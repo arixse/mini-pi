@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.vitepress/cache/
+.vitepress/dist/
+.playwright-cli/
+output/
+examples/teaching-agent/.teaching-agent/
+examples/teaching-agent/dist/
+.vercel/
+.env
+
