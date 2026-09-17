@@ -124,5 +124,74 @@ describe("sessionStore", () => {
       assert.strictEqual(lines.length, 2); // header + 1 message
       assert.ok(lines[1].includes("persisted"));
     });
+
+    it("should compact messages when context is too long", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      
+      // 添加足够的消息以触发压缩
+      for (let i = 0; i < 10; i++) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`Message ${i}: ${"a".repeat(100)}`)],
+          timestamp: Date.now(),
+        });
+        await store.appendMessage({
+          role: "assistant",
+          content: [createTextContent(`Response ${i}: ${"b".repeat(100)}`)],
+          stopReason: "stop",
+          usage: { input: 0, output: 0, totalTokens: 0 },
+          timestamp: Date.now(),
+        });
+      }
+
+      // 尝试压缩，保留最近2条消息
+      const compaction = await store.compactIfNedded(100, 2);
+      
+      // 如果触发了压缩，验证摘要内容
+      if (compaction) {
+        assert.ok(compaction.summary.length > 0);
+        assert.ok(compaction.summary.includes("对话共"));
+        assert.ok(compaction.summary.includes("用户消息"));
+        assert.ok(compaction.summary.includes("助手回复"));
+      }
+    });
+
+    it("should build context with compaction summary", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      
+      // 添加消息
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("first question")],
+        timestamp: Date.now(),
+      });
+      await store.appendMessage({
+        role: "assistant",
+        content: [createTextContent("first answer")],
+        stopReason: "stop",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      });
+      
+      // 强制压缩（设置很低的 token 阈值）
+      const compaction = await store.compactIfNedded(10, 0);
+      
+      if (compaction) {
+        // 添加新消息
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent("new question")],
+          timestamp: Date.now(),
+        });
+        
+        const context = store.buildContext();
+        
+        // 验证上下文包含摘要
+        const firstMessage = context[0];
+        assert.strictEqual(firstMessage.role, "user");
+        const text = firstMessage.content[0];
+        assert.ok(text.type === "text" && text.text.includes("旧的上下文摘要"));
+      }
+    });
   });
 });

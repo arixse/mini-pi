@@ -8,7 +8,80 @@ type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
 function summarizeEntries(entries: MessageEntry[]): string {
-  return "";
+  if (entries.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  
+  // 统计消息数量
+  const userMessages = entries.filter(e => e.message.role === "user");
+  const assistantMessages = entries.filter(e => e.message.role === "assistant");
+  const toolResultMessages = entries.filter(e => e.message.role === "toolResult");
+  
+  parts.push(`对话共 ${entries.length} 条消息`);
+  
+  if (userMessages.length > 0) {
+    parts.push(`用户消息 ${userMessages.length} 条`);
+  }
+  if (assistantMessages.length > 0) {
+    parts.push(`助手回复 ${assistantMessages.length} 条`);
+  }
+  if (toolResultMessages.length > 0) {
+    parts.push(`工具调用 ${toolResultMessages.length} 次`);
+  }
+
+  // 提取用户的前几个主要请求
+  const userRequests: string[] = [];
+  for (const entry of userMessages.slice(0, 3)) {
+    const text = extractText(entry.message);
+    if (text.trim()) {
+      // 截取前100个字符
+      const truncated = text.length > 100 ? text.substring(0, 100) + "..." : text;
+      userRequests.push(truncated);
+    }
+  }
+  
+  if (userRequests.length > 0) {
+    parts.push("用户主要请求：");
+    for (const request of userRequests) {
+      parts.push(`- ${request}`);
+    }
+  }
+
+  // 提取助手的关键回复
+  const assistantResponses: string[] = [];
+  for (const entry of assistantMessages.slice(0, 2)) {
+    const text = extractText(entry.message);
+    if (text.trim()) {
+      const truncated = text.length > 150 ? text.substring(0, 150) + "..." : text;
+      assistantResponses.push(truncated);
+    }
+  }
+  
+  if (assistantResponses.length > 0) {
+    parts.push("助手关键回复：");
+    for (const response of assistantResponses) {
+      parts.push(`- ${response}`);
+    }
+  }
+
+  // 提取工具调用信息
+  const toolCalls: string[] = [];
+  for (const entry of assistantMessages) {
+    for (const block of entry.message.content) {
+      if (block.type === "toolCall") {
+        toolCalls.push(block.name);
+      }
+    }
+  }
+  
+  if (toolCalls.length > 0) {
+    const uniqueTools = [...new Set(toolCalls)];
+    parts.push(`使用工具：${uniqueTools.join("、")}`);
+  }
+
+  return parts.join("\n");
 }
 
 export class JsonlSessionStore {
