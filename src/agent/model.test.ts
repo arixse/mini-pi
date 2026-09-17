@@ -6,6 +6,7 @@ import {
   createOpenAIModel,
   createAnthropicModel,
   createModelFromEnv,
+  createModelFromProvider,
 } from "./model";
 
 describe("model", () => {
@@ -97,6 +98,45 @@ describe("model", () => {
       process.env.OPENAI_API_KEY = "test-key";
       const model = createOpenAIModel();
       assert.strictEqual(typeof model.complete, "function");
+    });
+  });
+
+  describe("createModelFromProvider", () => {
+    it("should create Anthropic model for minimax-cn provider", async () => {
+      const model = await createModelFromProvider("minimax-cn", {
+        apiKey: "test-key",
+      });
+      assert.ok(model instanceof AnthropicModel);
+    });
+
+    it("should create OpenAI model for openai provider", async () => {
+      const model = await createModelFromProvider("openai", {
+        apiKey: "test-key",
+      });
+      assert.ok(model instanceof OpenAIModel);
+    });
+
+    it("should create Anthropic model for anthropic provider", async () => {
+      const model = await createModelFromProvider("anthropic", {
+        apiKey: "test-key",
+      });
+      assert.ok(model instanceof AnthropicModel);
+    });
+
+    it("should use custom baseUrl and model", async () => {
+      const model = await createModelFromProvider("openai", {
+        apiKey: "test-key",
+        baseUrl: "https://custom.api.com",
+        model: "gpt-4",
+      });
+      assert.ok(model instanceof OpenAIModel);
+    });
+
+    it("should default to Anthropic SDK for unknown provider", async () => {
+      const model = await createModelFromProvider("unknown-provider", {
+        apiKey: "test-key",
+      });
+      assert.ok(model instanceof AnthropicModel);
     });
   });
 });

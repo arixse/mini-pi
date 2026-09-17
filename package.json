@@ -4,7 +4,7 @@
   "description": "Mini Pi Code Agent - AI编程助手",
   "main": "index.js",
   "bin": {
-    "mini-pi": "./bin/mini-pi.js"
+    "mini-pi": "./bin/mini-pi-cli.cjs"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,green \"npm:dev:server\" \"npm:dev:web\"",
@@ -12,6 +12,7 @@
     "dev:web": "vite --host 0.0.0.0 --port 5174",
     "dev:cli": "tsx src/cli/index.ts",
     "build": "vite build",
+    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --outfile=bin/mini-pi-cli.cjs --format=cjs --external:react --external:react-dom --external:lucide-react --external:vite",
     "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\""
@@ -39,6 +40,7 @@
     "@types/node": "^26.3.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "esbuild": "^0.25.2",
     "typescript": "^7.0.2"
   }
 }

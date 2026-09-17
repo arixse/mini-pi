@@ -111,7 +111,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
     }
     const context = [...options.messages]
     const newMessages:AgentMessage[] = []
-    const maxTurns = options.maxTurns ?? 15
+    const maxTurns = options.maxTurns ?? 25
     emit({type:"agent_start"})
 
     for(let turn=1;turn<=maxTurns;turn++) {

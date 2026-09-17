@@ -145,6 +145,14 @@ export class ModelProviderService {
   hasProvider(providerName: string): boolean {
     return this.providers.has(providerName);
   }
+  
+  /**
+   * 获取所有Provider配置
+   * @returns 所有配置
+   */
+  async getAllConfigs(): Promise<Record<string, { apiKey?: string; baseUrl?: string; model?: string }>> {
+    return this.store.getAllConfigs();
+  }
 }
 
 export { ProviderStore } from "./provider-store";

@@ -363,3 +363,37 @@ export function createModelFromEnv():LlmModel {
             });
     }
 }
+
+export async function createModelFromProvider(
+  providerName: string,
+  config: { apiKey: string; baseUrl?: string; model?: string }): Promise<LlmModel> {
+  // 根据Provider的SDK类型创建对应的Model
+  switch(providerName.toLowerCase()) {
+    case "minimax-cn":
+      // MiniMax-CN 使用 Anthropic SDK
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl || "https://api.minimax.cn/anthropic",
+        model: config.model,
+      });
+    case "openai":
+      return createOpenAIModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+      });
+    case "anthropic":
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+      });
+    default:
+      // 默认使用 Anthropic SDK（因为 MiniMax-CN 使用的是 Anthropic 兼容接口）
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+      });
+  }
+}
