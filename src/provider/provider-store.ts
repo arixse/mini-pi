@@ -6,6 +6,7 @@ import { join } from "node:path";
 type ProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
 };
 
 type ProviderStoreData = Record<string, ProviderConfig>;

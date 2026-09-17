@@ -86,7 +86,7 @@ export class ModelProviderService {
    * @param providerName Provider名称
    * @param config 配置信息
    */
-  async saveProviderConfig(providerName: string, config: { apiKey?: string; baseUrl?: string }): Promise<void> {
+  async saveProviderConfig(providerName: string, config: { apiKey?: string; baseUrl?: string; model?: string }): Promise<void> {
     const provider = this.providers.get(providerName);
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);
@@ -100,7 +100,7 @@ export class ModelProviderService {
    * @param providerName Provider名称
    * @returns 配置信息
    */
-  async getProviderConfig(providerName: string): Promise<{ apiKey?: string; baseUrl?: string }> {
+  async getProviderConfig(providerName: string): Promise<{ apiKey?: string; baseUrl?: string; model?: string }> {
     const provider = this.providers.get(providerName);
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);

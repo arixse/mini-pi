@@ -107,6 +107,17 @@ describe("ReplOptions", () => {
       assert.strictEqual(config.apiKey, "test-api-key");
     });
 
+    it("should save provider config with model", async () => {
+      await providerService.saveProviderConfig("minimax-cn", {
+        apiKey: "test-api-key",
+        model: "test-model",
+      });
+
+      const config = await providerService.getProviderConfig("minimax-cn");
+      assert.strictEqual(config.apiKey, "test-api-key");
+      assert.strictEqual(config.model, "test-model");
+    });
+
     it("should get model list with valid API key", async () => {
       const mockProvider = new MockProvider("test-provider", "OpenAI", "https://test.api.com");
       providerService.registerProvider(mockProvider);
