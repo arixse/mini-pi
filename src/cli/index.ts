@@ -8,6 +8,8 @@ import { AgentMessage } from "../shared/protocol";
 import { createTextContent } from "../agent/message";
 import { startRepl } from "./repl";
 import { ModelProviderService, SettingsStore } from "../provider";
+import { JsonlSessionStore } from "../agent/sessionStore";
+import { join } from "node:path";
 
 config();
 
@@ -64,6 +66,11 @@ async function main() {
   const model = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
+  // 创建 sessionStore 并设置模型
+  const sessionFilePath = join(workspaceRoot, ".mini-pi", "session.jsonl");
+  const sessionStore = new JsonlSessionStore(sessionFilePath, workspaceRoot);
+  sessionStore.setModel(model);
+
   const systemPrompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
 - 读取和写入文件
 - 执行命令
@@ -87,6 +94,7 @@ async function main() {
     workspaceRoot,
     providerService,
     settingsStore,
+    sessionStore,
   });
 }
 

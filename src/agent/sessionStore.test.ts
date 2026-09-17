@@ -4,6 +4,7 @@ import { JsonlSessionStore } from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
+import { LlmModel, createAssistantMessage } from "./model";
 
 describe("sessionStore", () => {
   const testDir = join(process.cwd(), ".test-session-store");
@@ -191,6 +192,47 @@ describe("sessionStore", () => {
         assert.strictEqual(firstMessage.role, "user");
         const text = firstMessage.content[0];
         assert.ok(text.type === "text" && text.text.includes("旧的上下文摘要"));
+      }
+    });
+
+    it("should use model for summarization when model is set", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      
+      // 创建模拟模型
+      const mockModel: LlmModel = {
+        complete: async () => {
+          return {
+            role: "assistant",
+            content: [createTextContent("用户询问了排序算法，助手实现了快速排序")],
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        }
+      };
+      
+      store.setModel(mockModel);
+      
+      // 添加消息
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("请帮我写一个排序算法")],
+        timestamp: Date.now(),
+      });
+      await store.appendMessage({
+        role: "assistant",
+        content: [createTextContent("好的，我来实现快速排序")],
+        stopReason: "stop",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      });
+      
+      // 强制压缩
+      const compaction = await store.compactIfNedded(10, 0);
+      
+      if (compaction) {
+        // 验证摘要来自模型
+        assert.strictEqual(compaction.summary, "用户询问了排序算法，助手实现了快速排序");
       }
     });
   });

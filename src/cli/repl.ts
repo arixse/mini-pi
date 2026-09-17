@@ -6,6 +6,7 @@ import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop } from "../agent/loop";
 import { ModelProviderService, SettingsStore } from "../provider";
+import { JsonlSessionStore } from "../agent/sessionStore";
 
 export type ReplOptions = {
   prompt: string;
@@ -16,6 +17,7 @@ export type ReplOptions = {
   workspaceRoot: string;
   providerService?: ModelProviderService;
   settingsStore?: SettingsStore;
+  sessionStore?: JsonlSessionStore;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {

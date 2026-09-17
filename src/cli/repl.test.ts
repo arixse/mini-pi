@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { JsonlSessionStore } from "../agent/sessionStore";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -134,6 +135,27 @@ describe("ReplOptions", () => {
         async () => await providerService.getModelList("test-provider", ""),
         { message: "API key is required" }
       );
+    });
+  });
+
+  describe("ReplOptions with sessionStore", () => {
+    it("should accept sessionStore option", () => {
+      const sessionFile = join(testDir, "session.jsonl");
+      const sessionStore = new JsonlSessionStore(sessionFile, testDir);
+
+      const options: ReplOptions = {
+        prompt: "You: ",
+        systemPrompt: "test system prompt",
+        messages: [],
+        model: {} as any,
+        toolRegistry: {} as any,
+        workspaceRoot: "/test",
+        providerService,
+        sessionStore,
+      };
+
+      assert.ok(options.sessionStore);
+      assert.strictEqual(options.sessionStore, sessionStore);
     });
   });
 });

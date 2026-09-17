@@ -3,15 +3,68 @@ import { AgentMessage, SessionEntry } from "../shared/protocol";
 import { appendFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createTextContent, isTextContent } from "./message";
+import { LlmModel } from "./model";
 
 type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
-function summarizeEntries(entries: MessageEntry[]): string {
+async function summarizeEntries(entries: MessageEntry[], model: LlmModel): Promise<string> {
   if (entries.length === 0) {
     return "";
   }
 
+  // 构建对话历史文本
+  const conversationText = entries.map(entry => {
+    const role = entry.message.role === "user" ? "用户" : "助手";
+    const text = extractText(entry.message);
+    return `${role}: ${text}`;
+  }).join("\n\n");
+
+  // 使用模型生成摘要
+  const systemPrompt = `你是一个对话摘要助手。请将以下对话历史压缩成一个简洁的摘要，保留关键信息和上下文。
+
+要求：
+1. 保留用户的主要请求和意图
+2. 保留助手的关键回复和解决方案
+3. 保留重要的工具调用和结果
+4. 使用简洁的中文描述
+5. 摘要长度控制在200字以内`;
+
+  const messages: AgentMessage[] = [
+    {
+      role: "user",
+      content: [createTextContent(`请为以下对话生成摘要：\n\n${conversationText}`)],
+      timestamp: Date.now(),
+    }
+  ];
+
+  try {
+    const response = await model.complete({
+      systemPrompt,
+      messages,
+      tools: [],
+    });
+
+    // 提取模型回复的文本
+    const summaryParts: string[] = [];
+    for (const block of response.content) {
+      if (block.type === "text") {
+        summaryParts.push(block.text);
+      }
+    }
+
+    if (summaryParts.length > 0) {
+      return summaryParts.join("\n");
+    }
+  } catch (error) {
+    console.error("Failed to generate summary with model:", error);
+  }
+
+  // 如果模型调用失败，回退到简单摘要
+  return generateSimpleSummary(entries);
+}
+
+function generateSimpleSummary(entries: MessageEntry[]): string {
   const parts: string[] = [];
   
   // 统计消息数量
@@ -36,7 +89,6 @@ function summarizeEntries(entries: MessageEntry[]): string {
   for (const entry of userMessages.slice(0, 3)) {
     const text = extractText(entry.message);
     if (text.trim()) {
-      // 截取前100个字符
       const truncated = text.length > 100 ? text.substring(0, 100) + "..." : text;
       userRequests.push(truncated);
     }
@@ -46,23 +98,6 @@ function summarizeEntries(entries: MessageEntry[]): string {
     parts.push("用户主要请求：");
     for (const request of userRequests) {
       parts.push(`- ${request}`);
-    }
-  }
-
-  // 提取助手的关键回复
-  const assistantResponses: string[] = [];
-  for (const entry of assistantMessages.slice(0, 2)) {
-    const text = extractText(entry.message);
-    if (text.trim()) {
-      const truncated = text.length > 150 ? text.substring(0, 150) + "..." : text;
-      assistantResponses.push(truncated);
-    }
-  }
-  
-  if (assistantResponses.length > 0) {
-    parts.push("助手关键回复：");
-    for (const response of assistantResponses) {
-      parts.push(`- ${response}`);
     }
   }
 
@@ -90,11 +125,17 @@ export class JsonlSessionStore {
   private byId = new Map<string, SessionEntry>();
   private leafId: string | null = null;
   private counter = 0;
+  private model: LlmModel | null = null;
+  
   constructor(
     private readonly filePath: string,
     private readonly cwd: string,
   ) {
     this.loadOrCreate();
+  }
+
+  setModel(model: LlmModel): void {
+    this.model = model;
   }
 
   getSessionId(): string {
@@ -210,7 +251,15 @@ export class JsonlSessionStore {
     }
     const kept = messageEntries.slice(-keepRecentMessages);
     const summarized = messageEntries.slice(0, -keepRecentMessages);
-    const summary = summarizeEntries(summarized);
+    
+    // 使用模型生成摘要，如果没有模型则使用简单摘要
+    let summary: string;
+    if (this.model) {
+      summary = await summarizeEntries(summarized, this.model);
+    } else {
+      summary = generateSimpleSummary(summarized);
+    }
+    
     const firstKeptEntryId = kept[0]?.id;
     if (!firstKeptEntryId) {
       return undefined;
