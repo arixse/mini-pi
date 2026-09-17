@@ -1,13 +1,18 @@
 {
   "name": "mini-pi",
   "version": "1.0.0",
-  "description": "",
+  "description": "Mini Pi Code Agent - AI编程助手",
   "main": "index.js",
+  "bin": {
+    "mini-pi": "./bin/mini-pi.js"
+  },
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite --host 0.0.0.0 --port 5174",
+    "dev:cli": "tsx src/cli/index.ts",
     "build": "vite build",
+    "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\""
   },
