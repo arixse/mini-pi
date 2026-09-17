@@ -156,4 +156,5 @@ export class ModelProviderService {
 }
 
 export { ProviderStore } from "./provider-store";
+export { SettingsStore } from "./settings-store";
 export { MiniMaxCnProvider } from "./minimax-cn";

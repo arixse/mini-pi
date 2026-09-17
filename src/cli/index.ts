@@ -7,15 +7,37 @@ import { runAgentLoop } from "../agent/loop";
 import { AgentMessage } from "../shared/protocol";
 import { createTextContent } from "../agent/message";
 import { startRepl } from "./repl";
-import { ModelProviderService } from "../provider";
+import { ModelProviderService, SettingsStore } from "../provider";
 
 config();
 
-async function createModelFromProviderConfig(providerService: ModelProviderService): Promise<LlmModel> {
-  // 获取所有 provider 配置
+async function createModelFromSettings(
+  providerService: ModelProviderService,
+  settingsStore: SettingsStore,
+): Promise<LlmModel> {
+  // 从 settings.json 读取 defaultModel
+  const parsed = await settingsStore.parseDefaultModel();
+  
+  if (parsed) {
+    const { providerName, modelName } = parsed;
+    console.log(`📡 使用 provider: ${providerName}`);
+    console.log(`🤖 使用模型: ${modelName}`);
+    
+    // 获取 provider 配置
+    const providerConfig = await providerService.getProviderConfig(providerName);
+    
+    if (providerConfig.apiKey) {
+      return createModelFromProvider(providerName, {
+        apiKey: providerConfig.apiKey,
+        baseUrl: providerConfig.baseUrl,
+        model: modelName,
+      });
+    }
+  }
+  
+  // 如果 settings.json 中没有配置，尝试从 provider 配置中获取
   const allConfigs = await providerService.getAllConfigs();
   
-  // 找到第一个有 apiKey 的配置
   for (const [providerName, config] of Object.entries(allConfigs)) {
     if (config.apiKey) {
       console.log(`📡 使用 provider: ${providerName}`);
@@ -38,7 +60,8 @@ async function createModelFromProviderConfig(providerService: ModelProviderServi
 async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
-  const model = await createModelFromProviderConfig(providerService);
+  const settingsStore = new SettingsStore();
+  const model = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
   const systemPrompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
@@ -63,6 +86,7 @@ async function main() {
     toolRegistry,
     workspaceRoot,
     providerService,
+    settingsStore,
   });
 }
 

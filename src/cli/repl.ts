@@ -5,7 +5,7 @@ import { createTextContent, messageText } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop } from "../agent/loop";
-import { ModelProviderService } from "../provider";
+import { ModelProviderService, SettingsStore } from "../provider";
 
 export type ReplOptions = {
   prompt: string;
@@ -15,6 +15,7 @@ export type ReplOptions = {
   toolRegistry: ToolRegistry;
   workspaceRoot: string;
   providerService?: ModelProviderService;
+  settingsStore?: SettingsStore;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -60,7 +61,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/model") {
-      await handleModel(options.providerService, rl);
+      await handleModel(options.providerService, options.settingsStore, rl);
       rl.prompt();
       return;
     }
@@ -181,6 +182,7 @@ function question(rl: readline.Interface, prompt: string): Promise<string> {
 
 async function handleModel(
   providerService: ModelProviderService | undefined,
+  settingsStore: SettingsStore | undefined,
   rl: readline.Interface,
 ): Promise<void> {
   if (!providerService) {
@@ -193,6 +195,14 @@ async function handleModel(
   if (providers.length === 0) {
     console.log("❌ 没有可用的模型服务商");
     return;
+  }
+
+  // 显示当前默认模型
+  if (settingsStore) {
+    const defaultModel = await settingsStore.getDefaultModel();
+    if (defaultModel) {
+      console.log(`\n📌 当前默认模型: ${defaultModel}`);
+    }
   }
 
   console.log("\n📋 可用的模型服务商:");
@@ -242,15 +252,22 @@ async function handleModel(
     }
 
     const selectedModel = models[mIdx];
+    const defaultModel = `${selectedProvider}/${selectedModel}`;
 
-    // 保存模型选择
-    await providerService.saveProviderConfig(selectedProvider, {
-      ...config,
-      model: selectedModel,
-    });
-
-    console.log(`\n✅ 已选择模型: ${selectedProvider}/${selectedModel}`);
-    console.log("💡 重启应用后生效\n");
+    // 保存到 settings.json
+    if (settingsStore) {
+      await settingsStore.setDefaultModel(defaultModel);
+      console.log(`\n✅ 已设置默认模型: ${defaultModel}`);
+      console.log("💡 重启应用后生效\n");
+    } else {
+      // 如果没有 settingsStore，回退到保存到 provider 配置
+      await providerService.saveProviderConfig(selectedProvider, {
+        ...config,
+        model: selectedModel,
+      });
+      console.log(`\n✅ 已选择模型: ${defaultModel}`);
+      console.log("💡 重启应用后生效\n");
+    }
   } catch (error) {
     console.log("❌ 获取模型列表失败:", error instanceof Error ? error.message : error);
   }
