@@ -52,6 +52,19 @@ async function createModelFromSettings(
   return { model, providerName: "env", modelName: "default" };
 }
 
+function buildSystemPrompt(workspaceRoot: string, fixedContext: string): string {
+  return `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
+- 读取和写入文件
+- 执行命令
+- 解答编程问题
+
+当前工作目录：${workspaceRoot}
+
+请用中文回复用户的问题。
+
+${fixedContext}`;
+}
+
 async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
@@ -69,16 +82,7 @@ async function main() {
   // 获取固定上下文
   const fixedContext = sessionManager.getFixedContext();
 
-  const systemPrompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
-- 读取和写入文件
-- 执行命令
-- 解答编程问题
-
-当前工作目录：${workspaceRoot}
-
-请用中文回复用户的问题。
-
-${fixedContext}`;
+  let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext);
 
   const messages: AgentMessage[] = [];
 
@@ -93,6 +97,26 @@ ${fixedContext}`;
     console.log("✅ 已创建新会话");
   };
 
+  // 重载配置的回调函数
+  const onReload = async (): Promise<{ model: LlmModel; systemPrompt: string }> => {
+    // 重新从配置创建模型
+    const { model: newModel, providerName: newProviderName, modelName: newModelName } = 
+      await createModelFromSettings(providerService, settingsStore);
+    
+    // 更新 sessionManager 的模型
+    sessionManager.setModel(newModel);
+    
+    // 重新构建 systemPrompt（获取最新的固定上下文）
+    const newFixedContext = sessionManager.getFixedContext();
+    const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext);
+    
+    // 显示重载后的信息
+    printLogo();
+    printWelcome(newProviderName, newModelName);
+    
+    return { model: newModel, systemPrompt: newSystemPrompt };
+  };
+
   await startRepl({
     prompt: "You: ",
     systemPrompt,
@@ -104,6 +128,7 @@ ${fixedContext}`;
     settingsStore,
     sessionStore,
     onNewSession,
+    onReload,
   });
 }
 

@@ -8,6 +8,7 @@ import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
+import { LlmModel } from "../agent/model";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -39,6 +40,21 @@ class MockProvider implements Provider {
     }
     return ["model1", "model2"];
   }
+}
+
+// Mock model for reload testing
+function createMockModel(name: string): LlmModel {
+  return {
+    async complete() {
+      return {
+        role: "assistant",
+        content: [{ type: "text" as const, text: "mock response" }],
+        stopReason: "stop" as const,
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      };
+    },
+  };
 }
 
 describe("ReplOptions", () => {
@@ -86,6 +102,48 @@ describe("ReplOptions", () => {
       assert.deepStrictEqual(options.messages, []);
       assert.strictEqual(options.workspaceRoot, "/test");
       assert.ok(options.providerService);
+    });
+
+    it("should support onReload callback", () => {
+      let reloadCalled = false;
+      const options: ReplOptions = {
+        prompt: "You: ",
+        systemPrompt: "test system prompt",
+        messages: [],
+        model: createMockModel("initial"),
+        toolRegistry: {} as any,
+        workspaceRoot: "/test",
+        onReload: async () => {
+          reloadCalled = true;
+          return {
+            model: createMockModel("reloaded"),
+            systemPrompt: "reloaded system prompt",
+          };
+        },
+      };
+
+      assert.ok(options.onReload);
+      assert.strictEqual(reloadCalled, false);
+    });
+
+    it("onReload should return new model and systemPrompt", async () => {
+      const options: ReplOptions = {
+        prompt: "You: ",
+        systemPrompt: "test system prompt",
+        messages: [],
+        model: createMockModel("initial"),
+        toolRegistry: {} as any,
+        workspaceRoot: "/test",
+        onReload: async () => {
+          return {
+            model: createMockModel("reloaded"),
+            systemPrompt: "reloaded system prompt",
+          };
+        },
+      };
+
+      const result = await options.onReload!();
+      assert.strictEqual(result.systemPrompt, "reloaded system prompt");
     });
   });
 
@@ -156,6 +214,52 @@ describe("ReplOptions", () => {
 
       assert.ok(options.sessionStore);
       assert.strictEqual(options.sessionStore, sessionStore);
+    });
+  });
+
+  describe("Reload functionality", () => {
+    it("should reload configuration successfully", async () => {
+      let callCount = 0;
+      
+      const options: ReplOptions = {
+        prompt: "You: ",
+        systemPrompt: "original prompt",
+        messages: [],
+        model: createMockModel("original"),
+        toolRegistry: {} as any,
+        workspaceRoot: "/test",
+        onReload: async () => {
+          callCount++;
+          return {
+            model: createMockModel(`reloaded-${callCount}`),
+            systemPrompt: `reloaded prompt ${callCount}`,
+          };
+        },
+      };
+
+      // First reload
+      const result1 = await options.onReload!();
+      assert.strictEqual(callCount, 1);
+      assert.strictEqual(result1.systemPrompt, "reloaded prompt 1");
+
+      // Second reload
+      const result2 = await options.onReload!();
+      assert.strictEqual(callCount, 2);
+      assert.strictEqual(result2.systemPrompt, "reloaded prompt 2");
+    });
+
+    it("should handle reload without callback gracefully", () => {
+      const options: ReplOptions = {
+        prompt: "You: ",
+        systemPrompt: "test system prompt",
+        messages: [],
+        model: createMockModel("test"),
+        toolRegistry: {} as any,
+        workspaceRoot: "/test",
+        // no onReload callback
+      };
+
+      assert.strictEqual(options.onReload, undefined);
     });
   });
 });

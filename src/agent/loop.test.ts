@@ -62,6 +62,38 @@ describe("loop", () => {
       assert.ok(result.events.some((e) => e.type === "agent_end"));
     });
 
+    it("should use default maxTurns of 100", async () => {
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "call_1",
+        name: "test_tool",
+        arguments: {},
+      };
+      // 模型持续返回工具调用，不会停止
+      const responseWithTool = createAssistantMessage([toolCall], "toolUse");
+      const model = createMockModel([responseWithTool]);
+      const toolRegistry = createMockToolRegistry();
+
+      const result = await runAgentLoop({
+        systemPrompt: "You are a helpful assistant",
+        messages: [{ role: "user", content: [createTextContent("Loop forever")], timestamp: Date.now() }],
+        tools: [{ name: "test_tool", description: "A test tool", parameters: {} }],
+        model,
+        toolRegistry,
+        // 不设置 maxTurns，使用默认值
+      });
+
+      // 应该运行 100 轮后停止
+      const guardrailMessage = result.newMessages.find(
+        (m) => m.role === "assistant" && m.stopReason === "error",
+      );
+      assert.ok(guardrailMessage, "应该包含超过最大轮次的 guardrail 消息");
+      assert.ok((guardrailMessage as AssistantMessage).errorMessage?.includes("max_turns_exceeded"));
+      assert.ok((guardrailMessage as AssistantMessage).content[0].type === "text");
+      const textContent = (guardrailMessage as AssistantMessage).content[0] as { type: "text"; text: string };
+      assert.ok(textContent.text.includes("100"), "消息应包含默认的 maxTurns 值 100");
+    });
+
     it("should execute tool calls", async () => {
       const toolCall: ToolCallContent = {
         type: "toolCall",
@@ -187,7 +219,7 @@ describe("loop", () => {
       assert.strictEqual((result.newMessages[0] as AssistantMessage).stopReason, "aborted");
     });
 
-    it("should respect maxTurns limit", async () => {
+    it("should respect custom maxTurns limit", async () => {
       const toolCall: ToolCallContent = {
         type: "toolCall",
         id: "call_1",
@@ -212,6 +244,8 @@ describe("loop", () => {
       );
       assert.ok(guardrailMessage);
       assert.ok((guardrailMessage as AssistantMessage).errorMessage?.includes("max_turns_exceeded"));
+      const textContent = (guardrailMessage as AssistantMessage).content[0] as { type: "text"; text: string };
+      assert.ok(textContent.text.includes("2"), "消息应包含自定义的 maxTurns 值 2");
     });
 
     it("should emit events in correct order", async () => {

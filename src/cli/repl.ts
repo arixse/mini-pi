@@ -20,6 +20,7 @@ export type ReplOptions = {
   settingsStore?: SettingsStore;
   sessionStore?: JsonlSessionStore;
   onNewSession?: () => void;
+  onReload?: () => Promise<{ model: LlmModel; systemPrompt: string }>;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -78,6 +79,24 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return;
     }
 
+    if (input === "/reload") {
+      if (options.onReload) {
+        try {
+          const { model, systemPrompt } = await options.onReload();
+          // 更新外部传入的 model 和 systemPrompt
+          (options as any).model = model;
+          (options as any).systemPrompt = systemPrompt;
+          console.log(chalk.green("\n✅ 配置已重载\n"));
+        } catch (error) {
+          console.log(chalk.red("\n❌ 重载失败:"), error instanceof Error ? error.message : error);
+        }
+      } else {
+        console.log(chalk.red("\n❌ 重载功能未配置\n"));
+      }
+      rl.prompt();
+      return;
+    }
+
     options.messages.push({
       role: "user",
       content: [createTextContent(input)],
@@ -95,6 +114,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         tools: options.toolRegistry.definitions(),
         model: options.model,
         toolRegistry: options.toolRegistry,
+        maxTurns: 100,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             process.stdout.write(event.delta);
@@ -130,13 +150,14 @@ function printHelp() {
   console.log("");
   console.log(chalk.cyan("📖 可用命令（所有命令以 / 开头）:"));
   console.log("");
-  console.log(chalk.white("  /new") + chalk.dim("   - 创建新的会话"));
-  console.log(chalk.white("  /login") + chalk.dim(" - 登录模型服务商（输入apiKey）"));
-  console.log(chalk.white("  /model") + chalk.dim(" - 选择模型供应商和模型"));
-  console.log(chalk.white("  /help") + chalk.dim("  - 显示帮助信息"));
-  console.log(chalk.white("  /clear") + chalk.dim(" - 清除对话历史"));
-  console.log(chalk.white("  /exit") + chalk.dim("  - 退出程序"));
-  console.log(chalk.white("  /quit") + chalk.dim("  - 退出程序"));
+  console.log(chalk.white("  /new") + chalk.dim("     - 创建新的会话"));
+  console.log(chalk.white("  /login") + chalk.dim("   - 登录模型服务商（输入apiKey）"));
+  console.log(chalk.white("  /model") + chalk.dim("   - 选择模型供应商和模型"));
+  console.log(chalk.white("  /reload") + chalk.dim("   - 重载配置文件"));
+  console.log(chalk.white("  /help") + chalk.dim("    - 显示帮助信息"));
+  console.log(chalk.white("  /clear") + chalk.dim("   - 清除对话历史"));
+  console.log(chalk.white("  /exit") + chalk.dim("    - 退出程序"));
+  console.log(chalk.white("  /quit") + chalk.dim("    - 退出程序"));
   console.log("");
   console.log(chalk.dim("💡 提示:"));
   console.log(chalk.dim("  - 直接输入问题即可开始对话"));
@@ -188,6 +209,7 @@ async function handleLogin(
       apiKey: apiKey.trim(),
     });
     console.log(chalk.green(`✅ 已保存 ${selectedProvider} 的 API Key`));
+    console.log(chalk.dim("💡 使用 /reload 命令重载配置使其生效\n"));
   } catch (error) {
     console.log(chalk.red("❌ 保存失败:"), error instanceof Error ? error.message : error);
   }
@@ -282,7 +304,7 @@ async function handleModel(
     if (settingsStore) {
       await settingsStore.setDefaultModel(defaultModel);
       console.log(chalk.green(`\n✅ 已设置默认模型: ${defaultModel}`));
-      console.log(chalk.dim("💡 重启应用后生效\n"));
+      console.log(chalk.dim("💡 使用 /reload 命令重载配置使其生效\n"));
     } else {
       // 如果没有 settingsStore，回退到保存到 provider 配置
       await providerService.saveProviderConfig(selectedProvider, {
@@ -290,7 +312,7 @@ async function handleModel(
         model: selectedModel,
       });
       console.log(chalk.green(`\n✅ 已选择模型: ${defaultModel}`));
-      console.log(chalk.dim("💡 重启应用后生效\n"));
+      console.log(chalk.dim("💡 使用 /reload 命令重载配置使其生效\n"));
     }
   } catch (error) {
     console.log(chalk.red("❌ 获取模型列表失败:"), error instanceof Error ? error.message : error);

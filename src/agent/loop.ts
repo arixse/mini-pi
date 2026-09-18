@@ -16,6 +16,7 @@ export type RunAgentLoopOptions = {
     tools:ToolDefinition[]
     model:LlmModel
     toolRegistry:ToolRegistry
+    /** 最大循环轮次，默认值为 100 */
     maxTurns?:number
     beforeToolCall?:BeforeToolCall
     onEvent?:(event:AgentEvent)=>void
@@ -100,6 +101,20 @@ function createLoopGuardrailMessage(maxTurns:number):AssistantMessage {
     }
 }
 
+/**
+ * 运行 Agent 循环
+ * 
+ * @param options - 运行选项
+ * @param options.systemPrompt - 系统提示词
+ * @param options.messages - 消息历史
+ * @param options.tools - 可用工具定义
+ * @param options.model - LLM 模型
+ * @param options.toolRegistry - 工具注册表
+ * @param options.maxTurns - 最大循环轮次，默认值为 100
+ * @param options.beforeToolCall - 工具调用前的回调
+ * @param options.onEvent - 事件回调
+ * @returns 包含新消息和事件的响应
+ */
 export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
     newMessages:AgentMessage[],
     events:AgentEvent[]
@@ -111,7 +126,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
     }
     const context = [...options.messages]
     const newMessages:AgentMessage[] = []
-    const maxTurns = options.maxTurns ?? 25
+    const maxTurns = options.maxTurns ?? 100
     emit({type:"agent_start"})
 
     for(let turn=1;turn<=maxTurns;turn++) {
