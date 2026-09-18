@@ -52,17 +52,25 @@ async function createModelFromSettings(
   return { model, providerName: "env", modelName: "default" };
 }
 
-function buildSystemPrompt(workspaceRoot: string, fixedContext: string): string {
-  return `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
+function buildSystemPrompt(workspaceRoot: string, fixedContext: string, skillSummary?: string): string {
+  let prompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
 - 读取和写入文件
 - 执行命令
 - 解答编程问题
 
 当前工作目录：${workspaceRoot}
 
-请用中文回复用户的问题。
+请用中文回复用户的问题。`;
 
-${fixedContext}`;
+  if (fixedContext) {
+    prompt += `\n\n${fixedContext}`;
+  }
+
+  if (skillSummary) {
+    prompt += `\n\n${skillSummary}`;
+  }
+
+  return prompt;
 }
 
 async function main() {
@@ -82,7 +90,13 @@ async function main() {
   // 获取固定上下文
   const fixedContext = sessionManager.getFixedContext();
 
-  let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext);
+  // 加载 skill 元数据并生成摘要
+  const skillSummary = sessionManager.getSkillSummary();
+  if (skillSummary) {
+    console.log(chalk.dim(`📚 已加载 ${sessionManager.loadSkillMetadata().length} 个 skills`));
+  }
+
+  let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
 
   const messages: AgentMessage[] = [];
 
@@ -108,7 +122,8 @@ async function main() {
     
     // 重新构建 systemPrompt（获取最新的固定上下文）
     const newFixedContext = sessionManager.getFixedContext();
-    const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext);
+    const newSkillSummary = sessionManager.getSkillSummary();
+    const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
     
     // 显示重载后的信息
     printLogo();
@@ -127,6 +142,7 @@ async function main() {
     providerService,
     settingsStore,
     sessionStore,
+    sessionManager,
     onNewSession,
     onReload,
   });

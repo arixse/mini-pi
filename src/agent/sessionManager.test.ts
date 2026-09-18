@@ -4,6 +4,7 @@ import { SessionManager } from "./sessionManager";
 import { existsSync, mkdirSync, rmSync, readdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { SkillLoader } from "./skillLoader";
 
 describe("SessionManager", () => {
   let sessionManager: SessionManager;
@@ -178,5 +179,95 @@ describe("SessionManager", () => {
         // 忽略清理错误
       }
     }
+  });
+
+  // Skill 相关测试
+  describe("Skill Management", () => {
+    let skillDir: string;
+    let isolatedSessionManager: SessionManager;
+
+    beforeEach(() => {
+      // 创建独立的 skill 目录
+      skillDir = join(testWorkspace, "test-skills");
+      if (!existsSync(skillDir)) {
+        mkdirSync(skillDir, { recursive: true });
+      }
+      // 创建使用独立 skill 目录的 sessionManager
+      isolatedSessionManager = new SessionManager(testWorkspace, {
+        customSkillDirs: [{ path: skillDir, source: "project" }],
+      });
+    });
+
+    afterEach(() => {
+      // 清理 skill 目录
+      if (existsSync(skillDir)) {
+        rmSync(skillDir, { recursive: true, force: true });
+      }
+    });
+
+    function createTestSkill(dirName: string, name: string, description: string) {
+      const dir = join(skillDir, dirName);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(
+        join(dir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nTest skill content.`,
+        "utf8"
+      );
+    }
+
+    it("should get skill loader instance", () => {
+      const skillLoader = isolatedSessionManager.getSkillLoader();
+      assert.ok(skillLoader instanceof SkillLoader);
+    });
+
+    it("should load skill metadata", () => {
+      createTestSkill("test-skill", "test-skill", "A test skill");
+
+      const metadata = isolatedSessionManager.loadSkillMetadata();
+      assert.ok(Array.isArray(metadata));
+      assert.strictEqual(metadata.length, 1);
+      assert.strictEqual(metadata[0].name, "test-skill");
+      assert.strictEqual(metadata[0].description, "A test skill");
+    });
+
+    it("should load skill content by name", () => {
+      createTestSkill("my-skill", "my-skill", "My skill description");
+
+      const content = isolatedSessionManager.loadSkillContent("my-skill");
+      assert.ok(content !== null);
+      assert.ok(content!.includes("# my-skill"));
+      assert.ok(content!.includes("Test skill content."));
+    });
+
+    it("should return null for non-existent skill", () => {
+      const content = isolatedSessionManager.loadSkillContent("non-existent");
+      assert.strictEqual(content, null);
+    });
+
+    it("should find matching skills based on input", () => {
+      createTestSkill("stock-analysis", "stock-analysis", "Analyze stocks and cryptocurrencies");
+      createTestSkill("web-scraper", "web-scraper", "Scrape data from websites");
+
+      const matches = isolatedSessionManager.findMatchingSkills("I want to analyze stocks");
+      assert.ok(matches.length > 0);
+      assert.strictEqual(matches[0].name, "stock-analysis");
+    });
+
+    it("should get skill summary for system prompt", () => {
+      createTestSkill("summary-test", "summary-test", "Summary test skill");
+
+      const summary = isolatedSessionManager.getSkillSummary();
+      assert.ok(summary.length > 0);
+      assert.ok(summary.includes("summary-test"));
+      assert.ok(summary.includes("Summary test skill"));
+      assert.ok(summary.includes("可用 Skills"));
+    });
+
+    it("should return empty summary when no skills exist", () => {
+      const summary = isolatedSessionManager.getSkillSummary();
+      assert.strictEqual(summary, "");
+    });
   });
 });

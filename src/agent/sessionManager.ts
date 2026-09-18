@@ -3,6 +3,12 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { JsonlSessionStore } from "./sessionStore";
 import { LlmModel } from "./model";
+import { SkillLoader, SkillSource, SkillWithSource } from "./skillLoader";
+
+export interface SessionManagerOptions {
+  /** 自定义 skill 目录列表（用于测试） */
+  customSkillDirs?: Array<{ path: string; source: SkillSource }>;
+}
 
 export class SessionManager {
   private readonly sessionsDir: string;
@@ -10,11 +16,13 @@ export class SessionManager {
   private readonly projectAgentsPath: string;
   private currentSession: JsonlSessionStore | null = null;
   private model: LlmModel | null = null;
+  private readonly skillLoader: SkillLoader;
 
-  constructor(private readonly workspaceRoot: string) {
+  constructor(private readonly workspaceRoot: string, options?: SessionManagerOptions) {
     this.sessionsDir = join(homedir(), ".mini-pi", "sessions");
     this.globalAgentsPath = join(homedir(), ".mini-pi", "AGENTS.md");
     this.projectAgentsPath = join(workspaceRoot, "AGENTS.md");
+    this.skillLoader = new SkillLoader(workspaceRoot, options?.customSkillDirs);
     this.ensureSessionsDir();
   }
 
@@ -70,6 +78,46 @@ export class SessionManager {
     }
 
     return `# 固定上下文\n\n以下是来自 AGENTS.md 的规则，请在回答时遵循这些规则：\n\n${parts.join("\n\n---\n\n")}`;
+  }
+
+  /**
+   * 获取 SkillLoader 实例
+   */
+  getSkillLoader(): SkillLoader {
+    return this.skillLoader;
+  }
+
+  /**
+   * 加载所有 skill 的元数据（轻量级操作）
+   */
+  loadSkillMetadata(): SkillWithSource[] {
+    return this.skillLoader.loadAllMetadata();
+  }
+
+  /**
+   * 按需加载单个 skill 的完整内容
+   * @param skillName skill 名称
+   * @returns skill 内容，如果未找到则返回 null
+   */
+  loadSkillContent(skillName: string): string | null {
+    const skill = this.skillLoader.loadSkill(skillName);
+    return skill ? skill.content : null;
+  }
+
+  /**
+   * 根据用户输入查找匹配的 skills
+   * @param userInput 用户输入
+   * @returns 匹配的 skill 列表
+   */
+  findMatchingSkills(userInput: string): SkillWithSource[] {
+    return this.skillLoader.findMatchingSkills(userInput);
+  }
+
+  /**
+   * 生成 skill 摘要（用于注入 system prompt）
+   */
+  getSkillSummary(): string {
+    return this.skillLoader.generateSkillSummary();
   }
 
   /**
