@@ -85,7 +85,7 @@ ${fixedContext}`;
   const messages: AgentMessage[] = [];
 
   console.log("🤖 Mini Pi Code Agent");
-  console.log("输入 '/new' 创建新会话，'exit' 或 'quit' 退出，输入 'clear' 清除历史\n");
+  console.log("输入 '/help' 查看所有命令\n");
 
   // 创建新会话的回调函数
   const onNewSession = () => {

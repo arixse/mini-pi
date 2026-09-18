@@ -38,20 +38,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return;
     }
 
-    if (input === "exit" || input === "quit") {
+    if (input === "/exit" || input === "/quit") {
       console.log("👋 再见！");
       rl.close();
       process.exit(0);
     }
 
-    if (input === "clear") {
+    if (input === "/clear") {
       options.messages.length = 0;
       console.log("🗑️  历史已清除\n");
       rl.prompt();
       return;
     }
 
-    if (input === "help") {
+    if (input === "/help") {
       printHelp();
       rl.prompt();
       return;
@@ -121,14 +121,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 function printHelp() {
   console.log(`
-📖 可用命令:
+📖 可用命令（所有命令以 / 开头）:
   /new   - 创建新的会话
   /login - 登录模型服务商（输入apiKey）
   /model - 选择模型供应商和模型
-  help   - 显示帮助信息
-  clear  - 清除对话历史
-  exit   - 退出程序
-  quit   - 退出程序
+  /help  - 显示帮助信息
+  /clear - 清除对话历史
+  /exit  - 退出程序
+  /quit  - 退出程序
 
 💡 提示:
   - 直接输入问题即可开始对话
