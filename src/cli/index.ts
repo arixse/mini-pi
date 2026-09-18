@@ -23,7 +23,7 @@ async function createModelFromSettings(
     const providerConfig = await providerService.getProviderConfig(providerName);
     
     if (providerConfig.apiKey) {
-      const model = createModelFromProvider(providerName, {
+      const model = await createModelFromProvider(providerName, {
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
@@ -38,7 +38,7 @@ async function createModelFromSettings(
   for (const [providerName, config] of Object.entries(allConfigs)) {
     if (config.apiKey) {
       const modelName = config.model || "default";
-      const model = createModelFromProvider(providerName, {
+      const model = await createModelFromProvider(providerName, {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,

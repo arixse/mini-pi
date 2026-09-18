@@ -1261,12 +1261,12 @@ var init_token_cache = __esm({
 var readEnv2;
 var init_env = __esm({
   "node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/internal/utils/env.mjs"() {
-    readEnv2 = (env) => {
+    readEnv2 = (env2) => {
       if (typeof globalThis.process !== "undefined") {
-        return globalThis.process.env?.[env]?.trim() || void 0;
+        return globalThis.process.env?.[env2]?.trim() || void 0;
       }
       if (typeof globalThis.Deno !== "undefined") {
-        return globalThis.Deno.env?.get?.(env)?.trim() || void 0;
+        return globalThis.Deno.env?.get?.(env2)?.trim() || void 0;
       }
       return void 0;
     };
@@ -1577,8 +1577,8 @@ var init_credentials = __esm({
       if (configDir) {
         return configDir;
       }
-      const os2 = getPlatformHeaders2()["X-Stainless-OS"];
-      if (os2 === "Windows") {
+      const os3 = getPlatformHeaders2()["X-Stainless-OS"];
+      if (os3 === "Windows") {
         const appData = readEnv2("APPDATA");
         if (appData) {
           return path5.join(appData, "Anthropic");
@@ -2740,8 +2740,8 @@ var init_uploads = __esm({
     init_shims();
     checkFileSupport2 = () => {
       if (typeof File === "undefined") {
-        const { process: process2 } = globalThis;
-        const isOldNode = typeof process2?.versions?.node === "string" && parseInt(process2.versions.node.split(".")) < 20;
+        const { process: process3 } = globalThis;
+        const isOldNode = typeof process3?.versions?.node === "string" && parseInt(process3.versions.node.split(".")) < 20;
         throw new Error("`File` is not defined as a global, which is required for file uploads." + (isOldNode ? " Update to Node 20 LTS or newer, or set `globalThis.File` to `import('node:buffer').File`." : ""));
       }
     };
@@ -4917,8 +4917,8 @@ function backoff2(attempt) {
   return backoff(attempt, POLL_BACKOFF_BASE_MS, POLL_BACKOFF_CAP_MS);
 }
 function defaultWorkerId() {
-  const env = globalThis.process?.env;
-  const host = env?.["HOSTNAME"];
+  const env2 = globalThis.process?.env;
+  const host = env2?.["HOSTNAME"];
   return host ? `${host}-${uuid42()}` : uuid42();
 }
 var _WorkPoller_runnerClient, _WorkPoller_consumed, _WorkPoller_controller, _WorkPoller_detachExternal, _WorkPoller_autoStop, _WorkPoller_drain, _WorkPoller_blockMs, _WorkPoller_reclaimOlderThanMs, _WorkPoller_requestOpts, _IdleLog_log, _IdleLog_environmentId, _IdleLog_idleSince, _IdleLog_lastReport, POLL_BLOCK_MS, POLL_BACKOFF_BASE_MS, POLL_BACKOFF_CAP_MS, IDLE_REPORT_INTERVAL_MS, WorkPoller, IdleLog;
@@ -7307,13 +7307,13 @@ function readOnlyRootFor(ctx, target) {
   return containingRoot(ctx.readOnlyRoots ?? [], target);
 }
 function scrubbedShellEnv() {
-  const env = {};
+  const env2 = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith("ANTHROPIC_"))
       continue;
-    env[key] = value;
+    env2[key] = value;
   }
-  return env;
+  return env2;
 }
 function betaBashTool(ctx) {
   rejectUnrestrictedPaths(ctx.unrestrictedPaths);
@@ -7785,7 +7785,7 @@ var init_node2 = __esm({
     ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
     fsGlob = fs4.glob;
     BashSession = class {
-      constructor(dir, env = scrubbedShellEnv()) {
+      constructor(dir, env2 = scrubbedShellEnv()) {
         _BashSession_instances.add(this);
         _BashSession_proc.set(this, void 0);
         _BashSession_buf.set(this, "");
@@ -7799,7 +7799,7 @@ var init_node2 = __esm({
           // PS1/PS2/TERM are shell-control settings BashSession always applies so
           // the pipe-based sentinel exec parsing works — not part of the
           // user-facing environment.
-          env: { ...env, PS1: "", PS2: "", TERM: "dumb" },
+          env: { ...env2, PS1: "", PS2: "", TERM: "dumb" },
           stdio: ["pipe", "pipe", "pipe"],
           detached: true
         }), "f");
@@ -19984,8 +19984,8 @@ function toStreamingFile(data, name, options) {
 }
 var checkFileSupport = () => {
   if (typeof File === "undefined") {
-    const { process: process2 } = globalThis;
-    const isOldNode = typeof process2?.versions?.node === "string" && Number.parseInt(process2.versions.node.split("."), 10) < 20;
+    const { process: process3 } = globalThis;
+    const isOldNode = typeof process3?.versions?.node === "string" && Number.parseInt(process3.versions.node.split("."), 10) < 20;
     throw new Error("`File` is not defined as a global, which is required for file uploads." + (isOldNode ? " Update to a supported Node.js LTS release, or set `globalThis.File` to `import('node:buffer').File`." : ""));
   }
 };
@@ -28785,13 +28785,13 @@ var toFloat32Array = (base64Str) => {
 };
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/utils/env.mjs
-var readEnv = (env) => {
+var readEnv = (env2) => {
   try {
     if (typeof globalThis.process !== "undefined") {
-      return globalThis.process.env?.[env]?.trim() || void 0;
+      return globalThis.process.env?.[env2]?.trim() || void 0;
     }
     if (typeof globalThis.Deno !== "undefined") {
-      return globalThis.Deno.env?.get?.(env)?.trim() || void 0;
+      return globalThis.Deno.env?.get?.(env2)?.trim() || void 0;
     }
   } catch {
     return void 0;
@@ -35346,6 +35346,568 @@ function stringArg(value, fallback) {
 // src/cli/repl.ts
 var import_node_readline = require("node:readline");
 
+// node_modules/.pnpm/chalk@6.0.0/node_modules/chalk/source/utilities.js
+function stringReplaceAll(string, substring, postfix) {
+  let index = string.indexOf(substring);
+  if (index === -1) {
+    return string;
+  }
+  const substringLength = substring.length;
+  let endIndex = 0;
+  let returnValue = "";
+  do {
+    returnValue += string.slice(endIndex, index) + substring + postfix;
+    endIndex = index + substringLength;
+    index = string.indexOf(substring, endIndex);
+  } while (index !== -1);
+  returnValue += string.slice(endIndex);
+  return returnValue;
+}
+function stringEncaseCRLFWithFirstIndex(string, prefix, postfix, index) {
+  let endIndex = 0;
+  let returnValue = "";
+  do {
+    const isGotCR = string[index - 1] === "\r";
+    returnValue += string.slice(endIndex, isGotCR ? index - 1 : index) + prefix + (isGotCR ? "\r\n" : "\n") + postfix;
+    endIndex = index + 1;
+    index = string.indexOf("\n", endIndex);
+  } while (index !== -1);
+  returnValue += string.slice(endIndex);
+  return returnValue;
+}
+
+// node_modules/.pnpm/chalk@6.0.0/node_modules/chalk/source/vendor/ansi-styles/index.js
+var ANSI_BACKGROUND_OFFSET = 10;
+var ANSI_UNDERLINE_OFFSET = 20;
+var wrapAnsi16 = (offset = 0) => (code) => `\x1B[${code + offset}m`;
+var wrapAnsi256 = (offset = 0) => (code) => `\x1B[${38 + offset};5;${code}m`;
+var wrapAnsi16m = (offset = 0) => (red, green, blue) => `\x1B[${38 + offset};2;${red};${green};${blue}m`;
+var wrapUnderlineAnsi = (code) => `\x1B[58;5;${code < 90 ? code - 30 : code - 90 + 8}m`;
+var styles = {
+  modifier: {
+    reset: [0, 0],
+    // 21 isn't widely supported and 22 does the same thing
+    bold: [1, 22],
+    dim: [2, 22],
+    italic: [3, 23],
+    underline: [4, 24],
+    // Extended underline styles (`SGR 4:x` sub-parameters). Not in upstream `ansi-styles`.
+    underlineDouble: ["4:2", 24],
+    underlineCurly: ["4:3", 24],
+    underlineDotted: ["4:4", 24],
+    underlineDashed: ["4:5", 24],
+    overline: [53, 55],
+    inverse: [7, 27],
+    hidden: [8, 28],
+    strikethrough: [9, 29]
+  },
+  color: {
+    black: [30, 39],
+    red: [31, 39],
+    green: [32, 39],
+    yellow: [33, 39],
+    blue: [34, 39],
+    magenta: [35, 39],
+    cyan: [36, 39],
+    white: [37, 39],
+    // Bright color
+    blackBright: [90, 39],
+    gray: [90, 39],
+    // Alias of `blackBright`
+    grey: [90, 39],
+    // Alias of `blackBright`
+    redBright: [91, 39],
+    greenBright: [92, 39],
+    yellowBright: [93, 39],
+    blueBright: [94, 39],
+    magentaBright: [95, 39],
+    cyanBright: [96, 39],
+    whiteBright: [97, 39]
+  },
+  bgColor: {
+    bgBlack: [40, 49],
+    bgRed: [41, 49],
+    bgGreen: [42, 49],
+    bgYellow: [43, 49],
+    bgBlue: [44, 49],
+    bgMagenta: [45, 49],
+    bgCyan: [46, 49],
+    bgWhite: [47, 49],
+    // Bright color
+    bgBlackBright: [100, 49],
+    bgGray: [100, 49],
+    // Alias of `bgBlackBright`
+    bgGrey: [100, 49],
+    // Alias of `bgBlackBright`
+    bgRedBright: [101, 49],
+    bgGreenBright: [102, 49],
+    bgYellowBright: [103, 49],
+    bgBlueBright: [104, 49],
+    bgMagentaBright: [105, 49],
+    bgCyanBright: [106, 49],
+    bgWhiteBright: [107, 49]
+  },
+  // Underline color (`SGR 58`/`59`). Not in upstream `ansi-styles`.
+  underlineColor: {
+    underlineBlack: ["58;5;0", 59],
+    underlineRed: ["58;5;1", 59],
+    underlineGreen: ["58;5;2", 59],
+    underlineYellow: ["58;5;3", 59],
+    underlineBlue: ["58;5;4", 59],
+    underlineMagenta: ["58;5;5", 59],
+    underlineCyan: ["58;5;6", 59],
+    underlineWhite: ["58;5;7", 59],
+    // Bright color
+    underlineBlackBright: ["58;5;8", 59],
+    underlineGray: ["58;5;8", 59],
+    // Alias of `underlineBlackBright`
+    underlineGrey: ["58;5;8", 59],
+    // Alias of `underlineBlackBright`
+    underlineRedBright: ["58;5;9", 59],
+    underlineGreenBright: ["58;5;10", 59],
+    underlineYellowBright: ["58;5;11", 59],
+    underlineBlueBright: ["58;5;12", 59],
+    underlineMagentaBright: ["58;5;13", 59],
+    underlineCyanBright: ["58;5;14", 59],
+    underlineWhiteBright: ["58;5;15", 59]
+  }
+};
+var modifierNames = Object.keys(styles.modifier);
+var foregroundColorNames = Object.keys(styles.color);
+var backgroundColorNames = Object.keys(styles.bgColor);
+var underlineColorNames = Object.keys(styles.underlineColor);
+var colorNames = [...foregroundColorNames, ...backgroundColorNames];
+function assembleStyles() {
+  const codes = /* @__PURE__ */ new Map();
+  for (const [groupName, group] of Object.entries(styles)) {
+    for (const [styleName, style] of Object.entries(group)) {
+      styles[styleName] = {
+        open: `\x1B[${style[0]}m`,
+        close: `\x1B[${style[1]}m`
+      };
+      group[styleName] = styles[styleName];
+      codes.set(Number.parseInt(style[0], 10), style[1]);
+    }
+    Object.defineProperty(styles, groupName, {
+      value: group,
+      enumerable: false
+    });
+  }
+  Object.defineProperty(styles, "codes", {
+    value: codes,
+    enumerable: false
+  });
+  styles.color.close = "\x1B[39m";
+  styles.bgColor.close = "\x1B[49m";
+  styles.underlineColor.close = "\x1B[59m";
+  styles.color.ansi = wrapAnsi16();
+  styles.color.ansi256 = wrapAnsi256();
+  styles.color.ansi16m = wrapAnsi16m();
+  styles.bgColor.ansi = wrapAnsi16(ANSI_BACKGROUND_OFFSET);
+  styles.bgColor.ansi256 = wrapAnsi256(ANSI_BACKGROUND_OFFSET);
+  styles.bgColor.ansi16m = wrapAnsi16m(ANSI_BACKGROUND_OFFSET);
+  styles.underlineColor.ansi = wrapUnderlineAnsi;
+  styles.underlineColor.ansi256 = wrapAnsi256(ANSI_UNDERLINE_OFFSET);
+  styles.underlineColor.ansi16m = wrapAnsi16m(ANSI_UNDERLINE_OFFSET);
+  Object.defineProperties(styles, {
+    rgbToAnsi256: {
+      value(red, green, blue) {
+        if (red === green && green === blue) {
+          if (red < 8) {
+            return 16;
+          }
+          if (red > 248) {
+            return 231;
+          }
+          return Math.round((red - 8) / 247 * 24) + 232;
+        }
+        return 16 + 36 * Math.round(red / 255 * 5) + 6 * Math.round(green / 255 * 5) + Math.round(blue / 255 * 5);
+      },
+      enumerable: false
+    },
+    hexToRgb: {
+      value(hex) {
+        const matches = /[\da-f]{6}|[\da-f]{3}/i.exec(hex.toString(16));
+        if (!matches) {
+          return [0, 0, 0];
+        }
+        let [colorString] = matches;
+        if (colorString.length === 3) {
+          colorString = [...colorString].map((character) => character + character).join("");
+        }
+        const integer = Number.parseInt(colorString, 16);
+        return [
+          /* eslint-disable no-bitwise -- We need the speed */
+          integer >> 16 & 255,
+          integer >> 8 & 255,
+          integer & 255
+          /* eslint-enable no-bitwise */
+        ];
+      },
+      enumerable: false
+    },
+    hexToAnsi256: {
+      value: (hex) => styles.rgbToAnsi256(...styles.hexToRgb(hex)),
+      enumerable: false
+    },
+    ansi256ToAnsi: {
+      value(code) {
+        if (code < 8) {
+          return 30 + code;
+        }
+        if (code < 16) {
+          return 90 + (code - 8);
+        }
+        let red;
+        let green;
+        let blue;
+        if (code >= 232) {
+          red = ((code - 232) * 10 + 8) / 255;
+          green = red;
+          blue = red;
+        } else {
+          code -= 16;
+          const remainder = code % 36;
+          red = Math.floor(code / 36) / 5;
+          green = Math.floor(remainder / 6) / 5;
+          blue = remainder % 6 / 5;
+        }
+        const value = Math.max(red, green, blue) * 2;
+        if (value === 0) {
+          return 30;
+        }
+        let result = 30 + (Math.round(blue) << 2 | Math.round(green) << 1 | Math.round(red));
+        if (value === 2) {
+          result += 60;
+        }
+        return result;
+      },
+      enumerable: false
+    },
+    rgbToAnsi: {
+      value: (red, green, blue) => styles.ansi256ToAnsi(styles.rgbToAnsi256(red, green, blue)),
+      enumerable: false
+    },
+    hexToAnsi: {
+      value: (hex) => styles.ansi256ToAnsi(styles.hexToAnsi256(hex)),
+      enumerable: false
+    }
+  });
+  return styles;
+}
+var ansiStyles = assembleStyles();
+var ansi_styles_default = ansiStyles;
+
+// node_modules/.pnpm/chalk@6.0.0/node_modules/chalk/source/vendor/supports-color/index.js
+var import_node_process = __toESM(require("node:process"), 1);
+var import_node_os = __toESM(require("node:os"), 1);
+var import_node_tty = __toESM(require("node:tty"), 1);
+function hasFlag(flag, argv = globalThis.Deno ? globalThis.Deno.args : import_node_process.default.argv) {
+  const prefix = flag.startsWith("-") ? "" : flag.length === 1 ? "-" : "--";
+  const position = argv.indexOf(prefix + flag);
+  const terminatorPosition = argv.indexOf("--");
+  return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+}
+var { env } = import_node_process.default;
+var flagForceColor;
+if (hasFlag("no-color") || hasFlag("no-colors") || hasFlag("color=false") || hasFlag("color=never")) {
+  flagForceColor = 0;
+} else if (hasFlag("color") || hasFlag("colors") || hasFlag("color=true") || hasFlag("color=always")) {
+  flagForceColor = 1;
+}
+function hasNumericForceColor() {
+  return /^\d+$/.test(env.FORCE_COLOR);
+}
+function envForceColor() {
+  if (!("FORCE_COLOR" in env)) {
+    return;
+  }
+  if (env.FORCE_COLOR === "false") {
+    return 0;
+  }
+  if (env.FORCE_COLOR === "true" || env.FORCE_COLOR.length === 0) {
+    return 1;
+  }
+  if (!hasNumericForceColor()) {
+    return;
+  }
+  return Math.min(Number.parseInt(env.FORCE_COLOR, 10), 3);
+}
+function translateLevel(level) {
+  if (level === 0) {
+    return false;
+  }
+  return {
+    level,
+    hasBasic: true,
+    has256: level >= 2,
+    has16m: level >= 3
+  };
+}
+function _supportsColor(haveStream, { streamIsTTY, sniffFlags = true } = {}) {
+  const noFlagForceColor = envForceColor();
+  if (noFlagForceColor !== void 0) {
+    flagForceColor = noFlagForceColor;
+  }
+  const forceColor = sniffFlags ? flagForceColor : noFlagForceColor;
+  if (forceColor === 0) {
+    return 0;
+  }
+  if (sniffFlags) {
+    if (hasFlag("color=16m") || hasFlag("color=full") || hasFlag("color=truecolor")) {
+      return 3;
+    }
+    if (hasFlag("color=256")) {
+      return 2;
+    }
+  }
+  if (forceColor !== void 0 && hasNumericForceColor()) {
+    return forceColor;
+  }
+  if ("TF_BUILD" in env && "AGENT_NAME" in env) {
+    return 1;
+  }
+  if (haveStream && !streamIsTTY && forceColor === void 0) {
+    return 0;
+  }
+  const min = forceColor || 0;
+  if (env.TERM === "dumb") {
+    return min;
+  }
+  if (import_node_process.default.platform === "win32") {
+    const osRelease = import_node_os.default.release().split(".");
+    if (Number(osRelease[0]) >= 10 && Number(osRelease[2]) >= 10586) {
+      return Number(osRelease[2]) >= 14931 ? 3 : 2;
+    }
+    return 1;
+  }
+  if ("CI" in env) {
+    if (["GITHUB_ACTIONS", "GITEA_ACTIONS", "CIRCLECI"].some((key) => key in env)) {
+      return 3;
+    }
+    if (["TRAVIS", "APPVEYOR", "GITLAB_CI", "BUILDKITE", "DRONE"].some((sign) => sign in env) || env.CI_NAME === "codeship") {
+      return 1;
+    }
+    return min;
+  }
+  if ("TEAMCITY_VERSION" in env) {
+    return /^(?:9\.0*[1-9]\d*\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+  }
+  if (env.COLORTERM === "truecolor") {
+    return 3;
+  }
+  if (env.TERM === "xterm-kitty") {
+    return 3;
+  }
+  if (env.TERM === "xterm-ghostty") {
+    return 3;
+  }
+  if (env.TERM === "wezterm") {
+    return 3;
+  }
+  if ("TERM_PROGRAM" in env) {
+    const version = Number.parseInt((env.TERM_PROGRAM_VERSION || "").split(".", 1)[0], 10);
+    switch (env.TERM_PROGRAM) {
+      case "iTerm.app": {
+        return version >= 3 ? 3 : 2;
+      }
+      case "Apple_Terminal": {
+        return 2;
+      }
+    }
+  }
+  if (/-256(?:color)?$/i.test(env.TERM)) {
+    return 2;
+  }
+  if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+    return 1;
+  }
+  if ("COLORTERM" in env) {
+    return 1;
+  }
+  return min;
+}
+function createSupportsColor(stream2, options = {}) {
+  const level = _supportsColor(stream2, {
+    streamIsTTY: stream2 && stream2.isTTY,
+    ...options
+  });
+  return translateLevel(level);
+}
+var supportsColor = {
+  stdout: createSupportsColor({ isTTY: import_node_tty.default.isatty(1) }),
+  stderr: createSupportsColor({ isTTY: import_node_tty.default.isatty(2) })
+};
+var supports_color_default = supportsColor;
+
+// node_modules/.pnpm/chalk@6.0.0/node_modules/chalk/source/index.js
+var { stdout: stdoutColor, stderr: stderrColor } = supports_color_default;
+var GENERATOR = Symbol("GENERATOR");
+var STYLER = Symbol("STYLER");
+var IS_EMPTY = Symbol("IS_EMPTY");
+var LEVEL = Symbol("LEVEL");
+var styles2 = /* @__PURE__ */ Object.create(null);
+var assertValidLevel = (level) => {
+  if (!Number.isSafeInteger(level) || level < 0 || level > 3) {
+    throw new Error("The `level` should be an integer from 0 to 3");
+  }
+};
+var levelDescriptor = {
+  enumerable: true,
+  get() {
+    return this[LEVEL];
+  },
+  set(level) {
+    assertValidLevel(level);
+    this[LEVEL] = level;
+  }
+};
+var applyOptions = (object, options = {}) => {
+  if (options.level !== void 0) {
+    assertValidLevel(options.level);
+  }
+  const colorLevel = stdoutColor ? stdoutColor.level : 0;
+  object[LEVEL] = options.level === void 0 ? colorLevel : options.level;
+};
+var chalkFactory = (options) => {
+  const chalk2 = (...strings) => strings.join(" ");
+  applyOptions(chalk2, options);
+  Object.setPrototypeOf(chalk2, createChalk.prototype);
+  return chalk2;
+};
+function createChalk(options) {
+  return chalkFactory(options);
+}
+Object.setPrototypeOf(createChalk.prototype, Function.prototype);
+for (const [styleName, style] of Object.entries(ansi_styles_default)) {
+  styles2[styleName] = {
+    get() {
+      const builder = createBuilder(this, createStyler(style.open, style.close, this[STYLER]), this[IS_EMPTY]);
+      Object.defineProperty(this, styleName, { value: builder });
+      return builder;
+    }
+  };
+}
+styles2.visible = {
+  get() {
+    const builder = createBuilder(this, this[STYLER], true);
+    Object.defineProperty(this, "visible", { value: builder });
+    return builder;
+  }
+};
+var createModelConverters = (model, type) => {
+  const style = ansi_styles_default[type];
+  if (model === "rgb") {
+    const ansi2 = (red, green, blue) => style.ansi(ansi_styles_default.rgbToAnsi(red, green, blue));
+    const ansi256 = (red, green, blue) => style.ansi256(ansi_styles_default.rgbToAnsi256(red, green, blue));
+    return [ansi2, ansi2, ansi256, style.ansi16m];
+  }
+  if (model === "hex") {
+    const ansi2 = (hex) => style.ansi(ansi_styles_default.hexToAnsi(hex));
+    const ansi256 = (hex) => style.ansi256(ansi_styles_default.hexToAnsi256(hex));
+    return [ansi2, ansi2, ansi256, (hex) => style.ansi16m(...ansi_styles_default.hexToRgb(hex))];
+  }
+  const ansi = (code) => style.ansi(ansi_styles_default.ansi256ToAnsi(code));
+  return [ansi, ansi, style.ansi256, style.ansi256];
+};
+var usedModels = ["rgb", "hex", "ansi256"];
+for (const model of usedModels) {
+  const capitalizedModel = model[0].toUpperCase() + model.slice(1);
+  for (const [styleName, type] of [
+    [model, "color"],
+    ["bg" + capitalizedModel, "bgColor"],
+    ["underline" + capitalizedModel, "underlineColor"]
+  ]) {
+    const { close } = ansi_styles_default[type];
+    const converters = createModelConverters(model, type);
+    styles2[styleName] = {
+      get() {
+        const styleFunction = function(first, second, third) {
+          const open = converters[this.level](first, second, third);
+          return createBuilder(this, createStyler(open, close, this[STYLER]), this[IS_EMPTY]);
+        };
+        Object.defineProperty(this, styleName, { value: styleFunction });
+        return styleFunction;
+      }
+    };
+  }
+}
+var proto = Object.defineProperties(
+  () => {
+  },
+  {
+    ...styles2,
+    level: {
+      enumerable: true,
+      get() {
+        return this[GENERATOR].level;
+      },
+      set(level) {
+        this[GENERATOR].level = level;
+      }
+    }
+  }
+);
+var createStyler = (open, close, parent) => {
+  let openAll;
+  let closeAll;
+  if (parent === void 0) {
+    openAll = open;
+    closeAll = close;
+  } else {
+    openAll = parent.openAll + open;
+    closeAll = close + parent.closeAll;
+  }
+  return {
+    open,
+    close,
+    openAll,
+    closeAll,
+    parent
+  };
+};
+var createBuilder = (self, _styler, _isEmpty) => {
+  const builder = (...arguments_) => {
+    if (arguments_.length === 1) {
+      return applyStyle(builder, "" + arguments_[0]);
+    }
+    if (arguments_.length === 2) {
+      return applyStyle(builder, arguments_[0] + " " + arguments_[1]);
+    }
+    return applyStyle(builder, arguments_.join(" "));
+  };
+  Object.setPrototypeOf(builder, proto);
+  builder[GENERATOR] = self[GENERATOR] ?? self;
+  builder[STYLER] = _styler;
+  builder[IS_EMPTY] = _isEmpty;
+  return builder;
+};
+var applyStyle = (self, string) => {
+  if (self[GENERATOR][LEVEL] <= 0 || !string) {
+    return self[IS_EMPTY] ? "" : string;
+  }
+  let styler = self[STYLER];
+  if (styler === void 0) {
+    return string;
+  }
+  const { openAll, closeAll } = styler;
+  if (string.includes("\x1B")) {
+    while (styler !== void 0) {
+      string = stringReplaceAll(string, styler.close, styler.open);
+      styler = styler.parent;
+    }
+  }
+  const lfIndex = string.indexOf("\n");
+  if (lfIndex !== -1) {
+    string = stringEncaseCRLFWithFirstIndex(string, closeAll, openAll, lfIndex);
+  }
+  return openAll + string + closeAll;
+};
+Object.defineProperties(createChalk.prototype, { ...styles2, level: levelDescriptor });
+var chalk = createChalk();
+var chalkStderr = createChalk({ level: stderrColor ? stderrColor.level : 0 });
+var source_default = chalk;
+
 // src/agent/loop.ts
 async function decideToolCall(toolCall, beforeToolCall) {
   return beforeToolCall ? await beforeToolCall(toolCall) : { action: "allow" };
@@ -35507,7 +36069,7 @@ async function startRepl(options) {
   const rl = (0, import_node_readline.createInterface)({
     input: process.stdin,
     output: process.stdout,
-    prompt: options.prompt
+    prompt: source_default.cyan("> ")
   });
   rl.prompt();
   rl.on("line", async (line) => {
@@ -35516,18 +36078,18 @@ async function startRepl(options) {
       rl.prompt();
       return;
     }
-    if (input === "exit" || input === "quit") {
-      console.log("\u{1F44B} \u518D\u89C1\uFF01");
+    if (input === "/exit" || input === "/quit") {
+      console.log(source_default.yellow("\n\u{1F44B} \u518D\u89C1\uFF01\n"));
       rl.close();
       process.exit(0);
     }
-    if (input === "clear") {
+    if (input === "/clear") {
       options.messages.length = 0;
-      console.log("\u{1F5D1}\uFE0F  \u5386\u53F2\u5DF2\u6E05\u9664\n");
+      console.log(source_default.dim("\n\u{1F5D1}\uFE0F  \u5386\u53F2\u5DF2\u6E05\u9664\n"));
       rl.prompt();
       return;
     }
-    if (input === "help") {
+    if (input === "/help") {
       printHelp();
       rl.prompt();
       return;
@@ -35555,7 +36117,9 @@ async function startRepl(options) {
       timestamp: Date.now()
     });
     try {
-      process.stdout.write("\n\u{1F916} ");
+      console.log("");
+      console.log(source_default.dim("\u2500".repeat(60)));
+      console.log("");
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
@@ -35567,19 +36131,21 @@ async function startRepl(options) {
             process.stdout.write(event.delta);
           }
           if (event.type === "tool_execution_start") {
-            process.stdout.write(`
-\u{1F527} \u8C03\u7528\u5DE5\u5177: ${event.toolName}`);
+            console.log("");
+            console.log(source_default.dim(`\u{1F527} \u8C03\u7528\u5DE5\u5177: ${event.toolName}`));
           }
           if (event.type === "tool_execution_end") {
-            process.stdout.write(` \u2713
-\u{1F916} `);
+            console.log(source_default.dim(` \u2713`));
+            console.log("");
           }
         }
       });
       options.messages.push(...result.newMessages);
-      console.log("\n");
+      console.log("");
+      console.log(source_default.dim("\u2500".repeat(60)));
+      console.log("");
     } catch (error) {
-      console.error("\n\u274C \u9519\u8BEF:", error instanceof Error ? error.message : error);
+      console.error(source_default.red("\n\u274C \u9519\u8BEF:"), error instanceof Error ? error.message : error);
     }
     rl.prompt();
   });
@@ -35588,56 +36154,58 @@ async function startRepl(options) {
   });
 }
 function printHelp() {
-  console.log(`
-\u{1F4D6} \u53EF\u7528\u547D\u4EE4:
-  /new   - \u521B\u5EFA\u65B0\u7684\u4F1A\u8BDD
-  /login - \u767B\u5F55\u6A21\u578B\u670D\u52A1\u5546\uFF08\u8F93\u5165apiKey\uFF09
-  /model - \u9009\u62E9\u6A21\u578B\u4F9B\u5E94\u5546\u548C\u6A21\u578B
-  help   - \u663E\u793A\u5E2E\u52A9\u4FE1\u606F
-  clear  - \u6E05\u9664\u5BF9\u8BDD\u5386\u53F2
-  exit   - \u9000\u51FA\u7A0B\u5E8F
-  quit   - \u9000\u51FA\u7A0B\u5E8F
-
-\u{1F4A1} \u63D0\u793A:
-  - \u76F4\u63A5\u8F93\u5165\u95EE\u9898\u5373\u53EF\u5F00\u59CB\u5BF9\u8BDD
-  - \u652F\u6301\u591A\u8F6E\u5BF9\u8BDD\uFF0C\u4E0A\u4E0B\u6587\u4F1A\u81EA\u52A8\u4FDD\u6301
-  - \u8F93\u5165\u7F16\u7A0B\u95EE\u9898\u6216\u6587\u4EF6\u64CD\u4F5C\u8BF7\u6C42
-`);
+  console.log("");
+  console.log(source_default.cyan("\u{1F4D6} \u53EF\u7528\u547D\u4EE4\uFF08\u6240\u6709\u547D\u4EE4\u4EE5 / \u5F00\u5934\uFF09:"));
+  console.log("");
+  console.log(source_default.white("  /new") + source_default.dim("   - \u521B\u5EFA\u65B0\u7684\u4F1A\u8BDD"));
+  console.log(source_default.white("  /login") + source_default.dim(" - \u767B\u5F55\u6A21\u578B\u670D\u52A1\u5546\uFF08\u8F93\u5165apiKey\uFF09"));
+  console.log(source_default.white("  /model") + source_default.dim(" - \u9009\u62E9\u6A21\u578B\u4F9B\u5E94\u5546\u548C\u6A21\u578B"));
+  console.log(source_default.white("  /help") + source_default.dim("  - \u663E\u793A\u5E2E\u52A9\u4FE1\u606F"));
+  console.log(source_default.white("  /clear") + source_default.dim(" - \u6E05\u9664\u5BF9\u8BDD\u5386\u53F2"));
+  console.log(source_default.white("  /exit") + source_default.dim("  - \u9000\u51FA\u7A0B\u5E8F"));
+  console.log(source_default.white("  /quit") + source_default.dim("  - \u9000\u51FA\u7A0B\u5E8F"));
+  console.log("");
+  console.log(source_default.dim("\u{1F4A1} \u63D0\u793A:"));
+  console.log(source_default.dim("  - \u76F4\u63A5\u8F93\u5165\u95EE\u9898\u5373\u53EF\u5F00\u59CB\u5BF9\u8BDD"));
+  console.log(source_default.dim("  - \u652F\u6301\u591A\u8F6E\u5BF9\u8BDD\uFF0C\u4E0A\u4E0B\u6587\u4F1A\u81EA\u52A8\u4FDD\u6301"));
+  console.log(source_default.dim("  - \u8F93\u5165\u7F16\u7A0B\u95EE\u9898\u6216\u6587\u4EF6\u64CD\u4F5C\u8BF7\u6C42"));
+  console.log("");
 }
 async function handleLogin(providerService, rl) {
   if (!providerService) {
-    console.log("\u274C Provider\u670D\u52A1\u672A\u521D\u59CB\u5316");
+    console.log(source_default.red("\u274C Provider\u670D\u52A1\u672A\u521D\u59CB\u5316"));
     return;
   }
   const providers = providerService.getRegisteredProviders();
   if (providers.length === 0) {
-    console.log("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546");
+    console.log(source_default.red("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546"));
     return;
   }
-  console.log("\n\u{1F4CB} \u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546:");
+  console.log("");
+  console.log(source_default.cyan("\u{1F4CB} \u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546:"));
   providers.forEach((provider, index2) => {
-    console.log(`  ${index2 + 1}. ${provider}`);
+    console.log(source_default.white(`  ${index2 + 1}. ${provider}`));
   });
-  const providerIndex = await question(rl, "\n\u8BF7\u9009\u62E9\u6A21\u578B\u670D\u52A1\u5546 (\u8F93\u5165\u5E8F\u53F7): ");
+  const providerIndex = await question(rl, source_default.cyan("\n\u8BF7\u9009\u62E9\u6A21\u578B\u670D\u52A1\u5546 (\u8F93\u5165\u5E8F\u53F7): "));
   const index = parseInt(providerIndex, 10) - 1;
   if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log("\u274C \u65E0\u6548\u7684\u9009\u62E9");
+    console.log(source_default.red("\u274C \u65E0\u6548\u7684\u9009\u62E9"));
     return;
   }
   const selectedProvider = providers[index];
-  const apiKey = await question(rl, `
-\u8BF7\u8F93\u5165 ${selectedProvider} \u7684 API Key: `);
+  const apiKey = await question(rl, source_default.cyan(`
+\u8BF7\u8F93\u5165 ${selectedProvider} \u7684 API Key: `));
   if (!apiKey.trim()) {
-    console.log("\u274C API Key\u4E0D\u80FD\u4E3A\u7A7A");
+    console.log(source_default.red("\u274C API Key\u4E0D\u80FD\u4E3A\u7A7A"));
     return;
   }
   try {
     await providerService.saveProviderConfig(selectedProvider, {
       apiKey: apiKey.trim()
     });
-    console.log(`\u2705 \u5DF2\u4FDD\u5B58 ${selectedProvider} \u7684 API Key`);
+    console.log(source_default.green(`\u2705 \u5DF2\u4FDD\u5B58 ${selectedProvider} \u7684 API Key`));
   } catch (error) {
-    console.log("\u274C \u4FDD\u5B58\u5931\u8D25:", error instanceof Error ? error.message : error);
+    console.log(source_default.red("\u274C \u4FDD\u5B58\u5931\u8D25:"), error instanceof Error ? error.message : error);
   }
 }
 function question(rl, prompt) {
@@ -35649,88 +36217,89 @@ function question(rl, prompt) {
 }
 async function handleModel(providerService, settingsStore, rl) {
   if (!providerService) {
-    console.log("\u274C Provider\u670D\u52A1\u672A\u521D\u59CB\u5316");
+    console.log(source_default.red("\u274C Provider\u670D\u52A1\u672A\u521D\u59CB\u5316"));
     return;
   }
   const providers = providerService.getRegisteredProviders();
   if (providers.length === 0) {
-    console.log("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546");
+    console.log(source_default.red("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546"));
     return;
   }
   if (settingsStore) {
     const defaultModel = await settingsStore.getDefaultModel();
     if (defaultModel) {
-      console.log(`
-\u{1F4CC} \u5F53\u524D\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`);
+      console.log("");
+      console.log(source_default.cyan(`\u{1F4CC} \u5F53\u524D\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`));
     }
   }
-  console.log("\n\u{1F4CB} \u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546:");
+  console.log("");
+  console.log(source_default.cyan("\u{1F4CB} \u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546:"));
   providers.forEach((provider, index2) => {
-    console.log(`  ${index2 + 1}. ${provider}`);
+    console.log(source_default.white(`  ${index2 + 1}. ${provider}`));
   });
-  const providerIndex = await question(rl, "\n\u8BF7\u9009\u62E9\u6A21\u578B\u670D\u52A1\u5546 (\u8F93\u5165\u5E8F\u53F7): ");
+  const providerIndex = await question(rl, source_default.cyan("\n\u8BF7\u9009\u62E9\u6A21\u578B\u670D\u52A1\u5546 (\u8F93\u5165\u5E8F\u53F7): "));
   const index = parseInt(providerIndex, 10) - 1;
   if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log("\u274C \u65E0\u6548\u7684\u9009\u62E9");
+    console.log(source_default.red("\u274C \u65E0\u6548\u7684\u9009\u62E9"));
     return;
   }
   const selectedProvider = providers[index];
   const config = await providerService.getProviderConfig(selectedProvider);
   if (!config.apiKey) {
-    console.log(`\u274C \u8BF7\u5148\u4F7F\u7528 /login \u547D\u4EE4\u914D\u7F6E ${selectedProvider} \u7684 API Key`);
+    console.log(source_default.red(`\u274C \u8BF7\u5148\u4F7F\u7528 /login \u547D\u4EE4\u914D\u7F6E ${selectedProvider} \u7684 API Key`));
     return;
   }
-  console.log(`
-\u{1F50D} \u6B63\u5728\u83B7\u53D6 ${selectedProvider} \u7684\u6A21\u578B\u5217\u8868...`);
+  console.log(source_default.dim(`
+\u{1F50D} \u6B63\u5728\u83B7\u53D6 ${selectedProvider} \u7684\u6A21\u578B\u5217\u8868...`));
   try {
     const models = await providerService.getModelList(selectedProvider, config.apiKey);
     if (models.length === 0) {
-      console.log("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B");
+      console.log(source_default.red("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B"));
       return;
     }
-    console.log(`
-\u{1F4CB} ${selectedProvider} \u53EF\u7528\u7684\u6A21\u578B:`);
+    console.log("");
+    console.log(source_default.cyan(`\u{1F4CB} ${selectedProvider} \u53EF\u7528\u7684\u6A21\u578B:`));
     models.forEach((model, idx) => {
-      console.log(`  ${idx + 1}. ${model}`);
+      console.log(source_default.white(`  ${idx + 1}. ${model}`));
     });
-    const modelIndex = await question(rl, "\n\u8BF7\u9009\u62E9\u6A21\u578B (\u8F93\u5165\u5E8F\u53F7): ");
+    const modelIndex = await question(rl, source_default.cyan("\n\u8BF7\u9009\u62E9\u6A21\u578B (\u8F93\u5165\u5E8F\u53F7): "));
     const mIdx = parseInt(modelIndex, 10) - 1;
     if (isNaN(mIdx) || mIdx < 0 || mIdx >= models.length) {
-      console.log("\u274C \u65E0\u6548\u7684\u9009\u62E9");
+      console.log(source_default.red("\u274C \u65E0\u6548\u7684\u9009\u62E9"));
       return;
     }
     const selectedModel = models[mIdx];
     const defaultModel = `${selectedProvider}/${selectedModel}`;
     if (settingsStore) {
       await settingsStore.setDefaultModel(defaultModel);
-      console.log(`
-\u2705 \u5DF2\u8BBE\u7F6E\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`);
-      console.log("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n");
+      console.log(source_default.green(`
+\u2705 \u5DF2\u8BBE\u7F6E\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`));
+      console.log(source_default.dim("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n"));
     } else {
       await providerService.saveProviderConfig(selectedProvider, {
         ...config,
         model: selectedModel
       });
-      console.log(`
-\u2705 \u5DF2\u9009\u62E9\u6A21\u578B: ${defaultModel}`);
-      console.log("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n");
+      console.log(source_default.green(`
+\u2705 \u5DF2\u9009\u62E9\u6A21\u578B: ${defaultModel}`));
+      console.log(source_default.dim("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n"));
     }
   } catch (error) {
-    console.log("\u274C \u83B7\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25:", error instanceof Error ? error.message : error);
+    console.log(source_default.red("\u274C \u83B7\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25:"), error instanceof Error ? error.message : error);
   }
 }
 
 // src/provider/provider-store.ts
 var import_node_fs = require("node:fs");
 var import_promises2 = require("node:fs/promises");
-var import_node_os = require("node:os");
+var import_node_os2 = require("node:os");
 var import_node_path2 = require("node:path");
 var ProviderStore = class {
   storePath;
   data = {};
   initialized = false;
   constructor(storePath) {
-    this.storePath = storePath || (0, import_node_path2.join)((0, import_node_os.homedir)(), ".mini-pi", "auth.json");
+    this.storePath = storePath || (0, import_node_path2.join)((0, import_node_os2.homedir)(), ".mini-pi", "auth.json");
   }
   /**
    * 初始化存储，从文件加载数据
@@ -35883,14 +36452,14 @@ var MiniMaxCnProvider = class {
 // src/provider/settings-store.ts
 var import_node_fs2 = require("node:fs");
 var import_promises3 = require("node:fs/promises");
-var import_node_os2 = require("node:os");
+var import_node_os3 = require("node:os");
 var import_node_path3 = require("node:path");
 var SettingsStore = class {
   settingsPath;
   settings = {};
   initialized = false;
   constructor(settingsPath) {
-    this.settingsPath = settingsPath || (0, import_node_path3.join)((0, import_node_os2.homedir)(), ".mini-pi", "settings.json");
+    this.settingsPath = settingsPath || (0, import_node_path3.join)((0, import_node_os3.homedir)(), ".mini-pi", "settings.json");
   }
   /**
    * 初始化存储，从文件加载数据
@@ -36108,7 +36677,7 @@ var ModelProviderService = class {
 // src/agent/sessionManager.ts
 var import_node_fs4 = require("node:fs");
 var import_node_path5 = require("node:path");
-var import_node_os3 = require("node:os");
+var import_node_os4 = require("node:os");
 
 // src/agent/sessionStore.ts
 var import_node_fs3 = require("node:fs");
@@ -36422,10 +36991,14 @@ function extractText(message) {
 var SessionManager = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.sessionsDir = (0, import_node_path5.join)((0, import_node_os3.homedir)(), ".mini-pi", "sessions");
+    this.sessionsDir = (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".mini-pi", "sessions");
+    this.globalAgentsPath = (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".mini-pi", "AGENTS.md");
+    this.projectAgentsPath = (0, import_node_path5.join)(workspaceRoot, "AGENTS.md");
     this.ensureSessionsDir();
   }
   sessionsDir;
+  globalAgentsPath;
+  projectAgentsPath;
   currentSession = null;
   model = null;
   setModel(model) {
@@ -36438,6 +37011,47 @@ var SessionManager = class {
     if (!(0, import_node_fs4.existsSync)(this.sessionsDir)) {
       (0, import_node_fs4.mkdirSync)(this.sessionsDir, { recursive: true });
     }
+  }
+  /**
+   * 读取 AGENTS.md 文件内容
+   * @returns AGENTS.md 内容，如果文件不存在则返回空字符串
+   */
+  readAgentsFile(filePath) {
+    try {
+      if ((0, import_node_fs4.existsSync)(filePath)) {
+        return (0, import_node_fs4.readFileSync)(filePath, "utf8");
+      }
+    } catch (error) {
+      console.error(`\u8BFB\u53D6 ${filePath} \u5931\u8D25:`, error);
+    }
+    return "";
+  }
+  /**
+   * 获取固定上下文（来自 AGENTS.md 文件）
+   * @returns 固定上下文内容
+   */
+  getFixedContext() {
+    const parts = [];
+    const globalAgents = this.readAgentsFile(this.globalAgentsPath);
+    if (globalAgents) {
+      parts.push(`## \u5168\u5C40\u4EE3\u7406\u89C4\u5219
+
+${globalAgents}`);
+    }
+    const projectAgents = this.readAgentsFile(this.projectAgentsPath);
+    if (projectAgents) {
+      parts.push(`## \u9879\u76EE\u4EE3\u7406\u89C4\u5219
+
+${projectAgents}`);
+    }
+    if (parts.length === 0) {
+      return "";
+    }
+    return `# \u56FA\u5B9A\u4E0A\u4E0B\u6587
+
+\u4EE5\u4E0B\u662F\u6765\u81EA AGENTS.md \u7684\u89C4\u5219\uFF0C\u8BF7\u5728\u56DE\u7B54\u65F6\u9075\u5FAA\u8FD9\u4E9B\u89C4\u5219\uFF1A
+
+${parts.join("\n\n---\n\n")}`;
   }
   /**
    * 创建新的 session
@@ -36505,48 +37119,75 @@ var SessionManager = class {
   }
 };
 
+// src/cli/ui.ts
+function printLogo() {
+  const logo = `
+${source_default.cyan("  \u2588\u2588\u2588\u2557   \u2588\u2588\u2588\u2557\u2588\u2588\u2557\u2588\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2557")}
+${source_default.cyan("  \u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\u2588\u2588\u2551")}
+${source_default.cyan("  \u2588\u2588\u2554\u2588\u2588\u2588\u2588\u2554\u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551\u2588\u2588\u2551")}
+${source_default.cyan("  \u2588\u2588\u2551\u255A\u2588\u2588\u2554\u255D\u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2551\u255A\u2588\u2588\u2557\u2588\u2588\u2551\u2588\u2588\u2551")}
+${source_default.cyan("  \u2588\u2588\u2551 \u255A\u2550\u255D \u2588\u2588\u2551\u2588\u2588\u2551\u2588\u2588\u2551 \u255A\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2551")}
+${source_default.cyan("  \u255A\u2550\u255D     \u255A\u2550\u255D\u255A\u2550\u255D\u255A\u2550\u255D  \u255A\u2550\u2550\u2550\u255D\u255A\u2550\u255D")}
+${source_default.dim("  \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550")}
+${source_default.yellow("  Code Agent")}
+${source_default.dim("  \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550")}
+`;
+  console.log(logo);
+}
+function printWelcome(providerName, modelName) {
+  console.log(source_default.dim("\u2500".repeat(60)));
+  console.log(source_default.dim("  Provider: ") + source_default.white(providerName));
+  console.log(source_default.dim("  Model:    ") + source_default.white(modelName));
+  console.log(source_default.dim("\u2500".repeat(60)));
+  console.log();
+  console.log(source_default.dim("  \u8F93\u5165 ") + source_default.cyan("/help") + source_default.dim(" \u67E5\u770B\u6240\u6709\u547D\u4EE4"));
+  console.log(source_default.dim("  \u8F93\u5165 ") + source_default.cyan("/new") + source_default.dim(" \u521B\u5EFA\u65B0\u4F1A\u8BDD"));
+  console.log(source_default.dim("  \u76F4\u63A5\u8F93\u5165\u95EE\u9898\u5373\u53EF\u5F00\u59CB\u5BF9\u8BDD"));
+  console.log();
+  console.log(source_default.dim("\u2500".repeat(60)));
+  console.log();
+}
+
 // src/cli/index.ts
 async function createModelFromSettings(providerService, settingsStore) {
   const parsed = await settingsStore.parseDefaultModel();
   if (parsed) {
     const { providerName, modelName } = parsed;
-    console.log(`\u{1F4E1} \u4F7F\u7528 provider: ${providerName}`);
-    console.log(`\u{1F916} \u4F7F\u7528\u6A21\u578B: ${modelName}`);
     const providerConfig = await providerService.getProviderConfig(providerName);
     if (providerConfig.apiKey) {
-      return createModelFromProvider(providerName, {
+      const model2 = createModelFromProvider(providerName, {
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName
       });
+      return { model: model2, providerName, modelName };
     }
   }
   const allConfigs = await providerService.getAllConfigs();
   for (const [providerName, config] of Object.entries(allConfigs)) {
     if (config.apiKey) {
-      console.log(`\u{1F4E1} \u4F7F\u7528 provider: ${providerName}`);
-      if (config.model) {
-        console.log(`\u{1F916} \u4F7F\u7528\u6A21\u578B: ${config.model}`);
-      }
-      return createModelFromProvider(providerName, {
+      const modelName = config.model || "default";
+      const model2 = createModelFromProvider(providerName, {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model
       });
+      return { model: model2, providerName, modelName };
     }
   }
-  console.log("\u26A0\uFE0F  \u672A\u627E\u5230 provider \u914D\u7F6E\uFF0C\u4F7F\u7528\u73AF\u5883\u53D8\u91CF");
-  return createModelFromEnv();
+  const model = createModelFromEnv();
+  return { model, providerName: "env", modelName: "default" };
 }
 async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();
-  const model = await createModelFromSettings(providerService, settingsStore);
+  const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
   const sessionManager = new SessionManager(workspaceRoot);
   sessionManager.setModel(model);
   const sessionStore = sessionManager.loadLatestSession();
+  const fixedContext = sessionManager.getFixedContext();
   const systemPrompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
 - \u8BFB\u53D6\u548C\u5199\u5165\u6587\u4EF6
 - \u6267\u884C\u547D\u4EE4
@@ -36554,10 +37195,12 @@ async function main() {
 
 \u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55\uFF1A${workspaceRoot}
 
-\u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002`;
+\u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002
+
+${fixedContext}`;
   const messages = [];
-  console.log("\u{1F916} Mini Pi Code Agent");
-  console.log("\u8F93\u5165 '/new' \u521B\u5EFA\u65B0\u4F1A\u8BDD\uFF0C'exit' \u6216 'quit' \u9000\u51FA\uFF0C\u8F93\u5165 'clear' \u6E05\u9664\u5386\u53F2\n");
+  printLogo();
+  printWelcome(providerName, modelName);
   const onNewSession = () => {
     const newSession = sessionManager.createNewSession();
     messages.length = 0;
