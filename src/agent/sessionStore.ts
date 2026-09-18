@@ -28,7 +28,8 @@ async function summarizeEntries(entries: MessageEntry[], model: LlmModel): Promi
 2. 保留助手的关键回复和解决方案
 3. 保留重要的工具调用和结果
 4. 使用简洁的中文描述
-5. 摘要长度控制在200字以内`;
+5. 保留用户任务的关键执行进度
+6. 摘要长度控制在200字以内`;
 
   const messages: AgentMessage[] = [
     {
@@ -198,7 +199,7 @@ export class JsonlSessionStore {
     mkdirSync(dirname(this.filePath), { recursive: true });
     const header: SessionEntry = {
       type: "session",
-      version: 1.0,
+      version: 1,
       id: this.sessionId,
       timestamp: new Date().toISOString(),
       cwd: this.cwd,

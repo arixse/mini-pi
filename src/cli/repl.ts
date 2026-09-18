@@ -18,6 +18,7 @@ export type ReplOptions = {
   providerService?: ModelProviderService;
   settingsStore?: SettingsStore;
   sessionStore?: JsonlSessionStore;
+  onNewSession?: () => void;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -68,6 +69,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return;
     }
 
+    if (input === "/new") {
+      if (options.onNewSession) {
+        options.onNewSession();
+      }
+      rl.prompt();
+      return;
+    }
+
     options.messages.push({
       role: "user",
       content: [createTextContent(input)],
@@ -113,6 +122,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 function printHelp() {
   console.log(`
 📖 可用命令:
+  /new   - 创建新的会话
   /login - 登录模型服务商（输入apiKey）
   /model - 选择模型供应商和模型
   help   - 显示帮助信息

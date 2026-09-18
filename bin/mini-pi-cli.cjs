@@ -33,325 +33,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/.pnpm/dotenv@17.4.2/node_modules/dotenv/lib/main.js
-var require_main = __commonJS({
-  "node_modules/.pnpm/dotenv@17.4.2/node_modules/dotenv/lib/main.js"(exports2, module2) {
-    var fs5 = require("fs");
-    var path5 = require("path");
-    var os2 = require("os");
-    var crypto4 = require("crypto");
-    var TIPS = [
-      "\u25C8 encrypted .env [www.dotenvx.com]",
-      "\u25C8 secrets for agents [www.dotenvx.com]",
-      "\u2301 auth for agents [www.vestauth.com]",
-      "\u2318 custom filepath { path: '/custom/path/.env' }",
-      "\u2318 enable debugging { debug: true }",
-      "\u2318 override existing { override: true }",
-      "\u2318 suppress logs { quiet: true }",
-      "\u2318 multiple files { path: ['.env.local', '.env'] }"
-    ];
-    function _getRandomTip() {
-      return TIPS[Math.floor(Math.random() * TIPS.length)];
-    }
-    function parseBoolean(value) {
-      if (typeof value === "string") {
-        return !["false", "0", "no", "off", ""].includes(value.toLowerCase());
-      }
-      return Boolean(value);
-    }
-    function supportsAnsi() {
-      return process.stdout.isTTY;
-    }
-    function dim(text) {
-      return supportsAnsi() ? `\x1B[2m${text}\x1B[0m` : text;
-    }
-    var LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
-    function parse(src) {
-      const obj = {};
-      let lines = src.toString();
-      lines = lines.replace(/\r\n?/mg, "\n");
-      let match;
-      while ((match = LINE.exec(lines)) != null) {
-        const key = match[1];
-        let value = match[2] || "";
-        value = value.trim();
-        const maybeQuote = value[0];
-        value = value.replace(/^(['"`])([\s\S]*)\1$/mg, "$2");
-        if (maybeQuote === '"') {
-          value = value.replace(/\\n/g, "\n");
-          value = value.replace(/\\r/g, "\r");
-        }
-        obj[key] = value;
-      }
-      return obj;
-    }
-    function _parseVault(options) {
-      options = options || {};
-      const vaultPath = _vaultPath(options);
-      options.path = vaultPath;
-      const result = DotenvModule.configDotenv(options);
-      if (!result.parsed) {
-        const err = new Error(`MISSING_DATA: Cannot parse ${vaultPath} for an unknown reason`);
-        err.code = "MISSING_DATA";
-        throw err;
-      }
-      const keys = _dotenvKey(options).split(",");
-      const length = keys.length;
-      let decrypted;
-      for (let i = 0; i < length; i++) {
-        try {
-          const key = keys[i].trim();
-          const attrs = _instructions(result, key);
-          decrypted = DotenvModule.decrypt(attrs.ciphertext, attrs.key);
-          break;
-        } catch (error) {
-          if (i + 1 >= length) {
-            throw error;
-          }
-        }
-      }
-      return DotenvModule.parse(decrypted);
-    }
-    function _warn(message) {
-      console.error(`\u26A0 ${message}`);
-    }
-    function _debug(message) {
-      console.log(`\u2506 ${message}`);
-    }
-    function _log(message) {
-      console.log(`\u25C7 ${message}`);
-    }
-    function _dotenvKey(options) {
-      if (options && options.DOTENV_KEY && options.DOTENV_KEY.length > 0) {
-        return options.DOTENV_KEY;
-      }
-      if (process.env.DOTENV_KEY && process.env.DOTENV_KEY.length > 0) {
-        return process.env.DOTENV_KEY;
-      }
-      return "";
-    }
-    function _instructions(result, dotenvKey) {
-      let uri;
-      try {
-        uri = new URL(dotenvKey);
-      } catch (error) {
-        if (error.code === "ERR_INVALID_URL") {
-          const err = new Error("INVALID_DOTENV_KEY: Wrong format. Must be in valid uri format like dotenv://:key_1234@dotenvx.com/vault/.env.vault?environment=development");
-          err.code = "INVALID_DOTENV_KEY";
-          throw err;
-        }
-        throw error;
-      }
-      const key = uri.password;
-      if (!key) {
-        const err = new Error("INVALID_DOTENV_KEY: Missing key part");
-        err.code = "INVALID_DOTENV_KEY";
-        throw err;
-      }
-      const environment = uri.searchParams.get("environment");
-      if (!environment) {
-        const err = new Error("INVALID_DOTENV_KEY: Missing environment part");
-        err.code = "INVALID_DOTENV_KEY";
-        throw err;
-      }
-      const environmentKey = `DOTENV_VAULT_${environment.toUpperCase()}`;
-      const ciphertext = result.parsed[environmentKey];
-      if (!ciphertext) {
-        const err = new Error(`NOT_FOUND_DOTENV_ENVIRONMENT: Cannot locate environment ${environmentKey} in your .env.vault file.`);
-        err.code = "NOT_FOUND_DOTENV_ENVIRONMENT";
-        throw err;
-      }
-      return { ciphertext, key };
-    }
-    function _vaultPath(options) {
-      let possibleVaultPath = null;
-      if (options && options.path && options.path.length > 0) {
-        if (Array.isArray(options.path)) {
-          for (const filepath of options.path) {
-            if (fs5.existsSync(filepath)) {
-              possibleVaultPath = filepath.endsWith(".vault") ? filepath : `${filepath}.vault`;
-            }
-          }
-        } else {
-          possibleVaultPath = options.path.endsWith(".vault") ? options.path : `${options.path}.vault`;
-        }
-      } else {
-        possibleVaultPath = path5.resolve(process.cwd(), ".env.vault");
-      }
-      if (fs5.existsSync(possibleVaultPath)) {
-        return possibleVaultPath;
-      }
-      return null;
-    }
-    function _resolveHome(envPath) {
-      return envPath[0] === "~" ? path5.join(os2.homedir(), envPath.slice(1)) : envPath;
-    }
-    function _configVault(options) {
-      const debug = parseBoolean(process.env.DOTENV_CONFIG_DEBUG || options && options.debug);
-      const quiet = parseBoolean(process.env.DOTENV_CONFIG_QUIET || options && options.quiet);
-      if (debug || !quiet) {
-        _log("loading env from encrypted .env.vault");
-      }
-      const parsed = DotenvModule._parseVault(options);
-      let processEnv = process.env;
-      if (options && options.processEnv != null) {
-        processEnv = options.processEnv;
-      }
-      DotenvModule.populate(processEnv, parsed, options);
-      return { parsed };
-    }
-    function configDotenv(options) {
-      const dotenvPath = path5.resolve(process.cwd(), ".env");
-      let encoding = "utf8";
-      let processEnv = process.env;
-      if (options && options.processEnv != null) {
-        processEnv = options.processEnv;
-      }
-      let debug = parseBoolean(processEnv.DOTENV_CONFIG_DEBUG || options && options.debug);
-      let quiet = parseBoolean(processEnv.DOTENV_CONFIG_QUIET || options && options.quiet);
-      if (options && options.encoding) {
-        encoding = options.encoding;
-      } else {
-        if (debug) {
-          _debug("no encoding is specified (UTF-8 is used by default)");
-        }
-      }
-      let optionPaths = [dotenvPath];
-      if (options && options.path) {
-        if (!Array.isArray(options.path)) {
-          optionPaths = [_resolveHome(options.path)];
-        } else {
-          optionPaths = [];
-          for (const filepath of options.path) {
-            optionPaths.push(_resolveHome(filepath));
-          }
-        }
-      }
-      let lastError;
-      const parsedAll = {};
-      for (const path6 of optionPaths) {
-        try {
-          const parsed = DotenvModule.parse(fs5.readFileSync(path6, { encoding }));
-          DotenvModule.populate(parsedAll, parsed, options);
-        } catch (e) {
-          if (debug) {
-            _debug(`failed to load ${path6} ${e.message}`);
-          }
-          lastError = e;
-        }
-      }
-      const populated = DotenvModule.populate(processEnv, parsedAll, options);
-      debug = parseBoolean(processEnv.DOTENV_CONFIG_DEBUG || debug);
-      quiet = parseBoolean(processEnv.DOTENV_CONFIG_QUIET || quiet);
-      if (debug || !quiet) {
-        const keysCount = Object.keys(populated).length;
-        const shortPaths = [];
-        for (const filePath of optionPaths) {
-          try {
-            const relative2 = path5.relative(process.cwd(), filePath);
-            shortPaths.push(relative2);
-          } catch (e) {
-            if (debug) {
-              _debug(`failed to load ${filePath} ${e.message}`);
-            }
-            lastError = e;
-          }
-        }
-        _log(`injected env (${keysCount}) from ${shortPaths.join(",")} ${dim(`// tip: ${_getRandomTip()}`)}`);
-      }
-      if (lastError) {
-        return { parsed: parsedAll, error: lastError };
-      } else {
-        return { parsed: parsedAll };
-      }
-    }
-    function config2(options) {
-      if (_dotenvKey(options).length === 0) {
-        return DotenvModule.configDotenv(options);
-      }
-      const vaultPath = _vaultPath(options);
-      if (!vaultPath) {
-        _warn(`you set DOTENV_KEY but you are missing a .env.vault file at ${vaultPath}`);
-        return DotenvModule.configDotenv(options);
-      }
-      return DotenvModule._configVault(options);
-    }
-    function decrypt(encrypted, keyStr) {
-      const key = Buffer.from(keyStr.slice(-64), "hex");
-      let ciphertext = Buffer.from(encrypted, "base64");
-      const nonce = ciphertext.subarray(0, 12);
-      const authTag = ciphertext.subarray(-16);
-      ciphertext = ciphertext.subarray(12, -16);
-      try {
-        const aesgcm = crypto4.createDecipheriv("aes-256-gcm", key, nonce);
-        aesgcm.setAuthTag(authTag);
-        return `${aesgcm.update(ciphertext)}${aesgcm.final()}`;
-      } catch (error) {
-        const isRange = error instanceof RangeError;
-        const invalidKeyLength = error.message === "Invalid key length";
-        const decryptionFailed = error.message === "Unsupported state or unable to authenticate data";
-        if (isRange || invalidKeyLength) {
-          const err = new Error("INVALID_DOTENV_KEY: It must be 64 characters long (or more)");
-          err.code = "INVALID_DOTENV_KEY";
-          throw err;
-        } else if (decryptionFailed) {
-          const err = new Error("DECRYPTION_FAILED: Please check your DOTENV_KEY");
-          err.code = "DECRYPTION_FAILED";
-          throw err;
-        } else {
-          throw error;
-        }
-      }
-    }
-    function populate(processEnv, parsed, options = {}) {
-      const debug = Boolean(options && options.debug);
-      const override = Boolean(options && options.override);
-      const populated = {};
-      if (typeof parsed !== "object") {
-        const err = new Error("OBJECT_REQUIRED: Please check the processEnv argument being passed to populate");
-        err.code = "OBJECT_REQUIRED";
-        throw err;
-      }
-      for (const key of Object.keys(parsed)) {
-        if (Object.prototype.hasOwnProperty.call(processEnv, key)) {
-          if (override === true) {
-            processEnv[key] = parsed[key];
-            populated[key] = parsed[key];
-          }
-          if (debug) {
-            if (override === true) {
-              _debug(`"${key}" is already defined and WAS overwritten`);
-            } else {
-              _debug(`"${key}" is already defined and was NOT overwritten`);
-            }
-          }
-        } else {
-          processEnv[key] = parsed[key];
-          populated[key] = parsed[key];
-        }
-      }
-      return populated;
-    }
-    var DotenvModule = {
-      configDotenv,
-      _configVault,
-      _parseVault,
-      config: config2,
-      decrypt,
-      parse,
-      populate
-    };
-    module2.exports.configDotenv = DotenvModule.configDotenv;
-    module2.exports._configVault = DotenvModule._configVault;
-    module2.exports._parseVault = DotenvModule._parseVault;
-    module2.exports.config = DotenvModule.config;
-    module2.exports.decrypt = DotenvModule.decrypt;
-    module2.exports.parse = DotenvModule.parse;
-    module2.exports.populate = DotenvModule.populate;
-    module2.exports = DotenvModule;
-  }
-});
-
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/auth/x509-transport-state.js
 var require_x509_transport_state = __commonJS({
   "node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/auth/x509-transport-state.js"(exports2, module2) {
@@ -1837,43 +1518,43 @@ var init_credentials = __esm({
         }
         return null;
       }
-      let config2;
+      let config;
       try {
-        config2 = JSON.parse(configRaw);
+        config = JSON.parse(configRaw);
       } catch (err) {
         throw new Error(`failed to parse config file ${configPath}: ${err}`);
       }
-      if (!config2.authentication) {
+      if (!config.authentication) {
         throw new Error(`config file ${configPath} is missing "authentication"`);
       }
-      const authType = config2.authentication.type;
+      const authType = config.authentication.type;
       if (authType !== "oidc_federation" && authType !== "user_oauth") {
         throw new Error(`authentication.type "${authType}" is not a known authentication type`);
       }
-      config2.organization_id ?? (config2.organization_id = readEnv2("ANTHROPIC_ORGANIZATION_ID"));
-      config2.workspace_id ?? (config2.workspace_id = readEnv2("ANTHROPIC_WORKSPACE_ID"));
-      config2.base_url ?? (config2.base_url = readEnv2("ANTHROPIC_BASE_URL"));
-      (_a6 = config2.authentication).scope ?? (_a6.scope = readEnv2("ANTHROPIC_SCOPE"));
-      if (config2.authentication.type === "oidc_federation") {
-        if (!config2.authentication.identity_token) {
+      config.organization_id ?? (config.organization_id = readEnv2("ANTHROPIC_ORGANIZATION_ID"));
+      config.workspace_id ?? (config.workspace_id = readEnv2("ANTHROPIC_WORKSPACE_ID"));
+      config.base_url ?? (config.base_url = readEnv2("ANTHROPIC_BASE_URL"));
+      (_a6 = config.authentication).scope ?? (_a6.scope = readEnv2("ANTHROPIC_SCOPE"));
+      if (config.authentication.type === "oidc_federation") {
+        if (!config.authentication.identity_token) {
           const identityTokenFile = readEnv2("ANTHROPIC_IDENTITY_TOKEN_FILE");
           if (identityTokenFile) {
-            config2.authentication.identity_token = {
+            config.authentication.identity_token = {
               source: "file",
               path: identityTokenFile
             };
           }
         }
-        if (!config2.authentication.federation_rule_id) {
-          config2.authentication.federation_rule_id = readEnv2("ANTHROPIC_FEDERATION_RULE_ID") ?? "";
+        if (!config.authentication.federation_rule_id) {
+          config.authentication.federation_rule_id = readEnv2("ANTHROPIC_FEDERATION_RULE_ID") ?? "";
         }
-        (_b = config2.authentication).service_account_id ?? (_b.service_account_id = readEnv2("ANTHROPIC_SERVICE_ACCOUNT_ID"));
+        (_b = config.authentication).service_account_id ?? (_b.service_account_id = readEnv2("ANTHROPIC_SERVICE_ACCOUNT_ID"));
       }
-      return { config: config2, fromFile: true };
+      return { config, fromFile: true };
     };
-    getCredentialsPath = async (config2, profile) => {
-      if (config2?.authentication.credentials_path) {
-        return config2.authentication.credentials_path;
+    getCredentialsPath = async (config, profile) => {
+      if (config?.authentication.credentials_path) {
+        return config.authentication.credentials_path;
       }
       const rootConfigPath = await getRootConfigPath();
       if (!rootConfigPath) {
@@ -1978,34 +1659,34 @@ var init_identity_token = __esm({
 });
 
 // node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/lib/credentials/oidc-federation.mjs
-function oidcFederationProvider(config2) {
+function oidcFederationProvider(config) {
   return async () => {
-    requireSecureTokenEndpoint(config2.baseURL);
-    const jwt = await config2.identityTokenProvider();
+    requireSecureTokenEndpoint(config.baseURL);
+    const jwt = await config.identityTokenProvider();
     if (jwt.length > 16 * 1024) {
       throw new WorkloadIdentityError(`Identity token is ${Math.ceil(jwt.length / 1024)} KiB, exceeds the 16 KiB assertion limit`);
     }
     const body = {
       grant_type: GRANT_TYPE_JWT_BEARER,
       assertion: jwt,
-      federation_rule_id: config2.federationRuleId,
-      organization_id: config2.organizationId
+      federation_rule_id: config.federationRuleId,
+      organization_id: config.organizationId
     };
-    if (config2.serviceAccountId) {
-      body["service_account_id"] = config2.serviceAccountId;
+    if (config.serviceAccountId) {
+      body["service_account_id"] = config.serviceAccountId;
     }
-    if (config2.workspaceId) {
-      body["workspace_id"] = config2.workspaceId;
+    if (config.workspaceId) {
+      body["workspace_id"] = config.workspaceId;
     }
-    const url = `${config2.baseURL}${TOKEN_ENDPOINT}`;
+    const url = `${config.baseURL}${TOKEN_ENDPOINT}`;
     let resp;
     try {
-      resp = await config2.fetch(url, {
+      resp = await config.fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "anthropic-beta": `${OAUTH_API_BETA_HEADER},${FEDERATION_BETA_HEADER}`,
-          "User-Agent": config2.userAgent || `anthropic-sdk-typescript/${VERSION2} oidcFederationProvider`
+          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION2} oidcFederationProvider`
         },
         body: JSON.stringify(body)
       });
@@ -2018,7 +1699,7 @@ function oidcFederationProvider(config2) {
       const redacted = redactSensitive(text);
       let hint = "";
       if (resp.status === 401) {
-        const hintMiddle = config2.workspaceId ? "" : "If your federation rule is scoped to multiple workspaces, set the ANTHROPIC_WORKSPACE_ID environment variable, the 'workspace_id' config key, or the `workspaceId` option. ";
+        const hintMiddle = config.workspaceId ? "" : "If your federation rule is scoped to multiple workspaces, set the ANTHROPIC_WORKSPACE_ID environment variable, the 'workspace_id' config key, or the `workspaceId` option. ";
         hint = ` Ensure your federation rule matches your identity token. ${hintMiddle}View your authentication events in the Workload identity page of Claude Console for more details.`;
       }
       throw new WorkloadIdentityError(`Token exchange failed with status ${resp.status}${requestId ? ` (request-id ${requestId})` : ""}: ${redacted}${hint}`, resp.status, redacted, requestId);
@@ -2043,49 +1724,49 @@ var init_oidc_federation = __esm({
 });
 
 // node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/lib/credentials/user-oauth.mjs
-function userOAuthProvider(config2) {
+function userOAuthProvider(config) {
   return async (opts) => {
     const { fs: fs5 } = await Promise.resolve().then(() => (init_node(), node_exports));
-    await checkCredentialsFileSafety(config2.credentialsPath, config2.onSafetyWarning);
+    await checkCredentialsFileSafety(config.credentialsPath, config.onSafetyWarning);
     let raw;
     try {
-      raw = await fs5.promises.readFile(config2.credentialsPath, "utf-8");
+      raw = await fs5.promises.readFile(config.credentialsPath, "utf-8");
     } catch (err) {
-      throw new WorkloadIdentityError(`Credentials file not found at ${config2.credentialsPath}: ${err}`);
+      throw new WorkloadIdentityError(`Credentials file not found at ${config.credentialsPath}: ${err}`);
     }
     let creds;
     try {
       creds = JSON.parse(raw);
     } catch (err) {
-      throw new WorkloadIdentityError(`Credentials file at ${config2.credentialsPath} is not valid JSON: ${err}`);
+      throw new WorkloadIdentityError(`Credentials file at ${config.credentialsPath} is not valid JSON: ${err}`);
     }
     const accessToken = creds.access_token;
     if (!accessToken) {
-      throw new WorkloadIdentityError(`Credentials file at ${config2.credentialsPath} must include 'access_token'`);
+      throw new WorkloadIdentityError(`Credentials file at ${config.credentialsPath} must include 'access_token'`);
     }
     const expiresAt = creds.expires_at;
     if (!opts?.forceRefresh && (expiresAt == null || nowAsSeconds() < expiresAt - MANDATORY_REFRESH_THRESHOLD_IN_SECONDS)) {
       return { token: accessToken, expiresAt: expiresAt ?? null };
     }
     const refreshToken = creds.refresh_token;
-    if (!config2.clientId || !refreshToken) {
-      throw new WorkloadIdentityError(`Access token at ${config2.credentialsPath} has expired and no refresh is available (client_id ${config2.clientId ? "set" : "empty"}, refresh_token ${refreshToken ? "set" : "empty"})`);
+    if (!config.clientId || !refreshToken) {
+      throw new WorkloadIdentityError(`Access token at ${config.credentialsPath} has expired and no refresh is available (client_id ${config.clientId ? "set" : "empty"}, refresh_token ${refreshToken ? "set" : "empty"})`);
     }
-    requireSecureTokenEndpoint(config2.baseURL);
+    requireSecureTokenEndpoint(config.baseURL);
     const body = {
       grant_type: GRANT_TYPE_REFRESH_TOKEN,
       refresh_token: refreshToken,
-      client_id: config2.clientId
+      client_id: config.clientId
     };
-    const url = `${config2.baseURL}${TOKEN_ENDPOINT}`;
+    const url = `${config.baseURL}${TOKEN_ENDPOINT}`;
     let resp;
     try {
-      resp = await config2.fetch(url, {
+      resp = await config.fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "anthropic-beta": OAUTH_API_BETA_HEADER,
-          "User-Agent": config2.userAgent || `anthropic-sdk-typescript/${VERSION2} userOAuthProvider`
+          "User-Agent": config.userAgent || `anthropic-sdk-typescript/${VERSION2} userOAuthProvider`
         },
         body: JSON.stringify(body)
       });
@@ -2104,7 +1785,7 @@ function userOAuthProvider(config2) {
     }
     const newExpiresAt = nowAsSeconds() + expiresIn;
     const newRefreshToken = data.refresh_token || refreshToken;
-    await writeCredentialsFileAtomic(config2.credentialsPath, {
+    await writeCredentialsFileAtomic(config.credentialsPath, {
       ...creds,
       version: CREDENTIALS_FILE_VERSION,
       type: "oauth_token",
@@ -2125,35 +1806,35 @@ var init_user_oauth = __esm({
 });
 
 // node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/lib/credentials/credential-chain.mjs
-function resolveCredentialsFromConfig(config2, options) {
-  const credentialsPath = config2.authentication.credentials_path ?? null;
-  const effectiveBaseURL = (config2.base_url || options.baseURL).replace(/\/+$/, "");
-  const provider = buildProvider(config2, credentialsPath, effectiveBaseURL, options);
+function resolveCredentialsFromConfig(config, options) {
+  const credentialsPath = config.authentication.credentials_path ?? null;
+  const effectiveBaseURL = (config.base_url || options.baseURL).replace(/\/+$/, "");
+  const provider = buildProvider(config, credentialsPath, effectiveBaseURL, options);
   const extraHeaders = {};
-  if (config2.workspace_id && config2.authentication.type === "user_oauth") {
-    extraHeaders["anthropic-workspace-id"] = config2.workspace_id;
+  if (config.workspace_id && config.authentication.type === "user_oauth") {
+    extraHeaders["anthropic-workspace-id"] = config.workspace_id;
   }
-  return { provider, extraHeaders, baseURL: config2.base_url || void 0 };
+  return { provider, extraHeaders, baseURL: config.base_url || void 0 };
 }
 async function defaultCredentials(options, profile) {
   const loaded = await loadConfigWithSource(profile);
   if (!loaded) {
     return null;
   }
-  const { config: config2, fromFile } = loaded;
-  const withPath = config2.authentication.credentials_path || !fromFile ? config2 : {
-    ...config2,
+  const { config, fromFile } = loaded;
+  const withPath = config.authentication.credentials_path || !fromFile ? config : {
+    ...config,
     authentication: {
-      ...config2.authentication,
-      credentials_path: await getCredentialsPath(config2, profile) ?? void 0
+      ...config.authentication,
+      credentials_path: await getCredentialsPath(config, profile) ?? void 0
     }
   };
   return resolveCredentialsFromConfig(withPath, options);
 }
-function buildProvider(config2, credentialsPath, baseURL, options) {
-  switch (config2.authentication.type) {
+function buildProvider(config, credentialsPath, baseURL, options) {
+  switch (config.authentication.type) {
     case "oidc_federation": {
-      const auth = config2.authentication;
+      const auth = config.authentication;
       const identityProvider = resolveIdentityTokenProvider(auth);
       if (!identityProvider) {
         throw new WorkloadIdentityError("oidc_federation config requires an identity token (set authentication.identity_token, ANTHROPIC_IDENTITY_TOKEN_FILE, or ANTHROPIC_IDENTITY_TOKEN)");
@@ -2161,15 +1842,15 @@ function buildProvider(config2, credentialsPath, baseURL, options) {
       if (!auth.federation_rule_id) {
         throw new WorkloadIdentityError("oidc_federation config requires 'federation_rule_id'. Set it in authentication.federation_rule_id in your profile, or via ANTHROPIC_FEDERATION_RULE_ID (profile takes precedence).");
       }
-      if (!config2.organization_id) {
+      if (!config.organization_id) {
         throw new WorkloadIdentityError("oidc_federation config requires organization_id (set ANTHROPIC_ORGANIZATION_ID or config.organization_id)");
       }
       const exchange = oidcFederationProvider({
         identityTokenProvider: identityProvider,
         federationRuleId: auth.federation_rule_id,
-        organizationId: config2.organization_id,
+        organizationId: config.organization_id,
         serviceAccountId: auth.service_account_id,
-        workspaceId: config2.workspace_id,
+        workspaceId: config.workspace_id,
         baseURL,
         fetch: options.fetch,
         userAgent: options.userAgent
@@ -2185,7 +1866,7 @@ function buildProvider(config2, credentialsPath, baseURL, options) {
       }
       return userOAuthProvider({
         credentialsPath,
-        clientId: config2.authentication.client_id,
+        clientId: config.authentication.client_id,
         baseURL,
         fetch: options.fetch,
         userAgent: options.userAgent,
@@ -2193,7 +1874,7 @@ function buildProvider(config2, credentialsPath, baseURL, options) {
       });
     }
     default: {
-      const t = config2.authentication.type;
+      const t = config.authentication.type;
       throw new WorkloadIdentityError(`authentication.type "${t}" is not a known authentication type`);
     }
   }
@@ -6241,10 +5922,10 @@ async function setupSkills(ctx) {
   for (const skill of session.agent.skills) {
     try {
       const version = await client.beta.skills.versions.retrieve(skill.version, { skill_id: skill.skill_id });
-      let dirname2 = path2.basename(version.name.trim());
-      if (dirname2 === "" || dirname2 === "." || dirname2 === "..")
-        dirname2 = skill.skill_id;
-      const dest = path2.resolve(skillsRoot, dirname2);
+      let dirname3 = path2.basename(version.name.trim());
+      if (dirname3 === "" || dirname3 === "." || dirname3 === "..")
+        dirname3 = skill.skill_id;
+      const dest = path2.resolve(skillsRoot, dirname3);
       if (dest !== skillsRoot && !dest.startsWith(skillsRoot + path2.sep)) {
         log.warn("skill name escapes the skills dir; skipping", {
           component: "agent-tool-context",
@@ -17015,9 +16696,6 @@ var init_sdk = __esm({
   }
 });
 
-// src/cli/index.ts
-var import_dotenv = __toESM(require_main(), 1);
-
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state2, value, kind, f) {
   if (kind === "m")
@@ -19217,12 +18895,12 @@ var WorkloadIdentityAuth = class _WorkloadIdentityAuth {
    * @param config External identity provider, OpenAI service account, and refresh settings.
    * @param fetch Optional fetch implementation for calls to the OpenAI token endpoint.
    */
-  constructor(config2, fetch2) {
+  constructor(config, fetch2) {
     this.cachedToken = null;
     this.refreshPromise = null;
     this.tokenGeneration = 0;
     this.tokenExchangeUrl = "https://auth.openai.com/oauth/token";
-    const { identityProviderId, serviceAccountId, clientId, refreshBufferSeconds, provider } = config2;
+    const { identityProviderId, serviceAccountId, clientId, refreshBufferSeconds, provider } = config;
     this.config = {
       identityProviderId,
       serviceAccountId,
@@ -35117,18 +34795,21 @@ function createAssistantMessage(content, stopReason = "stop") {
 function messageText(message) {
   return message.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 }
+function isTextContent(block) {
+  return block.type === "text";
+}
 
 // src/agent/model.ts
 var OpenAIModel = class {
   client;
   model;
   defaultTools = [];
-  constructor(config2) {
+  constructor(config) {
     this.client = new OpenAI({
-      apiKey: config2?.apiKey || process.env.OPENAI_API_KEY,
-      baseURL: config2?.baseUrl || process.env.OPENAI_BASE_URL
+      apiKey: config?.apiKey || process.env.OPENAI_API_KEY,
+      baseURL: config?.baseUrl || process.env.OPENAI_BASE_URL
     });
-    this.model = config2?.model || process.env.OPENAI_MODEL || "gpt-3.5-turbo";
+    this.model = config?.model || process.env.OPENAI_MODEL || "gpt-3.5-turbo";
   }
   async complete(input) {
     try {
@@ -35259,18 +34940,18 @@ var OpenAIModel = class {
     }));
   }
 };
-function createOpenAIModel(config2) {
-  return new OpenAIModel(config2);
+function createOpenAIModel(config) {
+  return new OpenAIModel(config);
 }
 var AnthropicModel = class {
   client;
   model;
-  constructor(config2) {
+  constructor(config) {
     this.client = new Anthropic({
-      apiKey: config2?.apiKey || process.env.ANTHROPIC_API_KEY,
-      baseURL: config2?.baseUrl || process.env.ANTHROPIC_BASE_URL
+      apiKey: config?.apiKey || process.env.ANTHROPIC_API_KEY,
+      baseURL: config?.baseUrl || process.env.ANTHROPIC_BASE_URL
     });
-    this.model = config2?.model || process.env.ANTHROPIC_MODEL || "claude-3-sonnet-20240229";
+    this.model = config?.model || process.env.ANTHROPIC_MODEL || "claude-3-sonnet-20240229";
   }
   async complete(input) {
     try {
@@ -35400,8 +35081,8 @@ var AnthropicModel = class {
     };
   }
 };
-function createAnthropicModel(config2) {
-  return new AnthropicModel(config2);
+function createAnthropicModel(config) {
+  return new AnthropicModel(config);
 }
 function createModelFromEnv() {
   const provider = process.env.MODEL_PROVIDER || "openai";
@@ -35423,6 +35104,34 @@ function createModelFromEnv() {
         apiKey: process.env.OPENAI_API_KEY,
         baseUrl: process.env.OPENAI_BASE_URL,
         model: process.env.OPENAI_MODEL
+      });
+  }
+}
+async function createModelFromProvider(providerName, config) {
+  switch (providerName.toLowerCase()) {
+    case "minimax-cn":
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl || "https://api.minimax.cn/anthropic",
+        model: config.model
+      });
+    case "openai":
+      return createOpenAIModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
+      });
+    case "anthropic":
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
+      });
+    default:
+      return createAnthropicModel({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
       });
   }
 }
@@ -35560,10 +35269,10 @@ function writeFileTool(workspaceRoot) {
         stringArg(args.path, "")
       );
       const content = stringArg(args.content, "");
-      const { mkdir: mkdir3, writeFile: writeFile2 } = await import("node:fs/promises");
-      const { dirname: dirname2 } = await import("node:path");
-      await mkdir3(dirname2(filePath), { recursive: true });
-      await writeFile2(filePath, content, "utf8");
+      const { mkdir: mkdir4, writeFile: writeFile3 } = await import("node:fs/promises");
+      const { dirname: dirname3 } = await import("node:path");
+      await mkdir4(dirname3(filePath), { recursive: true });
+      await writeFile3(filePath, content, "utf8");
       return {
         content: [createTextContent(`File written successfully: ${(0, import_node_path.relative)(workspaceRoot, filePath)}`)],
         details: { path: (0, import_node_path.relative)(workspaceRoot, filePath), bytesWritten: content.length }
@@ -35829,7 +35538,7 @@ async function startRepl(options) {
       return;
     }
     if (input === "/model") {
-      await handleModel(options.providerService, rl);
+      await handleModel(options.providerService, options.settingsStore, rl);
       rl.prompt();
       return;
     }
@@ -35930,7 +35639,7 @@ function question(rl, prompt) {
     });
   });
 }
-async function handleModel(providerService, rl) {
+async function handleModel(providerService, settingsStore, rl) {
   if (!providerService) {
     console.log("\u274C Provider\u670D\u52A1\u672A\u521D\u59CB\u5316");
     return;
@@ -35939,6 +35648,13 @@ async function handleModel(providerService, rl) {
   if (providers.length === 0) {
     console.log("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546");
     return;
+  }
+  if (settingsStore) {
+    const defaultModel = await settingsStore.getDefaultModel();
+    if (defaultModel) {
+      console.log(`
+\u{1F4CC} \u5F53\u524D\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`);
+    }
   }
   console.log("\n\u{1F4CB} \u53EF\u7528\u7684\u6A21\u578B\u670D\u52A1\u5546:");
   providers.forEach((provider, index2) => {
@@ -35951,15 +35667,15 @@ async function handleModel(providerService, rl) {
     return;
   }
   const selectedProvider = providers[index];
-  const config2 = await providerService.getProviderConfig(selectedProvider);
-  if (!config2.apiKey) {
+  const config = await providerService.getProviderConfig(selectedProvider);
+  if (!config.apiKey) {
     console.log(`\u274C \u8BF7\u5148\u4F7F\u7528 /login \u547D\u4EE4\u914D\u7F6E ${selectedProvider} \u7684 API Key`);
     return;
   }
   console.log(`
 \u{1F50D} \u6B63\u5728\u83B7\u53D6 ${selectedProvider} \u7684\u6A21\u578B\u5217\u8868...`);
   try {
-    const models = await providerService.getModelList(selectedProvider, config2.apiKey);
+    const models = await providerService.getModelList(selectedProvider, config.apiKey);
     if (models.length === 0) {
       console.log("\u274C \u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B");
       return;
@@ -35976,13 +35692,21 @@ async function handleModel(providerService, rl) {
       return;
     }
     const selectedModel = models[mIdx];
-    await providerService.saveProviderConfig(selectedProvider, {
-      ...config2,
-      model: selectedModel
-    });
-    console.log(`
-\u2705 \u5DF2\u9009\u62E9\u6A21\u578B: ${selectedProvider}/${selectedModel}`);
-    console.log("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n");
+    const defaultModel = `${selectedProvider}/${selectedModel}`;
+    if (settingsStore) {
+      await settingsStore.setDefaultModel(defaultModel);
+      console.log(`
+\u2705 \u5DF2\u8BBE\u7F6E\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`);
+      console.log("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n");
+    } else {
+      await providerService.saveProviderConfig(selectedProvider, {
+        ...config,
+        model: selectedModel
+      });
+      console.log(`
+\u2705 \u5DF2\u9009\u62E9\u6A21\u578B: ${defaultModel}`);
+      console.log("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n");
+    }
   } catch (error) {
     console.log("\u274C \u83B7\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25:", error instanceof Error ? error.message : error);
   }
@@ -36050,11 +35774,11 @@ var ProviderStore = class {
    * @param providerName Provider名称
    * @param config 配置信息
    */
-  async saveConfig(providerName, config2) {
+  async saveConfig(providerName, config) {
     await this.initialize();
     this.data[providerName] = {
       ...this.data[providerName],
-      ...config2
+      ...config
     };
     await this.persist();
   }
@@ -36148,6 +35872,115 @@ var MiniMaxCnProvider = class {
   }
 };
 
+// src/provider/settings-store.ts
+var import_node_fs2 = require("node:fs");
+var import_promises3 = require("node:fs/promises");
+var import_node_os2 = require("node:os");
+var import_node_path3 = require("node:path");
+var SettingsStore = class {
+  settingsPath;
+  settings = {};
+  initialized = false;
+  constructor(settingsPath) {
+    this.settingsPath = settingsPath || (0, import_node_path3.join)((0, import_node_os2.homedir)(), ".mini-pi", "settings.json");
+  }
+  /**
+   * 初始化存储，从文件加载数据
+   */
+  async initialize() {
+    if (this.initialized) {
+      return;
+    }
+    try {
+      const dir = (0, import_node_path3.join)(this.settingsPath, "..");
+      if (!(0, import_node_fs2.existsSync)(dir)) {
+        await (0, import_promises3.mkdir)(dir, { recursive: true });
+      }
+      if ((0, import_node_fs2.existsSync)(this.settingsPath)) {
+        try {
+          const content = await (0, import_promises3.readFile)(this.settingsPath, "utf-8");
+          this.settings = JSON.parse(content);
+        } catch (readError) {
+          console.error("Failed to read settings file:", readError);
+          this.settings = {};
+        }
+      } else {
+        this.settings = {};
+      }
+      this.initialized = true;
+    } catch (error) {
+      console.error("Failed to initialize settings store:", error);
+      this.settings = {};
+      this.initialized = true;
+    }
+  }
+  /**
+   * 保存配置到文件
+   */
+  async persist() {
+    try {
+      const dir = (0, import_node_path3.join)(this.settingsPath, "..");
+      if (!(0, import_node_fs2.existsSync)(dir)) {
+        await (0, import_promises3.mkdir)(dir, { recursive: true });
+      }
+      await (0, import_promises3.writeFile)(this.settingsPath, JSON.stringify(this.settings, null, 2), "utf-8");
+    } catch (error) {
+      console.error("Failed to persist settings:", error);
+      throw error;
+    }
+  }
+  /**
+   * 获取默认模型配置
+   * @returns 默认模型配置，格式: [模型供应商]/[模型名称]
+   */
+  async getDefaultModel() {
+    await this.initialize();
+    return this.settings.defaultModel;
+  }
+  /**
+   * 设置默认模型配置
+   * @param defaultModel 默认模型配置，格式: [模型供应商]/[模型名称]
+   */
+  async setDefaultModel(defaultModel) {
+    await this.initialize();
+    this.settings.defaultModel = defaultModel;
+    await this.persist();
+  }
+  /**
+   * 解析默认模型配置
+   * @returns 解析后的供应商和模型名称
+   */
+  async parseDefaultModel() {
+    const defaultModel = await this.getDefaultModel();
+    if (!defaultModel) {
+      return void 0;
+    }
+    const parts = defaultModel.split("/");
+    if (parts.length !== 2) {
+      return void 0;
+    }
+    return {
+      providerName: parts[0],
+      modelName: parts[1]
+    };
+  }
+  /**
+   * 清除默认模型配置
+   */
+  async clearDefaultModel() {
+    await this.initialize();
+    delete this.settings.defaultModel;
+    await this.persist();
+  }
+  /**
+   * 获取所有设置
+   */
+  async getSettings() {
+    await this.initialize();
+    return { ...this.settings };
+  }
+};
+
 // src/provider/index.ts
 var ModelProviderService = class {
   providers = /* @__PURE__ */ new Map();
@@ -36204,12 +36037,12 @@ var ModelProviderService = class {
    * @param providerName Provider名称
    * @param config 配置信息
    */
-  async saveProviderConfig(providerName, config2) {
+  async saveProviderConfig(providerName, config) {
     const provider = this.providers.get(providerName);
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);
     }
-    await this.store.saveConfig(providerName, config2);
+    await this.store.saveConfig(providerName, config);
   }
   /**
    * 获取Provider配置
@@ -36255,15 +36088,366 @@ var ModelProviderService = class {
   hasProvider(providerName) {
     return this.providers.has(providerName);
   }
+  /**
+   * 获取所有Provider配置
+   * @returns 所有配置
+   */
+  async getAllConfigs() {
+    return this.store.getAllConfigs();
+  }
 };
 
+// src/agent/sessionStore.ts
+var import_node_fs3 = require("node:fs");
+var import_promises4 = require("node:fs/promises");
+var import_node_path4 = require("node:path");
+async function summarizeEntries(entries, model) {
+  if (entries.length === 0) {
+    return "";
+  }
+  const conversationText = entries.map((entry) => {
+    const role = entry.message.role === "user" ? "\u7528\u6237" : "\u52A9\u624B";
+    const text = extractText(entry.message);
+    return `${role}: ${text}`;
+  }).join("\n\n");
+  const systemPrompt = `\u4F60\u662F\u4E00\u4E2A\u5BF9\u8BDD\u6458\u8981\u52A9\u624B\u3002\u8BF7\u5C06\u4EE5\u4E0B\u5BF9\u8BDD\u5386\u53F2\u538B\u7F29\u6210\u4E00\u4E2A\u7B80\u6D01\u7684\u6458\u8981\uFF0C\u4FDD\u7559\u5173\u952E\u4FE1\u606F\u548C\u4E0A\u4E0B\u6587\u3002
+
+\u8981\u6C42\uFF1A
+1. \u4FDD\u7559\u7528\u6237\u7684\u4E3B\u8981\u8BF7\u6C42\u548C\u610F\u56FE
+2. \u4FDD\u7559\u52A9\u624B\u7684\u5173\u952E\u56DE\u590D\u548C\u89E3\u51B3\u65B9\u6848
+3. \u4FDD\u7559\u91CD\u8981\u7684\u5DE5\u5177\u8C03\u7528\u548C\u7ED3\u679C
+4. \u4F7F\u7528\u7B80\u6D01\u7684\u4E2D\u6587\u63CF\u8FF0
+5. \u4FDD\u7559\u7528\u6237\u4EFB\u52A1\u7684\u5173\u952E\u6267\u884C\u8FDB\u5EA6
+6. \u6458\u8981\u957F\u5EA6\u63A7\u5236\u5728200\u5B57\u4EE5\u5185`;
+  const messages = [
+    {
+      role: "user",
+      content: [createTextContent(`\u8BF7\u4E3A\u4EE5\u4E0B\u5BF9\u8BDD\u751F\u6210\u6458\u8981\uFF1A
+
+${conversationText}`)],
+      timestamp: Date.now()
+    }
+  ];
+  try {
+    const response = await model.complete({
+      systemPrompt,
+      messages,
+      tools: []
+    });
+    const summaryParts = [];
+    for (const block of response.content) {
+      if (block.type === "text") {
+        summaryParts.push(block.text);
+      }
+    }
+    if (summaryParts.length > 0) {
+      return summaryParts.join("\n");
+    }
+  } catch (error) {
+    console.error("Failed to generate summary with model:", error);
+  }
+  return generateSimpleSummary(entries);
+}
+function generateSimpleSummary(entries) {
+  const parts = [];
+  const userMessages = entries.filter((e) => e.message.role === "user");
+  const assistantMessages = entries.filter((e) => e.message.role === "assistant");
+  const toolResultMessages = entries.filter((e) => e.message.role === "toolResult");
+  parts.push(`\u5BF9\u8BDD\u5171 ${entries.length} \u6761\u6D88\u606F`);
+  if (userMessages.length > 0) {
+    parts.push(`\u7528\u6237\u6D88\u606F ${userMessages.length} \u6761`);
+  }
+  if (assistantMessages.length > 0) {
+    parts.push(`\u52A9\u624B\u56DE\u590D ${assistantMessages.length} \u6761`);
+  }
+  if (toolResultMessages.length > 0) {
+    parts.push(`\u5DE5\u5177\u8C03\u7528 ${toolResultMessages.length} \u6B21`);
+  }
+  const userRequests = [];
+  for (const entry of userMessages.slice(0, 3)) {
+    const text = extractText(entry.message);
+    if (text.trim()) {
+      const truncated = text.length > 100 ? text.substring(0, 100) + "..." : text;
+      userRequests.push(truncated);
+    }
+  }
+  if (userRequests.length > 0) {
+    parts.push("\u7528\u6237\u4E3B\u8981\u8BF7\u6C42\uFF1A");
+    for (const request of userRequests) {
+      parts.push(`- ${request}`);
+    }
+  }
+  const toolCalls = [];
+  for (const entry of assistantMessages) {
+    for (const block of entry.message.content) {
+      if (block.type === "toolCall") {
+        toolCalls.push(block.name);
+      }
+    }
+  }
+  if (toolCalls.length > 0) {
+    const uniqueTools = [...new Set(toolCalls)];
+    parts.push(`\u4F7F\u7528\u5DE5\u5177\uFF1A${uniqueTools.join("\u3001")}`);
+  }
+  return parts.join("\n");
+}
+var JsonlSessionStore = class {
+  constructor(filePath, cwd) {
+    this.filePath = filePath;
+    this.cwd = cwd;
+    this.loadOrCreate();
+  }
+  sessionId = "mini-pi-session";
+  entries = [];
+  byId = /* @__PURE__ */ new Map();
+  leafId = null;
+  counter = 0;
+  model = null;
+  setModel(model) {
+    this.model = model;
+  }
+  getSessionId() {
+    return this.sessionId;
+  }
+  getEntries() {
+    return [...this.entries];
+  }
+  getLeafId() {
+    return this.leafId;
+  }
+  switchLeafId(leafId) {
+    if (!this.byId.has(leafId)) {
+      throw new Error(`Unkownn session entry:${leafId}`);
+    }
+    this.leafId = leafId;
+  }
+  loadOrCreate() {
+    if (!(0, import_node_fs3.existsSync)(this.filePath)) {
+      this.writeHeader();
+      return;
+    }
+    const lines = (0, import_node_fs3.readFileSync)(this.filePath, "utf8").split("\n").filter(Boolean);
+    for (const line of lines) {
+      const entry = JSON.parse(line);
+      this.entries.push(entry);
+      if (entry.type !== "session") {
+        this.byId.set(entry.id, entry);
+        this.leafId = entry.id;
+        this.counter = Math.max(
+          this.counter,
+          Number(entry.id.replace("entry_", "")) || 0
+        );
+      }
+    }
+    if (!this.entries.some((entry) => entry.type === "session")) {
+      this.entries.length = 0;
+      this.writeHeader();
+    }
+  }
+  async reset() {
+    if ((0, import_node_fs3.existsSync)(this.filePath)) {
+      await (0, import_promises4.rm)(this.filePath);
+    }
+    this.entries.length = 0;
+    this.byId = /* @__PURE__ */ new Map();
+    this.leafId = null;
+    this.counter = 0;
+    this.writeHeader();
+  }
+  writeHeader() {
+    (0, import_node_fs3.mkdirSync)((0, import_node_path4.dirname)(this.filePath), { recursive: true });
+    const header = {
+      type: "session",
+      version: 1,
+      id: this.sessionId,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      cwd: this.cwd
+    };
+    this.entries.push(header);
+    (0, import_node_fs3.writeFileSync)(this.filePath, `${JSON.stringify(header)}
+`, "utf8");
+  }
+  nextId() {
+    this.counter += 1;
+    return `entry_${this.counter}`;
+  }
+  async appendMessage(message) {
+    const id = this.nextId();
+    const entry = {
+      type: "message",
+      id,
+      parentId: this.leafId,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      message
+    };
+    await this.appendEntry(entry);
+    this.leafId = id;
+    return id;
+  }
+  async appendEntry(entry) {
+    this.entries.push(entry);
+    if (entry.type !== "session") {
+      this.byId.set(entry.id, entry);
+    }
+    await (0, import_promises4.appendFile)(this.filePath, `${JSON.stringify(entry)}
+`, "utf8");
+  }
+  async compactIfNedded(maxApproxTokens, keepRecentMessages) {
+    const path5 = this.pathToLeaf();
+    const messageEntries = path5.filter(
+      (entry2) => entry2.type === "message"
+    );
+    const currentContext = this.buildContext();
+    const tokensBefore = estimateTokens(currentContext);
+    if (tokensBefore <= maxApproxTokens || messageEntries.length <= keepRecentMessages) {
+      return void 0;
+    }
+    const kept = messageEntries.slice(-keepRecentMessages);
+    const summarized = messageEntries.slice(0, -keepRecentMessages);
+    let summary;
+    if (this.model) {
+      summary = await summarizeEntries(summarized, this.model);
+    } else {
+      summary = generateSimpleSummary(summarized);
+    }
+    const firstKeptEntryId = kept[0]?.id;
+    if (!firstKeptEntryId) {
+      return void 0;
+    }
+    const entry = {
+      type: "compaction",
+      id: this.nextId(),
+      parentId: this.leafId,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      summary,
+      firstKeptEntryId,
+      tokensBefore
+    };
+    await this.appendEntry(entry);
+    this.leafId = entry.id;
+    return entry;
+  }
+  pathToLeaf() {
+    const path5 = [];
+    let current = this.leafId ? this.byId.get(this.leafId) : null;
+    if (current) {
+      path5.unshift(current);
+      current = "parentId" in current && current.parentId ? this.byId.get(current.parentId) : void 0;
+    }
+    return path5;
+  }
+  buildContext() {
+    const path5 = this.pathToLeaf();
+    const latestCompactionIndex = findLastIndex(
+      path5,
+      (entry) => entry.type === "compaction"
+    );
+    if (latestCompactionIndex === -1) {
+      return path5.flatMap(entryToMessage);
+    }
+    const compaction = path5[latestCompactionIndex];
+    const messages = [
+      {
+        role: "user",
+        content: [
+          createTextContent(
+            `\u4EE5\u4E0B\u662F\u65E7\u7684\u4E0A\u4E0B\u6587\u6458\u8981\u3002\u540E\u7EED\u56DE\u7B54\u5FC5\u987B\u53C2\u8003\u5B83\uFF0C\u4F46\u6700\u8FD1\u7684\u6D88\u606F\u4F18\u5148\u7EA7\u66F4\u9AD8\u3002
+
+ ${compaction.summary}`
+          )
+        ],
+        timestamp: new Date(compaction.timestamp).getTime()
+      }
+    ];
+    let foundFirstKept = false;
+    for (let i = 0; i < latestCompactionIndex; i++) {
+      const entry = path5[i];
+      if (entry.id === compaction.firstKeptEntryId) {
+        foundFirstKept = true;
+      }
+      if (foundFirstKept) {
+        messages.push(...entryToMessage(path5[i]));
+      }
+    }
+    for (let i = latestCompactionIndex + 1; i < path5.length; i++) {
+      messages.push(...entryToMessage(path5[i]));
+    }
+    return messages;
+  }
+};
+function entryToMessage(entry) {
+  if (entry.type !== "message") {
+    return [];
+  }
+  return [entry.message];
+}
+function findLastIndex(items, predicate) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (predicate(items[i])) {
+      return i;
+    }
+  }
+  return -1;
+}
+function estimateTokens(messages) {
+  return messages.reduce((sum, message) => {
+    const content = extractText(message);
+    return sum + Math.ceil(content.length / 2);
+  }, 0);
+}
+function extractText(message) {
+  const parts = [];
+  for (const block of message.content) {
+    if (isTextContent(block)) {
+      parts.push(block.text);
+    }
+  }
+  return parts.join("\n");
+}
+
 // src/cli/index.ts
-(0, import_dotenv.config)();
+var import_node_path5 = require("node:path");
+async function createModelFromSettings(providerService, settingsStore) {
+  const parsed = await settingsStore.parseDefaultModel();
+  if (parsed) {
+    const { providerName, modelName } = parsed;
+    console.log(`\u{1F4E1} \u4F7F\u7528 provider: ${providerName}`);
+    console.log(`\u{1F916} \u4F7F\u7528\u6A21\u578B: ${modelName}`);
+    const providerConfig = await providerService.getProviderConfig(providerName);
+    if (providerConfig.apiKey) {
+      return createModelFromProvider(providerName, {
+        apiKey: providerConfig.apiKey,
+        baseUrl: providerConfig.baseUrl,
+        model: modelName
+      });
+    }
+  }
+  const allConfigs = await providerService.getAllConfigs();
+  for (const [providerName, config] of Object.entries(allConfigs)) {
+    if (config.apiKey) {
+      console.log(`\u{1F4E1} \u4F7F\u7528 provider: ${providerName}`);
+      if (config.model) {
+        console.log(`\u{1F916} \u4F7F\u7528\u6A21\u578B: ${config.model}`);
+      }
+      return createModelFromProvider(providerName, {
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model
+      });
+    }
+  }
+  console.log("\u26A0\uFE0F  \u672A\u627E\u5230 provider \u914D\u7F6E\uFF0C\u4F7F\u7528\u73AF\u5883\u53D8\u91CF");
+  return createModelFromEnv();
+}
 async function main() {
   const workspaceRoot = process.cwd();
-  const model = createModelFromEnv();
-  const toolRegistry = createToolRegistry(workspaceRoot);
   const providerService = new ModelProviderService();
+  const settingsStore = new SettingsStore();
+  const model = await createModelFromSettings(providerService, settingsStore);
+  const toolRegistry = createToolRegistry(workspaceRoot);
+  const sessionFilePath = (0, import_node_path5.join)(workspaceRoot, ".mini-pi", "session.jsonl");
+  const sessionStore = new JsonlSessionStore(sessionFilePath, workspaceRoot);
+  sessionStore.setModel(model);
   const systemPrompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
 - \u8BFB\u53D6\u548C\u5199\u5165\u6587\u4EF6
 - \u6267\u884C\u547D\u4EE4
@@ -36282,7 +36466,9 @@ async function main() {
     model,
     toolRegistry,
     workspaceRoot,
-    providerService
+    providerService,
+    settingsStore,
+    sessionStore
   });
 }
 main().catch(console.error);

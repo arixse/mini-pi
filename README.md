@@ -6,13 +6,13 @@
 
 ## 技术栈
 
-| 类别 | 技术 |
-|------|------|
-| 运行时 | Node.js 18+ |
-| 语言 | TypeScript 7.0 |
-| 包管理 | pnpm 10.17 |
-| 后端 | Express 5.2 |
-| 前端 | React 19.2 + Vite |
+| 类别   | 技术               |
+| ------ | ------------------ |
+| 运行时 | Node.js 18+        |
+| 语言   | TypeScript 7.0     |
+| 包管理 | pnpm 10.17         |
+| 后端   | Express 5.2        |
+| 前端   | React 19.2 + Vite  |
 | AI SDK | OpenAI / Anthropic |
 
 ## 项目结构
@@ -69,18 +69,6 @@ pnpm test
 3. **工具拦截** - 支持 `beforeToolCall` 钩子进行权限控制
 4. **类型安全** - 全程 TypeScript 类型检查
 5. **测试覆盖** - 每个模块都有对应的单元测试
-
-## 配置说明
-
-通过 `.env` 文件配置：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| MODEL_PROVIDER | 模型提供商 | mock |
-| OPENAI_API_KEY | OpenAI 密钥 | - |
-| OPENAI_BASE_URL | OpenAI 地址 | https://api.openai.com/v1 |
-| OPENAI_MODEL | OpenAI 模型 | gpt-3.5-turbo |
-| PORT | 服务端口 | 4317 |
 
 ## 工作原理
 

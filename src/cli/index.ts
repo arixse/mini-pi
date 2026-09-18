@@ -3,15 +3,12 @@
 import { config } from "dotenv";
 import { createModelFromEnv, createModelFromProvider, LlmModel } from "../agent/model";
 import { createToolRegistry } from "../agent/tools";
-import { runAgentLoop } from "../agent/loop";
 import { AgentMessage } from "../shared/protocol";
-import { createTextContent } from "../agent/message";
 import { startRepl } from "./repl";
 import { ModelProviderService, SettingsStore } from "../provider";
-import { JsonlSessionStore } from "../agent/sessionStore";
+import { SessionManager } from "../agent/sessionManager";
 import { join } from "node:path";
 
-config();
 
 async function createModelFromSettings(
   providerService: ModelProviderService,
@@ -66,10 +63,12 @@ async function main() {
   const model = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
-  // 创建 sessionStore 并设置模型
-  const sessionFilePath = join(workspaceRoot, ".mini-pi", "session.jsonl");
-  const sessionStore = new JsonlSessionStore(sessionFilePath, workspaceRoot);
-  sessionStore.setModel(model);
+  // 创建 sessionManager
+  const sessionManager = new SessionManager(workspaceRoot);
+  sessionManager.setModel(model);
+
+  // 加载最近的 session 或创建新的
+  const sessionStore = sessionManager.loadLatestSession();
 
   const systemPrompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
 - 读取和写入文件
@@ -83,7 +82,14 @@ async function main() {
   const messages: AgentMessage[] = [];
 
   console.log("🤖 Mini Pi Code Agent");
-  console.log("输入 'exit' 或 'quit' 退出，输入 'clear' 清除历史\n");
+  console.log("输入 '/new' 创建新会话，'exit' 或 'quit' 退出，输入 'clear' 清除历史\n");
+
+  // 创建新会话的回调函数
+  const onNewSession = () => {
+    const newSession = sessionManager.createNewSession();
+    messages.length = 0; // 清空当前消息
+    console.log("✅ 已创建新会话");
+  };
 
   await startRepl({
     prompt: "You: ",
@@ -95,6 +101,7 @@ async function main() {
     providerService,
     settingsStore,
     sessionStore,
+    onNewSession,
   });
 }
 
