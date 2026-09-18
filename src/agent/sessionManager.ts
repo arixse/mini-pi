@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { JsonlSessionStore } from "./sessionStore";
@@ -6,11 +6,15 @@ import { LlmModel } from "./model";
 
 export class SessionManager {
   private readonly sessionsDir: string;
+  private readonly globalAgentsPath: string;
+  private readonly projectAgentsPath: string;
   private currentSession: JsonlSessionStore | null = null;
   private model: LlmModel | null = null;
 
   constructor(private readonly workspaceRoot: string) {
     this.sessionsDir = join(homedir(), ".mini-pi", "sessions");
+    this.globalAgentsPath = join(homedir(), ".mini-pi", "AGENTS.md");
+    this.projectAgentsPath = join(workspaceRoot, "AGENTS.md");
     this.ensureSessionsDir();
   }
 
@@ -25,6 +29,47 @@ export class SessionManager {
     if (!existsSync(this.sessionsDir)) {
       mkdirSync(this.sessionsDir, { recursive: true });
     }
+  }
+
+  /**
+   * 读取 AGENTS.md 文件内容
+   * @returns AGENTS.md 内容，如果文件不存在则返回空字符串
+   */
+  private readAgentsFile(filePath: string): string {
+    try {
+      if (existsSync(filePath)) {
+        return readFileSync(filePath, "utf8");
+      }
+    } catch (error) {
+      console.error(`读取 ${filePath} 失败:`, error);
+    }
+    return "";
+  }
+
+  /**
+   * 获取固定上下文（来自 AGENTS.md 文件）
+   * @returns 固定上下文内容
+   */
+  getFixedContext(): string {
+    const parts: string[] = [];
+
+    // 读取全局 AGENTS.md
+    const globalAgents = this.readAgentsFile(this.globalAgentsPath);
+    if (globalAgents) {
+      parts.push(`## 全局代理规则\n\n${globalAgents}`);
+    }
+
+    // 读取项目 AGENTS.md
+    const projectAgents = this.readAgentsFile(this.projectAgentsPath);
+    if (projectAgents) {
+      parts.push(`## 项目代理规则\n\n${projectAgents}`);
+    }
+
+    if (parts.length === 0) {
+      return "";
+    }
+
+    return `# 固定上下文\n\n以下是来自 AGENTS.md 的规则，请在回答时遵循这些规则：\n\n${parts.join("\n\n---\n\n")}`;
   }
 
   /**

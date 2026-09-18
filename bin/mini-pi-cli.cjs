@@ -35542,6 +35542,13 @@ async function startRepl(options) {
       rl.prompt();
       return;
     }
+    if (input === "/new") {
+      if (options.onNewSession) {
+        options.onNewSession();
+      }
+      rl.prompt();
+      return;
+    }
     options.messages.push({
       role: "user",
       content: [createTextContent(input)],
@@ -35583,6 +35590,7 @@ async function startRepl(options) {
 function printHelp() {
   console.log(`
 \u{1F4D6} \u53EF\u7528\u547D\u4EE4:
+  /new   - \u521B\u5EFA\u65B0\u7684\u4F1A\u8BDD
   /login - \u767B\u5F55\u6A21\u578B\u670D\u52A1\u5546\uFF08\u8F93\u5165apiKey\uFF09
   /model - \u9009\u62E9\u6A21\u578B\u4F9B\u5E94\u5546\u548C\u6A21\u578B
   help   - \u663E\u793A\u5E2E\u52A9\u4FE1\u606F
@@ -36097,6 +36105,11 @@ var ModelProviderService = class {
   }
 };
 
+// src/agent/sessionManager.ts
+var import_node_fs4 = require("node:fs");
+var import_node_path5 = require("node:path");
+var import_node_os3 = require("node:os");
+
 // src/agent/sessionStore.ts
 var import_node_fs3 = require("node:fs");
 var import_promises4 = require("node:fs/promises");
@@ -36405,8 +36418,94 @@ function extractText(message) {
   return parts.join("\n");
 }
 
+// src/agent/sessionManager.ts
+var SessionManager = class {
+  constructor(workspaceRoot) {
+    this.workspaceRoot = workspaceRoot;
+    this.sessionsDir = (0, import_node_path5.join)((0, import_node_os3.homedir)(), ".mini-pi", "sessions");
+    this.ensureSessionsDir();
+  }
+  sessionsDir;
+  currentSession = null;
+  model = null;
+  setModel(model) {
+    this.model = model;
+    if (this.currentSession) {
+      this.currentSession.setModel(model);
+    }
+  }
+  ensureSessionsDir() {
+    if (!(0, import_node_fs4.existsSync)(this.sessionsDir)) {
+      (0, import_node_fs4.mkdirSync)(this.sessionsDir, { recursive: true });
+    }
+  }
+  /**
+   * 创建新的 session
+   * @returns 新创建的 session store
+   */
+  createNewSession() {
+    const timestamp = this.generateTimestamp();
+    const fileName = `${timestamp}.jsonl`;
+    const filePath = (0, import_node_path5.join)(this.sessionsDir, fileName);
+    this.currentSession = new JsonlSessionStore(filePath, this.workspaceRoot);
+    if (this.model) {
+      this.currentSession.setModel(this.model);
+    }
+    return this.currentSession;
+  }
+  /**
+   * 获取当前 session
+   */
+  getCurrentSession() {
+    return this.currentSession;
+  }
+  /**
+   * 加载最近的 session
+   * @returns 最近的 session store，如果没有则创建新的
+   */
+  loadLatestSession() {
+    const sessions = this.listSessions();
+    if (sessions.length > 0) {
+      const latestSession = sessions[sessions.length - 1];
+      const filePath = (0, import_node_path5.join)(this.sessionsDir, latestSession.fileName);
+      this.currentSession = new JsonlSessionStore(filePath, this.workspaceRoot);
+      if (this.model) {
+        this.currentSession.setModel(this.model);
+      }
+      return this.currentSession;
+    }
+    return this.createNewSession();
+  }
+  /**
+   * 列出所有 session 文件
+   */
+  listSessions() {
+    if (!(0, import_node_fs4.existsSync)(this.sessionsDir)) {
+      return [];
+    }
+    const files = (0, import_node_fs4.readdirSync)(this.sessionsDir).filter((file) => file.endsWith(".jsonl")).sort();
+    return files.map((fileName) => ({
+      fileName,
+      timestamp: fileName.replace(".jsonl", "")
+    }));
+  }
+  /**
+   * 生成时间戳文件名
+   * 格式: YYYY-MM-DDTHH-mm-ss
+   */
+  generateTimestamp() {
+    const now = /* @__PURE__ */ new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const hours = String(now.getHours()).padStart(2, "0");
+    const minutes = String(now.getMinutes()).padStart(2, "0");
+    const seconds = String(now.getSeconds()).padStart(2, "0");
+    return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}`;
+  }
+};
+
 // src/cli/index.ts
-var import_node_path5 = require("node:path");
 async function createModelFromSettings(providerService, settingsStore) {
   const parsed = await settingsStore.parseDefaultModel();
   if (parsed) {
@@ -36445,9 +36544,9 @@ async function main() {
   const settingsStore = new SettingsStore();
   const model = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
-  const sessionFilePath = (0, import_node_path5.join)(workspaceRoot, ".mini-pi", "session.jsonl");
-  const sessionStore = new JsonlSessionStore(sessionFilePath, workspaceRoot);
-  sessionStore.setModel(model);
+  const sessionManager = new SessionManager(workspaceRoot);
+  sessionManager.setModel(model);
+  const sessionStore = sessionManager.loadLatestSession();
   const systemPrompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
 - \u8BFB\u53D6\u548C\u5199\u5165\u6587\u4EF6
 - \u6267\u884C\u547D\u4EE4
@@ -36458,7 +36557,12 @@ async function main() {
 \u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002`;
   const messages = [];
   console.log("\u{1F916} Mini Pi Code Agent");
-  console.log("\u8F93\u5165 'exit' \u6216 'quit' \u9000\u51FA\uFF0C\u8F93\u5165 'clear' \u6E05\u9664\u5386\u53F2\n");
+  console.log("\u8F93\u5165 '/new' \u521B\u5EFA\u65B0\u4F1A\u8BDD\uFF0C'exit' \u6216 'quit' \u9000\u51FA\uFF0C\u8F93\u5165 'clear' \u6E05\u9664\u5386\u53F2\n");
+  const onNewSession = () => {
+    const newSession = sessionManager.createNewSession();
+    messages.length = 0;
+    console.log("\u2705 \u5DF2\u521B\u5EFA\u65B0\u4F1A\u8BDD");
+  };
   await startRepl({
     prompt: "You: ",
     systemPrompt,
@@ -36468,7 +36572,8 @@ async function main() {
     workspaceRoot,
     providerService,
     settingsStore,
-    sessionStore
+    sessionStore,
+    onNewSession
   });
 }
 main().catch(console.error);

@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
-import { config } from "dotenv";
 import { createModelFromEnv, createModelFromProvider, LlmModel } from "../agent/model";
 import { createToolRegistry } from "../agent/tools";
 import { AgentMessage } from "../shared/protocol";
 import { startRepl } from "./repl";
 import { ModelProviderService, SettingsStore } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
-import { join } from "node:path";
 
 
 async function createModelFromSettings(
@@ -70,6 +68,9 @@ async function main() {
   // 加载最近的 session 或创建新的
   const sessionStore = sessionManager.loadLatestSession();
 
+  // 获取固定上下文
+  const fixedContext = sessionManager.getFixedContext();
+
   const systemPrompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
 - 读取和写入文件
 - 执行命令
@@ -77,7 +78,9 @@ async function main() {
 
 当前工作目录：${workspaceRoot}
 
-请用中文回复用户的问题。`;
+请用中文回复用户的问题。
+
+${fixedContext}`;
 
   const messages: AgentMessage[] = [];
 

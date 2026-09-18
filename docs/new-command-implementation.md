@@ -9,6 +9,7 @@
 - 会话存储在 `~/.mini-pi/sessions/` 目录
 - 使用时间戳命名会话文件（格式：`YYYY-MM-DDTHH-mm-ss.jsonl`）
 - 支持创建新会话、加载最近会话、列出所有会话
+- **新增**: 读取 AGENTS.md 文件作为固定上下文
 
 ### 2. 更新 REPL 命令
 **文件**: `src/cli/repl.ts`
@@ -37,6 +38,7 @@
 - 测试加载最近会话
 - 测试获取当前会话
 - 测试设置模型
+- **新增**: 测试固定上下文读取
 
 ### 6. 更新文档
 **文件**: `docs/session-management.md`, `README.md`
@@ -81,12 +83,15 @@ const currentSession = sessionManager.getCurrentSession();
 
 // 设置模型
 sessionManager.setModel(model);
+
+// 获取固定上下文（新增）
+const fixedContext = sessionManager.getFixedContext();
 ```
 
 ## 测试结果
 
-所有 123 个测试通过，包括：
-- SessionManager 相关测试（5 个）
+所有 126 个测试通过，包括：
+- SessionManager 相关测试（8 个，新增 3 个）
 - 其他现有测试（118 个）
 
 ## Git 提交记录
@@ -101,3 +106,4 @@ sessionManager.setModel(model);
 3. 添加 `/delete <timestamp>` 命令删除会话
 4. 支持会话导出和导入功能
 5. 添加会话搜索功能
+6. 支持动态重新加载 AGENTS.md 文件
