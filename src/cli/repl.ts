@@ -1,5 +1,6 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
+import chalk from "chalk";
 import { AgentMessage, AssistantMessage } from "../shared/protocol";
 import { createTextContent, messageText } from "../agent/message";
 import { LlmModel } from "../agent/model";
@@ -25,7 +26,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: options.prompt,
+    prompt: chalk.cyan("> "),
   });
 
   rl.prompt();
@@ -39,14 +40,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/exit" || input === "/quit") {
-      console.log("👋 再见！");
+      console.log(chalk.yellow("\n👋 再见！\n"));
       rl.close();
       process.exit(0);
     }
 
     if (input === "/clear") {
       options.messages.length = 0;
-      console.log("🗑️  历史已清除\n");
+      console.log(chalk.dim("\n🗑️  历史已清除\n"));
       rl.prompt();
       return;
     }
@@ -84,7 +85,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     });
 
     try {
-      process.stdout.write("\n🤖 ");
+      console.log("");
+      console.log(chalk.dim("─".repeat(60)));
+      console.log("");
 
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
@@ -97,18 +100,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
             process.stdout.write(event.delta);
           }
           if (event.type === "tool_execution_start") {
-            process.stdout.write(`\n🔧 调用工具: ${event.toolName}`);
+            console.log("");
+            console.log(chalk.dim(`🔧 调用工具: ${event.toolName}`));
           }
           if (event.type === "tool_execution_end") {
-            process.stdout.write(` ✓\n🤖 `);
+            console.log(chalk.dim(` ✓`));
+            console.log("");
           }
         },
       });
 
       options.messages.push(...result.newMessages);
-      console.log("\n");
+      console.log("");
+      console.log(chalk.dim("─".repeat(60)));
+      console.log("");
     } catch (error) {
-      console.error("\n❌ 错误:", error instanceof Error ? error.message : error);
+      console.error(chalk.red("\n❌ 错误:"), error instanceof Error ? error.message : error);
     }
 
     rl.prompt();
@@ -120,21 +127,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 }
 
 function printHelp() {
-  console.log(`
-📖 可用命令（所有命令以 / 开头）:
-  /new   - 创建新的会话
-  /login - 登录模型服务商（输入apiKey）
-  /model - 选择模型供应商和模型
-  /help  - 显示帮助信息
-  /clear - 清除对话历史
-  /exit  - 退出程序
-  /quit  - 退出程序
-
-💡 提示:
-  - 直接输入问题即可开始对话
-  - 支持多轮对话，上下文会自动保持
-  - 输入编程问题或文件操作请求
-`);
+  console.log("");
+  console.log(chalk.cyan("📖 可用命令（所有命令以 / 开头）:"));
+  console.log("");
+  console.log(chalk.white("  /new") + chalk.dim("   - 创建新的会话"));
+  console.log(chalk.white("  /login") + chalk.dim(" - 登录模型服务商（输入apiKey）"));
+  console.log(chalk.white("  /model") + chalk.dim(" - 选择模型供应商和模型"));
+  console.log(chalk.white("  /help") + chalk.dim("  - 显示帮助信息"));
+  console.log(chalk.white("  /clear") + chalk.dim(" - 清除对话历史"));
+  console.log(chalk.white("  /exit") + chalk.dim("  - 退出程序"));
+  console.log(chalk.white("  /quit") + chalk.dim("  - 退出程序"));
+  console.log("");
+  console.log(chalk.dim("💡 提示:"));
+  console.log(chalk.dim("  - 直接输入问题即可开始对话"));
+  console.log(chalk.dim("  - 支持多轮对话，上下文会自动保持"));
+  console.log(chalk.dim("  - 输入编程问题或文件操作请求"));
+  console.log("");
 }
 
 async function handleLogin(
@@ -142,35 +150,36 @@ async function handleLogin(
   rl: readline.Interface,
 ): Promise<void> {
   if (!providerService) {
-    console.log("❌ Provider服务未初始化");
+    console.log(chalk.red("❌ Provider服务未初始化"));
     return;
   }
 
   const providers = providerService.getRegisteredProviders();
 
   if (providers.length === 0) {
-    console.log("❌ 没有可用的模型服务商");
+    console.log(chalk.red("❌ 没有可用的模型服务商"));
     return;
   }
 
-  console.log("\n📋 可用的模型服务商:");
+  console.log("");
+  console.log(chalk.cyan("📋 可用的模型服务商:"));
   providers.forEach((provider, index) => {
-    console.log(`  ${index + 1}. ${provider}`);
+    console.log(chalk.white(`  ${index + 1}. ${provider}`));
   });
 
-  const providerIndex = await question(rl, "\n请选择模型服务商 (输入序号): ");
+  const providerIndex = await question(rl, chalk.cyan("\n请选择模型服务商 (输入序号): "));
   const index = parseInt(providerIndex, 10) - 1;
 
   if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log("❌ 无效的选择");
+    console.log(chalk.red("❌ 无效的选择"));
     return;
   }
 
   const selectedProvider = providers[index];
-  const apiKey = await question(rl, `\n请输入 ${selectedProvider} 的 API Key: `);
+  const apiKey = await question(rl, chalk.cyan(`\n请输入 ${selectedProvider} 的 API Key: `));
 
   if (!apiKey.trim()) {
-    console.log("❌ API Key不能为空");
+    console.log(chalk.red("❌ API Key不能为空"));
     return;
   }
 
@@ -178,9 +187,9 @@ async function handleLogin(
     await providerService.saveProviderConfig(selectedProvider, {
       apiKey: apiKey.trim(),
     });
-    console.log(`✅ 已保存 ${selectedProvider} 的 API Key`);
+    console.log(chalk.green(`✅ 已保存 ${selectedProvider} 的 API Key`));
   } catch (error) {
-    console.log("❌ 保存失败:", error instanceof Error ? error.message : error);
+    console.log(chalk.red("❌ 保存失败:"), error instanceof Error ? error.message : error);
   }
 }
 
@@ -198,14 +207,14 @@ async function handleModel(
   rl: readline.Interface,
 ): Promise<void> {
   if (!providerService) {
-    console.log("❌ Provider服务未初始化");
+    console.log(chalk.red("❌ Provider服务未初始化"));
     return;
   }
 
   const providers = providerService.getRegisteredProviders();
 
   if (providers.length === 0) {
-    console.log("❌ 没有可用的模型服务商");
+    console.log(chalk.red("❌ 没有可用的模型服务商"));
     return;
   }
 
@@ -213,20 +222,22 @@ async function handleModel(
   if (settingsStore) {
     const defaultModel = await settingsStore.getDefaultModel();
     if (defaultModel) {
-      console.log(`\n📌 当前默认模型: ${defaultModel}`);
+      console.log("");
+      console.log(chalk.cyan(`📌 当前默认模型: ${defaultModel}`));
     }
   }
 
-  console.log("\n📋 可用的模型服务商:");
+  console.log("");
+  console.log(chalk.cyan("📋 可用的模型服务商:"));
   providers.forEach((provider, index) => {
-    console.log(`  ${index + 1}. ${provider}`);
+    console.log(chalk.white(`  ${index + 1}. ${provider}`));
   });
 
-  const providerIndex = await question(rl, "\n请选择模型服务商 (输入序号): ");
+  const providerIndex = await question(rl, chalk.cyan("\n请选择模型服务商 (输入序号): "));
   const index = parseInt(providerIndex, 10) - 1;
 
   if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log("❌ 无效的选择");
+    console.log(chalk.red("❌ 无效的选择"));
     return;
   }
 
@@ -236,30 +247,31 @@ async function handleModel(
   const config = await providerService.getProviderConfig(selectedProvider);
   
   if (!config.apiKey) {
-    console.log(`❌ 请先使用 /login 命令配置 ${selectedProvider} 的 API Key`);
+    console.log(chalk.red(`❌ 请先使用 /login 命令配置 ${selectedProvider} 的 API Key`));
     return;
   }
 
-  console.log(`\n🔍 正在获取 ${selectedProvider} 的模型列表...`);
+  console.log(chalk.dim(`\n🔍 正在获取 ${selectedProvider} 的模型列表...`));
   
   try {
     const models = await providerService.getModelList(selectedProvider, config.apiKey);
     
     if (models.length === 0) {
-      console.log("❌ 没有可用的模型");
+      console.log(chalk.red("❌ 没有可用的模型"));
       return;
     }
 
-    console.log(`\n📋 ${selectedProvider} 可用的模型:`);
+    console.log("");
+    console.log(chalk.cyan(`📋 ${selectedProvider} 可用的模型:`));
     models.forEach((model, idx) => {
-      console.log(`  ${idx + 1}. ${model}`);
+      console.log(chalk.white(`  ${idx + 1}. ${model}`));
     });
 
-    const modelIndex = await question(rl, "\n请选择模型 (输入序号): ");
+    const modelIndex = await question(rl, chalk.cyan("\n请选择模型 (输入序号): "));
     const mIdx = parseInt(modelIndex, 10) - 1;
 
     if (isNaN(mIdx) || mIdx < 0 || mIdx >= models.length) {
-      console.log("❌ 无效的选择");
+      console.log(chalk.red("❌ 无效的选择"));
       return;
     }
 
@@ -269,18 +281,18 @@ async function handleModel(
     // 保存到 settings.json
     if (settingsStore) {
       await settingsStore.setDefaultModel(defaultModel);
-      console.log(`\n✅ 已设置默认模型: ${defaultModel}`);
-      console.log("💡 重启应用后生效\n");
+      console.log(chalk.green(`\n✅ 已设置默认模型: ${defaultModel}`));
+      console.log(chalk.dim("💡 重启应用后生效\n"));
     } else {
       // 如果没有 settingsStore，回退到保存到 provider 配置
       await providerService.saveProviderConfig(selectedProvider, {
         ...config,
         model: selectedModel,
       });
-      console.log(`\n✅ 已选择模型: ${defaultModel}`);
-      console.log("💡 重启应用后生效\n");
+      console.log(chalk.green(`\n✅ 已选择模型: ${defaultModel}`));
+      console.log(chalk.dim("💡 重启应用后生效\n"));
     }
   } catch (error) {
-    console.log("❌ 获取模型列表失败:", error instanceof Error ? error.message : error);
+    console.log(chalk.red("❌ 获取模型列表失败:"), error instanceof Error ? error.message : error);
   }
 }

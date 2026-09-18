@@ -6,29 +6,29 @@ import { AgentMessage } from "../shared/protocol";
 import { startRepl } from "./repl";
 import { ModelProviderService, SettingsStore } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
+import { printLogo, printWelcome } from "./ui";
 
 
 async function createModelFromSettings(
   providerService: ModelProviderService,
   settingsStore: SettingsStore,
-): Promise<LlmModel> {
+): Promise<{ model: LlmModel; providerName: string; modelName: string }> {
   // 从 settings.json 读取 defaultModel
   const parsed = await settingsStore.parseDefaultModel();
   
   if (parsed) {
     const { providerName, modelName } = parsed;
-    console.log(`📡 使用 provider: ${providerName}`);
-    console.log(`🤖 使用模型: ${modelName}`);
     
     // 获取 provider 配置
     const providerConfig = await providerService.getProviderConfig(providerName);
     
     if (providerConfig.apiKey) {
-      return createModelFromProvider(providerName, {
+      const model = createModelFromProvider(providerName, {
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
       });
+      return { model, providerName, modelName };
     }
   }
   
@@ -37,28 +37,26 @@ async function createModelFromSettings(
   
   for (const [providerName, config] of Object.entries(allConfigs)) {
     if (config.apiKey) {
-      console.log(`📡 使用 provider: ${providerName}`);
-      if (config.model) {
-        console.log(`🤖 使用模型: ${config.model}`);
-      }
-      return createModelFromProvider(providerName, {
+      const modelName = config.model || "default";
+      const model = createModelFromProvider(providerName, {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
       });
+      return { model, providerName, modelName };
     }
   }
   
   // 如果没有找到配置，回退到环境变量
-  console.log("⚠️  未找到 provider 配置，使用环境变量");
-  return createModelFromEnv();
+  const model = createModelFromEnv();
+  return { model, providerName: "env", modelName: "default" };
 }
 
 async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();
-  const model = await createModelFromSettings(providerService, settingsStore);
+  const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
   // 创建 sessionManager
@@ -84,8 +82,9 @@ ${fixedContext}`;
 
   const messages: AgentMessage[] = [];
 
-  console.log("🤖 Mini Pi Code Agent");
-  console.log("输入 '/help' 查看所有命令\n");
+  // 显示 logo 和欢迎信息
+  printLogo();
+  printWelcome(providerName, modelName);
 
   // 创建新会话的回调函数
   const onNewSession = () => {
