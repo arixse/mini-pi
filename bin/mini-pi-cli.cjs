@@ -282,16 +282,16 @@ var init_values = __esm({
 var sleep2;
 var init_sleep = __esm({
   "node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/internal/utils/sleep.mjs"() {
-    sleep2 = (ms, signal) => new Promise((resolve3) => {
+    sleep2 = (ms, signal) => new Promise((resolve4) => {
       if (signal?.aborted)
-        return resolve3();
+        return resolve4();
       const onAbort = () => {
         clearTimeout(timer);
-        resolve3();
+        resolve4();
       };
       const timer = setTimeout(() => {
         signal?.removeEventListener("abort", onAbort);
-        resolve3();
+        resolve4();
       }, ms);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
@@ -2481,8 +2481,8 @@ var init_api_promise = __esm({
     init_parse();
     APIPromise2 = class _APIPromise extends Promise {
       constructor(client, responsePromise, parseResponse2 = defaultParseResponse2) {
-        super((resolve3) => {
-          resolve3(null);
+        super((resolve4) => {
+          resolve4(null);
         });
         this.responsePromise = responsePromise;
         this.parseResponse = parseResponse2;
@@ -5121,16 +5121,16 @@ var init_async_queue = __esm({
         if (__classPrivateFieldGet2(this, _AsyncQueue_closed, "f") || signal?.aborted) {
           return Promise.resolve({ done: true, value: void 0 });
         }
-        return new Promise((resolve3) => {
+        return new Promise((resolve4) => {
           const waiter = (r) => {
             signal?.removeEventListener("abort", onAbort);
-            resolve3(r);
+            resolve4(r);
           };
           const onAbort = () => {
             const idx = __classPrivateFieldGet2(this, _AsyncQueue_waiters, "f").indexOf(waiter);
             if (idx >= 0)
               __classPrivateFieldGet2(this, _AsyncQueue_waiters, "f").splice(idx, 1);
-            resolve3({ done: true, value: void 0 });
+            resolve4({ done: true, value: void 0 });
           };
           __classPrivateFieldGet2(this, _AsyncQueue_waiters, "f").push(waiter);
           signal?.addEventListener("abort", onAbort, { once: true });
@@ -5764,13 +5764,13 @@ var init_json_schema = __esm({
 
 // node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs
 function promiseWithResolvers() {
-  let resolve3;
+  let resolve4;
   let reject;
   const promise = new Promise((res, rej) => {
-    resolve3 = res;
+    resolve4 = res;
     reject = rej;
   });
-  return { promise, resolve: resolve3, reject };
+  return { promise, resolve: resolve4, reject };
 }
 var init_promise = __esm({
   "node_modules/.pnpm/@anthropic-ai+sdk@0.125.0/node_modules/@anthropic-ai/sdk/internal/utils/promise.mjs"() {
@@ -6559,10 +6559,10 @@ async function settledOrAborted(p, signal) {
     return;
   }
   let onAbort;
-  const aborted = new Promise((resolve3) => {
-    onAbort = resolve3;
+  const aborted = new Promise((resolve4) => {
+    onAbort = resolve4;
     if (signal.aborted)
-      resolve3();
+      resolve4();
   });
   signal.addEventListener("abort", onAbort, { once: true });
   try {
@@ -7620,7 +7620,7 @@ function betaGrepTool(ctx) {
   });
 }
 function runRipgrep(rg, pattern, searchPath, signal) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const proc = cp.spawn(rg, ["-n", "--no-heading", "-e", pattern, "--", searchPath], {
       ...signal ? { signal } : {}
     });
@@ -7642,12 +7642,12 @@ function runRipgrep(rg, pattern, searchPath, signal) {
       if (signal?.aborted)
         return reject(new ToolError("grep: aborted"));
       if (truncated)
-        return resolve3(out + `
+        return resolve4(out + `
 [output truncated at ${GREP_OUTPUT_LIMIT} bytes]`);
       if (code === 0)
-        return resolve3(out);
+        return resolve4(out);
       if (code === 1)
-        return resolve3("no matches");
+        return resolve4("no matches");
       reject(new ToolError(`grep: rg failed: ${errOut || `exit ${code}`}`));
     });
     proc.on("error", (e) => {
@@ -7834,8 +7834,8 @@ var init_node2 = __esm({
 `;
         __classPrivateFieldGet2(this, _BashSession_proc, "f").stdin.write(wrapped);
         if (__classPrivateFieldGet2(this, _BashSession_buf, "f").indexOf(sentinel3) < 0) {
-          const { promise: sentinelSeen, resolve: resolve3 } = promiseWithResolvers();
-          __classPrivateFieldSet2(this, _BashSession_waiting, { sentinel: sentinel3, resolve: resolve3 }, "f");
+          const { promise: sentinelSeen, resolve: resolve4 } = promiseWithResolvers();
+          __classPrivateFieldSet2(this, _BashSession_waiting, { sentinel: sentinel3, resolve: resolve4 }, "f");
           let timer;
           let onAbort;
           try {
@@ -7992,8 +7992,8 @@ async function withTimeout(p, ms) {
   try {
     return await Promise.race([
       p.then(() => false, () => false),
-      new Promise((resolve3) => {
-        timer = setTimeout(() => resolve3(true), ms);
+      new Promise((resolve4) => {
+        timer = setTimeout(() => resolve4(true), ms);
       })
     ]);
   } finally {
@@ -9904,12 +9904,12 @@ var init_BetaMessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet2(this, _BetaMessageStream_connectedPromise, new Promise((resolve3, reject) => {
-          __classPrivateFieldSet2(this, _BetaMessageStream_resolveConnectedPromise, resolve3, "f");
+        __classPrivateFieldSet2(this, _BetaMessageStream_connectedPromise, new Promise((resolve4, reject) => {
+          __classPrivateFieldSet2(this, _BetaMessageStream_resolveConnectedPromise, resolve4, "f");
           __classPrivateFieldSet2(this, _BetaMessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet2(this, _BetaMessageStream_endPromise, new Promise((resolve3, reject) => {
-          __classPrivateFieldSet2(this, _BetaMessageStream_resolveEndPromise, resolve3, "f");
+        __classPrivateFieldSet2(this, _BetaMessageStream_endPromise, new Promise((resolve4, reject) => {
+          __classPrivateFieldSet2(this, _BetaMessageStream_resolveEndPromise, resolve4, "f");
           __classPrivateFieldSet2(this, _BetaMessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet2(this, _BetaMessageStream_connectedPromise, "f").catch(() => {
@@ -10084,11 +10084,11 @@ var init_BetaMessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           __classPrivateFieldSet2(this, _BetaMessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve3);
+          this.once(event, resolve4);
         });
       }
       async done() {
@@ -10461,7 +10461,7 @@ var init_BetaMessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve3, reject) => readQueue.push({ resolve: resolve3, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve4, reject) => readQueue.push({ resolve: resolve4, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -14742,12 +14742,12 @@ var init_MessageStream = __esm({
           }
           return this._emit("error", new AnthropicError(String(error)));
         });
-        __classPrivateFieldSet2(this, _MessageStream_connectedPromise, new Promise((resolve3, reject) => {
-          __classPrivateFieldSet2(this, _MessageStream_resolveConnectedPromise, resolve3, "f");
+        __classPrivateFieldSet2(this, _MessageStream_connectedPromise, new Promise((resolve4, reject) => {
+          __classPrivateFieldSet2(this, _MessageStream_resolveConnectedPromise, resolve4, "f");
           __classPrivateFieldSet2(this, _MessageStream_rejectConnectedPromise, reject, "f");
         }), "f");
-        __classPrivateFieldSet2(this, _MessageStream_endPromise, new Promise((resolve3, reject) => {
-          __classPrivateFieldSet2(this, _MessageStream_resolveEndPromise, resolve3, "f");
+        __classPrivateFieldSet2(this, _MessageStream_endPromise, new Promise((resolve4, reject) => {
+          __classPrivateFieldSet2(this, _MessageStream_resolveEndPromise, resolve4, "f");
           __classPrivateFieldSet2(this, _MessageStream_rejectEndPromise, reject, "f");
         }), "f");
         __classPrivateFieldGet2(this, _MessageStream_connectedPromise, "f").catch(() => {
@@ -14922,11 +14922,11 @@ var init_MessageStream = __esm({
        *   const message = await stream.emitted('message') // rejects if the stream errors
        */
       emitted(event) {
-        return new Promise((resolve3, reject) => {
+        return new Promise((resolve4, reject) => {
           __classPrivateFieldSet2(this, _MessageStream_catchingPromiseCreated, true, "f");
           if (event !== "error")
             this.once("error", reject);
-          this.once(event, resolve3);
+          this.once(event, resolve4);
         });
       }
       async done() {
@@ -15251,7 +15251,7 @@ var init_MessageStream = __esm({
               if (done) {
                 return { value: void 0, done: true };
               }
-              return new Promise((resolve3, reject) => readQueue.push({ resolve: resolve3, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
+              return new Promise((resolve4, reject) => readQueue.push({ resolve: resolve4, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: void 0, done: true });
             }
             const chunk = pushQueue.shift();
             return { value: chunk, done: false };
@@ -16936,7 +16936,7 @@ var safeJSON = (text) => {
 };
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/utils/sleep.mjs
-var sleep = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
+var sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/shims.mjs
 function getDefaultFetch() {
@@ -17634,8 +17634,8 @@ function createAbortableSSESource(body, signal) {
   let interrupt;
   const waitForAbort = () => (
     // oxlint-disable-next-line promise/avoid-new -- AbortSignal callbacks need a portable Promise bridge.
-    new Promise((resolve3) => {
-      interrupt = resolve3;
+    new Promise((resolve4) => {
+      interrupt = resolve4;
     })
   );
   const cancel = () => {
@@ -18552,8 +18552,8 @@ function resolveDataResidency(options) {
 var _APIPromise_client;
 var APIPromise = class _APIPromise extends Promise {
   constructor(client, responsePromise, parseResponse2 = defaultParseResponse) {
-    super((resolve3) => {
-      resolve3(null);
+    super((resolve4) => {
+      resolve4(null);
     });
     this.responsePromise = responsePromise;
     this.parseResponse = parseResponse2;
@@ -21522,12 +21522,12 @@ var EventStream = class {
     _EventStream_aborted.set(this, false);
     _EventStream_catchingPromiseCreated.set(this, false);
     _EventStream_terminalFailure.set(this, void 0);
-    __classPrivateFieldSet(this, _EventStream_connectedPromise, new Promise((resolve3, reject) => {
-      __classPrivateFieldSet(this, _EventStream_resolveConnectedPromise, resolve3, "f");
+    __classPrivateFieldSet(this, _EventStream_connectedPromise, new Promise((resolve4, reject) => {
+      __classPrivateFieldSet(this, _EventStream_resolveConnectedPromise, resolve4, "f");
       __classPrivateFieldSet(this, _EventStream_rejectConnectedPromise, reject, "f");
     }), "f");
-    __classPrivateFieldSet(this, _EventStream_endPromise, new Promise((resolve3, reject) => {
-      __classPrivateFieldSet(this, _EventStream_resolveEndPromise, resolve3, "f");
+    __classPrivateFieldSet(this, _EventStream_endPromise, new Promise((resolve4, reject) => {
+      __classPrivateFieldSet(this, _EventStream_resolveEndPromise, resolve4, "f");
       __classPrivateFieldSet(this, _EventStream_rejectEndPromise, reject, "f");
     }), "f");
     __classPrivateFieldGet(this, _EventStream_connectedPromise, "f").catch(() => void 0);
@@ -21655,7 +21655,7 @@ var EventStream = class {
    *   const message = await stream.emitted('message') // rejects if the stream errors
    */
   emitted(event) {
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       __classPrivateFieldSet(this, _EventStream_catchingPromiseCreated, true, "f");
       const onError = (error) => {
         this.off(event, onEvent);
@@ -21665,7 +21665,7 @@ var EventStream = class {
         if (event !== "error") {
           this.off("error", onError);
         }
-        resolve3(values.length > 1 ? values : values[0]);
+        resolve4(values.length > 1 ? values : values[0]);
       };
       if (event !== "error") {
         __classPrivateFieldGet(this, _EventStream_instances, "m", _EventStream_onceForEmitted).call(this, "error", onError);
@@ -21881,8 +21881,8 @@ var EventStream = class {
         if (ended) {
           return Promise.resolve(doneResult());
         }
-        return new Promise((resolve3, reject) => {
-          readQueue.enqueue({ resolve: resolve3, reject });
+        return new Promise((resolve4, reject) => {
+          readQueue.enqueue({ resolve: resolve4, reject });
         });
       },
       return: () => {
@@ -27520,8 +27520,8 @@ _AgentSessionStream_iterate = async function* _AgentSessionStream_iterate2() {
     try {
       await __classPrivateFieldGet(this, _AgentSessionStream_instances, "m", _AgentSessionStream_wait).call(this, () => (
         // oxlint-disable-next-line promise/avoid-new -- Own the registration timer so cancellation clears it promptly.
-        new Promise((resolve3) => {
-          timer = setTimeout(resolve3, delay);
+        new Promise((resolve4) => {
+          timer = setTimeout(resolve4, delay);
         })
       ));
     } finally {
@@ -29777,7 +29777,7 @@ function assertNever2(_x) {
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/lib/polling.mjs
 function sleepUntilAborted(milliseconds, signal) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     let timer;
     let registered;
     let settled = false;
@@ -29826,7 +29826,7 @@ function sleepUntilAborted(milliseconds, signal) {
       }
       settled = true;
       cleanup();
-      resolve3();
+      resolve4();
     }, milliseconds);
     registered = abort;
     try {
@@ -35770,10 +35770,10 @@ var applyOptions = (object, options = {}) => {
   object[LEVEL] = options.level === void 0 ? colorLevel : options.level;
 };
 var chalkFactory = (options) => {
-  const chalk2 = (...strings) => strings.join(" ");
-  applyOptions(chalk2, options);
-  Object.setPrototypeOf(chalk2, createChalk.prototype);
-  return chalk2;
+  const chalk3 = (...strings) => strings.join(" ");
+  applyOptions(chalk3, options);
+  Object.setPrototypeOf(chalk3, createChalk.prototype);
+  return chalk3;
 };
 function createChalk(options) {
   return chalkFactory(options);
@@ -35904,9 +35904,9 @@ var applyStyle = (self, string) => {
   return openAll + string + closeAll;
 };
 Object.defineProperties(createChalk.prototype, { ...styles2, level: levelDescriptor });
-var chalk = createChalk();
+var chalk2 = createChalk();
 var chalkStderr = createChalk({ level: stderrColor ? stderrColor.level : 0 });
-var source_default = chalk;
+var source_default = chalk2;
 
 // src/agent/loop.ts
 async function decideToolCall(toolCall, beforeToolCall) {
@@ -35978,7 +35978,7 @@ async function runAgentLoop(options) {
   };
   const context = [...options.messages];
   const newMessages = [];
-  const maxTurns = options.maxTurns ?? 25;
+  const maxTurns = options.maxTurns ?? 100;
   emit({ type: "agent_start" });
   for (let turn = 1; turn <= maxTurns; turn++) {
     emit({ type: "turn_start", turn });
@@ -36111,6 +36111,38 @@ async function startRepl(options) {
       rl.prompt();
       return;
     }
+    if (input === "/reload") {
+      if (options.onReload) {
+        try {
+          const { model, systemPrompt } = await options.onReload();
+          options.model = model;
+          options.systemPrompt = systemPrompt;
+          console.log(source_default.green("\n\u2705 \u914D\u7F6E\u5DF2\u91CD\u8F7D\n"));
+        } catch (error) {
+          console.log(source_default.red("\n\u274C \u91CD\u8F7D\u5931\u8D25:"), error instanceof Error ? error.message : error);
+        }
+      } else {
+        console.log(source_default.red("\n\u274C \u91CD\u8F7D\u529F\u80FD\u672A\u914D\u7F6E\n"));
+      }
+      rl.prompt();
+      return;
+    }
+    if (input === "/skills") {
+      handleSkills(options.sessionManager);
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/load ")) {
+      const skillName = input.slice(6).trim();
+      if (skillName) {
+        await handleLoadSkill(options.sessionManager, skillName, options);
+      } else {
+        console.log(source_default.red("\n\u274C \u8BF7\u6307\u5B9A skill \u540D\u79F0\uFF0C\u4F8B\u5982: /load stock-analysis\n"));
+      }
+      rl.prompt();
+      return;
+    }
+    checkSkillMatch(options.sessionManager, input);
     options.messages.push({
       role: "user",
       content: [createTextContent(input)],
@@ -36126,6 +36158,7 @@ async function startRepl(options) {
         tools: options.toolRegistry.definitions(),
         model: options.model,
         toolRegistry: options.toolRegistry,
+        maxTurns: 100,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             process.stdout.write(event.delta);
@@ -36157,19 +36190,103 @@ function printHelp() {
   console.log("");
   console.log(source_default.cyan("\u{1F4D6} \u53EF\u7528\u547D\u4EE4\uFF08\u6240\u6709\u547D\u4EE4\u4EE5 / \u5F00\u5934\uFF09:"));
   console.log("");
-  console.log(source_default.white("  /new") + source_default.dim("   - \u521B\u5EFA\u65B0\u7684\u4F1A\u8BDD"));
-  console.log(source_default.white("  /login") + source_default.dim(" - \u767B\u5F55\u6A21\u578B\u670D\u52A1\u5546\uFF08\u8F93\u5165apiKey\uFF09"));
-  console.log(source_default.white("  /model") + source_default.dim(" - \u9009\u62E9\u6A21\u578B\u4F9B\u5E94\u5546\u548C\u6A21\u578B"));
-  console.log(source_default.white("  /help") + source_default.dim("  - \u663E\u793A\u5E2E\u52A9\u4FE1\u606F"));
-  console.log(source_default.white("  /clear") + source_default.dim(" - \u6E05\u9664\u5BF9\u8BDD\u5386\u53F2"));
-  console.log(source_default.white("  /exit") + source_default.dim("  - \u9000\u51FA\u7A0B\u5E8F"));
-  console.log(source_default.white("  /quit") + source_default.dim("  - \u9000\u51FA\u7A0B\u5E8F"));
+  console.log(source_default.white("  /new") + source_default.dim("     - \u521B\u5EFA\u65B0\u7684\u4F1A\u8BDD"));
+  console.log(source_default.white("  /login") + source_default.dim("   - \u767B\u5F55\u6A21\u578B\u670D\u52A1\u5546\uFF08\u8F93\u5165apiKey\uFF09"));
+  console.log(source_default.white("  /model") + source_default.dim("   - \u9009\u62E9\u6A21\u578B\u4F9B\u5E94\u5546\u548C\u6A21\u578B"));
+  console.log(source_default.white("  /reload") + source_default.dim("   - \u91CD\u8F7D\u914D\u7F6E\u6587\u4EF6"));
+  console.log(source_default.white("  /skills") + source_default.dim("   - \u5217\u51FA\u6240\u6709\u53EF\u7528\u7684 skills"));
+  console.log(source_default.white("  /load <name>") + source_default.dim(" - \u52A0\u8F7D\u6307\u5B9A skill \u7684\u5B8C\u6574\u5185\u5BB9"));
+  console.log(source_default.white("  /help") + source_default.dim("    - \u663E\u793A\u5E2E\u52A9\u4FE1\u606F"));
+  console.log(source_default.white("  /clear") + source_default.dim("   - \u6E05\u9664\u5BF9\u8BDD\u5386\u53F2"));
+  console.log(source_default.white("  /exit") + source_default.dim("    - \u9000\u51FA\u7A0B\u5E8F"));
+  console.log(source_default.white("  /quit") + source_default.dim("    - \u9000\u51FA\u7A0B\u5E8F"));
   console.log("");
   console.log(source_default.dim("\u{1F4A1} \u63D0\u793A:"));
   console.log(source_default.dim("  - \u76F4\u63A5\u8F93\u5165\u95EE\u9898\u5373\u53EF\u5F00\u59CB\u5BF9\u8BDD"));
   console.log(source_default.dim("  - \u652F\u6301\u591A\u8F6E\u5BF9\u8BDD\uFF0C\u4E0A\u4E0B\u6587\u4F1A\u81EA\u52A8\u4FDD\u6301"));
   console.log(source_default.dim("  - \u8F93\u5165\u7F16\u7A0B\u95EE\u9898\u6216\u6587\u4EF6\u64CD\u4F5C\u8BF7\u6C42"));
+  console.log(source_default.dim("  - \u5F53\u5339\u914D\u5230 skill \u65F6\u4F1A\u81EA\u52A8\u63D0\u793A\uFF0C\u4F7F\u7528 /load \u52A0\u8F7D\u5B8C\u6574\u5185\u5BB9"));
   console.log("");
+}
+function handleSkills(sessionManager) {
+  if (!sessionManager) {
+    console.log(source_default.red("\n\u274C SessionManager \u672A\u521D\u59CB\u5316\n"));
+    return;
+  }
+  const metadata = sessionManager.loadSkillMetadata();
+  if (metadata.length === 0) {
+    console.log(source_default.dim("\n\u{1F4ED} \u6CA1\u6709\u627E\u5230\u4EFB\u4F55 skill\n"));
+    console.log(source_default.dim("\u53EF\u4EE5\u5C06 skill \u653E\u7F6E\u5728\u4EE5\u4E0B\u76EE\u5F55\uFF1A"));
+    console.log(source_default.dim("  - ~/.agents/skills/"));
+    console.log(source_default.dim("  - ~/.mini-pi/skills/"));
+    console.log(source_default.dim("  - \u9879\u76EE\u76EE\u5F55/.mini-pi/skills/\n"));
+    return;
+  }
+  console.log("");
+  console.log(source_default.cyan("\u{1F4DA} \u53EF\u7528 Skills:"));
+  console.log("");
+  const bySource = /* @__PURE__ */ new Map();
+  for (const skill of metadata) {
+    const group = bySource.get(skill.source) || [];
+    group.push(skill);
+    bySource.set(skill.source, group);
+  }
+  const sourceLabels = {
+    "project": "\u{1F4C1} \u9879\u76EE Skills",
+    "global-mini-pi": "\u{1F464} \u7528\u6237 Skills",
+    "global-agents": "\u{1F310} \u5168\u5C40 Skills"
+  };
+  const sourceOrder = ["project", "global-mini-pi", "global-agents"];
+  for (const source of sourceOrder) {
+    const skills = bySource.get(source);
+    if (!skills || skills.length === 0) continue;
+    console.log(source_default.yellow(sourceLabels[source] || source));
+    for (const skill of skills) {
+      console.log(source_default.white(`  ${skill.name}`) + source_default.dim(` - ${skill.description}`));
+    }
+    console.log("");
+  }
+  console.log(source_default.dim("\u4F7F\u7528 /load <name> \u52A0\u8F7D skill \u5B8C\u6574\u5185\u5BB9"));
+  console.log("");
+}
+async function handleLoadSkill(sessionManager, skillName, options) {
+  if (!sessionManager) {
+    console.log(source_default.red("\n\u274C SessionManager \u672A\u521D\u59CB\u5316\n"));
+    return;
+  }
+  const skillContent = sessionManager.loadSkillContent(skillName);
+  if (!skillContent) {
+    console.log(source_default.red(`
+\u274C \u672A\u627E\u5230 skill: ${skillName}
+`));
+    console.log(source_default.dim("\u4F7F\u7528 /skills \u67E5\u770B\u6240\u6709\u53EF\u7528\u7684 skills\n"));
+    return;
+  }
+  const skillSection = `
+
+## \u5DF2\u52A0\u8F7D Skill: ${skillName}
+
+${skillContent}`;
+  options.systemPrompt = options.systemPrompt + skillSection;
+  console.log(source_default.green(`
+\u2705 \u5DF2\u52A0\u8F7D skill: ${skillName}
+`));
+  console.log(source_default.dim("\u8BE5 skill \u7684\u5185\u5BB9\u5DF2\u6CE8\u5165\u5230\u4E0A\u4E0B\u6587\u4E2D\uFF0C\u540E\u7EED\u5BF9\u8BDD\u5C06\u53C2\u8003\u6B64 skill\u3002\n"));
+}
+function checkSkillMatch(sessionManager, userInput) {
+  if (!sessionManager) return;
+  const matches = sessionManager.findMatchingSkills(userInput);
+  if (matches.length > 0) {
+    const topMatches = matches.slice(0, 3);
+    console.log("");
+    console.log(source_default.cyan("\u{1F4A1} \u53D1\u73B0\u5339\u914D\u7684 Skills:"));
+    for (const skill of topMatches) {
+      console.log(source_default.white(`  - ${skill.name}`) + source_default.dim(`: ${skill.description}`));
+    }
+    console.log(source_default.dim(`
+\u4F7F\u7528 /load <name> \u52A0\u8F7D skill \u83B7\u53D6\u66F4\u4E13\u4E1A\u7684\u5E2E\u52A9`));
+    console.log("");
+  }
 }
 async function handleLogin(providerService, rl) {
   if (!providerService) {
@@ -36204,14 +36321,15 @@ async function handleLogin(providerService, rl) {
       apiKey: apiKey.trim()
     });
     console.log(source_default.green(`\u2705 \u5DF2\u4FDD\u5B58 ${selectedProvider} \u7684 API Key`));
+    console.log(source_default.dim("\u{1F4A1} \u4F7F\u7528 /reload \u547D\u4EE4\u91CD\u8F7D\u914D\u7F6E\u4F7F\u5176\u751F\u6548\n"));
   } catch (error) {
     console.log(source_default.red("\u274C \u4FDD\u5B58\u5931\u8D25:"), error instanceof Error ? error.message : error);
   }
 }
 function question(rl, prompt) {
-  return new Promise((resolve3) => {
+  return new Promise((resolve4) => {
     rl.question(prompt, (answer) => {
-      resolve3(answer);
+      resolve4(answer);
     });
   });
 }
@@ -36274,7 +36392,7 @@ async function handleModel(providerService, settingsStore, rl) {
       await settingsStore.setDefaultModel(defaultModel);
       console.log(source_default.green(`
 \u2705 \u5DF2\u8BBE\u7F6E\u9ED8\u8BA4\u6A21\u578B: ${defaultModel}`));
-      console.log(source_default.dim("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n"));
+      console.log(source_default.dim("\u{1F4A1} \u4F7F\u7528 /reload \u547D\u4EE4\u91CD\u8F7D\u914D\u7F6E\u4F7F\u5176\u751F\u6548\n"));
     } else {
       await providerService.saveProviderConfig(selectedProvider, {
         ...config,
@@ -36282,7 +36400,7 @@ async function handleModel(providerService, settingsStore, rl) {
       });
       console.log(source_default.green(`
 \u2705 \u5DF2\u9009\u62E9\u6A21\u578B: ${defaultModel}`));
-      console.log(source_default.dim("\u{1F4A1} \u91CD\u542F\u5E94\u7528\u540E\u751F\u6548\n"));
+      console.log(source_default.dim("\u{1F4A1} \u4F7F\u7528 /reload \u547D\u4EE4\u91CD\u8F7D\u914D\u7F6E\u4F7F\u5176\u751F\u6548\n"));
     }
   } catch (error) {
     console.log(source_default.red("\u274C \u83B7\u53D6\u6A21\u578B\u5217\u8868\u5931\u8D25:"), error instanceof Error ? error.message : error);
@@ -36675,9 +36793,9 @@ var ModelProviderService = class {
 };
 
 // src/agent/sessionManager.ts
-var import_node_fs4 = require("node:fs");
-var import_node_path5 = require("node:path");
-var import_node_os4 = require("node:os");
+var import_node_fs5 = require("node:fs");
+var import_node_path6 = require("node:path");
+var import_node_os5 = require("node:os");
 
 // src/agent/sessionStore.ts
 var import_node_fs3 = require("node:fs");
@@ -36987,13 +37105,223 @@ function extractText(message) {
   return parts.join("\n");
 }
 
+// src/agent/skillLoader.ts
+var import_node_fs4 = require("node:fs");
+var import_node_path5 = require("node:path");
+var import_node_os4 = require("node:os");
+function parseFrontmatter(content) {
+  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) {
+    return null;
+  }
+  const frontmatter = frontmatterMatch[1];
+  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+  const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
+  if (!nameMatch) {
+    return null;
+  }
+  return {
+    name: nameMatch[1].trim(),
+    description: descMatch ? descMatch[1].trim() : ""
+  };
+}
+var SkillLoader = class {
+  /**
+   * 创建 SkillLoader 实例
+   * @param workspaceRoot 工作区根目录
+   * @param customDirs 自定义 skill 目录列表（用于测试）
+   */
+  constructor(workspaceRoot, customDirs) {
+    this.workspaceRoot = workspaceRoot;
+    if (customDirs) {
+      this.skillDirs = customDirs;
+    } else {
+      this.skillDirs = [
+        { path: (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".agents", "skills"), source: "global-agents" },
+        { path: (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".mini-pi", "skills"), source: "global-mini-pi" },
+        { path: (0, import_node_path5.join)(workspaceRoot, ".mini-pi", "skills"), source: "project" }
+      ];
+    }
+  }
+  skillDirs;
+  metadataCache = null;
+  contentCache = /* @__PURE__ */ new Map();
+  /**
+   * 获取所有 skill 目录路径
+   */
+  getSkillDirectories() {
+    return this.skillDirs.map((d) => d.path);
+  }
+  /**
+   * 扫描单个 skill 目录，返回元数据列表
+   */
+  scanSkillDir(dirPath, source) {
+    if (!(0, import_node_fs4.existsSync)(dirPath)) {
+      return [];
+    }
+    const results = [];
+    try {
+      const entries = (0, import_node_fs4.readdirSync)(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillDir = (0, import_node_path5.join)(dirPath, entry.name);
+        const skillFile = (0, import_node_path5.join)(skillDir, "SKILL.md");
+        if (!(0, import_node_fs4.existsSync)(skillFile)) continue;
+        try {
+          const content = (0, import_node_fs4.readFileSync)(skillFile, "utf8");
+          const metadata = parseFrontmatter(content);
+          if (metadata) {
+            results.push({
+              name: metadata.name,
+              description: metadata.description,
+              location: skillDir,
+              skillFile,
+              source
+            });
+          }
+        } catch (error) {
+          console.error(`Failed to read skill ${skillFile}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to scan skill directory ${dirPath}:`, error);
+    }
+    return results;
+  }
+  /**
+   * 加载所有 skill 的元数据（轻量级操作）
+   * 结果会被缓存
+   */
+  loadAllMetadata() {
+    if (this.metadataCache) {
+      return [...this.metadataCache];
+    }
+    const allSkills = [];
+    const sourceMap = /* @__PURE__ */ new Map();
+    for (const dir of this.skillDirs) {
+      const skills = this.scanSkillDir(dir.path, dir.source);
+      for (const skill of skills) {
+        sourceMap.set(skill.name, skill);
+      }
+    }
+    this.metadataCache = Array.from(sourceMap.values());
+    return [...this.metadataCache];
+  }
+  /**
+   * 按名称加载单个 skill 的完整内容
+   * @returns Skill 对象，如果未找到则返回 null
+   */
+  loadSkill(skillName) {
+    if (this.contentCache.has(skillName)) {
+      return this.contentCache.get(skillName);
+    }
+    const metadata = this.loadAllMetadata();
+    const skillMeta = metadata.find((s) => s.name === skillName);
+    if (!skillMeta) {
+      return null;
+    }
+    try {
+      const content = (0, import_node_fs4.readFileSync)(skillMeta.skillFile, "utf8");
+      const skill = {
+        ...skillMeta,
+        content
+      };
+      this.contentCache.set(skillName, skill);
+      return skill;
+    } catch (error) {
+      console.error(`Failed to load skill ${skillName}:`, error);
+      return null;
+    }
+  }
+  /**
+   * 检查用户输入是否匹配某个 skill
+   * 基于 skill 名称和描述中的关键词进行匹配
+   */
+  findMatchingSkills(userInput) {
+    const metadata = this.loadAllMetadata();
+    const inputLower = userInput.toLowerCase();
+    const matches = [];
+    for (const skill of metadata) {
+      let score = 0;
+      if (inputLower.includes(skill.name.toLowerCase())) {
+        score += 100;
+      }
+      const nameWords = skill.name.toLowerCase().split(/[-_\s]+/);
+      for (const word of nameWords) {
+        if (word.length > 2 && inputLower.includes(word)) {
+          score += 30;
+        }
+      }
+      const descWords = skill.description.toLowerCase().split(/\s+/);
+      for (const word of descWords) {
+        if (word.length > 3 && inputLower.includes(word)) {
+          score += 5;
+        }
+      }
+      if (score > 0) {
+        matches.push({ skill, score });
+      }
+    }
+    return matches.sort((a, b) => b.score - a.score).map((m) => m.skill);
+  }
+  /**
+   * 清除缓存（用于重新加载）
+   */
+  clearCache() {
+    this.metadataCache = null;
+    this.contentCache.clear();
+  }
+  /**
+   * 生成 skill 摘要列表（用于注入 system prompt）
+   * 这是渐进式披露的核心：只暴露轻量级元数据
+   */
+  generateSkillSummary() {
+    const metadata = this.loadAllMetadata();
+    if (metadata.length === 0) {
+      return "";
+    }
+    const lines = [
+      "## \u53EF\u7528 Skills",
+      "",
+      "\u4EE5\u4E0B\u662F\u4F60\u53EF\u7528\u7684 skills\u3002\u5F53\u7528\u6237\u7684\u8BF7\u6C42\u5339\u914D\u67D0\u4E2A skill \u65F6\uFF0C\u4F60\u5E94\u8BE5\u52A0\u8F7D\u5E76\u53C2\u8003\u8BE5 skill \u7684\u5B8C\u6574\u5185\u5BB9\u6765\u6307\u5BFC\u4F60\u7684\u56DE\u7B54\u3002",
+      ""
+    ];
+    const bySource = /* @__PURE__ */ new Map();
+    for (const skill of metadata) {
+      const group = bySource.get(skill.source) || [];
+      group.push(skill);
+      bySource.set(skill.source, group);
+    }
+    const sourceLabels = {
+      "project": "\u9879\u76EE Skills",
+      "global-mini-pi": "\u7528\u6237 Skills",
+      "global-agents": "\u5168\u5C40 Skills"
+    };
+    const sourceOrder = ["project", "global-mini-pi", "global-agents"];
+    for (const source of sourceOrder) {
+      const skills = bySource.get(source);
+      if (!skills || skills.length === 0) continue;
+      lines.push(`### ${sourceLabels[source]}`);
+      lines.push("");
+      for (const skill of skills) {
+        lines.push(`- **${skill.name}**: ${skill.description}`);
+      }
+      lines.push("");
+    }
+    lines.push("---");
+    lines.push("\u5F53\u7528\u6237\u8BF7\u6C42\u5339\u914D\u67D0\u4E2A skill \u65F6\uFF0C\u8BF7\u544A\u77E5\u7528\u6237\u4F60\u53EF\u4EE5\u52A0\u8F7D\u8BE5 skill \u6765\u63D0\u4F9B\u66F4\u4E13\u4E1A\u7684\u5E2E\u52A9\uFF0C\u5E76\u8BE2\u95EE\u662F\u5426\u9700\u8981\u52A0\u8F7D\u3002");
+    return lines.join("\n");
+  }
+};
+
 // src/agent/sessionManager.ts
 var SessionManager = class {
-  constructor(workspaceRoot) {
+  constructor(workspaceRoot, options) {
     this.workspaceRoot = workspaceRoot;
-    this.sessionsDir = (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".mini-pi", "sessions");
-    this.globalAgentsPath = (0, import_node_path5.join)((0, import_node_os4.homedir)(), ".mini-pi", "AGENTS.md");
-    this.projectAgentsPath = (0, import_node_path5.join)(workspaceRoot, "AGENTS.md");
+    this.sessionsDir = (0, import_node_path6.join)((0, import_node_os5.homedir)(), ".mini-pi", "sessions");
+    this.globalAgentsPath = (0, import_node_path6.join)((0, import_node_os5.homedir)(), ".mini-pi", "AGENTS.md");
+    this.projectAgentsPath = (0, import_node_path6.join)(workspaceRoot, "AGENTS.md");
+    this.skillLoader = new SkillLoader(workspaceRoot, options?.customSkillDirs);
     this.ensureSessionsDir();
   }
   sessionsDir;
@@ -37001,6 +37329,7 @@ var SessionManager = class {
   projectAgentsPath;
   currentSession = null;
   model = null;
+  skillLoader;
   setModel(model) {
     this.model = model;
     if (this.currentSession) {
@@ -37008,8 +37337,8 @@ var SessionManager = class {
     }
   }
   ensureSessionsDir() {
-    if (!(0, import_node_fs4.existsSync)(this.sessionsDir)) {
-      (0, import_node_fs4.mkdirSync)(this.sessionsDir, { recursive: true });
+    if (!(0, import_node_fs5.existsSync)(this.sessionsDir)) {
+      (0, import_node_fs5.mkdirSync)(this.sessionsDir, { recursive: true });
     }
   }
   /**
@@ -37018,8 +37347,8 @@ var SessionManager = class {
    */
   readAgentsFile(filePath) {
     try {
-      if ((0, import_node_fs4.existsSync)(filePath)) {
-        return (0, import_node_fs4.readFileSync)(filePath, "utf8");
+      if ((0, import_node_fs5.existsSync)(filePath)) {
+        return (0, import_node_fs5.readFileSync)(filePath, "utf8");
       }
     } catch (error) {
       console.error(`\u8BFB\u53D6 ${filePath} \u5931\u8D25:`, error);
@@ -37054,13 +37383,48 @@ ${projectAgents}`);
 ${parts.join("\n\n---\n\n")}`;
   }
   /**
+   * 获取 SkillLoader 实例
+   */
+  getSkillLoader() {
+    return this.skillLoader;
+  }
+  /**
+   * 加载所有 skill 的元数据（轻量级操作）
+   */
+  loadSkillMetadata() {
+    return this.skillLoader.loadAllMetadata();
+  }
+  /**
+   * 按需加载单个 skill 的完整内容
+   * @param skillName skill 名称
+   * @returns skill 内容，如果未找到则返回 null
+   */
+  loadSkillContent(skillName) {
+    const skill = this.skillLoader.loadSkill(skillName);
+    return skill ? skill.content : null;
+  }
+  /**
+   * 根据用户输入查找匹配的 skills
+   * @param userInput 用户输入
+   * @returns 匹配的 skill 列表
+   */
+  findMatchingSkills(userInput) {
+    return this.skillLoader.findMatchingSkills(userInput);
+  }
+  /**
+   * 生成 skill 摘要（用于注入 system prompt）
+   */
+  getSkillSummary() {
+    return this.skillLoader.generateSkillSummary();
+  }
+  /**
    * 创建新的 session
    * @returns 新创建的 session store
    */
   createNewSession() {
     const timestamp = this.generateTimestamp();
     const fileName = `${timestamp}.jsonl`;
-    const filePath = (0, import_node_path5.join)(this.sessionsDir, fileName);
+    const filePath = (0, import_node_path6.join)(this.sessionsDir, fileName);
     this.currentSession = new JsonlSessionStore(filePath, this.workspaceRoot);
     if (this.model) {
       this.currentSession.setModel(this.model);
@@ -37081,7 +37445,7 @@ ${parts.join("\n\n---\n\n")}`;
     const sessions = this.listSessions();
     if (sessions.length > 0) {
       const latestSession = sessions[sessions.length - 1];
-      const filePath = (0, import_node_path5.join)(this.sessionsDir, latestSession.fileName);
+      const filePath = (0, import_node_path6.join)(this.sessionsDir, latestSession.fileName);
       this.currentSession = new JsonlSessionStore(filePath, this.workspaceRoot);
       if (this.model) {
         this.currentSession.setModel(this.model);
@@ -37094,10 +37458,10 @@ ${parts.join("\n\n---\n\n")}`;
    * 列出所有 session 文件
    */
   listSessions() {
-    if (!(0, import_node_fs4.existsSync)(this.sessionsDir)) {
+    if (!(0, import_node_fs5.existsSync)(this.sessionsDir)) {
       return [];
     }
-    const files = (0, import_node_fs4.readdirSync)(this.sessionsDir).filter((file) => file.endsWith(".jsonl")).sort();
+    const files = (0, import_node_fs5.readdirSync)(this.sessionsDir).filter((file) => file.endsWith(".jsonl")).sort();
     return files.map((fileName) => ({
       fileName,
       timestamp: fileName.replace(".jsonl", "")
@@ -37175,6 +37539,27 @@ async function createModelFromSettings(providerService, settingsStore) {
   const model = createModelFromEnv();
   return { model, providerName: "env", modelName: "default" };
 }
+function buildSystemPrompt(workspaceRoot, fixedContext, skillSummary) {
+  let prompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
+- \u8BFB\u53D6\u548C\u5199\u5165\u6587\u4EF6
+- \u6267\u884C\u547D\u4EE4
+- \u89E3\u7B54\u7F16\u7A0B\u95EE\u9898
+
+\u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55\uFF1A${workspaceRoot}
+
+\u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002`;
+  if (fixedContext) {
+    prompt += `
+
+${fixedContext}`;
+  }
+  if (skillSummary) {
+    prompt += `
+
+${skillSummary}`;
+  }
+  return prompt;
+}
 async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
@@ -37185,16 +37570,11 @@ async function main() {
   sessionManager.setModel(model);
   const sessionStore = sessionManager.loadLatestSession();
   const fixedContext = sessionManager.getFixedContext();
-  const systemPrompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
-- \u8BFB\u53D6\u548C\u5199\u5165\u6587\u4EF6
-- \u6267\u884C\u547D\u4EE4
-- \u89E3\u7B54\u7F16\u7A0B\u95EE\u9898
-
-\u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55\uFF1A${workspaceRoot}
-
-\u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002
-
-${fixedContext}`;
+  const skillSummary = sessionManager.getSkillSummary();
+  if (skillSummary) {
+    console.log(chalk.dim(`\u{1F4DA} \u5DF2\u52A0\u8F7D ${sessionManager.loadSkillMetadata().length} \u4E2A skills`));
+  }
+  let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
   const messages = [];
   printLogo();
   printWelcome(providerName, modelName);
@@ -37202,6 +37582,16 @@ ${fixedContext}`;
     const newSession = sessionManager.createNewSession();
     messages.length = 0;
     console.log("\u2705 \u5DF2\u521B\u5EFA\u65B0\u4F1A\u8BDD");
+  };
+  const onReload = async () => {
+    const { model: newModel, providerName: newProviderName, modelName: newModelName } = await createModelFromSettings(providerService, settingsStore);
+    sessionManager.setModel(newModel);
+    const newFixedContext = sessionManager.getFixedContext();
+    const newSkillSummary = sessionManager.getSkillSummary();
+    const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
+    printLogo();
+    printWelcome(newProviderName, newModelName);
+    return { model: newModel, systemPrompt: newSystemPrompt };
   };
   await startRepl({
     prompt: "You: ",
@@ -37213,7 +37603,9 @@ ${fixedContext}`;
     providerService,
     settingsStore,
     sessionStore,
-    onNewSession
+    sessionManager,
+    onNewSession,
+    onReload
   });
 }
 main().catch(console.error);

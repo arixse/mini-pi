@@ -7,6 +7,7 @@ import { startRepl } from "./repl";
 import { ModelProviderService, SettingsStore } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
 import { printLogo, printWelcome } from "./ui";
+import chalk from "chalk";
 
 
 async function createModelFromSettings(
