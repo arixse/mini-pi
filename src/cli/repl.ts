@@ -1,8 +1,8 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { AgentMessage, AssistantMessage } from "../shared/protocol";
-import { createTextContent, messageText } from "../agent/message";
+import { AgentEvent, AgentMessage, AssistantMessage } from "../shared/protocol";
+import { createTextContent, messageText,createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop } from "../agent/loop";
@@ -27,6 +27,7 @@ export type ReplOptions = {
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
+  const sessionStore = options.sessionStore
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -118,13 +119,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     // 渐进式披露：检查用户输入是否匹配某个 skill
-    checkSkillMatch(options.sessionManager, input);
+    checkSkillMatch(options.sessionManager, input);  
 
-    options.messages.push({
-      role: "user",
-      content: [createTextContent(input)],
-      timestamp: Date.now(),
-    });
+    const userMessage = createUserMessage(input)
+
+    options.messages.push(userMessage);
+
+    if(sessionStore) {
+      sessionStore.appendMessage(userMessage)
+      await sessionStore?.compactIfNedded(6000,10)
+    } 
+
 
     try {
       console.log("");
@@ -154,6 +159,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       });
 
       options.messages.push(...result.newMessages);
+
+      for(const message of result.newMessages) {
+        await sessionStore?.appendMessage(message)
+      }
+
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
       console.log("");

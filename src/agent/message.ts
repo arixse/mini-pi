@@ -4,6 +4,7 @@ import {
   TextContent,
   ToolCallContent,
   ToolResult,
+  UserMessage
 } from "../shared/protocol";
 
 export function createTextContent(value: string): TextContent {
@@ -11,6 +12,14 @@ export function createTextContent(value: string): TextContent {
     type: "text",
     text: value,
   };
+}
+
+export function createUserMessage(input:string):UserMessage {
+    return {
+        role:"user",
+        content:[createTextContent(input)],
+        timestamp:Date.now()
+    }
 }
 
 export function createAssistantMessage(
