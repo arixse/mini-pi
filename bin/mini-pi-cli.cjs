@@ -34783,6 +34783,13 @@ function createTextContent(value) {
     text: value
   };
 }
+function createUserMessage(input) {
+  return {
+    role: "user",
+    content: [createTextContent(input)],
+    timestamp: Date.now()
+  };
+}
 function createAssistantMessage(content, stopReason = "stop") {
   return {
     role: "assistant",
@@ -35770,10 +35777,10 @@ var applyOptions = (object, options = {}) => {
   object[LEVEL] = options.level === void 0 ? colorLevel : options.level;
 };
 var chalkFactory = (options) => {
-  const chalk3 = (...strings) => strings.join(" ");
-  applyOptions(chalk3, options);
-  Object.setPrototypeOf(chalk3, createChalk.prototype);
-  return chalk3;
+  const chalk2 = (...strings) => strings.join(" ");
+  applyOptions(chalk2, options);
+  Object.setPrototypeOf(chalk2, createChalk.prototype);
+  return chalk2;
 };
 function createChalk(options) {
   return chalkFactory(options);
@@ -35904,9 +35911,9 @@ var applyStyle = (self, string) => {
   return openAll + string + closeAll;
 };
 Object.defineProperties(createChalk.prototype, { ...styles2, level: levelDescriptor });
-var chalk2 = createChalk();
+var chalk = createChalk();
 var chalkStderr = createChalk({ level: stderrColor ? stderrColor.level : 0 });
-var source_default = chalk2;
+var source_default = chalk;
 
 // src/agent/loop.ts
 async function decideToolCall(toolCall, beforeToolCall) {
@@ -36066,6 +36073,7 @@ async function runAgentLoop(options) {
 
 // src/cli/repl.ts
 async function startRepl(options) {
+  const sessionStore = options.sessionStore;
   const rl = (0, import_node_readline.createInterface)({
     input: process.stdin,
     output: process.stdout,
@@ -36143,11 +36151,12 @@ async function startRepl(options) {
       return;
     }
     checkSkillMatch(options.sessionManager, input);
-    options.messages.push({
-      role: "user",
-      content: [createTextContent(input)],
-      timestamp: Date.now()
-    });
+    const userMessage = createUserMessage(input);
+    options.messages.push(userMessage);
+    if (sessionStore) {
+      sessionStore.appendMessage(userMessage);
+      await sessionStore?.compactIfNedded(6e3, 10);
+    }
     try {
       console.log("");
       console.log(source_default.dim("\u2500".repeat(60)));
@@ -36174,6 +36183,9 @@ async function startRepl(options) {
         }
       });
       options.messages.push(...result.newMessages);
+      for (const message of result.newMessages) {
+        await sessionStore?.appendMessage(message);
+      }
       console.log("");
       console.log(source_default.dim("\u2500".repeat(60)));
       console.log("");
@@ -37572,7 +37584,7 @@ async function main() {
   const fixedContext = sessionManager.getFixedContext();
   const skillSummary = sessionManager.getSkillSummary();
   if (skillSummary) {
-    console.log(chalk.dim(`\u{1F4DA} \u5DF2\u52A0\u8F7D ${sessionManager.loadSkillMetadata().length} \u4E2A skills`));
+    console.log(source_default.dim(`\u{1F4DA} \u5DF2\u52A0\u8F7D ${sessionManager.loadSkillMetadata().length} \u4E2A skills`));
   }
   let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
   const messages = [];

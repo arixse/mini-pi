@@ -99,9 +99,12 @@ describe("tools", () => {
 
     it("should reject path outside workspace", async () => {
       const registry = createToolRegistry(testDir);
-      await assert.rejects(() => registry.execute("list_files", { path: "../.." }), {
-        message: /Path escapes workspace/,
-      });
+      await assert.rejects(
+        () => registry.execute("list_files", { path: "D:\\" }),
+        {
+          message: /Path escapes workspace/,
+        },
+      );
     });
   });
 
@@ -126,7 +129,29 @@ describe("tools", () => {
 
     it("should throw error for non-existent file", async () => {
       const registry = createToolRegistry(testDir);
-      await assert.rejects(() => registry.execute("read_file", { path: "nonexistent.txt" }));
+      await assert.rejects(() =>
+        registry.execute("read_file", { path: "nonexistent.txt" }),
+      );
+    });
+
+    it("should reject path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "../../etc/passwd" }),
+        {
+          message: /Path escapes workspace/,
+        },
+      );
+    });
+
+    it("should reject absolute path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "D:\\secret.txt" }),
+        {
+          message: /Path escapes workspace/,
+        },
+      );
     });
   });
 
@@ -140,7 +165,10 @@ describe("tools", () => {
 
       assert.ok(result.content[0].text.includes("successfully"));
       const { readFileSync } = await import("node:fs");
-      assert.strictEqual(readFileSync(join(testDir, "output.txt"), "utf8"), "new content");
+      assert.strictEqual(
+        readFileSync(join(testDir, "output.txt"), "utf8"),
+        "new content",
+      );
     });
 
     it("should create parent directories", async () => {
@@ -154,6 +182,34 @@ describe("tools", () => {
       assert.strictEqual(
         readFileSync(join(testDir, "deep", "nested", "file.txt"), "utf8"),
         "nested content",
+      );
+    });
+
+    it("should reject path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("write_file", {
+            path: "../../../outside.txt",
+            content: "escape attempt",
+          }),
+        {
+          message: /Path escapes workspace/,
+        },
+      );
+    });
+
+    it("should reject absolute path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("write_file", {
+            path: "D:\\outside.txt",
+            content: "escape attempt",
+          }),
+        {
+          message: /Path escapes workspace/,
+        },
       );
     });
   });
