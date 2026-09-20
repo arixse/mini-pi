@@ -177,6 +177,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   });
 }
 
+// 缓存 tool_execution_start 事件信息
+const toolStartCache = new Map<string, { toolName: string; args: Record<string, unknown> }>();
+
 export function printToolInfo(event: AgentEvent) {
   const toolIcons: Record<string, string> = {
     "list_files": "📂",
@@ -190,22 +193,18 @@ export function printToolInfo(event: AgentEvent) {
     return toolIcons[toolName] || "🛠️";
   };
 
-  const truncateText = (text: string, maxLength: number = 50): string => {
+  const truncateText = (text: string, maxLength: number = 80): string => {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + "...";
   };
 
   const formatArgs = (args: Record<string, unknown>): string => {
     const formatted = Object.entries(args)
+      .filter(([key]) => key !== "content" && key !== "oldText" && key !== "newText") // 过滤掉大段内容
       .map(([key, value]) => {
         let valueStr: string;
         if (typeof value === "string") {
-          // 对于大段内容，只显示长度
-          if (key === "content" || key === "oldText" || key === "newText") {
-            valueStr = `(${value.length} chars)`;
-          } else {
-            valueStr = truncateText(value, 30);
-          }
+          valueStr = truncateText(value, 40);
         } else if (typeof value === "object") {
           valueStr = "{" + Object.keys(value as object).join(",") + "}";
         } else {
@@ -214,7 +213,7 @@ export function printToolInfo(event: AgentEvent) {
         return `${key}=${valueStr}`;
       })
       .join(", ");
-    return formatted ? `(${formatted})` : "";
+    return formatted;
   };
 
   const formatResult = (result: ToolResult): string => {
@@ -223,28 +222,88 @@ export function printToolInfo(event: AgentEvent) {
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
         .map(c => c.text || "")
         .join(" ");
-      return truncateText(text, 60);
+      return truncateText(text, 100);
     }
     return "(empty)";
   };
 
+  // 绘制工具信息块
+  const printToolBlock = (
+    toolName: string,
+    args: Record<string, unknown>,
+    result: ToolResult | null,
+    isError: boolean | null
+  ) => {
+    const icon = getToolIcon(toolName);
+    const argsStr = formatArgs(args);
+    const width = 60;
+
+    // 标题行
+    const titleLine = `${icon} ${toolName}`;
+    const argsLine = argsStr ? `Args: ${argsStr}` : "";
+
+    // 结果行
+    let resultLine = "";
+    let statusLine = "";
+    if (result !== null) {
+      const statusIcon = isError ? "❌" : "✅";
+      const statusText = isError ? "Error" : "Success";
+      statusLine = `${statusIcon} ${statusText}`;
+      resultLine = formatResult(result);
+    }
+
+    // 计算内容最大宽度
+    const contentWidth = Math.max(
+      titleLine.length + 2,
+      argsLine.length + 2,
+      statusLine.length + 2,
+      resultLine.length + 2,
+      40
+    );
+
+    // 绘制边框
+    const border = "─".repeat(contentWidth);
+    const pad = (str: string, len: number) => str + " ".repeat(Math.max(0, len - str.length));
+
+    // 输出块
+    console.log("");
+    console.log(chalk.bgGray(chalk.white(`┌${border}┐`)));
+    console.log(chalk.bgGray(chalk.white(`│ `) + chalk.bold(pad(titleLine, contentWidth - 2)) + chalk.white(` │`)));
+    
+    if (argsLine) {
+      console.log(chalk.bgGray(chalk.white(`│ `) + chalk.dim(pad(argsLine, contentWidth - 2)) + chalk.white(` │`)));
+    }
+    
+    if (statusLine) {
+      const statusColor = isError ? chalk.red : chalk.green;
+      console.log(chalk.bgGray(chalk.white(`│ `) + statusColor(pad(statusLine, contentWidth - 2)) + chalk.white(` │`)));
+    }
+    
+    if (resultLine) {
+      console.log(chalk.bgGray(chalk.white(`│ `) + chalk.dim(pad(resultLine, contentWidth - 2)) + chalk.white(` │`)));
+    }
+    
+    console.log(chalk.bgGray(chalk.white(`└${border}┘`)));
+  };
+
   if (event.type === "tool_execution_start") {
-    const icon = getToolIcon(event.toolName);
-    const argsStr = formatArgs(event.args);
-    console.log(chalk.cyan(`${icon} `) + chalk.white(`${event.toolName}`) + chalk.dim(` ${argsStr}`));
+    // 缓存 start 事件信息，等待 end 事件一起输出
+    toolStartCache.set(event.toolCallId, {
+      toolName: event.toolName,
+      args: event.args,
+    });
   }
 
   if (event.type === "tool_execution_end") {
-    const icon = getToolIcon(event.toolName);
-    const statusIcon = event.isError ? "❌" : "✅";
-    const resultStr = formatResult(event.result);
-    console.log(
-      chalk.cyan(`${icon} `) +
-      chalk.white(`${event.toolName}`) +
-      chalk.dim(` → `) +
-      (event.isError ? chalk.red(`${statusIcon} `) : chalk.green(`${statusIcon} `)) +
-      chalk.dim(resultStr)
-    );
+    // 获取缓存的 start 信息
+    const cached = toolStartCache.get(event.toolCallId);
+    const args = cached?.args || {};
+    
+    // 输出完整的工具信息块
+    printToolBlock(event.toolName, args, event.result, event.isError);
+    
+    // 清理缓存
+    toolStartCache.delete(event.toolCallId);
   }
 }
 

@@ -264,34 +264,16 @@ describe("ReplOptions", () => {
   });
 
   describe("printToolInfo", () => {
-    it("should print tool execution start info", () => {
-      const event = {
+    it("should print tool execution end info with args and success result", () => {
+      // 先发送 start 事件缓存参数
+      const startEvent = {
         type: "tool_execution_start" as const,
         toolCallId: "call-1",
         toolName: "read_file",
         args: { path: "src/index.ts" },
       };
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(event);
-        assert.ok(output.length > 0);
-        assert.ok(output[0].includes("📖"));
-        assert.ok(output[0].includes("read_file"));
-        assert.ok(output[0].includes("path=src/index.ts"));
-      } finally {
-        console.log = originalLog;
-      }
-    });
-
-    it("should print tool execution end info with success", () => {
-      const event = {
+      const endEvent = {
         type: "tool_execution_end" as const,
         toolCallId: "call-1",
         toolName: "read_file",
@@ -309,21 +291,29 @@ describe("ReplOptions", () => {
       };
 
       try {
-        printToolInfo(event);
+        // start 事件只缓存，不输出
+        printToolInfo(startEvent);
+        assert.strictEqual(output.length, 0);
+
+        // end 事件输出完整块
+        printToolInfo(endEvent);
         assert.ok(output.length > 0);
-        assert.ok(output[0].includes("📖"));
-        assert.ok(output[0].includes("read_file"));
-        assert.ok(output[0].includes("✅"));
-        assert.ok(output[0].includes("File content here"));
+        const fullOutput = output.join("\n");
+        assert.ok(fullOutput.includes("📖"));
+        assert.ok(fullOutput.includes("read_file"));
+        assert.ok(fullOutput.includes("Args: path=src/index.ts"));
+        assert.ok(fullOutput.includes("✅"));
+        assert.ok(fullOutput.includes("Success"));
+        assert.ok(fullOutput.includes("File content here"));
       } finally {
         console.log = originalLog;
       }
     });
 
     it("should print tool execution end info with error", () => {
-      const event = {
+      const endEvent = {
         type: "tool_execution_end" as const,
-        toolCallId: "call-1",
+        toolCallId: "call-2",
         toolName: "bash",
         result: {
           content: [{ type: "text" as const, text: "Command not found" }],
@@ -339,23 +329,27 @@ describe("ReplOptions", () => {
       };
 
       try {
-        printToolInfo(event);
-        assert.ok(output.length > 0);
-        assert.ok(output[0].includes("💻"));
-        assert.ok(output[0].includes("bash"));
-        assert.ok(output[0].includes("❌"));
-        assert.ok(output[0].includes("Command not found"));
+        printToolInfo(endEvent);
+        const fullOutput = output.join("\n");
+        assert.ok(fullOutput.includes("💻"));
+        assert.ok(fullOutput.includes("bash"));
+        assert.ok(fullOutput.includes("❌"));
+        assert.ok(fullOutput.includes("Error"));
+        assert.ok(fullOutput.includes("Command not found"));
       } finally {
         console.log = originalLog;
       }
     });
 
     it("should handle unknown tool names", () => {
-      const event = {
-        type: "tool_execution_start" as const,
-        toolCallId: "call-1",
+      const endEvent = {
+        type: "tool_execution_end" as const,
+        toolCallId: "call-3",
         toolName: "unknown_tool",
-        args: { param: "value" },
+        result: {
+          content: [{ type: "text" as const, text: "result" }],
+        },
+        isError: false,
       };
 
       // 捕获控制台输出
@@ -366,23 +360,26 @@ describe("ReplOptions", () => {
       };
 
       try {
-        printToolInfo(event);
-        assert.ok(output.length > 0);
-        assert.ok(output[0].includes("🛠️"));
-        assert.ok(output[0].includes("unknown_tool"));
-        assert.ok(output[0].includes("param=value"));
+        printToolInfo(endEvent);
+        const fullOutput = output.join("\n");
+        assert.ok(fullOutput.includes("🛠️"));
+        assert.ok(fullOutput.includes("unknown_tool"));
+        assert.ok(fullOutput.includes("✅"));
       } finally {
         console.log = originalLog;
       }
     });
 
-    it("should truncate long content in args", () => {
-      const longContent = "a".repeat(100);
-      const event = {
-        type: "tool_execution_start" as const,
-        toolCallId: "call-1",
-        toolName: "write_file",
-        args: { path: "test.txt", content: longContent },
+    it("should truncate long result content", () => {
+      const longContent = "a".repeat(150);
+      const endEvent = {
+        type: "tool_execution_end" as const,
+        toolCallId: "call-4",
+        toolName: "read_file",
+        result: {
+          content: [{ type: "text" as const, text: longContent }],
+        },
+        isError: false,
       };
 
       // 捕获控制台输出
@@ -393,11 +390,43 @@ describe("ReplOptions", () => {
       };
 
       try {
-        printToolInfo(event);
-        assert.ok(output.length > 0);
-        assert.ok(output[0].includes("✏️"));
-        assert.ok(output[0].includes("write_file"));
-        assert.ok(output[0].includes("(100 chars)"));
+        printToolInfo(endEvent);
+        const fullOutput = output.join("\n");
+        assert.ok(fullOutput.includes("..."));
+        assert.ok(!fullOutput.includes(longContent)); // 完整内容不应出现
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it("should display box format with border", () => {
+      const endEvent = {
+        type: "tool_execution_end" as const,
+        toolCallId: "call-5",
+        toolName: "bash",
+        args: { command: "ls -la" },
+        result: {
+          content: [{ type: "text" as const, text: "total 0" }],
+        },
+        isError: false,
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(endEvent);
+        const fullOutput = output.join("\n");
+        // 检查是否包含边框字符
+        assert.ok(fullOutput.includes("┌"));
+        assert.ok(fullOutput.includes("┐"));
+        assert.ok(fullOutput.includes("└"));
+        assert.ok(fullOutput.includes("┘"));
+        assert.ok(fullOutput.includes("│"));
       } finally {
         console.log = originalLog;
       }
