@@ -46,6 +46,7 @@ export function createToolRegistry(workspaceRoot: string): ToolRegistry {
   registry.register(listFilesTool(workspaceRoot));
   registry.register(readFileTool(workspaceRoot));
   registry.register(writeFileTool(workspaceRoot));
+  registry.register(editFileTool(workspaceRoot));
   registry.register(bashTool(workspaceRoot));
   return registry;
 }
@@ -164,6 +165,94 @@ function writeFileTool(workspaceRoot: string): RegisteredTool {
       return {
         content: [createTextContent(`File written successfully: ${relative(workspaceRoot, filePath)}`)],
         details: { path: relative(workspaceRoot, filePath), bytesWritten: content.length },
+      };
+    },
+  };
+}
+
+function editFileTool(workspaceRoot: string): RegisteredTool {
+  return {
+    name: "edit_file",
+    description: "Edit a file by replacing exact text matches. Use this for precise, targeted changes to existing files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative file path under workspace.",
+        },
+        oldText: {
+          type: "string",
+          description: "Exact text to find and replace. Must be unique in the file unless replaceAll is true.",
+        },
+        newText: {
+          type: "string",
+          description: "Replacement text.",
+        },
+        replaceAll: {
+          type: "boolean",
+          description: "If true, replace all occurrences. If false or omitted, replace only the first occurrence (oldText must be unique).",
+        },
+      },
+      required: ["path", "oldText", "newText"],
+    },
+    async execute(args) {
+      const filePath = resolveInsideWorkspace(
+        workspaceRoot,
+        stringArg(args.path, ""),
+      );
+      const oldText = stringArg(args.oldText, "");
+      const newText = stringArg(args.newText, "");
+      const replaceAll = args.replaceAll === true;
+      
+      if (!oldText) {
+        throw new Error("oldText cannot be empty");
+      }
+      
+      const { readFile, writeFile } = await import("node:fs/promises");
+      
+      // 读取文件内容
+      const content = await readFile(filePath, "utf8");
+      
+      // 检查 oldText 是否存在
+      if (!content.includes(oldText)) {
+        throw new Error(`Text not found in file: ${oldText.substring(0, 50)}...`);
+      }
+      
+      // 如果不是 replaceAll，检查 oldText 是否唯一
+      if (!replaceAll) {
+        const occurrences = content.split(oldText).length - 1;
+        if (occurrences > 1) {
+          throw new Error(`Text is not unique in file (${occurrences} occurrences). Use replaceAll=true to replace all, or provide more specific text.`);
+        }
+      }
+      
+      // 执行替换
+      let newContent: string;
+      let replacementCount: number;
+      
+      if (replaceAll) {
+        // 替换所有 occurrences
+        const parts = content.split(oldText);
+        replacementCount = parts.length - 1;
+        newContent = parts.join(newText);
+      } else {
+        // 只替换第一个 occurrence
+        replacementCount = 1;
+        newContent = content.replace(oldText, newText);
+      }
+      
+      // 写入文件
+      await writeFile(filePath, newContent, "utf8");
+      
+      return {
+        content: [createTextContent(`File edited successfully: ${replacementCount} replacement(s) made in ${relative(workspaceRoot, filePath)}`)],
+        details: {
+          path: relative(workspaceRoot, filePath),
+          replacements: replacementCount,
+          oldTextLength: oldText.length,
+          newTextLength: newText.length,
+        },
       };
     },
   };

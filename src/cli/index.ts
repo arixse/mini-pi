@@ -59,7 +59,7 @@ function buildSystemPrompt(workspaceRoot: string, fixedContext: string, skillSum
 - 执行命令
 - 解答编程问题
 
-当前工作目录：${workspaceRoot}
+当前工作目录：${workspaceRoot}，禁止查看或操作${workspaceRoot}以外目录的文件，
 
 请用中文回复用户的问题。`;
 

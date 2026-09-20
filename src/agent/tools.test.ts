@@ -214,6 +214,90 @@ describe("tools", () => {
     });
   });
 
+  describe("edit_file tool", () => {
+    it("should replace text in file", async () => {
+      writeFileSync(join(testDir, "test.txt"), "hello world");
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("edit_file", {
+        path: "test.txt",
+        oldText: "world",
+        newText: "universe",
+      });
+
+      assert.ok(result.content[0].text.includes("1 replacement(s)"));
+      const { readFileSync } = await import("node:fs");
+      assert.strictEqual(
+        readFileSync(join(testDir, "test.txt"), "utf8"),
+        "hello universe",
+      );
+    });
+
+    it("should replace multiple occurrences when replaceAll is true", async () => {
+      writeFileSync(join(testDir, "test.txt"), "foo bar foo baz foo");
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("edit_file", {
+        path: "test.txt",
+        oldText: "foo",
+        newText: "qux",
+        replaceAll: true,
+      });
+
+      assert.ok(result.content[0].text.includes("3 replacement(s)"));
+      const { readFileSync } = await import("node:fs");
+      assert.strictEqual(
+        readFileSync(join(testDir, "test.txt"), "utf8"),
+        "qux bar qux baz qux",
+      );
+    });
+
+    it("should throw error when text not found", async () => {
+      writeFileSync(join(testDir, "test.txt"), "hello world");
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("edit_file", {
+            path: "test.txt",
+            oldText: "nonexistent",
+            newText: "replacement",
+          }),
+        {
+          message: /Text not found in file/,
+        },
+      );
+    });
+
+    it("should throw error when text is not unique", async () => {
+      writeFileSync(join(testDir, "test.txt"), "foo bar foo baz");
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("edit_file", {
+            path: "test.txt",
+            oldText: "foo",
+            newText: "qux",
+          }),
+        {
+          message: /Text is not unique in file/,
+        },
+      );
+    });
+
+    it("should reject path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("edit_file", {
+            path: "../../../etc/passwd",
+            oldText: "root",
+            newText: "hacked",
+          }),
+        {
+          message: /Path escapes workspace/,
+        },
+      );
+    });
+  });
+
   describe("bash tool", () => {
     it("should execute command and return output", async () => {
       const registry = createToolRegistry(testDir);

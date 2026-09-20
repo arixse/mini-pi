@@ -35306,6 +35306,7 @@ function bashTool(workspaceRoot) {
       if (!command) {
         throw new Error("Command cannot be empty");
       }
+      checkBashCommand(command, workspaceRoot);
       const { exec } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const execAsync = promisify(exec);
@@ -35331,6 +35332,49 @@ function bashTool(workspaceRoot) {
       }
     }
   };
+}
+function checkBashCommand(command, workspaceRoot) {
+  const normalizedCommand = command.toLowerCase();
+  const absolutePathPatterns = [
+    /^[a-z]:\\/i,
+    // Windows 绝对路径，如 D:\、C:\
+    /^[a-z]:\//i,
+    // Windows 绝对路径，如 D:/、C:/
+    /^\//,
+    // Unix 绝对路径，如 /etc、/home
+    /^~/
+    // home 目录路径
+  ];
+  for (const pattern of absolutePathPatterns) {
+    const pathMatches = command.match(/(?:^|\s)([^\s]+)/g);
+    if (pathMatches) {
+      for (const match of pathMatches) {
+        const pathPart = match.trim();
+        if (pathPart.startsWith("-") || pathPart.includes("=")) continue;
+        if (pattern.test(pathPart)) {
+          throw new Error(`Bash command contains absolute path outside workspace: ${pathPart}`);
+        }
+      }
+    }
+  }
+  const escapePatterns = [
+    /\.\.[\\/]/,
+    // ../
+    /[\\/]\.\.$/,
+    // /..
+    /\.\./
+    // 包含 .. 的路径
+  ];
+  const pathArgs = command.match(/(?:^|\s)([^\s]*\.\.[^\s]*)/g);
+  if (pathArgs) {
+    for (const arg of pathArgs) {
+      const pathArg = arg.trim();
+      if (pathArg.startsWith("-") || pathArg.includes("=")) continue;
+      if (escapePatterns.some((p) => p.test(pathArg))) {
+        throw new Error(`Bash command contains path escape pattern: ${pathArg}`);
+      }
+    }
+  }
 }
 function resolveInsideWorkspace(workspaceRoot, input) {
   const target = (0, import_node_path.resolve)(workspaceRoot, input);
@@ -37557,7 +37601,7 @@ function buildSystemPrompt(workspaceRoot, fixedContext, skillSummary) {
 - \u6267\u884C\u547D\u4EE4
 - \u89E3\u7B54\u7F16\u7A0B\u95EE\u9898
 
-\u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55\uFF1A${workspaceRoot}
+\u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55\uFF1A${workspaceRoot}\uFF0C\u7981\u6B62\u67E5\u770B\u6216\u64CD\u4F5C${workspaceRoot}\u4EE5\u5916\u76EE\u5F55\u7684\u6587\u4EF6\uFF0C
 
 \u8BF7\u7528\u4E2D\u6587\u56DE\u590D\u7528\u6237\u7684\u95EE\u9898\u3002`;
   if (fixedContext) {
