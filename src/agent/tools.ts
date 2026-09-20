@@ -1,4 +1,4 @@
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { readdir, readFile } from "node:fs/promises";
@@ -222,7 +222,7 @@ function resolveInsideWorkspace(workspaceRoot: string, input: string): string {
   const target = resolve(workspaceRoot, input);
   const root = resolve(workspaceRoot);
   const rel = relative(root, target);
-  if (rel.startsWith("..") || (rel === "" && input.includes(".."))) {
+  if (rel.startsWith("..") || (rel === "" && input.includes("..")) || isAbsolute(rel)) {
     throw new Error(`Path escapes workspace:${input}`);
   }
   return target;

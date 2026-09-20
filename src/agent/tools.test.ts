@@ -147,7 +147,7 @@ describe("tools", () => {
     it("should reject absolute path outside workspace", async () => {
       const registry = createToolRegistry(testDir);
       await assert.rejects(
-        () => registry.execute("read_file", { path: "D:\\secret.txt" }),
+        () => registry.execute("read_file", { path: "E:\\test.txt" }),
         {
           message: /Path escapes workspace/,
         },
