@@ -94,7 +94,8 @@ async function main() {
   // 加载 skill 元数据并生成摘要
   const skillSummary = sessionManager.getSkillSummary();
   if (skillSummary) {
-    console.log(chalk.dim(`📚 已加载 ${sessionManager.loadSkillMetadata().length} 个 skills`));
+    const skills = sessionManager.loadSkillMetadata()
+    console.log(chalk.dim(`[Skills]\n ${skills.length>0?skills.map(skill=>skill.name).join(','):''}`));
   }
 
   let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);

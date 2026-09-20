@@ -35175,6 +35175,7 @@ function createToolRegistry(workspaceRoot) {
   registry2.register(listFilesTool(workspaceRoot));
   registry2.register(readFileTool(workspaceRoot));
   registry2.register(writeFileTool(workspaceRoot));
+  registry2.register(editFileTool(workspaceRoot));
   registry2.register(bashTool(workspaceRoot));
   return registry2;
 }
@@ -35283,6 +35284,77 @@ function writeFileTool(workspaceRoot) {
       return {
         content: [createTextContent(`File written successfully: ${(0, import_node_path.relative)(workspaceRoot, filePath)}`)],
         details: { path: (0, import_node_path.relative)(workspaceRoot, filePath), bytesWritten: content.length }
+      };
+    }
+  };
+}
+function editFileTool(workspaceRoot) {
+  return {
+    name: "edit_file",
+    description: "Edit a file by replacing exact text matches. Use this for precise, targeted changes to existing files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative file path under workspace."
+        },
+        oldText: {
+          type: "string",
+          description: "Exact text to find and replace. Must be unique in the file unless replaceAll is true."
+        },
+        newText: {
+          type: "string",
+          description: "Replacement text."
+        },
+        replaceAll: {
+          type: "boolean",
+          description: "If true, replace all occurrences. If false or omitted, replace only the first occurrence (oldText must be unique)."
+        }
+      },
+      required: ["path", "oldText", "newText"]
+    },
+    async execute(args) {
+      const filePath = resolveInsideWorkspace(
+        workspaceRoot,
+        stringArg(args.path, "")
+      );
+      const oldText = stringArg(args.oldText, "");
+      const newText = stringArg(args.newText, "");
+      const replaceAll = args.replaceAll === true;
+      if (!oldText) {
+        throw new Error("oldText cannot be empty");
+      }
+      const { readFile: readFile5, writeFile: writeFile3 } = await import("node:fs/promises");
+      const content = await readFile5(filePath, "utf8");
+      if (!content.includes(oldText)) {
+        throw new Error(`Text not found in file: ${oldText.substring(0, 50)}...`);
+      }
+      if (!replaceAll) {
+        const occurrences = content.split(oldText).length - 1;
+        if (occurrences > 1) {
+          throw new Error(`Text is not unique in file (${occurrences} occurrences). Use replaceAll=true to replace all, or provide more specific text.`);
+        }
+      }
+      let newContent;
+      let replacementCount;
+      if (replaceAll) {
+        const parts = content.split(oldText);
+        replacementCount = parts.length - 1;
+        newContent = parts.join(newText);
+      } else {
+        replacementCount = 1;
+        newContent = content.replace(oldText, newText);
+      }
+      await writeFile3(filePath, newContent, "utf8");
+      return {
+        content: [createTextContent(`File edited successfully: ${replacementCount} replacement(s) made in ${(0, import_node_path.relative)(workspaceRoot, filePath)}`)],
+        details: {
+          path: (0, import_node_path.relative)(workspaceRoot, filePath),
+          replacements: replacementCount,
+          oldTextLength: oldText.length,
+          newTextLength: newText.length
+        }
       };
     }
   };
@@ -37628,7 +37700,9 @@ async function main() {
   const fixedContext = sessionManager.getFixedContext();
   const skillSummary = sessionManager.getSkillSummary();
   if (skillSummary) {
-    console.log(source_default.dim(`\u{1F4DA} \u5DF2\u52A0\u8F7D ${sessionManager.loadSkillMetadata().length} \u4E2A skills`));
+    const skills = sessionManager.loadSkillMetadata();
+    console.log(source_default.dim(`[Skills]
+ ${skills.length > 0 ? skills.map((skill) => skill.name).join(",") : ""}`));
   }
   let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
   const messages = [];

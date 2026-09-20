@@ -2,7 +2,7 @@ import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
 import { AgentEvent, AgentMessage, AssistantMessage } from "../shared/protocol";
-import { createTextContent, messageText,createUserMessage } from "../agent/message";
+import { createTextContent, messageText,createUserMessage, sliceText } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop } from "../agent/loop";
@@ -148,12 +148,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
             process.stdout.write(event.delta);
           }
           if (event.type === "tool_execution_start") {
-            console.log("");
-            console.log(chalk.dim(`🔧 调用工具: ${event.toolName}`));
+            printToolInfo(event)
           }
           if (event.type === "tool_execution_end") {
-            console.log(chalk.dim(` ✓`));
-            console.log("");
+            printToolInfo(event)
           }
         },
       });
@@ -178,6 +176,44 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     process.exit(0);
   });
 }
+
+function printToolInfo(event:AgentEvent) {
+  if(event.type==="tool_execution_start") {
+    if(event.toolName==="list_files") {
+      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
+    }
+    if(event.toolName==="read_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
+    }
+    if(event.toolName==="write_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
+    }
+    if(event.toolName==="edit_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
+    }
+    if(event.toolName==="bash") {
+      console.log(chalk.dim(`[${event.toolName}] ${event.args.command}`))
+    }
+  }
+  if(event.type==="tool_execution_end") {
+    if(event.toolName==="list_files") {
+      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
+    }
+    if(event.toolName==="read_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
+    }
+    if(event.toolName==="write_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
+    }
+    if(event.toolName==="edit_file") {
+      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
+    }
+    if(event.toolName==="bash") {
+      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
+    }
+  }
+}
+
 
 function printHelp() {
   console.log("");
@@ -205,7 +241,7 @@ function printHelp() {
 /**
  * 显示所有可用的 skills
  */
-function handleSkills(sessionManager?: SessionManager): void {
+export function handleSkills(sessionManager?: SessionManager): void {
   if (!sessionManager) {
     console.log(chalk.red("\n❌ SessionManager 未初始化\n"));
     return;
@@ -260,7 +296,7 @@ function handleSkills(sessionManager?: SessionManager): void {
 /**
  * 加载指定 skill 的完整内容并注入到 system prompt
  */
-async function handleLoadSkill(
+export async function handleLoadSkill(
   sessionManager: SessionManager | undefined,
   skillName: string,
   options: ReplOptions,
@@ -289,7 +325,7 @@ async function handleLoadSkill(
 /**
  * 检查用户输入是否匹配某个 skill，并提示用户
  */
-function checkSkillMatch(sessionManager: SessionManager | undefined, userInput: string): void {
+export function checkSkillMatch(sessionManager: SessionManager | undefined, userInput: string): void {
   if (!sessionManager) return;
 
   const matches = sessionManager.findMatchingSkills(userInput);
@@ -307,7 +343,7 @@ function checkSkillMatch(sessionManager: SessionManager | undefined, userInput: 
   }
 }
 
-async function handleLogin(
+export async function handleLogin(
   providerService: ModelProviderService | undefined,
   rl: readline.Interface,
 ): Promise<void> {
@@ -356,7 +392,7 @@ async function handleLogin(
   }
 }
 
-function question(rl: readline.Interface, prompt: string): Promise<string> {
+export function question(rl: readline.Interface, prompt: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(prompt, (answer) => {
       resolve(answer);
@@ -364,7 +400,7 @@ function question(rl: readline.Interface, prompt: string): Promise<string> {
   });
 }
 
-async function handleModel(
+export async function handleModel(
   providerService: ModelProviderService | undefined,
   settingsStore: SettingsStore | undefined,
   rl: readline.Interface,

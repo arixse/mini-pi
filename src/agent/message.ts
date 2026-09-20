@@ -42,6 +42,11 @@ export function messageText(message: AgentMessage | ToolResult): string {
     .join("\n");
 }
 
+export function sliceText(text:string):string {
+  if(!text) return ''
+  return text.length>200?text.substring(0,200):text
+}
+
 export function isTextContent(
   block: TextContent | ToolCallContent,
 ): block is TextContent {
