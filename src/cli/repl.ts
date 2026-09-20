@@ -190,15 +190,15 @@ export function printToolInfo(event: AgentEvent) {
   };
 
   // 工具类型对应的颜色主题
-  const toolColors: Record<string, { bg: typeof chalk; border: typeof chalk; title: typeof chalk }> = {
-    "list_files": { bg: chalk.bgBlue, border: chalk.blue, title: chalk.blue.bold },
-    "read_file": { bg: chalk.bgCyan, border: chalk.cyan, title: chalk.cyan.bold },
-    "write_file": { bg: chalk.bgMagenta, border: chalk.magenta, title: chalk.magenta.bold },
-    "edit_file": { bg: chalk.bgYellow, border: chalk.yellow, title: chalk.yellow.bold },
-    "bash": { bg: chalk.bgGreen, border: chalk.green, title: chalk.green.bold },
+  const toolColors: Record<string, { title: typeof chalk }> = {
+    "list_files": { title: chalk.blue.bold },
+    "read_file": { title: chalk.cyan.bold },
+    "write_file": { title: chalk.magenta.bold },
+    "edit_file": { title: chalk.yellow.bold },
+    "bash": { title: chalk.green.bold },
   };
 
-  const defaultColors = { bg: chalk.bgWhite, border: chalk.white, title: chalk.white.bold };
+  const defaultColors = { title: chalk.white.bold };
 
   const getToolIcon = (toolName: string): string => {
     return toolIcons[toolName] || "🛠️";
@@ -267,21 +267,21 @@ export function printToolInfo(event: AgentEvent) {
       resultLine = `📄 ${formatResult(result)}`;
     }
 
-    // 输出块 - 使用工具特定的背景色
+    // 输出块 - 使用工具特定的文字颜色
     console.log("");
-    console.log(colors.bg(colors.title(`  ${titleLine}  `)));
+    console.log(colors.title(`  ${titleLine}`));
     
     if (argsLine) {
-      console.log(colors.bg(chalk.cyan(`  ${argsLine}  `)));
+      console.log(chalk.cyan(`  ${argsLine}`));
     }
     
     if (statusLine) {
       const statusColor = isError ? chalk.red.bold : chalk.green.bold;
-      console.log(colors.bg(statusColor(`  ${statusLine}  `)));
+      console.log(statusColor(`  ${statusLine}`));
     }
     
     if (resultLine) {
-      console.log(colors.bg(chalk.white(`  ${resultLine}  `)));
+      console.log(chalk.dim(`  ${resultLine}`));
     }
   };
 
