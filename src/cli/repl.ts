@@ -267,38 +267,22 @@ export function printToolInfo(event: AgentEvent) {
       resultLine = `📄 ${formatResult(result)}`;
     }
 
-    // 计算内容最大宽度
-    const contentWidth = Math.max(
-      titleLine.length + 2,
-      argsLine.length + 2,
-      statusLine.length + 2,
-      resultLine.length + 2,
-      40
-    );
-
-    // 绘制边框
-    const border = "─".repeat(contentWidth);
-    const pad = (str: string, len: number) => str + " ".repeat(Math.max(0, len - str.length));
-
-    // 输出块 - 使用工具特定的颜色主题
+    // 输出块 - 使用工具特定的背景色
     console.log("");
-    console.log(colors.border(`┌${border}┐`));
-    console.log(colors.border("│ ") + colors.title(pad(titleLine, contentWidth - 2)) + colors.border(" │"));
+    console.log(colors.bg(colors.title(`  ${titleLine}  `)));
     
     if (argsLine) {
-      console.log(colors.border("│ ") + chalk.cyan(pad(argsLine, contentWidth - 2)) + colors.border(" │"));
+      console.log(colors.bg(chalk.cyan(`  ${argsLine}  `)));
     }
     
     if (statusLine) {
       const statusColor = isError ? chalk.red.bold : chalk.green.bold;
-      console.log(colors.border("│ ") + statusColor(pad(statusLine, contentWidth - 2)) + colors.border(" │"));
+      console.log(colors.bg(statusColor(`  ${statusLine}  `)));
     }
     
     if (resultLine) {
-      console.log(colors.border("│ ") + chalk.white(pad(resultLine, contentWidth - 2)) + colors.border(" │"));
+      console.log(colors.bg(chalk.white(`  ${resultLine}  `)));
     }
-    
-    console.log(colors.border(`└${border}┘`));
   };
 
   if (event.type === "tool_execution_start") {

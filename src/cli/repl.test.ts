@@ -399,7 +399,7 @@ describe("ReplOptions", () => {
       }
     });
 
-    it("should display box format with border", () => {
+    it("should display tool block with background color", () => {
       const endEvent = {
         type: "tool_execution_end" as const,
         toolCallId: "call-5",
@@ -421,12 +421,12 @@ describe("ReplOptions", () => {
       try {
         printToolInfo(endEvent);
         const fullOutput = output.join("\n");
-        // 检查是否包含边框字符
-        assert.ok(fullOutput.includes("┌"));
-        assert.ok(fullOutput.includes("┐"));
-        assert.ok(fullOutput.includes("└"));
-        assert.ok(fullOutput.includes("┘"));
-        assert.ok(fullOutput.includes("│"));
+        // 检查是否包含工具信息
+        assert.ok(fullOutput.includes("💻"));
+        assert.ok(fullOutput.includes("bash"));
+        assert.ok(fullOutput.includes("✅"));
+        assert.ok(fullOutput.includes("Success"));
+        assert.ok(fullOutput.includes("total 0"));
       } finally {
         console.log = originalLog;
       }
