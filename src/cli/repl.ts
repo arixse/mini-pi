@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage, AssistantMessage } from "../shared/protocol";
+import { AgentEvent, AgentMessage, AssistantMessage, ToolResult } from "../shared/protocol";
 import { createTextContent, messageText,createUserMessage, sliceText } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
@@ -177,40 +177,74 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   });
 }
 
-function printToolInfo(event:AgentEvent) {
-  if(event.type==="tool_execution_start") {
-    if(event.toolName==="list_files") {
-      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
+export function printToolInfo(event: AgentEvent) {
+  const toolIcons: Record<string, string> = {
+    "list_files": "📂",
+    "read_file": "📖",
+    "write_file": "✏️",
+    "edit_file": "🔧",
+    "bash": "💻",
+  };
+
+  const getToolIcon = (toolName: string): string => {
+    return toolIcons[toolName] || "🛠️";
+  };
+
+  const truncateText = (text: string, maxLength: number = 50): string => {
+    if (text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + "...";
+  };
+
+  const formatArgs = (args: Record<string, unknown>): string => {
+    const formatted = Object.entries(args)
+      .map(([key, value]) => {
+        let valueStr: string;
+        if (typeof value === "string") {
+          // 对于大段内容，只显示长度
+          if (key === "content" || key === "oldText" || key === "newText") {
+            valueStr = `(${value.length} chars)`;
+          } else {
+            valueStr = truncateText(value, 30);
+          }
+        } else if (typeof value === "object") {
+          valueStr = "{" + Object.keys(value as object).join(",") + "}";
+        } else {
+          valueStr = String(value);
+        }
+        return `${key}=${valueStr}`;
+      })
+      .join(", ");
+    return formatted ? `(${formatted})` : "";
+  };
+
+  const formatResult = (result: ToolResult): string => {
+    if (result.content && result.content.length > 0) {
+      const text = result.content
+        .filter((c): c is { type: "text"; text: string } => c.type === "text")
+        .map(c => c.text || "")
+        .join(" ");
+      return truncateText(text, 60);
     }
-    if(event.toolName==="read_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
-    }
-    if(event.toolName==="write_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
-    }
-    if(event.toolName==="edit_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${event.args.path}`))
-    }
-    if(event.toolName==="bash") {
-      console.log(chalk.dim(`[${event.toolName}] ${event.args.command}`))
-    }
+    return "(empty)";
+  };
+
+  if (event.type === "tool_execution_start") {
+    const icon = getToolIcon(event.toolName);
+    const argsStr = formatArgs(event.args);
+    console.log(chalk.cyan(`${icon} `) + chalk.white(`${event.toolName}`) + chalk.dim(` ${argsStr}`));
   }
-  if(event.type==="tool_execution_end") {
-    if(event.toolName==="list_files") {
-      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
-    }
-    if(event.toolName==="read_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
-    }
-    if(event.toolName==="write_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
-    }
-    if(event.toolName==="edit_file") {
-      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
-    }
-    if(event.toolName==="bash") {
-      console.log(chalk.dim(`[${event.toolName}] ${sliceText(messageText(event.result))}`))
-    }
+
+  if (event.type === "tool_execution_end") {
+    const icon = getToolIcon(event.toolName);
+    const statusIcon = event.isError ? "❌" : "✅";
+    const resultStr = formatResult(event.result);
+    console.log(
+      chalk.cyan(`${icon} `) +
+      chalk.white(`${event.toolName}`) +
+      chalk.dim(` → `) +
+      (event.isError ? chalk.red(`${statusIcon} `) : chalk.green(`${statusIcon} `)) +
+      chalk.dim(resultStr)
+    );
   }
 }
 

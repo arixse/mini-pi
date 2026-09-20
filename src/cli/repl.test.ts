@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ReplOptions } from "./repl";
+import { ReplOptions, printToolInfo } from "./repl";
 import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { existsSync } from "node:fs";
@@ -260,6 +260,147 @@ describe("ReplOptions", () => {
       };
 
       assert.strictEqual(options.onReload, undefined);
+    });
+  });
+
+  describe("printToolInfo", () => {
+    it("should print tool execution start info", () => {
+      const event = {
+        type: "tool_execution_start" as const,
+        toolCallId: "call-1",
+        toolName: "read_file",
+        args: { path: "src/index.ts" },
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(event);
+        assert.ok(output.length > 0);
+        assert.ok(output[0].includes("📖"));
+        assert.ok(output[0].includes("read_file"));
+        assert.ok(output[0].includes("path=src/index.ts"));
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it("should print tool execution end info with success", () => {
+      const event = {
+        type: "tool_execution_end" as const,
+        toolCallId: "call-1",
+        toolName: "read_file",
+        result: {
+          content: [{ type: "text" as const, text: "File content here" }],
+        },
+        isError: false,
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(event);
+        assert.ok(output.length > 0);
+        assert.ok(output[0].includes("📖"));
+        assert.ok(output[0].includes("read_file"));
+        assert.ok(output[0].includes("✅"));
+        assert.ok(output[0].includes("File content here"));
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it("should print tool execution end info with error", () => {
+      const event = {
+        type: "tool_execution_end" as const,
+        toolCallId: "call-1",
+        toolName: "bash",
+        result: {
+          content: [{ type: "text" as const, text: "Command not found" }],
+        },
+        isError: true,
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(event);
+        assert.ok(output.length > 0);
+        assert.ok(output[0].includes("💻"));
+        assert.ok(output[0].includes("bash"));
+        assert.ok(output[0].includes("❌"));
+        assert.ok(output[0].includes("Command not found"));
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it("should handle unknown tool names", () => {
+      const event = {
+        type: "tool_execution_start" as const,
+        toolCallId: "call-1",
+        toolName: "unknown_tool",
+        args: { param: "value" },
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(event);
+        assert.ok(output.length > 0);
+        assert.ok(output[0].includes("🛠️"));
+        assert.ok(output[0].includes("unknown_tool"));
+        assert.ok(output[0].includes("param=value"));
+      } finally {
+        console.log = originalLog;
+      }
+    });
+
+    it("should truncate long content in args", () => {
+      const longContent = "a".repeat(100);
+      const event = {
+        type: "tool_execution_start" as const,
+        toolCallId: "call-1",
+        toolName: "write_file",
+        args: { path: "test.txt", content: longContent },
+      };
+
+      // 捕获控制台输出
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: any[]) => {
+        output.push(args.join(" "));
+      };
+
+      try {
+        printToolInfo(event);
+        assert.ok(output.length > 0);
+        assert.ok(output[0].includes("✏️"));
+        assert.ok(output[0].includes("write_file"));
+        assert.ok(output[0].includes("(100 chars)"));
+      } finally {
+        console.log = originalLog;
+      }
     });
   });
 });
