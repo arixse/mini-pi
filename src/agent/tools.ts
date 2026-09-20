@@ -189,6 +189,9 @@ function bashTool(workspaceRoot: string): RegisteredTool {
         throw new Error("Command cannot be empty");
       }
       
+      // 检查命令是否包含路径逃逸模式
+      checkBashCommand(command, workspaceRoot);
+      
       const { exec } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const execAsync = promisify(exec);
@@ -216,6 +219,58 @@ function bashTool(workspaceRoot: string): RegisteredTool {
       }
     },
   };
+}
+
+/**
+ * 检查 bash 命令是否包含路径逃逸模式
+ * 注意：这是一个基本检查，复杂的命令组合可能绕过此检查
+ */
+function checkBashCommand(command: string, workspaceRoot: string): void {
+  const normalizedCommand = command.toLowerCase();
+  
+  // 检查是否包含绝对路径（Windows 驱动器号或 Unix 根路径）
+  const absolutePathPatterns = [
+    /^[a-z]:\\/i,  // Windows 绝对路径，如 D:\、C:\
+    /^[a-z]:\//i,   // Windows 绝对路径，如 D:/、C:/
+    /^\//,           // Unix 绝对路径，如 /etc、/home
+    /^~/,            // home 目录路径
+  ];
+  
+  for (const pattern of absolutePathPatterns) {
+    // 检查命令中的路径部分（跳过命令选项）
+    const pathMatches = command.match(/(?:^|\s)([^\s]+)/g);
+    if (pathMatches) {
+      for (const match of pathMatches) {
+        const pathPart = match.trim();
+        // 跳过命令选项（以-开头）和环境变量赋值
+        if (pathPart.startsWith('-') || pathPart.includes('=')) continue;
+        if (pattern.test(pathPart)) {
+          throw new Error(`Bash command contains absolute path outside workspace: ${pathPart}`);
+        }
+      }
+    }
+  }
+  
+  // 检查是否包含明显的路径逃逸模式
+  const escapePatterns = [
+    /\.\.[\\/]/,  // ../
+    /[\\/]\.\.$/,  // /..
+    /\.\./,        // 包含 .. 的路径
+  ];
+  
+  // 提取命令中的路径参数
+  const pathArgs = command.match(/(?:^|\s)([^\s]*\.\.[^\s]*)/g);
+  if (pathArgs) {
+    for (const arg of pathArgs) {
+      const pathArg = arg.trim();
+      // 跳过命令选项和环境变量
+      if (pathArg.startsWith('-') || pathArg.includes('=')) continue;
+      // 检查是否是路径逃逸
+      if (escapePatterns.some(p => p.test(pathArg))) {
+        throw new Error(`Bash command contains path escape pattern: ${pathArg}`);
+      }
+    }
+  }
 }
 
 function resolveInsideWorkspace(workspaceRoot: string, input: string): string {

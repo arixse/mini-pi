@@ -239,5 +239,45 @@ describe("tools", () => {
 
       assert.ok(result.content[0].text.includes("error msg"));
     });
+
+    it("should reject command with absolute path outside workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("bash", { command: "cat D:\\secret.txt" }),
+        {
+          message: /Bash command contains absolute path outside workspace/,
+        },
+      );
+    });
+
+    it("should reject command with Unix absolute path", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("bash", { command: "cat /etc/passwd" }),
+        {
+          message: /Bash command contains absolute path outside workspace/,
+        },
+      );
+    });
+
+    it("should reject command with path escape pattern", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("bash", { command: "cat ../../etc/passwd" }),
+        {
+          message: /Bash command contains path escape pattern/,
+        },
+      );
+    });
+
+    it("should reject command with home directory path", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("bash", { command: "cat ~/secret.txt" }),
+        {
+          message: /Bash command contains absolute path outside workspace/,
+        },
+      );
+    });
   });
 });

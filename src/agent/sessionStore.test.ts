@@ -4,7 +4,7 @@ import { JsonlSessionStore } from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
-import { LlmModel, createAssistantMessage } from "./model";
+import { LlmModel } from "./model";
 
 describe("sessionStore", () => {
   const testDir = join(process.cwd(), ".test-session-store");
@@ -47,7 +47,7 @@ describe("sessionStore", () => {
         role: "user",
         content: [createTextContent("world")],
         timestamp: Date.now(),
-      });
+      }); 
 
       assert.strictEqual(id1, "entry_1");
       assert.strictEqual(id2, "entry_2");

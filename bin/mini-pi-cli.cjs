@@ -35336,7 +35336,7 @@ function resolveInsideWorkspace(workspaceRoot, input) {
   const target = (0, import_node_path.resolve)(workspaceRoot, input);
   const root = (0, import_node_path.resolve)(workspaceRoot);
   const rel = (0, import_node_path.relative)(root, target);
-  if (rel.startsWith("..") || rel === "" && input.includes("..")) {
+  if (rel.startsWith("..") || rel === "" && input.includes("..") || (0, import_node_path.isAbsolute)(rel)) {
     throw new Error(`Path escapes workspace:${input}`);
   }
   return target;
