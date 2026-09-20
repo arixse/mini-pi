@@ -189,8 +189,23 @@ export function printToolInfo(event: AgentEvent) {
     "bash": "💻",
   };
 
+  // 工具类型对应的颜色主题
+  const toolColors: Record<string, { bg: typeof chalk; border: typeof chalk; title: typeof chalk }> = {
+    "list_files": { bg: chalk.bgBlue, border: chalk.blue, title: chalk.blue.bold },
+    "read_file": { bg: chalk.bgCyan, border: chalk.cyan, title: chalk.cyan.bold },
+    "write_file": { bg: chalk.bgMagenta, border: chalk.magenta, title: chalk.magenta.bold },
+    "edit_file": { bg: chalk.bgYellow, border: chalk.yellow, title: chalk.yellow.bold },
+    "bash": { bg: chalk.bgGreen, border: chalk.green, title: chalk.green.bold },
+  };
+
+  const defaultColors = { bg: chalk.bgWhite, border: chalk.white, title: chalk.white.bold };
+
   const getToolIcon = (toolName: string): string => {
     return toolIcons[toolName] || "🛠️";
+  };
+
+  const getToolColors = (toolName: string) => {
+    return toolColors[toolName] || defaultColors;
   };
 
   const truncateText = (text: string, maxLength: number = 80): string => {
@@ -235,21 +250,21 @@ export function printToolInfo(event: AgentEvent) {
     isError: boolean | null
   ) => {
     const icon = getToolIcon(toolName);
+    const colors = getToolColors(toolName);
     const argsStr = formatArgs(args);
-    const width = 60;
 
     // 标题行
     const titleLine = `${icon} ${toolName}`;
-    const argsLine = argsStr ? `Args: ${argsStr}` : "";
+    const argsLine = argsStr ? `📋 Args: ${argsStr}` : "";
 
     // 结果行
     let resultLine = "";
     let statusLine = "";
     if (result !== null) {
       const statusIcon = isError ? "❌" : "✅";
-      const statusText = isError ? "Error" : "Success";
+      const statusText = isError ? "Failed" : "Success";
       statusLine = `${statusIcon} ${statusText}`;
-      resultLine = formatResult(result);
+      resultLine = `📄 ${formatResult(result)}`;
     }
 
     // 计算内容最大宽度
@@ -265,25 +280,25 @@ export function printToolInfo(event: AgentEvent) {
     const border = "─".repeat(contentWidth);
     const pad = (str: string, len: number) => str + " ".repeat(Math.max(0, len - str.length));
 
-    // 输出块
+    // 输出块 - 使用工具特定的颜色主题
     console.log("");
-    console.log(chalk.bgGray(chalk.white(`┌${border}┐`)));
-    console.log(chalk.bgGray(chalk.white(`│ `) + chalk.bold(pad(titleLine, contentWidth - 2)) + chalk.white(` │`)));
+    console.log(colors.border(`┌${border}┐`));
+    console.log(colors.border("│ ") + colors.title(pad(titleLine, contentWidth - 2)) + colors.border(" │"));
     
     if (argsLine) {
-      console.log(chalk.bgGray(chalk.white(`│ `) + chalk.dim(pad(argsLine, contentWidth - 2)) + chalk.white(` │`)));
+      console.log(colors.border("│ ") + chalk.cyan(pad(argsLine, contentWidth - 2)) + colors.border(" │"));
     }
     
     if (statusLine) {
-      const statusColor = isError ? chalk.red : chalk.green;
-      console.log(chalk.bgGray(chalk.white(`│ `) + statusColor(pad(statusLine, contentWidth - 2)) + chalk.white(` │`)));
+      const statusColor = isError ? chalk.red.bold : chalk.green.bold;
+      console.log(colors.border("│ ") + statusColor(pad(statusLine, contentWidth - 2)) + colors.border(" │"));
     }
     
     if (resultLine) {
-      console.log(chalk.bgGray(chalk.white(`│ `) + chalk.dim(pad(resultLine, contentWidth - 2)) + chalk.white(` │`)));
+      console.log(colors.border("│ ") + chalk.white(pad(resultLine, contentWidth - 2)) + colors.border(" │"));
     }
     
-    console.log(chalk.bgGray(chalk.white(`└${border}┘`)));
+    console.log(colors.border(`└${border}┘`));
   };
 
   if (event.type === "tool_execution_start") {

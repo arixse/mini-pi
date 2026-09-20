@@ -334,7 +334,7 @@ describe("ReplOptions", () => {
         assert.ok(fullOutput.includes("💻"));
         assert.ok(fullOutput.includes("bash"));
         assert.ok(fullOutput.includes("❌"));
-        assert.ok(fullOutput.includes("Error"));
+        assert.ok(fullOutput.includes("Failed"));
         assert.ok(fullOutput.includes("Command not found"));
       } finally {
         console.log = originalLog;
