@@ -118,8 +118,7 @@ DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `h
 
 支持的模型：
 - `deepseek-flash` - 快速响应模型
-- `deepseek-reasoner` - 推理模型
-- `deepseek-chat` - 对话模型
+- `deepseek-v4-pro` - 专业版模型
 
 使用方法：
 1. 在 Mini Pi 中选择 DeepSeek 作为模型提供商
