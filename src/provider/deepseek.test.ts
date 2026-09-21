@@ -38,8 +38,7 @@ describe("DeepSeekProvider", () => {
       const models = provider.getDefaultModels();
       assert.ok(Array.isArray(models));
       assert.ok(models.includes("deepseek-flash"));
-      assert.ok(models.includes("deepseek-reasoner"));
-      assert.ok(models.includes("deepseek-chat"));
+      assert.ok(models.includes("deepseek-v4-pro"));
     });
   });
 
@@ -61,8 +60,7 @@ describe("DeepSeekProvider", () => {
     it("should return model list from API", async () => {
       const mockModels = [
         { id: "deepseek-flash", object: "model", created: 1234567890, owned_by: "deepseek" },
-        { id: "deepseek-reasoner", object: "model", created: 1234567890, owned_by: "deepseek" },
-        { id: "deepseek-chat", object: "model", created: 1234567890, owned_by: "deepseek" },
+        { id: "deepseek-v4-pro", object: "model", created: 1234567890, owned_by: "deepseek" },
       ];
 
       global.fetch = async (url: string, options?: RequestInit) => {
@@ -76,7 +74,7 @@ describe("DeepSeekProvider", () => {
       };
 
       const models = await provider.getModelList("test-api-key");
-      assert.deepStrictEqual(models, ["deepseek-flash", "deepseek-reasoner", "deepseek-chat"]);
+      assert.deepStrictEqual(models, ["deepseek-flash", "deepseek-v4-pro"]);
     });
 
     it("should handle API error response", async () => {

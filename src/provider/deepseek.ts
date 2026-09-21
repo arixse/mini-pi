@@ -57,16 +57,14 @@ export class DeepSeekProvider implements Provider {
 
   /**
    * 获取支持 Responses API 的默认模型列表
-   * 根据 DeepSeek 文档，支持 Responses API 的模型包括：
+   * 当前 DeepSeek 支持的模型：
    * - deepseek-flash
-   * - deepseek-reasoner
-   * - deepseek-chat
+   * - deepseek-v4-pro
    */
   getDefaultModels(): string[] {
     return [
       "deepseek-flash",
-      "deepseek-reasoner", 
-      "deepseek-chat"
+      "deepseek-v4-pro"
     ];
   }
 }
