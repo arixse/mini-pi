@@ -103,43 +103,43 @@ describe("model", () => {
 
   describe("createModelFromProvider", () => {
     it("should create Anthropic model for minimax-cn provider", async () => {
-      const model = await createModelFromProvider("minimax-cn", {
+      const model = await createModelFromProvider({
         apiKey: "test-key",
-        skdType: "Anthropic",
+        sdkType: "Anthropic",
       });
       assert.ok(model instanceof AnthropicModel);
     });
 
     it("should create OpenAI model for openai provider", async () => {
-      const model = await createModelFromProvider("openai", {
+      const model = await createModelFromProvider({
         apiKey: "test-key",
-        skdType: "OpenAI",
+        sdkType: "OpenAI",
       });
       assert.ok(model instanceof OpenAIModel);
     });
 
     it("should create Anthropic model for anthropic provider", async () => {
-      const model = await createModelFromProvider("anthropic", {
+      const model = await createModelFromProvider({
         apiKey: "test-key",
-        skdType: "Anthropic",
+        sdkType: "Anthropic",
       });
       assert.ok(model instanceof AnthropicModel);
     });
 
     it("should use custom baseUrl and model", async () => {
-      const model = await createModelFromProvider("openai", {
+      const model = await createModelFromProvider({
         apiKey: "test-key",
         baseUrl: "https://custom.api.com",
         model: "gpt-4",
-        skdType: "OpenAI",
+        sdkType: "OpenAI",
       });
       assert.ok(model instanceof OpenAIModel);
     });
 
     it("should default to Anthropic SDK for unknown provider", async () => {
-      const model = await createModelFromProvider("unknown-provider", {
+      const model = await createModelFromProvider({
         apiKey: "test-key",
-        skdType: "Unknown",
+        sdkType: "Unknown",
       });
       assert.ok(model instanceof AnthropicModel);
     });

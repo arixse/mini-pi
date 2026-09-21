@@ -1,7 +1,7 @@
 import { Provider } from "./index";
 
 export class DeepSeekProvider implements Provider {
-  private baseUrl: string = "https://api.deepseek.com/v1";
+  private baseUrl: string = "https://api.deepseek.com";
   private sdkType: string = "OpenAI";
   private readonly name: string = "deepseek";
 
@@ -53,5 +53,20 @@ export class DeepSeekProvider implements Provider {
       console.error("Failed to get model list:", error);
       throw error;
     }
+  }
+
+  /**
+   * 获取支持 Responses API 的默认模型列表
+   * 根据 DeepSeek 文档，支持 Responses API 的模型包括：
+   * - deepseek-flash
+   * - deepseek-reasoner
+   * - deepseek-chat
+   */
+  getDefaultModels(): string[] {
+    return [
+      "deepseek-flash",
+      "deepseek-reasoner", 
+      "deepseek-chat"
+    ];
   }
 }

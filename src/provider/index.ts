@@ -102,7 +102,7 @@ export class ModelProviderService {
    * @param providerName Provider名称
    * @returns 配置信息
    */
-  async getProviderConfig(providerName: string): Promise<{ apiKey?: string; baseUrl?: string; model?: string } & {skdType:string}> {
+  async getProviderConfig(providerName: string): Promise<{ apiKey?: string; baseUrl?: string; model?: string } & {sdkType:string}> {
     const provider = this.providers.get(providerName);
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);
@@ -112,7 +112,7 @@ export class ModelProviderService {
     const providerConfig = await this.store.getConfig(providerName)
     return {
       ...providerConfig,
-      skdType:provider.getSdkType()
+      sdkType:provider.getSdkType()
     }
     
   }

@@ -23,12 +23,12 @@ async function createModelFromSettings(
     // 获取 provider 配置
     const providerConfig = await providerService.getProviderConfig(providerName);
     
-    if (providerConfig.apiKey && providerConfig.skdType) {
-      const model = await createModelFromProvider(providerName, {
+    if (providerConfig.apiKey) {
+      const model = await createModelFromProvider({
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
-        skdType:providerConfig.skdType
+        sdkType:providerConfig.sdkType
       });
       return { model, providerName, modelName };
     }

@@ -365,10 +365,9 @@ export function createModelFromEnv():LlmModel {
 }
 
 export async function createModelFromProvider(
-  providerName: string,
-  config: { apiKey: string; baseUrl?: string; model?: string;skdType:string }): Promise<LlmModel> {
+  config: { apiKey: string; baseUrl?: string; model?: string;sdkType:string }): Promise<LlmModel> {
   // 根据Provider的SDK类型创建对应的Model
-  switch(config.skdType) {
+  switch(config.sdkType) {
     case "OpenAI":
       return createOpenAIModel({
         apiKey: config.apiKey,

@@ -1,9 +1,19 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { DeepSeekProvider } from "./deepseek";
 
 describe("DeepSeekProvider", () => {
-  const provider = new DeepSeekProvider();
+  let provider: DeepSeekProvider;
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    provider = new DeepSeekProvider();
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
 
   describe("getProviderName", () => {
     it("should return provider name", () => {
@@ -12,14 +22,24 @@ describe("DeepSeekProvider", () => {
   });
 
   describe("getSdkType", () => {
-    it("should return SDK type", () => {
+    it("should return OpenAI SDK type", () => {
       assert.strictEqual(provider.getSdkType(), "OpenAI");
     });
   });
 
   describe("getBaseUrl", () => {
-    it("should return base URL", () => {
-      assert.strictEqual(provider.getBaseUrl(), "https://api.deepseek.com/v1");
+    it("should return DeepSeek API base URL", () => {
+      assert.strictEqual(provider.getBaseUrl(), "https://api.deepseek.com");
+    });
+  });
+
+  describe("getDefaultModels", () => {
+    it("should return default models list", () => {
+      const models = provider.getDefaultModels();
+      assert.ok(Array.isArray(models));
+      assert.ok(models.includes("deepseek-flash"));
+      assert.ok(models.includes("deepseek-reasoner"));
+      assert.ok(models.includes("deepseek-chat"));
     });
   });
 
@@ -38,8 +58,101 @@ describe("DeepSeekProvider", () => {
       );
     });
 
-    // Note: We cannot test actual API calls without mocking fetch
-    // In a real test environment, you would mock the global fetch function
-    // to test the API response handling
+    it("should return model list from API", async () => {
+      const mockModels = [
+        { id: "deepseek-flash", object: "model", created: 1234567890, owned_by: "deepseek" },
+        { id: "deepseek-reasoner", object: "model", created: 1234567890, owned_by: "deepseek" },
+        { id: "deepseek-chat", object: "model", created: 1234567890, owned_by: "deepseek" },
+      ];
+
+      global.fetch = async (url: string, options?: RequestInit) => {
+        if (url === "https://api.deepseek.com/models") {
+          return new Response(JSON.stringify({ data: mockModels }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      };
+
+      const models = await provider.getModelList("test-api-key");
+      assert.deepStrictEqual(models, ["deepseek-flash", "deepseek-reasoner", "deepseek-chat"]);
+    });
+
+    it("should handle API error response", async () => {
+      global.fetch = async (url: string, options?: RequestInit) => {
+        if (url === "https://api.deepseek.com/models") {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      };
+
+      await assert.rejects(
+        async () => await provider.getModelList("invalid-api-key"),
+        { message: "HTTP error! status: 401" }
+      );
+    });
+
+    it("should handle empty response", async () => {
+      global.fetch = async (url: string, options?: RequestInit) => {
+        if (url === "https://api.deepseek.com/models") {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      };
+
+      const models = await provider.getModelList("test-api-key");
+      assert.deepStrictEqual(models, []);
+    });
+
+    it("should handle response without data array", async () => {
+      global.fetch = async (url: string, options?: RequestInit) => {
+        if (url === "https://api.deepseek.com/models") {
+          return new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      };
+
+      const models = await provider.getModelList("test-api-key");
+      assert.deepStrictEqual(models, []);
+    });
+
+    it("should handle network error", async () => {
+      global.fetch = async (url: string, options?: RequestInit) => {
+        throw new Error("Network error");
+      };
+
+      await assert.rejects(
+        async () => await provider.getModelList("test-api-key"),
+        { message: "Network error" }
+      );
+    });
+
+    it("should send correct authorization header", async () => {
+      let capturedHeaders: Headers | undefined;
+      global.fetch = async (url: string, options?: RequestInit) => {
+        if (url === "https://api.deepseek.com/models") {
+          capturedHeaders = new Headers(options?.headers);
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      };
+
+      await provider.getModelList("test-api-key-123");
+      assert.strictEqual(capturedHeaders?.get("Authorization"), "Bearer test-api-key-123");
+      assert.strictEqual(capturedHeaders?.get("Content-Type"), "application/json");
+    });
   });
 });
