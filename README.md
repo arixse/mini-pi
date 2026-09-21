@@ -42,6 +42,7 @@ mini-pi/
 4. **工具调用** - 通过 Function Calling 机制调用工具
 5. **会话管理** - 支持多会话管理，每个会话独立存储
 6. **模型切换** - 支持 OpenAI 和 Anthropic 模型
+7. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
 
 ## 运行方式
 
@@ -77,6 +78,28 @@ pnpm test
 ```
 
 Mini Pi 采用典型的 **代理模式（Agent Pattern）**，通过模型推理 + 工具调用的方式实现智能辅助功能。
+
+## 模型提供商
+
+### DeepSeek
+
+DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `https://api.deepseek.com`。
+
+支持的模型：
+- `deepseek-flash` - 快速响应模型
+- `deepseek-reasoner` - 推理模型
+- `deepseek-chat` - 对话模型
+
+使用方法：
+1. 在 Mini Pi 中选择 DeepSeek 作为模型提供商
+2. 输入 DeepSeek API Key
+3. 选择要使用的模型
+
+DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
+
+### MiniMax-CN
+
+MiniMax-CN 提供商使用 Anthropic 兼容接口。
 
 ## 会话管理
 
