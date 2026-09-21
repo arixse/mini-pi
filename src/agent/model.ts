@@ -366,23 +366,16 @@ export function createModelFromEnv():LlmModel {
 
 export async function createModelFromProvider(
   providerName: string,
-  config: { apiKey: string; baseUrl?: string; model?: string }): Promise<LlmModel> {
+  config: { apiKey: string; baseUrl?: string; model?: string;skdType:string }): Promise<LlmModel> {
   // 根据Provider的SDK类型创建对应的Model
-  switch(providerName.toLowerCase()) {
-    case "minimax-cn":
-      // MiniMax-CN 使用 Anthropic SDK
-      return createAnthropicModel({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl || "https://api.minimax.cn/anthropic",
-        model: config.model,
-      });
-    case "openai":
+  switch(config.skdType) {
+    case "OpenAI":
       return createOpenAIModel({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
       });
-    case "anthropic":
+    case "Anthropic":
       return createAnthropicModel({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,

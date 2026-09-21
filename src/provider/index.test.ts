@@ -186,9 +186,9 @@ describe("ModelProviderService", () => {
       assert.strictEqual(config.apiKey, "test-api-key");
     });
     
-    it("should return empty config for provider without saved config", async () => {
+    it("should return config with skdType for provider without saved config", async () => {
       const config = await service.getProviderConfig("minimax-cn");
-      assert.deepStrictEqual(config, {});
+      assert.deepStrictEqual(config, { skdType: "Anthropic" });
     });
     
     it("should throw error for non-existent provider", async () => {

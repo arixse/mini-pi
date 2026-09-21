@@ -20,7 +20,7 @@ export class DeepSeekProvider implements Provider {
   /**
    * 获取 DeepSeek 模型列表
    * 根据 curl --request GET \
-   * --url https://api.deepseek.com/v1/models \
+   * --url https://api.deepseek.com/models \
    * --header 'Authorization: Bearer <token>' 动态获取模型列表
    */
   async getModelList(apiKey: string): Promise<string[]> {
@@ -29,7 +29,7 @@ export class DeepSeekProvider implements Provider {
     }
 
     try {
-      const response = await fetch("https://api.deepseek.com/v1/models", {
+      const response = await fetch("https://api.deepseek.com/models", {
         method: "GET",
         headers: {
           Authorization: `Bearer ${apiKey}`,

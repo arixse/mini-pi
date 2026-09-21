@@ -23,29 +23,17 @@ async function createModelFromSettings(
     // 获取 provider 配置
     const providerConfig = await providerService.getProviderConfig(providerName);
     
-    if (providerConfig.apiKey) {
+    if (providerConfig.apiKey && providerConfig.skdType) {
       const model = await createModelFromProvider(providerName, {
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
+        skdType:providerConfig.skdType
       });
       return { model, providerName, modelName };
     }
-  }
-  
-  // 如果 settings.json 中没有配置，尝试从 provider 配置中获取
-  const allConfigs = await providerService.getAllConfigs();
-  
-  for (const [providerName, config] of Object.entries(allConfigs)) {
-    if (config.apiKey) {
-      const modelName = config.model || "default";
-      const model = await createModelFromProvider(providerName, {
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
-      });
-      return { model, providerName, modelName };
-    }
+  } else {
+    throw new Error("default model is not exist")
   }
   
   // 如果没有找到配置，回退到环境变量

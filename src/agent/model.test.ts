@@ -105,6 +105,7 @@ describe("model", () => {
     it("should create Anthropic model for minimax-cn provider", async () => {
       const model = await createModelFromProvider("minimax-cn", {
         apiKey: "test-key",
+        skdType: "Anthropic",
       });
       assert.ok(model instanceof AnthropicModel);
     });
@@ -112,6 +113,7 @@ describe("model", () => {
     it("should create OpenAI model for openai provider", async () => {
       const model = await createModelFromProvider("openai", {
         apiKey: "test-key",
+        skdType: "OpenAI",
       });
       assert.ok(model instanceof OpenAIModel);
     });
@@ -119,6 +121,7 @@ describe("model", () => {
     it("should create Anthropic model for anthropic provider", async () => {
       const model = await createModelFromProvider("anthropic", {
         apiKey: "test-key",
+        skdType: "Anthropic",
       });
       assert.ok(model instanceof AnthropicModel);
     });
@@ -128,6 +131,7 @@ describe("model", () => {
         apiKey: "test-key",
         baseUrl: "https://custom.api.com",
         model: "gpt-4",
+        skdType: "OpenAI",
       });
       assert.ok(model instanceof OpenAIModel);
     });
@@ -135,6 +139,7 @@ describe("model", () => {
     it("should default to Anthropic SDK for unknown provider", async () => {
       const model = await createModelFromProvider("unknown-provider", {
         apiKey: "test-key",
+        skdType: "Unknown",
       });
       assert.ok(model instanceof AnthropicModel);
     });
