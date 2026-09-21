@@ -1,6 +1,7 @@
 import { ProviderStore } from "./provider-store";
 import { MiniMaxCnProvider } from "./minimax-cn";
 import { DeepSeekProvider } from "./deepseek";
+import { OpenAIProvider } from "./openai";
 
 export interface Provider {
   /** 获取Provider名称 */
@@ -36,6 +37,7 @@ export class ModelProviderService {
   private registerDefaultProviders(): void {
     this.registerProvider(new MiniMaxCnProvider());
     this.registerProvider(new DeepSeekProvider());
+    this.registerProvider(new OpenAIProvider());
   }
   
   /**
@@ -166,3 +168,5 @@ export class ModelProviderService {
 export { ProviderStore } from "./provider-store";
 export { SettingsStore } from "./settings-store";
 export { MiniMaxCnProvider } from "./minimax-cn";
+export { DeepSeekProvider } from "./deepseek";
+export { OpenAIProvider } from "./openai";
