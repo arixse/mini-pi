@@ -1,5 +1,6 @@
 import { ProviderStore } from "./provider-store";
 import { MiniMaxCnProvider } from "./minimax-cn";
+import { DeepSeekProvider } from "./deepseek";
 
 export interface Provider {
   /** 获取Provider名称 */
@@ -34,6 +35,7 @@ export class ModelProviderService {
   /** 注册默认的Provider */
   private registerDefaultProviders(): void {
     this.registerProvider(new MiniMaxCnProvider());
+    this.registerProvider(new DeepSeekProvider());
   }
   
   /**

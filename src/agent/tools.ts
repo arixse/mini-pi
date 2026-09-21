@@ -279,7 +279,7 @@ function bashTool(workspaceRoot: string): RegisteredTool {
       }
       
       // 检查命令是否包含路径逃逸模式
-      checkBashCommand(command, workspaceRoot);
+      checkBashCommand(command, workspaceRoot); 
       
       const { exec } = await import("node:child_process");
       const { promisify } = await import("node:util");
