@@ -188,7 +188,8 @@ describe("ModelProviderService", () => {
     
     it("should return config with sdkType for provider without saved config", async () => {
       const config = await service.getProviderConfig("minimax-cn");
-      assert.deepStrictEqual(config, { sdkType: "Anthropic" });
+      assert.strictEqual(config.sdkType, "Anthropic");
+      assert.strictEqual(config.baseUrl, "https://api.minimax.cn/anthropic");
     });
     
     it("should throw error for non-existent provider", async () => {

@@ -108,13 +108,13 @@ export class ModelProviderService {
       throw new Error(`Provider '${providerName}' not found`);
     }
     
-    
     const providerConfig = await this.store.getConfig(providerName)
     return {
       ...providerConfig,
-      sdkType:provider.getSdkType()
+      // 如果 store 中没有 baseUrl，使用 provider 的默认 baseUrl
+      baseUrl: providerConfig.baseUrl || provider.getBaseUrl(),
+      sdkType: provider.getSdkType()
     }
-    
   }
   
   /**
