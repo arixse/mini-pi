@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -43,6 +43,7 @@ mini-pi/
 5. **会话管理** - 支持多会话管理，每个会话独立存储
 6. **模型切换** - 支持 OpenAI 和 Anthropic 模型
 7. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
+8. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
 
 ## 运行方式
 
@@ -80,6 +81,36 @@ pnpm test
 Mini Pi 采用典型的 **代理模式（Agent Pattern）**，通过模型推理 + 工具调用的方式实现智能辅助功能。
 
 ## 模型提供商
+
+Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览：
+
+| 提供商     | 名称         | SDK 类型  | Base URL                           |
+| ---------- | ------------ | --------- | ---------------------------------- |
+| OpenAI     | `openai`     | OpenAI    | `https://api.openai.com/v1`        |
+| DeepSeek   | `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
+| MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
+
+使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
+
+### OpenAI
+
+OpenAI 提供商使用官方 OpenAI 接口，base_url 为 `https://api.openai.com/v1`。
+
+支持的模型（默认列表）：
+- `gpt-4o` - 旗舰多模态模型
+- `gpt-4o-mini` - 高性价比模型
+- `gpt-4-turbo` - 高速模型
+- `o1` / `o1-mini` - 推理模型
+- `gpt-3.5-turbo` - 经典对话模型
+
+使用方法：
+1. 在 Mini Pi 中选择 OpenAI 作为模型提供商
+2. 输入 OpenAI API Key
+3. 选择要使用的模型
+
+也可以通过 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 环境变量进行配置。
+
+OpenAI API 文档：https://platform.openai.com/docs/api-reference/models/list
 
 ### DeepSeek
 

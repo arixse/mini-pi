@@ -22,6 +22,8 @@ mini-pi/
 │   │   ├── model.ts     # 模型封装
 │   │   ├── tools.ts     # 工具定义
 │   │   └── sessionStore.ts # 会话存储
+│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn）
+│   ├── cli/             # 命令行交互
 │   └── shared/          # 共享模块
 │       └── protocol.ts  # 通信协议
 ├── docs/                # 文档
@@ -35,6 +37,18 @@ mini-pi/
 - 封装 OpenAI 和 Anthropic API
 - 统一接口：LlmModel
 - 支持流式响应和工具调用
+
+### 3.1.1 模型提供商 (Provider)
+
+- 通过 `Provider` 接口统一抽象各模型服务商（`getProviderName` / `getSdkType` / `getBaseUrl` / `getModelList`）
+- `ModelProviderService` 负责提供商注册、配置存储（apiKey/baseUrl/model）与模型列表获取
+- 当前已注册的提供商：
+
+| 名称         | SDK 类型  | Base URL                           |
+| ------------ | --------- | ---------------------------------- |
+| `openai`     | OpenAI    | `https://api.openai.com/v1`        |
+| `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
+| `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 
 ### 3.2 工具层 (Tools)
 
