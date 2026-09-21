@@ -152,6 +152,7 @@ export class OpenAIModel implements LlmModel {
         if (toolCalls.length > 0) {
           assistantMessage.tool_calls = toolCalls;
         }
+        result.push(assistantMessage);
       } else if (message.role === "toolResult") {
         result.push({
           role: "tool",
