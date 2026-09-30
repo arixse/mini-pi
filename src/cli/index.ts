@@ -10,7 +10,7 @@ import { printLogo, printWelcome } from "./ui";
 import chalk from "chalk";
 
 
-async function createModelFromSettings(
+export async function createModelFromSettings(
   providerService: ModelProviderService,
   settingsStore: SettingsStore,
 ): Promise<{ model: LlmModel; providerName: string; modelName: string }> {
@@ -32,8 +32,6 @@ async function createModelFromSettings(
       });
       return { model, providerName, modelName };
     }
-  } else {
-    throw new Error("default model is not exist")
   }
   
   // 如果没有找到配置，回退到环境变量
