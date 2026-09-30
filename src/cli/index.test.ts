@@ -5,7 +5,7 @@ import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { SettingsStore } from "../provider/settings-store";
 import { existsSync } from "node:fs";
-import { unlink, mkdir } from "node:fs/promises";
+import { unlink, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -76,36 +76,6 @@ describe("createModelFromSettings", () => {
     }
   });
 
-  it("should fallback to env model when no default model is set", async () => {
-    // 模拟初次运行：没有设置文件，parseDefaultModel 返回 undefined
-    // 应该回退到环境变量，而不是抛出错误
-    const originalEnv = process.env.MODEL_PROVIDER;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    
-    try {
-      process.env.MODEL_PROVIDER = "openai";
-      process.env.OPENAI_API_KEY = "test-key";
-      
-      const result = await createModelFromSettings(providerService, settingsStore);
-      
-      assert.ok(result.model);
-      assert.strictEqual(result.providerName, "env");
-      assert.strictEqual(result.modelName, "default");
-    } finally {
-      // 恢复环境变量
-      if (originalEnv !== undefined) {
-        process.env.MODEL_PROVIDER = originalEnv;
-      } else {
-        delete process.env.MODEL_PROVIDER;
-      }
-      if (originalApiKey !== undefined) {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      } else {
-        delete process.env.OPENAI_API_KEY;
-      }
-    }
-  });
-
   it("should use settings model when default model is set", async () => {
     // 设置一个默认模型
     await settingsStore.setDefaultModel("openai/gpt-4");
@@ -122,10 +92,48 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(result.modelName, "gpt-4");
   });
 
-  it("should fallback to env model when provider has no API key", async () => {
-    // 设置一个默认模型，但不保存 provider 配置（无 API key）
-    await settingsStore.setDefaultModel("openai/gpt-4");
+  it("should auto-create default config when provider has apiKey but no defaultModel", async () => {
+    // 保存 provider 配置（有 apiKey），但不设置 defaultModel
+    await providerService.saveProviderConfig("openai", {
+      apiKey: "test-api-key",
+    });
     
+    const result = await createModelFromSettings(providerService, settingsStore);
+    
+    // 应该自动创建默认配置并使用它
+    assert.ok(result.model);
+    assert.strictEqual(result.providerName, "openai");
+    // 模型名应该是 openai 的第一个默认模型
+    assert.strictEqual(result.modelName, "gpt-4o");
+    
+    // 验证 settings.json 已被自动创建
+    const settingsContent = await readFile(settingsFilePath, "utf-8");
+    const settings = JSON.parse(settingsContent);
+    assert.strictEqual(settings.defaultModel, "openai/gpt-4o");
+  });
+
+  it("should auto-create default config for deepseek provider", async () => {
+    // 保存 deepseek provider 配置
+    await providerService.saveProviderConfig("deepseek", {
+      apiKey: "test-api-key",
+    });
+    
+    const result = await createModelFromSettings(providerService, settingsStore);
+    
+    // 应该自动创建默认配置并使用它
+    assert.ok(result.model);
+    assert.strictEqual(result.providerName, "deepseek");
+    assert.strictEqual(result.modelName, "deepseek-flash");
+    
+    // 验证 settings.json 已被自动创建
+    const settingsContent = await readFile(settingsFilePath, "utf-8");
+    const settings = JSON.parse(settingsContent);
+    assert.strictEqual(settings.defaultModel, "deepseek/deepseek-flash");
+  });
+
+  it("should fallback to env model when no provider has apiKey", async () => {
+    // 没有设置 defaultModel，也没有任何 provider 配置
+    // 应该回退到环境变量
     const originalEnv = process.env.MODEL_PROVIDER;
     const originalApiKey = process.env.OPENAI_API_KEY;
     
