@@ -15,7 +15,7 @@ export type ReplOptions = {
   prompt: string;
   systemPrompt: string;
   messages: AgentMessage[];
-  model: LlmModel;
+  model: LlmModel | null;
   toolRegistry: ToolRegistry;
   workspaceRoot: string;
   providerService?: ModelProviderService;
@@ -23,7 +23,7 @@ export type ReplOptions = {
   sessionStore?: JsonlSessionStore;
   sessionManager?: SessionManager;
   onNewSession?: () => void;
-  onReload?: () => Promise<{ model: LlmModel; systemPrompt: string }>;
+  onReload?: () => Promise<{ model: LlmModel | null; systemPrompt: string }>;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -130,6 +130,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       await sessionStore?.compactIfNedded(6000,10)
     } 
 
+    if(!options.model) {
+      console.log('Plase set the model first!')
+      return
+    }
 
     try {
       console.log("");

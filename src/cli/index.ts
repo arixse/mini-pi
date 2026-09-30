@@ -13,46 +13,31 @@ import chalk from "chalk";
 export async function createModelFromSettings(
   providerService: ModelProviderService,
   settingsStore: SettingsStore,
-): Promise<{ model: LlmModel; providerName: string; modelName: string }> {
+): Promise<{ model: LlmModel | null; providerName: string | null; modelName: string | null }> {
   // 从 settings.json 读取 defaultModel
   const parsed = await settingsStore.parseDefaultModel();
-  
+
   if (parsed) {
     const { providerName, modelName } = parsed;
-    
+
     // 获取 provider 配置
     const providerConfig = await providerService.getProviderConfig(providerName);
-    
+
     if (providerConfig.apiKey) {
       const model = await createModelFromProvider({
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
-        sdkType:providerConfig.sdkType
+        sdkType: providerConfig.sdkType
       });
       return { model, providerName, modelName };
     }
   }
-  
-  // 没有配置默认模型，尝试从已有 provider 配置中自动创建默认配置
-  const autoCreated = await tryCreateDefaultSettings(providerService, settingsStore);
-  if (autoCreated) {
-    const { providerName, modelName } = autoCreated;
-    const providerConfig = await providerService.getProviderConfig(providerName);
-    if (providerConfig.apiKey) {
-      const model = await createModelFromProvider({
-        apiKey: providerConfig.apiKey,
-        baseUrl: providerConfig.baseUrl,
-        model: modelName,
-        sdkType:providerConfig.sdkType
-      });
-      return { model, providerName, modelName };
-    }
+  return {
+    model: null,
+    providerName: null,
+    modelName: null
   }
-  
-  // 如果没有找到配置，回退到环境变量
-  const model = createModelFromEnv();
-  return { model, providerName: "env", modelName: "default" };
 }
 
 /**
@@ -64,7 +49,7 @@ async function tryCreateDefaultSettings(
   settingsStore: SettingsStore,
 ): Promise<{ providerName: string; modelName: string } | undefined> {
   const providers = providerService.getRegisteredProviders();
-  
+
   for (const providerName of providers) {
     try {
       const providerConfig = await providerService.getProviderConfig(providerName);
@@ -72,10 +57,10 @@ async function tryCreateDefaultSettings(
         // 找到有 apiKey 的 provider，使用 provider 的默认模型创建配置
         const provider = providerService.getProvider(providerName);
         if (!provider) continue;
-        
+
         const providerWithDefaults = provider as any;
         let modelName: string | undefined;
-        
+
         // 尝试获取 provider 的默认模型列表
         if (typeof providerWithDefaults.getDefaultModels === 'function') {
           const defaultModels = providerWithDefaults.getDefaultModels();
@@ -83,16 +68,16 @@ async function tryCreateDefaultSettings(
             modelName = defaultModels[0];
           }
         }
-        
+
         // 如果没有默认模型，使用一个通用的模型名
         if (!modelName) {
           modelName = 'default';
         }
-        
+
         // 保存默认模型配置到 settings
         await settingsStore.setDefaultModel(`${providerName}/${modelName}`);
         console.log(chalk.green(`已自动创建默认配置: ${providerName}/${modelName}`));
-        
+
         return { providerName, modelName };
       }
     } catch {
@@ -100,7 +85,7 @@ async function tryCreateDefaultSettings(
       continue;
     }
   }
-  
+
   return undefined;
 }
 
@@ -134,7 +119,9 @@ async function main() {
 
   // 创建 sessionManager
   const sessionManager = new SessionManager(workspaceRoot);
-  sessionManager.setModel(model);
+  if(model) {
+    sessionManager.setModel(model);
+  }
 
   // 加载最近的 session 或创建新的
   const sessionStore = sessionManager.loadLatestSession();
@@ -146,7 +133,7 @@ async function main() {
   const skillSummary = sessionManager.getSkillSummary();
   if (skillSummary) {
     const skills = sessionManager.loadSkillMetadata()
-    console.log(chalk.dim(`[Skills]\n ${skills.length>0?skills.map(skill=>skill.name).join(','):''}`));
+    console.log(chalk.dim(`[Skills]\n ${skills.length > 0 ? skills.map(skill => skill.name).join(',') : ''}`));
   }
 
   let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
@@ -165,23 +152,25 @@ async function main() {
   };
 
   // 重载配置的回调函数
-  const onReload = async (): Promise<{ model: LlmModel; systemPrompt: string }> => {
+  const onReload = async (): Promise<{ model: LlmModel | null; systemPrompt: string }> => {
     // 重新从配置创建模型
-    const { model: newModel, providerName: newProviderName, modelName: newModelName } = 
+    const { model: newModel, providerName: newProviderName, modelName: newModelName } =
       await createModelFromSettings(providerService, settingsStore);
-    
+
     // 更新 sessionManager 的模型
-    sessionManager.setModel(newModel);
-    
+    if(newModel) {
+      sessionManager.setModel(newModel);
+    }
+
     // 重新构建 systemPrompt（获取最新的固定上下文）
     const newFixedContext = sessionManager.getFixedContext();
     const newSkillSummary = sessionManager.getSkillSummary();
     const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
-    
+
     // 显示重载后的信息
     printLogo();
     printWelcome(newProviderName, newModelName);
-    
+
     return { model: newModel, systemPrompt: newSystemPrompt };
   };
 

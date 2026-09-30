@@ -12,11 +12,14 @@ ${chalk.cyan("  ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═
   console.log(logo);
 }
 
-export function printWelcome(providerName: string, modelName: string): void {
-  console.log(chalk.dim("─".repeat(60)));
-  console.log(chalk.dim("  Provider: ") + chalk.white(providerName));
-  console.log(chalk.dim("  Model:    ") + chalk.white(modelName));
-  console.log(chalk.dim("─".repeat(60)));
+export function printWelcome(providerName: string | null, modelName: string | null): void {
+  if(providerName && modelName) {
+    console.log(chalk.dim("─".repeat(60)));
+    console.log(chalk.dim("  Provider: ") + chalk.white(providerName));
+    console.log(chalk.dim("  Model:    ") + chalk.white(modelName));
+    console.log(chalk.dim("─".repeat(60)));
+  }
+  
   console.log();
   console.log(chalk.dim("  输入 ") + chalk.cyan("/help") + chalk.dim(" 查看所有命令"));
   console.log(chalk.dim("  输入 ") + chalk.cyan("/new") + chalk.dim(" 创建新会话"));
