@@ -34,6 +34,15 @@ mini-pi/
 └── index.html          # Web 界面
 ```
 
+## 文档索引
+
+- [CLI 交互文档](docs/cli-interaction.md) - 完整描述命令行启动、命令、对话与工具调用流程
+- [命令行登录与鉴权](docs/auth.md)
+- [模型供应商对接](docs/providers.md)
+- [Session 管理功能](docs/session-management.md)
+- [产品设计文档](docs/product-design.md)
+- [技术方案](docs/technical-solution.md)
+
 ## 核心功能
 
 1. **智能对话** - 支持多轮对话，流式响应输出
