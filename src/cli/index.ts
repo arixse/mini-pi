@@ -91,13 +91,19 @@ async function tryCreateDefaultSettings(
 
 function buildSystemPrompt(workspaceRoot: string, fixedContext: string, skillSummary?: string): string {
   let prompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
-- 读取和写入文件
-- 执行命令
-- 解答编程问题
+    - 读取和写入文件
+    - 执行命令
+    - 解答编程问题
 
-当前工作目录：${workspaceRoot}，禁止查看或操作${workspaceRoot}以外目录的文件，
+    当前工作目录：${workspaceRoot}，禁止查看或操作${workspaceRoot}以外目录的文件，
 
-请用中文回复用户的问题。`;
+    请用中文回复用户的问题。
+    禁止：
+      - 读取读取或操作用户隐私文件，例如.env
+    注意：
+      - 不要生成项目无关的临时文件
+      - 如果确实有必要生成文件进行测试，请在使用完成后自行删除
+`;
 
   if (fixedContext) {
     prompt += `\n\n${fixedContext}`;
