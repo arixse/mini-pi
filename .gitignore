@@ -8,4 +8,5 @@ examples/teaching-agent/.teaching-agent/
 examples/teaching-agent/dist/
 .vercel/
 .env
-
+.test-workspace
+test-out.txt

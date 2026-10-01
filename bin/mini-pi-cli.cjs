@@ -32,6 +32,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/auth/x509-transport-state.js
 var require_x509_transport_state = __commonJS({
@@ -16695,6 +16696,13 @@ var init_sdk = __esm({
     init_error();
   }
 });
+
+// src/cli/index.ts
+var index_exports = {};
+__export(index_exports, {
+  createModelFromSettings: () => createModelFromSettings
+});
+module.exports = __toCommonJS(index_exports);
 
 // node_modules/.pnpm/openai@7.15.0/node_modules/openai/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state2, value, kind, f) {
@@ -34926,6 +34934,7 @@ var OpenAIModel = class {
         if (toolCalls.length > 0) {
           assistantMessage.tool_calls = toolCalls;
         }
+        result.push(assistantMessage);
       } else if (message.role === "toolResult") {
         result.push({
           role: "tool",
@@ -35091,44 +35100,15 @@ var AnthropicModel = class {
 function createAnthropicModel(config) {
   return new AnthropicModel(config);
 }
-function createModelFromEnv() {
-  const provider = process.env.MODEL_PROVIDER || "openai";
-  switch (provider.toLowerCase()) {
-    case "openai":
-      return createOpenAIModel({
-        apiKey: process.env.OPENAI_API_KEY,
-        baseUrl: process.env.OPENAI_BASE_URL,
-        model: process.env.OPENAI_MODEL
-      });
-    case "anthropic":
-      return createAnthropicModel({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        baseUrl: process.env.ANTHROPIC_BASE_URL,
-        model: process.env.ANTHROPIC_MODEL
-      });
-    default:
-      return createOpenAIModel({
-        apiKey: process.env.OPENAI_API_KEY,
-        baseUrl: process.env.OPENAI_BASE_URL,
-        model: process.env.OPENAI_MODEL
-      });
-  }
-}
-async function createModelFromProvider(providerName, config) {
-  switch (providerName.toLowerCase()) {
-    case "minimax-cn":
-      return createAnthropicModel({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl || "https://api.minimax.cn/anthropic",
-        model: config.model
-      });
-    case "openai":
+async function createModelFromProvider(config) {
+  switch (config.sdkType) {
+    case "OpenAI":
       return createOpenAIModel({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model
       });
-    case "anthropic":
+    case "Anthropic":
       return createAnthropicModel({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
@@ -36273,6 +36253,10 @@ async function startRepl(options) {
       sessionStore.appendMessage(userMessage);
       await sessionStore?.compactIfNedded(6e3, 10);
     }
+    if (!options.model) {
+      console.log("Plase set the model first!");
+      return;
+    }
     try {
       console.log("");
       console.log(source_default.dim("\u2500".repeat(60)));
@@ -36289,12 +36273,10 @@ async function startRepl(options) {
             process.stdout.write(event.delta);
           }
           if (event.type === "tool_execution_start") {
-            console.log("");
-            console.log(source_default.dim(`\u{1F527} \u8C03\u7528\u5DE5\u5177: ${event.toolName}`));
+            printToolInfo(event);
           }
           if (event.type === "tool_execution_end") {
-            console.log(source_default.dim(` \u2713`));
-            console.log("");
+            printToolInfo(event);
           }
         }
       });
@@ -36313,6 +36295,94 @@ async function startRepl(options) {
   rl.on("close", () => {
     process.exit(0);
   });
+}
+var toolStartCache = /* @__PURE__ */ new Map();
+function printToolInfo(event) {
+  const toolIcons = {
+    "list_files": "\u{1F4C2}",
+    "read_file": "\u{1F4D6}",
+    "write_file": "\u270F\uFE0F",
+    "edit_file": "\u{1F527}",
+    "bash": "\u{1F4BB}"
+  };
+  const toolColors = {
+    "list_files": { title: source_default.blue.bold },
+    "read_file": { title: source_default.cyan.bold },
+    "write_file": { title: source_default.magenta.bold },
+    "edit_file": { title: source_default.yellow.bold },
+    "bash": { title: source_default.green.bold }
+  };
+  const defaultColors = { title: source_default.white.bold };
+  const getToolIcon = (toolName2) => {
+    return toolIcons[toolName2] || "\u{1F6E0}\uFE0F";
+  };
+  const getToolColors = (toolName2) => {
+    return toolColors[toolName2] || defaultColors;
+  };
+  const truncateText = (text, maxLength = 80) => {
+    if (text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + "...";
+  };
+  const formatArgs = (args) => {
+    const formatted = Object.entries(args).filter(([key]) => key !== "content" && key !== "oldText" && key !== "newText").map(([key, value]) => {
+      let valueStr;
+      if (typeof value === "string") {
+        valueStr = truncateText(value, 40);
+      } else if (typeof value === "object") {
+        valueStr = "{" + Object.keys(value).join(",") + "}";
+      } else {
+        valueStr = String(value);
+      }
+      return `${key}=${valueStr}`;
+    }).join(", ");
+    return formatted;
+  };
+  const formatResult = (result) => {
+    if (result.content && result.content.length > 0) {
+      const text = result.content.filter((c) => c.type === "text").map((c) => c.text || "").join(" ");
+      return truncateText(text, 100);
+    }
+    return "(empty)";
+  };
+  const printToolBlock = (toolName2, args, result, isError) => {
+    const icon = getToolIcon(toolName2);
+    const colors = getToolColors(toolName2);
+    const argsStr = formatArgs(args);
+    const titleLine = `${icon} ${toolName2}`;
+    const argsLine = argsStr ? `\u{1F4CB} Args: ${argsStr}` : "";
+    let resultLine = "";
+    let statusLine = "";
+    if (result !== null) {
+      const statusIcon = isError ? "\u274C" : "\u2705";
+      const statusText = isError ? "Failed" : "Success";
+      statusLine = `${statusIcon} ${statusText}`;
+      resultLine = `\u{1F4C4} ${formatResult(result)}`;
+    }
+    console.log("");
+    console.log(colors.title(`  ${titleLine}`));
+    if (argsLine) {
+      console.log(source_default.cyan(`  ${argsLine}`));
+    }
+    if (statusLine) {
+      const statusColor = isError ? source_default.red.bold : source_default.green.bold;
+      console.log(statusColor(`  ${statusLine}`));
+    }
+    if (resultLine) {
+      console.log(source_default.dim(`  ${resultLine}`));
+    }
+  };
+  if (event.type === "tool_execution_start") {
+    toolStartCache.set(event.toolCallId, {
+      toolName: event.toolName,
+      args: event.args
+    });
+  }
+  if (event.type === "tool_execution_end") {
+    const cached = toolStartCache.get(event.toolCallId);
+    const args = cached?.args || {};
+    printToolBlock(event.toolName, args, event.result, event.isError);
+    toolStartCache.delete(event.toolCallId);
+  }
 }
 function printHelp() {
   console.log("");
@@ -36695,6 +36765,132 @@ var MiniMaxCnProvider = class {
   }
 };
 
+// src/provider/deepseek.ts
+var DeepSeekProvider = class {
+  baseUrl = "https://api.deepseek.com";
+  sdkType = "OpenAI";
+  name = "deepseek";
+  getBaseUrl() {
+    return this.baseUrl;
+  }
+  getSdkType() {
+    return this.sdkType;
+  }
+  getProviderName() {
+    return this.name;
+  }
+  /**
+   * 获取 DeepSeek 模型列表
+   * 根据 curl --request GET \
+   * --url https://api.deepseek.com/models \
+   * --header 'Authorization: Bearer <token>' 动态获取模型列表
+   */
+  async getModelList(apiKey) {
+    if (!apiKey) {
+      throw new Error("API key is required");
+    }
+    try {
+      const response = await fetch("https://api.deepseek.com/models", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data && data.data && Array.isArray(data.data)) {
+        return data.data.map((model) => model.id);
+      }
+      return [];
+    } catch (error) {
+      console.error("Failed to get model list:", error);
+      throw error;
+    }
+  }
+  /**
+   * 获取支持 Responses API 的默认模型列表
+   * 当前 DeepSeek 支持的模型：
+   * - deepseek-flash
+   * - deepseek-v4-pro
+   */
+  getDefaultModels() {
+    return [
+      "deepseek-flash",
+      "deepseek-v4-pro"
+    ];
+  }
+};
+
+// src/provider/openai.ts
+var OpenAIProvider = class {
+  baseUrl = "https://api.openai.com/v1";
+  sdkType = "OpenAI";
+  name = "openai";
+  getBaseUrl() {
+    return this.baseUrl;
+  }
+  getSdkType() {
+    return this.sdkType;
+  }
+  getProviderName() {
+    return this.name;
+  }
+  /**
+   * 获取 OpenAI 模型列表
+   * 根据 curl --request GET \
+   * --url https://api.openai.com/v1/models \
+   * --header 'Authorization: Bearer <token>' 动态获取模型列表
+   */
+  async getModelList(apiKey) {
+    if (!apiKey) {
+      throw new Error("API key is required");
+    }
+    try {
+      const response = await fetch("https://api.openai.com/v1/models", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data && data.data && Array.isArray(data.data)) {
+        return data.data.map((model) => model.id);
+      }
+      return [];
+    } catch (error) {
+      console.error("Failed to get model list:", error);
+      throw error;
+    }
+  }
+  /**
+   * 获取默认模型列表
+   * 根据 OpenAI 文档，常用的模型包括：
+   * - gpt-4o
+   * - gpt-4o-mini
+   * - gpt-4-turbo
+   * - o1
+   * - o1-mini
+   * - gpt-3.5-turbo
+   */
+  getDefaultModels() {
+    return [
+      "gpt-4o",
+      "gpt-4o-mini",
+      "gpt-4-turbo",
+      "o1",
+      "o1-mini",
+      "gpt-3.5-turbo"
+    ];
+  }
+};
+
 // src/provider/settings-store.ts
 var import_node_fs2 = require("node:fs");
 var import_promises3 = require("node:fs/promises");
@@ -36815,6 +37011,8 @@ var ModelProviderService = class {
   /** 注册默认的Provider */
   registerDefaultProviders() {
     this.registerProvider(new MiniMaxCnProvider());
+    this.registerProvider(new DeepSeekProvider());
+    this.registerProvider(new OpenAIProvider());
   }
   /**
    * 注册模型服务商
@@ -36877,7 +37075,13 @@ var ModelProviderService = class {
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);
     }
-    return this.store.getConfig(providerName);
+    const providerConfig = await this.store.getConfig(providerName);
+    return {
+      ...providerConfig,
+      // 如果 store 中没有 baseUrl，使用 provider 的默认 baseUrl
+      baseUrl: providerConfig.baseUrl || provider.getBaseUrl(),
+      sdkType: provider.getSdkType()
+    };
   }
   /**
    * 获取Provider的基础URL
@@ -37624,10 +37828,12 @@ ${source_default.cyan("  \u255A\u2550\u255D     \u255A\u2550\u255D\u255A\u2550\u
   console.log(logo);
 }
 function printWelcome(providerName, modelName) {
-  console.log(source_default.dim("\u2500".repeat(60)));
-  console.log(source_default.dim("  Provider: ") + source_default.white(providerName));
-  console.log(source_default.dim("  Model:    ") + source_default.white(modelName));
-  console.log(source_default.dim("\u2500".repeat(60)));
+  if (providerName && modelName) {
+    console.log(source_default.dim("\u2500".repeat(60)));
+    console.log(source_default.dim("  Provider: ") + source_default.white(providerName));
+    console.log(source_default.dim("  Model:    ") + source_default.white(modelName));
+    console.log(source_default.dim("\u2500".repeat(60)));
+  }
   console.log();
   console.log(source_default.dim("  \u8F93\u5165 ") + source_default.cyan("/help") + source_default.dim(" \u67E5\u770B\u6240\u6709\u547D\u4EE4"));
   console.log(source_default.dim("  \u8F93\u5165 ") + source_default.cyan("/new") + source_default.dim(" \u521B\u5EFA\u65B0\u4F1A\u8BDD"));
@@ -37644,28 +37850,20 @@ async function createModelFromSettings(providerService, settingsStore) {
     const { providerName, modelName } = parsed;
     const providerConfig = await providerService.getProviderConfig(providerName);
     if (providerConfig.apiKey) {
-      const model2 = await createModelFromProvider(providerName, {
+      const model = await createModelFromProvider({
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
-        model: modelName
+        model: modelName,
+        sdkType: providerConfig.sdkType
       });
-      return { model: model2, providerName, modelName };
+      return { model, providerName, modelName };
     }
   }
-  const allConfigs = await providerService.getAllConfigs();
-  for (const [providerName, config] of Object.entries(allConfigs)) {
-    if (config.apiKey) {
-      const modelName = config.model || "default";
-      const model2 = await createModelFromProvider(providerName, {
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model
-      });
-      return { model: model2, providerName, modelName };
-    }
-  }
-  const model = createModelFromEnv();
-  return { model, providerName: "env", modelName: "default" };
+  return {
+    model: null,
+    providerName: null,
+    modelName: null
+  };
 }
 function buildSystemPrompt(workspaceRoot, fixedContext, skillSummary) {
   let prompt = `\u4F60\u662F\u4E00\u4E2A\u6709\u7528\u7684AI\u7F16\u7A0B\u52A9\u624B\u3002\u4F60\u53EF\u4EE5\u5E2E\u52A9\u7528\u6237\u5B8C\u6210\u7F16\u7A0B\u4EFB\u52A1\uFF0C\u5305\u62EC\uFF1A
@@ -37695,7 +37893,9 @@ async function main() {
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
   const sessionManager = new SessionManager(workspaceRoot);
-  sessionManager.setModel(model);
+  if (model) {
+    sessionManager.setModel(model);
+  }
   const sessionStore = sessionManager.loadLatestSession();
   const fixedContext = sessionManager.getFixedContext();
   const skillSummary = sessionManager.getSkillSummary();
@@ -37715,7 +37915,9 @@ async function main() {
   };
   const onReload = async () => {
     const { model: newModel, providerName: newProviderName, modelName: newModelName } = await createModelFromSettings(providerService, settingsStore);
-    sessionManager.setModel(newModel);
+    if (newModel) {
+      sessionManager.setModel(newModel);
+    }
     const newFixedContext = sessionManager.getFixedContext();
     const newSkillSummary = sessionManager.getSkillSummary();
     const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
@@ -37739,3 +37941,7 @@ async function main() {
   });
 }
 main().catch(console.error);
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  createModelFromSettings
+});

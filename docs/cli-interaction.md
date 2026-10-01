@@ -6,7 +6,7 @@
 
 ## 1. 概述
 
-Mini Pi CLI 是一个基于终端的交互式 AI 编程助手（REPL，Read-Eval-Print Loop）。用户启动后进入对话界面，直接输入自然语言问题即可与模型多轮对话；同时支持以 `/` 开头的斜杠命令来完成登录、模型选择、会话管理、Skill 加载等操作。
+Mini Pi CLI 是一个基于终端的交互式 AI 编程助手。用户启动后进入对话界面，直接输入自然语言问题即可与模型多轮对话；同时支持以 `/` 开头的斜杠命令来完成登录、模型选择、会话管理、Skill 加载等操作。
 
 核心特点：
 
@@ -24,10 +24,7 @@ Mini Pi CLI 是一个基于终端的交互式 AI 编程助手（REPL，Read-Eval
 ### 2.1 开发模式
 
 ```bash
-# 直接运行 CLI（推荐开发时使用）
 pnpm dev:cli
-# 等价于
-tsx src/cli/index.ts
 ```
 
 ### 2.2 免安装运行
@@ -246,31 +243,16 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 交互流程（`handleLogin`）：
 
-1. 列出所有已注册的供应商，要求输入序号选择；
+1. 列出所有已注册的供应商，用键盘方向键进行选择；
 2. 输入所选供应商的 API Key（不能为空）；
 3. 调用 `providerService.saveProviderConfig()` 保存到 `~/.mini-pi/auth.json`；
 4. 提示使用 `/reload` 使其生效。
-
-```
-> /login
-
-📋 可用的模型服务商:
-  1. minimax-cn
-  2. deepseek
-  3. openai
-
-请选择模型服务商 (输入序号): 2
-
-请输入 deepseek 的 API Key: sk-****
-✅ 已保存 deepseek 的 API Key
-💡 使用 /reload 命令重载配置使其生效
-```
+5. 使用ESC键退出该命令，回到聊天交互窗口
 
 异常处理：
 
 - Provider 服务未初始化 → `❌ Provider服务未初始化`
 - 无可用供应商 → `❌ 没有可用的模型服务商`
-- 序号非法 → `❌ 无效的选择`
 - API Key 为空 → `❌ API Key不能为空`
 - 保存失败 → `❌ 保存失败: <原因>`
 
@@ -279,35 +261,12 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 交互流程（`handleModel`）：
 
 1. 若已配置默认模型，先显示 `📌 当前默认模型: <provider/model>`；
-2. 列出供应商，选择序号；
+2. 列出供应商，用键盘方向键进行选择；
 3. 读取该供应商配置，若无 `apiKey` 则提示先执行 `/login`；
-4. 拉取该供应商可用模型列表（`getModelList`），展示并要求选择序号；
+4. 拉取该供应商可用模型列表（`getModelList`），用键盘方向键进行选择；
 5. 将 `${providerName}/${modelName}` 写入 `~/.mini-pi/settings.json` 的 `defaultModel`；
 6. 提示使用 `/reload` 使其生效。
-
-```
-> /model
-
-📌 当前默认模型: deepseek/deepseek-v4-pro
-
-📋 可用的模型服务商:
-  1. minimax-cn
-  2. deepseek
-  3. openai
-
-请选择模型服务商 (输入序号): 2
-
-🔍 正在获取 deepseek 的模型列表...
-
-📋 deepseek 可用的模型:
-  1. deepseek-flash
-  2. deepseek-v4-pro
-
-请选择模型 (输入序号): 2
-
-✅ 已设置默认模型: deepseek/deepseek-v4-pro
-💡 使用 /reload 命令重载配置使其生效
-```
+7. 使用ESC键退出该命令，回到聊天交互窗口
 
 - 若没有 `settingsStore`，会退化为把所选模型写入供应商配置（`auth.json` 中的 `model` 字段）。
 - 异常处理：Provider 未初始化、无供应商、无 API Key、无可用模型、序号非法、拉取模型列表失败等均有对应错误提示。
