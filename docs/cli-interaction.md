@@ -193,7 +193,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | ---- | ---- |
 | `/help` | 显示所有可用命令与使用提示 |
 | `/new` | 创建一个新会话（清空当前对话历史并新建会话文件） |
-| `/login` | 登录模型服务商，交互式输入 API Key |
+| `/login` | 登录模型服务商（方向键选择服务商，输入 API Key） |
 | `/model` | 选择模型供应商和模型，写入默认模型配置 |
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
@@ -210,7 +210,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 📖 可用命令（所有命令以 / 开头）:
 
   /new     - 创建新的会话
-  /login   - 登录模型服务商（输入apiKey）
+  /login   - 登录模型服务商（方向键选择服务商，输入apiKey）
   /model   - 选择模型供应商和模型
   /reload  - 重载配置文件
   /skills  - 列出所有可用的 skills
@@ -269,7 +269,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 7. 使用ESC键退出该命令，回到聊天交互窗口
 
 - 若没有 `settingsStore`，会退化为把所选模型写入供应商配置（`auth.json` 中的 `model` 字段）。
-- 异常处理：Provider 未初始化、无供应商、无 API Key、无可用模型、序号非法、拉取模型列表失败等均有对应错误提示。
+- 异常处理：Provider 未初始化、无供应商、无 API Key、无可用模型、拉取模型列表失败等均有对应错误提示；用户在任一步按 Esc 取消时直接返回。
 
 ### 5.5 `/reload` —— 重载配置
 

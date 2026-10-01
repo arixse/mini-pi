@@ -10,3 +10,4 @@ examples/teaching-agent/dist/
 .env
 .test-workspace
 test-out.txt
+tmp-exp

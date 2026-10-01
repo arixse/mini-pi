@@ -258,7 +258,7 @@ export class JsonlSessionStore {
     if (this.model) {
       summary = await summarizeEntries(summarized, this.model);
     } else {
-      summary = generateSimpleSummary(summarized);
+      throw new Error('please set the default model first')
     }
     
     const firstKeptEntryId = kept[0]?.id;

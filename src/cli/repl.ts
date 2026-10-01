@@ -10,6 +10,7 @@ import { ModelProviderService, SettingsStore } from "../provider";
 import { JsonlSessionStore } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
+import { promptSelect } from "./select";
 
 export type ReplOptions = {
   prompt: string;
@@ -131,7 +132,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     } 
 
     if(!options.model) {
-      console.log('Plase set the model first!')
+      console.log('Please set the model first!')
       return
     }
 
@@ -316,7 +317,7 @@ function printHelp() {
   console.log(chalk.cyan("📖 可用命令（所有命令以 / 开头）:"));
   console.log("");
   console.log(chalk.white("  /new") + chalk.dim("     - 创建新的会话"));
-  console.log(chalk.white("  /login") + chalk.dim("   - 登录模型服务商（输入apiKey）"));
+  console.log(chalk.white("  /login") + chalk.dim("   - 登录模型服务商（方向键选择服务商，输入apiKey）"));
   console.log(chalk.white("  /model") + chalk.dim("   - 选择模型供应商和模型"));
   console.log(chalk.white("  /reload") + chalk.dim("   - 重载配置文件"));
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
@@ -456,16 +457,14 @@ export async function handleLogin(
   }
 
   console.log("");
-  console.log(chalk.cyan("📋 可用的模型服务商:"));
-  providers.forEach((provider, index) => {
-    console.log(chalk.white(`  ${index + 1}. ${provider}`));
-  });
+  const index = await promptSelect(
+    "📋 请选择模型服务商 (↑/↓ 选择，Enter 确认，Esc 退出)",
+    providers,
+    rl,
+  );
 
-  const providerIndex = await question(rl, chalk.cyan("\n请选择模型服务商 (输入序号): "));
-  const index = parseInt(providerIndex, 10) - 1;
-
-  if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log(chalk.red("❌ 无效的选择"));
+  if (index === null) {
+    console.log(chalk.dim("\n已取消登录\n"));
     return;
   }
 
@@ -523,16 +522,14 @@ export async function handleModel(
   }
 
   console.log("");
-  console.log(chalk.cyan("📋 可用的模型服务商:"));
-  providers.forEach((provider, index) => {
-    console.log(chalk.white(`  ${index + 1}. ${provider}`));
-  });
+  const index = await promptSelect(
+    "📋 请选择模型服务商 (↑/↓ 选择，Enter 确认，Esc 退出)",
+    providers,
+    rl,
+  );
 
-  const providerIndex = await question(rl, chalk.cyan("\n请选择模型服务商 (输入序号): "));
-  const index = parseInt(providerIndex, 10) - 1;
-
-  if (isNaN(index) || index < 0 || index >= providers.length) {
-    console.log(chalk.red("❌ 无效的选择"));
+  if (index === null) {
+    console.log(chalk.dim("\n已取消操作\n"));
     return;
   }
 
@@ -556,17 +553,14 @@ export async function handleModel(
       return;
     }
 
-    console.log("");
-    console.log(chalk.cyan(`📋 ${selectedProvider} 可用的模型:`));
-    models.forEach((model, idx) => {
-      console.log(chalk.white(`  ${idx + 1}. ${model}`));
-    });
+    const mIdx = await promptSelect(
+      `📋 请选择 ${selectedProvider} 的模型 (↑/↓ 选择，Enter 确认，Esc 退出)`,
+      models,
+      rl,
+    );
 
-    const modelIndex = await question(rl, chalk.cyan("\n请选择模型 (输入序号): "));
-    const mIdx = parseInt(modelIndex, 10) - 1;
-
-    if (isNaN(mIdx) || mIdx < 0 || mIdx >= models.length) {
-      console.log(chalk.red("❌ 无效的选择"));
+    if (mIdx === null) {
+      console.log(chalk.dim("\n已取消操作\n"));
       return;
     }
 
