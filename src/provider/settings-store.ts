@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { PRIVATE_FILE_MODE, restrictFilePermissions } from "./private-file";
 
 type Settings = {
   defaultModel?: string; // 格式: [模型供应商]/[模型名称]
@@ -25,7 +26,7 @@ export class SettingsStore {
     }
 
     try {
-      const dir = join(this.settingsPath, "..");
+      const dir = dirname(this.settingsPath);
       if (!existsSync(dir)) {
         await mkdir(dir, { recursive: true });
       }
@@ -55,12 +56,16 @@ export class SettingsStore {
    */
   private async persist(): Promise<void> {
     try {
-      const dir = join(this.settingsPath, "..");
+      const dir = dirname(this.settingsPath);
       if (!existsSync(dir)) {
         await mkdir(dir, { recursive: true });
       }
 
-      await writeFile(this.settingsPath, JSON.stringify(this.settings, null, 2), "utf-8");
+      await writeFile(this.settingsPath, JSON.stringify(this.settings, null, 2), {
+        encoding: "utf-8",
+        mode: PRIVATE_FILE_MODE,
+      });
+      await restrictFilePermissions(this.settingsPath);
     } catch (error) {
       console.error("Failed to persist settings:", error);
       throw error;

@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { PRIVATE_FILE_MODE, restrictFilePermissions } from "./private-file";
 
 type ProviderConfig = {
   apiKey?: string;
@@ -29,7 +30,7 @@ export class ProviderStore {
     }
     
     try {
-      const dir = join(this.storePath, "..");
+      const dir = dirname(this.storePath);
       if (!existsSync(dir)) {
         await mkdir(dir, { recursive: true });
       }
@@ -59,12 +60,17 @@ export class ProviderStore {
    */
   private async persist(): Promise<void> {
     try {
-      const dir = join(this.storePath, "..");
+      const dir = dirname(this.storePath);
       if (!existsSync(dir)) {
         await mkdir(dir, { recursive: true });
       }
       
-      await writeFile(this.storePath, JSON.stringify(this.data, null, 2), "utf-8");
+      // auth.json 含 API Key：创建时即用 0600，写入后再收紧一次（已存在的文件 mode 不会变）
+      await writeFile(this.storePath, JSON.stringify(this.data, null, 2), {
+        encoding: "utf-8",
+        mode: PRIVATE_FILE_MODE,
+      });
+      await restrictFilePermissions(this.storePath);
     } catch (error) {
       console.error("Failed to persist provider store:", error);
       throw error;
