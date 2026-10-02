@@ -105,16 +105,40 @@ async function listFiles(
   return results.sort();
 }
 
+/**
+ * 单次 read_file 返回的最大字符数。
+ *
+ * 544738b 取消截断后，读一个大文件可能把十万级字符塞进上下文，
+ * 而压缩只在下一轮触发，救不回已经发出的请求。
+ * 这里重新引入**带显式标注、可分页继续**的上限：不偷偷丢内容，
+ * 模型看到标记后可以用 offset/limit 继续读。
+ */
+export const MAX_READ_CHARS = 20_000;
+
+/** 单次 read_file 返回的最大行数 */
+export const MAX_READ_LINES = 2_000;
+
 function readFileTool(workspaceRoot: string): RegisteredTool {
   return {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the safe teaching workspace.",
+    description:
+      "Read a UTF-8 text file inside the workspace. " +
+      `Returns at most ${MAX_READ_LINES} lines and ${MAX_READ_CHARS} characters per call; ` +
+      "when the result is cut, it says so explicitly and you can continue with offset/limit.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description: "Relative file path under workspace.",
+        },
+        offset: {
+          type: "number",
+          description: "1-based line number to start from. Defaults to 1.",
+        },
+        limit: {
+          type: "number",
+          description: `Maximum number of lines to return. Defaults to and capped at ${MAX_READ_LINES}.`,
         },
       },
       required: ["path"],
@@ -125,13 +149,91 @@ function readFileTool(workspaceRoot: string): RegisteredTool {
         stringArg(args.path, ""),
       );
       assertNotCredentialFile(filePath, workspaceRoot);
+
       const content = await readFile(filePath, "utf8");
+      const lines = toLines(content);
+      const totalLines = lines.length;
+
+      const offset = Math.max(1, Math.floor(numberArg(args.offset, 1)));
+      const limit = Math.min(
+        MAX_READ_LINES,
+        Math.max(1, Math.floor(numberArg(args.limit, MAX_READ_LINES))),
+      );
+
+      const startIndex = Math.min(offset - 1, totalLines);
+      const selected: string[] = [];
+      let usedChars = 0;
+      let cutByChars = false;
+
+      for (let index = startIndex; index < lines.length; index += 1) {
+        if (selected.length >= limit) {
+          break;
+        }
+        const line = lines[index];
+        const cost = line.length + 1; // 计入换行
+
+        if (usedChars + cost > MAX_READ_CHARS) {
+          // 单行本身超限时也要返回一点内容，否则该行永远读不到
+          if (selected.length === 0) {
+            selected.push(line.slice(0, MAX_READ_CHARS));
+          }
+          cutByChars = true;
+          break;
+        }
+
+        selected.push(line);
+        usedChars += cost;
+      }
+
+      const returnedLines = selected.length;
+      const endLine = returnedLines > 0 ? startIndex + returnedLines : startIndex;
+      const truncated = startIndex + returnedLines < totalLines || cutByChars;
+
+      let text: string;
+      if (totalLines === 0) {
+        text = "(空文件)";
+      } else if (returnedLines === 0) {
+        text = `(offset ${offset} 超出文件范围：该文件共 ${totalLines} 行)`;
+      } else {
+        text = selected.join("\n");
+        if (truncated) {
+          const reason = cutByChars
+            ? `已达单次 ${MAX_READ_CHARS} 字符上限`
+            : `已达单次 ${limit} 行上限`;
+          text +=
+            `\n\n...[已截断：本次返回第 ${startIndex + 1}-${endLine} 行（${reason}），` +
+            `文件共 ${totalLines} 行。用 offset/limit 继续读取]`;
+        }
+      }
+
       return {
-        content: [createTextContent(content)],
-        details: { path: relative(workspaceRoot, filePath) },
+        content: [createTextContent(text)],
+        details: {
+          path: relative(workspaceRoot, filePath),
+          totalLines,
+          totalBytes: Buffer.byteLength(content, "utf8"),
+          returnedFrom: returnedLines > 0 ? startIndex + 1 : null,
+          returnedTo: returnedLines > 0 ? endLine : null,
+          returnedLines,
+          truncated,
+        },
       };
     },
   };
+}
+
+/** 按行拆分文本：统一行尾、且末尾换行不额外产生一行 */
+function toLines(content: string): string[] {
+  if (content === "") {
+    return [];
+  }
+  const lines = content
+    .split("\n")
+    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
 }
 
 
@@ -608,6 +710,20 @@ function truncate(input: string, max: number): string {
 
 function stringArg(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+/** 数字参数：同时接受 number 与数字字符串（模型常把数字写成字符串） */
+function numberArg(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
 }
 
 

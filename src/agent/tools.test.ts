@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -119,8 +119,8 @@ describe("tools", () => {
     });
 
     it("should return the full content without truncation", async () => {
-      // 544738b「保留完整toolResult结果」起：工具不再截断内容，
-      // 完整结果交给模型（展示层的分页/窗口化见 docs/cli-ux-design.md）
+      // 544738b「保留完整toolResult结果」起：小文件完整返回；
+      // 大文件的保护改为"显式标注 + 可分页"，见下方 read_file 分页与上限
       const longContent = "x".repeat(2000);
       writeFileSync(join(testDir, "long.txt"), longContent);
       const registry = createToolRegistry(testDir);
@@ -364,6 +364,154 @@ describe("tools", () => {
           message: /home-directory path outside the workspace/,
         },
       );
+    });
+  });
+
+  describe("read_file 分页与上限", () => {
+    function writeLines(name: string, lines: string[]): void {
+      writeFileSync(join(testDir, name), lines.join("\n"), "utf8");
+    }
+
+    it("应返回规模元数据（总行数 / 字节数 / 窗口范围）", async () => {
+      writeLines("meta.txt", ["第一行", "第二行", "第三行"]);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "meta.txt" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(result.content[0].text, "第一行\n第二行\n第三行");
+      assert.strictEqual(details.totalLines, 3);
+      assert.strictEqual(details.returnedFrom, 1);
+      assert.strictEqual(details.returnedTo, 3);
+      assert.strictEqual(details.returnedLines, 3);
+      assert.strictEqual(details.truncated, false);
+      assert.strictEqual(typeof details.totalBytes, "number");
+    });
+
+    it("offset/limit 应返回指定行窗口", async () => {
+      writeLines("page.txt", ["l1", "l2", "l3", "l4", "l5"]);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "page.txt",
+        offset: 2,
+        limit: 2,
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.ok(result.content[0].text.startsWith("l2\nl3"));
+      assert.ok(result.content[0].text.includes("第 2-3 行"));
+      assert.strictEqual(details.returnedFrom, 2);
+      assert.strictEqual(details.returnedTo, 3);
+      assert.strictEqual(details.truncated, true, "后面还有内容，应标记为截断");
+      assert.ok(result.content[0].text.includes("offset/limit"));
+    });
+
+    it("应接受字符串形式的 offset/limit（模型常这么传）", async () => {
+      writeLines("str.txt", ["a", "b", "c", "d"]);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "str.txt",
+        offset: "3",
+        limit: "1",
+      });
+
+      assert.strictEqual(result.content[0].text.split("\n")[0], "c");
+    });
+
+    it("offset 超出文件范围时给出说明而不是报错", async () => {
+      writeLines("short.txt", ["only"]);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "short.txt",
+        offset: 99,
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.ok(result.content[0].text.includes("超出文件范围"));
+      assert.strictEqual(details.returnedLines, 0);
+      assert.strictEqual(details.totalLines, 1);
+    });
+
+    it("空文件应给出明确提示", async () => {
+      writeFileSync(join(testDir, "empty.txt"), "", "utf8");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "empty.txt" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(result.content[0].text, "(空文件)");
+      assert.strictEqual(details.totalLines, 0);
+    });
+
+    it("超过行数上限时应截断并标注上限原因", async () => {
+      const lines = Array.from({ length: MAX_READ_LINES + 5 }, (_, i) => `line-${i + 1}`);
+      writeLines("many.txt", lines);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "many.txt" });
+      const text = result.content[0].text;
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.returnedLines, MAX_READ_LINES);
+      assert.strictEqual(details.truncated, true);
+      assert.ok(text.includes(`第 1-${MAX_READ_LINES} 行`));
+      assert.ok(text.includes("行上限"));
+      assert.ok(text.includes(`共 ${MAX_READ_LINES + 5} 行`));
+      assert.ok(text.includes("offset/limit"));
+    });
+
+    it("超过字符上限时应在完整行处截断并标注字符原因", async () => {
+      // 每行 10000 字符，两行就超过 20000 字符上限
+      const big = "y".repeat(10_000);
+      writeLines("big.txt", [big, big, big]);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "big.txt" });
+      const text = result.content[0].text;
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.returnedLines, 1, "只应返回第一行");
+      assert.ok(text.includes("字符上限"));
+      assert.ok(text.includes("第 1-1 行"));
+    });
+
+    it("单行本身就超过字符上限时也要返回部分内容", async () => {
+      writeFileSync(join(testDir, "huge-line.txt"), "z".repeat(MAX_READ_CHARS + 5_000), "utf8");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "huge-line.txt" });
+      const text = result.content[0].text;
+
+      assert.ok(text.startsWith("z".repeat(MAX_READ_CHARS)));
+      assert.ok(text.includes("字符上限"));
+    });
+
+    it("行尾 \\r\\n 与末尾换行不应影响行数统计", async () => {
+      writeFileSync(join(testDir, "crlf.txt"), "a\r\nb\r\n", "utf8");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "crlf.txt" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(result.content[0].text, "a\nb");
+      assert.strictEqual(details.totalLines, 2, "末尾换行不算额外一行");
+    });
+
+    it("limit 会被限制在硬上限内", async () => {
+      const lines = Array.from({ length: MAX_READ_LINES + 5 }, (_, i) => `line-${i + 1}`);
+      writeLines("clamp.txt", lines);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "clamp.txt",
+        limit: MAX_READ_LINES * 10,
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.returnedLines, MAX_READ_LINES);
     });
   });
 
