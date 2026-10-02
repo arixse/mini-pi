@@ -83,10 +83,14 @@ export class SkillLoader {
     if (customDirs) {
       this.skillDirs = customDirs;
     } else {
+      // 同源目录按顺序加载，后加载者覆盖同名 skill。
+      // 项目级同时支持 .mini-pi/skills（历史约定）与 .pi/skills（项目规则 AGENTS.md 约定），
+      // 后者放在最后，因此同名时以 .pi/skills 为准。
       this.skillDirs = [
         { path: join(homedir(), ".agents", "skills"), source: "global-agents" },
         { path: join(homedir(), ".mini-pi", "skills"), source: "global-mini-pi" },
         { path: join(workspaceRoot, ".mini-pi", "skills"), source: "project" },
+        { path: join(workspaceRoot, ".pi", "skills"), source: "project" },
       ];
     }
   }

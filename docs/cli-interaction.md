@@ -313,6 +313,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - `~/.agents/skills/`
 - `~/.mini-pi/skills/`
 - `项目目录/.mini-pi/skills/`
+- `项目目录/.pi/skills/`
 
 ### 5.7 `/load <name>` —— 加载 Skill
 
@@ -382,7 +383,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 1. `~/.agents/skills`（global-agents，最低）
 2. `~/.mini-pi/skills`（global-mini-pi）
-3. `<workspaceRoot>/.mini-pi/skills`（project，最高）
+3. `<workspaceRoot>/.mini-pi/skills`（project）
+4. `<workspaceRoot>/.pi/skills`（project，最高；AGENTS.md 中约定的项目级 Skill 目录）
 
 ---
 
@@ -395,7 +397,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | 会话记录 | `~/.mini-pi/sessions/*.jsonl` | 每个会话一个文件 |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
-| Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
+| Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
 
 ### 8.1 auth.json 示例
 
