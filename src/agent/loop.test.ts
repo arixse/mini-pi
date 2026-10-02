@@ -429,4 +429,105 @@ describe("loop", () => {
       );
     });
   });
+
+  describe("流式消息生命周期", () => {
+    function eventsOfType<T extends AgentEvent["type"]>(
+      events: AgentEvent[],
+      type: T,
+    ): Array<Extract<AgentEvent, { type: T }>> {
+      return events.filter(
+        (event): event is Extract<AgentEvent, { type: T }> => event.type === type,
+      );
+    }
+
+    it("流式模型：逐段发出 delta，且 start/update/end 是同一个消息对象", async () => {
+      const events: AgentEvent[] = [];
+      const model: LlmModel = {
+        async complete(input) {
+          input.onDelta?.("你");
+          input.onDelta?.("好");
+          return createAssistantMessage([createTextContent("你好")]);
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onEvent: (event) => events.push(event),
+      });
+
+      assert.deepStrictEqual(
+        eventsOfType(events, "message_update").map((event) => event.delta),
+        ["你", "好"],
+      );
+
+      const start = eventsOfType(events, "message_start")[0];
+      const end = eventsOfType(events, "message_end")[0];
+      assert.strictEqual(
+        start.message,
+        end.message,
+        "start 与 end 必须引用同一个消息对象",
+      );
+      assert.strictEqual(
+        (start.message as AssistantMessage).content[0].type,
+        "text",
+        "最终字段应写回同一个对象",
+      );
+      assert.strictEqual(result.newMessages.length, 1);
+    });
+
+    it("非流式模型：补发一次性文本，保证终端仍能看到回复", async () => {
+      const events: AgentEvent[] = [];
+      const model: LlmModel = {
+        async complete() {
+          return createAssistantMessage([createTextContent("一次性文本")]);
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onEvent: (event) => events.push(event),
+      });
+
+      assert.deepStrictEqual(
+        eventsOfType(events, "message_update").map((event) => event.delta),
+        ["一次性文本"],
+      );
+    });
+
+    it("模型抛错时也要收好生命周期并产出一条错误消息", async () => {
+      const events: AgentEvent[] = [];
+      const model: LlmModel = {
+        async complete() {
+          throw new Error("boom");
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onEvent: (event) => events.push(event),
+      });
+
+      const types = events.map((event) => event.type);
+      assert.ok(
+        types.indexOf("message_start") < types.indexOf("message_end"),
+        "start 必须有对应的 end",
+      );
+      assert.strictEqual(result.newMessages.length, 1);
+      const message = result.newMessages[0] as AssistantMessage;
+      assert.strictEqual(message.stopReason, "error");
+      assert.strictEqual(message.errorMessage, "boom");
+    });
+  });
 });

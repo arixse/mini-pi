@@ -8,7 +8,6 @@ import {
   ToolDefinition,
 } from "../shared/protocol";
 import {
-  createAssistantMessage,
   createTextContent,
   messageText,
 } from "./message";
@@ -18,6 +17,8 @@ export type CompleteInput = {
   tools: ToolDefinition[];
   /** 取消信号：用户中断（Ctrl+C）时用于中止请求 */
   signal?: AbortSignal;
+  /** 流式回调：模型每产出一段文本就调用一次（用于逐字渲染） */
+  onDelta?: (delta: string) => void;
 };
 
 /** 单次模型请求的超时时间（毫秒） */
@@ -161,6 +162,134 @@ function isAbortError(error: unknown): boolean {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * OpenAI 兼容流式响应中我们用到的字段（结构化子集，便于测试构造分片）。
+ */
+export type ChatCompletionChunkLike = {
+  usage?: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+  } | null;
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }> | null;
+    } | null;
+    finish_reason?: string | null;
+  }> | null;
+};
+
+/** 提供方不支持 stream_options 时，只针对该参数做降级，避免掩盖其它 400 */
+export function isUnsupportedStreamOptionsError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /stream_options/i.test(message);
+}
+
+function mapFinishReason(reason: string | null | undefined): AssistantMessage["stopReason"] {
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "toolUse";
+  }
+  if (reason === "length") {
+    return "aborted";
+  }
+  if (reason === "content_filter") {
+    return "error";
+  }
+  return "stop";
+}
+
+/**
+ * 把 OpenAI 兼容的流式分片拼装成统一的 AssistantMessage。
+ *
+ * 纯函数：不依赖网络与 SDK，便于单测覆盖"增量文本 / 分片工具调用 / 用量 / finish_reason"。
+ */
+export async function collectOpenAIStream(
+  chunks: AsyncIterable<ChatCompletionChunkLike> | Iterable<ChatCompletionChunkLike>,
+  onDelta?: (delta: string) => void,
+): Promise<AssistantMessage> {
+  let text = "";
+  let finishReason: string | null = null;
+  let usage: ChatCompletionChunkLike["usage"] = null;
+  const toolCalls = new Map<
+    number,
+    { id: string; name: string; args: string }
+  >();
+
+  for await (const chunk of chunks as AsyncIterable<ChatCompletionChunkLike>) {
+    if (chunk.usage) {
+      usage = chunk.usage;
+    }
+
+    const choice = chunk.choices?.[0];
+    if (!choice) {
+      continue;
+    }
+
+    const delta = choice.delta;
+    if (delta?.content) {
+      text += delta.content;
+      onDelta?.(delta.content);
+    }
+
+    for (const call of delta?.tool_calls ?? []) {
+      const index = call.index ?? 0;
+      const entry = toolCalls.get(index) ?? { id: "", name: "", args: "" };
+      if (call.id) {
+        entry.id = call.id;
+      }
+      if (call.function?.name) {
+        entry.name += call.function.name;
+      }
+      if (call.function?.arguments) {
+        entry.args += call.function.arguments;
+      }
+      toolCalls.set(index, entry);
+    }
+
+    if (choice.finish_reason) {
+      finishReason = choice.finish_reason;
+    }
+  }
+
+  const content: AssistantMessage["content"] = [];
+  if (text) {
+    content.push(createTextContent(text));
+  }
+  for (const [index, call] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+    let args: Record<string, unknown> = {};
+    if (call.args) {
+      try {
+        args = JSON.parse(call.args);
+      } catch {
+        args = {};
+      }
+    }
+    content.push({
+      type: "toolCall",
+      id: call.id || `call_${index}`,
+      name: call.name,
+      arguments: args,
+    });
+  }
+
+  return {
+    role: "assistant",
+    content,
+    stopReason: mapFinishReason(finishReason),
+    usage: {
+      input: usage?.prompt_tokens ?? 0,
+      output: usage?.completion_tokens ?? 0,
+      totalTokens: usage?.total_tokens ?? 0,
+    },
+    timestamp: Date.now(),
+  };
+}
 export type ModelConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -173,6 +302,9 @@ export class OpenAIModel implements LlmModel {
   private client: OpenAI;
   private model: string;
   private defaultTools: ToolDefinition[] = [];
+  /** 提供方是否支持 stream_options.include_usage；不支持时自动关闭，避免每次请求都失败 */
+  private includeStreamUsage = true;
+
   constructor(config?: ModelConfig) {
     this.client = new OpenAI({
       apiKey: config?.apiKey,
@@ -180,90 +312,71 @@ export class OpenAIModel implements LlmModel {
     });
     this.model = config?.model || "gpt-3.5-turbo";
   }
+
   async complete(input: CompleteInput): Promise<AssistantMessage> {
+    const messages = this.convertMessages(input.systemPrompt, input.messages);
+    const tools = this.convertTools(input.tools);
+
     try {
-      const messages = this.convertMessages(input.systemPrompt, input.messages);
-      const tools = this.convertTools(input.tools);
-      const response = await withRetry(
-        () =>
-          this.client.chat.completions.create(
-            {
-              model: this.model,
-              messages,
-              tools: tools.length > 0 ? tools : undefined,
-              tool_choice: tools.length > 0 ? "auto" : undefined,
-            },
-            { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
-          ),
-        {
-          signal: input.signal,
-          onRetry: (attempt, error, delayMs) =>
-            console.error(
-              `OpenAI 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
-            ),
-        },
-      );
-      return this.convertResponse(response);
+      return await this.requestWithRetry(input, messages, tools);
     } catch (error) {
+      // 某些 OpenAI 兼容网关不认 stream_options：只针对这一种情况降级一次
+      if (this.includeStreamUsage && isUnsupportedStreamOptionsError(error)) {
+        this.includeStreamUsage = false;
+        console.error(
+          "提供方不支持 stream_options.include_usage，已关闭流式用量统计（不影响对话）",
+        );
+        try {
+          return await this.requestWithRetry(input, messages, tools);
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
       if (!isAbortError(error)) {
         console.error("OpenAI API error:", error);
       }
       return this.createErrorResponse(error, input.signal);
     }
   }
-  private convertResponse(response: OpenAI.ChatCompletion): AssistantMessage {
-    const choice = response.choices[0];
-    if (!choice) {
-      return createAssistantMessage(
-        [createTextContent("没有收到模型响应")],
-        "error",
-      );
-    }
-    const content: AssistantMessage["content"] = [];
 
-    if (choice.message.content) {
-      content.push(createTextContent(choice.message.content));
-    }
+  private requestWithRetry(
+    input: CompleteInput,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools: OpenAI.ChatCompletionTool[],
+  ): Promise<AssistantMessage> {
+    return withRetry(
+      () => this.streamCompletion(input, messages, tools),
+      {
+        signal: input.signal,
+        onRetry: (attempt, error, delayMs) =>
+          console.error(
+            `OpenAI 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
+          ),
+      },
+    );
+  }
 
-    if (choice.message.tool_calls) {
-      for (const toolCall of choice.message.tool_calls) {
-        if ("function" in toolCall && toolCall.type === "function") {
-          let argumentsObj: Record<string, unknown> = {};
-          try {
-            argumentsObj = JSON.parse(toolCall.function.arguments);
-          } catch {
-            argumentsObj = {};
-          }
-          content.push({
-            type: "toolCall",
-            id: toolCall.id,
-            name: toolCall.function.name,
-            arguments: argumentsObj,
-          });
-        }
-      }
-    }
-    let stopReason: AssistantMessage["stopReason"] = "stop";
-    if (choice.finish_reason === "tool_calls") {
-      stopReason = "toolUse";
-    } else if (choice.finish_reason === "length") {
-      stopReason = "aborted";
-    } else if (choice.finish_reason === "content_filter") {
-      stopReason = "error";
-    }
+  /** 流式请求：逐段回调 onDelta，最终拼装成完整消息 */
+  private async streamCompletion(
+    input: CompleteInput,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools: OpenAI.ChatCompletionTool[],
+  ): Promise<AssistantMessage> {
+    const stream = await this.client.chat.completions.create(
+      {
+        model: this.model,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+        tool_choice: tools.length > 0 ? "auto" : undefined,
+        stream: true,
+        ...(this.includeStreamUsage
+          ? { stream_options: { include_usage: true } }
+          : {}),
+      },
+      { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+    );
 
-    const usage: AssistantMessage["usage"] = {
-      input: response.usage?.prompt_tokens || 0,
-      output: response.usage?.completion_tokens || 0,
-      totalTokens: response.usage?.total_tokens || 0,
-    };
-    return {
-      role: "assistant",
-      content,
-      stopReason,
-      usage,
-      timestamp: Date.now(),
-    };
+    return collectOpenAIStream(stream, input.onDelta);
   }
   private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
     if (signal?.aborted || isAbortError(error)) {
@@ -367,17 +480,7 @@ export class AnthropicModel implements LlmModel {
       const tools = this.convertTools(input.tools);
 
       const response = await withRetry(
-        () =>
-          this.client.messages.create(
-            {
-              model: this.model,
-              max_tokens: 4096,
-              system,
-              messages,
-              tools: tools.length > 0 ? tools : undefined,
-            },
-            { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
-          ),
+        () => this.streamCompletion(input, system, messages, tools),
         {
           signal: input.signal,
           onRetry: (attempt, error, delayMs) =>
@@ -394,6 +497,32 @@ export class AnthropicModel implements LlmModel {
       return this.createErrorResponse(error, input.signal);
     }
   }
+
+  /** 流式请求：经 stream 事件逐段回调 onDelta，最终取回完整消息 */
+  private async streamCompletion(
+    input: CompleteInput,
+    system: string,
+    messages: Anthropic.MessageParam[],
+    tools: Anthropic.Tool[],
+  ): Promise<Anthropic.Message> {
+    const stream = this.client.messages.stream(
+      {
+        model: this.model,
+        max_tokens: 4096,
+        system,
+        messages,
+        tools: tools.length > 0 ? tools : undefined,
+      },
+      { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+    );
+
+    if (input.onDelta) {
+      stream.on("text", (delta: string) => input.onDelta?.(delta));
+    }
+
+    return stream.finalMessage();
+  }
+
   private convertMessages(
     systemPrompt: string,
     messages: AgentMessage[],

@@ -61,6 +61,66 @@ function emitMessageLifeCycle(
   emit({ type: "message_end", message });
 }
 
+/**
+ * 调用模型并发出完整的消息生命周期：start -> 流式 update -> end。
+ *
+ * 事件里的 `message` 始终是同一个对象：先作为空占位发出，
+ * 模型返回后把最终字段写回该对象，因此消费方看到的三段事件是一致的。
+ *
+ * 对于不支持流式的模型（含测试替身），补发一次性文本，
+ * 保证终端仍然能显示回复，不会因为引入流式而"什么都不打印"。
+ */
+async function completeAssistantMessage(
+  options: RunAgentLoopOptions,
+  context: AgentMessage[],
+  signal: AbortSignal,
+  emit: (event: AgentEvent) => void,
+): Promise<AssistantMessage> {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [],
+    stopReason: "stop",
+    usage: { input: 0, output: 0, totalTokens: 0 },
+    timestamp: Date.now(),
+  };
+
+  let streamed = false;
+  emit({ type: "message_start", message });
+
+  try {
+    const assistant = await options.model.complete({
+      systemPrompt: options.systemPrompt,
+      messages: context,
+      tools: options.tools,
+      signal,
+      onDelta: (delta) => {
+        streamed = true;
+        emit({ type: "message_update", message, delta });
+      },
+    });
+    Object.assign(message, assistant);
+  } catch (error) {
+    // 模型实现抛错时也要收好生命周期，避免 start 没有对应的 end
+    Object.assign(message, {
+      content: [createTextContent(error instanceof Error ? error.message : String(error))],
+      stopReason: "error" as const,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    streamed = false;
+  }
+
+  if (!streamed) {
+    for (const block of message.content) {
+      if (block.type === "text") {
+        emit({ type: "message_update", message, delta: block.text });
+      }
+    }
+  }
+
+  emit({ type: "message_end", message });
+  return message;
+}
+
 
 async function executeToolCall(
   toolCall: ToolCallContent,
@@ -137,16 +197,9 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
 
     for(let turn=1;turn<=maxTurns;turn++) {
         emit({type:"turn_start",turn})
-        const assistant = await options.model.complete({
-            systemPrompt:options.systemPrompt,
-            messages:context,
-            tools:options.tools,
-            signal
-        })
+        const assistant = await completeAssistantMessage(options, context, signal, emit)
         context.push(assistant)
         newMessages.push(assistant)
-
-        emitMessageLifeCycle(assistant, emit);
 
         if(assistant.stopReason==="error" || assistant.stopReason==="aborted") {
             emit({type:"turn_end",turn,message:assistant,toolResults:[]})

@@ -1,6 +1,27 @@
 # CLI 交互体验设计稿
 
-> 状态：**草案**（待评审）。本文只描述终端呈现与交互，不改动会话存储、工具安全与审批的既有语义。
+> 状态：**第一档已实现**（真流式 + 工作状态 spinner + 耗时），第二~四档待做。
+> 本文只描述终端呈现与交互，不改动会话存储、工具安全与审批的既有语义。
+
+## 0. 实现进度
+
+| 档位 | 内容 | 状态 |
+| --- | --- | --- |
+| 1 | 真流式输出、工作状态行（spinner）、工具耗时 | ✅ 已实现 |
+| 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code） | ⏳ 待做 |
+| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做 |
+| 4 | `render.ts` 收口、`NO_COLOR`/`--no-emoji`/窄终端降级 | ⏳ 待做（部分降级已随第 1 档落地） |
+
+第 1 档实际落地内容：
+
+- `model.ts` 两个 SDK 走流式：OpenAI 兼容路径用 `stream: true` + `stream_options.include_usage`，
+  Anthropic 路径用 `messages.stream()`；增量经 `CompleteInput.onDelta` 回调；
+- `collectOpenAIStream()` 把分片拼装成统一 `AssistantMessage`（纯函数，可单测）；
+- `loop.ts` 消息生命周期改为 `message_start` → 流式 `message_update` → `message_end`，
+  三段事件引用**同一个消息对象**；不支持流式的模型自动补发一次性文本；
+- `cli/status.ts` 状态行：`⠋ 思考中… 1.4s` / `⠋ 压缩上下文…` / `⠋ 执行 npm test… 4.1s`，
+  TTY 上原地刷新，非 TTY 只打印静态行；
+- 工具卡片状态行追加耗时：`✅ Success · 3.2s`。
 
 ## 1. 目标与原则
 
@@ -8,13 +29,13 @@
 
 | # | 问题 | 根因位置 |
 | --- | --- | --- |
-| 1 | 长回答期间终端完全静默 | `model.complete()` 为非流式调用，整段文本最后一次性 emit（`src/agent/loop.ts` 的消息生命周期） |
-| 2 | 工具执行期间静默，卡片要等结束才出现 | `printToolInfo` 的 `tool_execution_start` 分支只写缓存不输出 |
-| 3 | 多行结果格式塌陷 | 结果被拼成单行 `📄 ` 前缀，换行未处理 |
-| 4 | 双重截断、不告知截断量 | 工具内部截到 1800 字符，卡片再截到 100 字符 |
-| 5 | 关键信息被丢弃 | `edit_file` 无 diff、`write_file` 无字节数、bash 无 exitCode/stderr 标注 |
-| 6 | 无耗时、无用量 | `start/end` 时间戳与 `usage` 均未渲染 |
-| 7 | 渲染逻辑集中在单个大函数、模块级缓存 | `printToolInfo` 内重建图标表、`toolStartCache` 为模块级 Map |
+| 1 | 长回答期间终端完全静默 | ~~`model.complete()` 为非流式调用~~ → **第 1 档已修复** |
+| 2 | 工具执行期间静默，卡片要等结束才出现 | ~~`printToolInfo` 的 `tool_execution_start` 分支只写缓存~~ → **第 1 档已用状态行修复** |
+| 3 | 多行结果格式塌陷 | 结果被拼成单行 `📄 ` 前缀，换行未处理（第 3 档） |
+| 4 | 卡片截断不告知规模 | 卡片仍截到 100 字符；工具侧截断已于 `544738b` 取消，完整内容交给模型（第 3 档补规模提示与 `/last`） |
+| 5 | 关键信息被丢弃 | `edit_file` 无 diff、`write_file` 无字节数、bash 无 exitCode/stderr 标注（第 2 档） |
+| 6 | 无用量统计 | `usage` 已能正确取到（含流式），但尚未渲染（第 2/3 档） |
+| 7 | 渲染逻辑集中在单个大函数、模块级缓存 | `printToolInfo` 内重建图标表、`toolStartCache` 为模块级 Map（第 4 档） |
 
 设计原则：
 
@@ -206,7 +227,7 @@ IDLE ──用户回车──▶ THINKING ──首个 token──▶ STREAMING 
 | 工具 | 现状 `details` | 需补充 |
 | --- | --- | --- |
 | `bash` | `command`, `exitCode` | `stdout`, `stderr`（分开），`truncated` |
-| `read_file` | `path` | `totalLines`, `totalBytes`, `returnedLines`（内容已截到 1800 字符，卡片必须能报出真实规模） |
+| `read_file` | `path` | `totalLines`, `totalBytes`（`544738b` 起工具返回完整内容，卡片需要规模元数据才能显示"529 行 · 18.6 KB"，展示窗口化由渲染层负责） |
 | `write_file` | `path`, `bytesWritten` | `lines`, `created`（新增还是覆盖） |
 | `edit_file` | `path`, `replacements`, `oldTextLength`, `newTextLength` | `hunks`（可选，用于折叠提示） |
 | `list_files` | `entries` | `dirCount`, `fileCount`, `truncated` |
@@ -368,6 +389,22 @@ export function renderStatus(state: RunState, ctx): string;
 3. **取消时是否把"已取消"占位消息写入会话文件**？（当前实现会写入一条 `模型调用已取消`，可能污染历史）
 4. **`list_files` 折叠阈值**（默认 10 项是否合适）
 5. **是否保留每轮首尾的 60 字符分隔线**？（工具块已有 gutter，连续多轮时分隔线可能冗余）
+
+### 12.1 新增：工具结果完整性 vs 上下文预算
+
+`544738b`「保留完整toolResult结果」取消了 `read_file` 的 1800 字符截断，好处是模型能看到完整内容，
+代价是**单次读取可能撑爆上下文**（读一个 200KB 的文件 ≈ 十万字符进 context），
+而压缩只在下一轮开始时触发，救不回已经发出的这一次请求。
+
+可选方案（未实施，等你定）：
+
+| 方案 | 说明 |
+| --- | --- |
+| A. 保持现状 | 完全信任模型与压缩机制，仅在上下文估算里体现 |
+| B. 给 `read_file` 加分页参数 | `path` + `offset` + `limit`（行），默认返回有限行并在 `details` 里给出总行数，模型按需翻页 |
+| C. 大文件硬上限 + 明确提示 | 超过 N 字符（如 20k）时截断，并在结果里写明"已截断，可用 offset 继续"，同时进入 `details.truncated` |
+
+倾向 **B + C 组合**：既保留"不偷偷丢内容"的原则，又给模型可控的翻页手段。
 
 ## 相关文档
 

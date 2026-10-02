@@ -8,6 +8,10 @@ import {
   createModelFromProvider,
 } from "./model";
 import { isRetryableError, withRetry } from "./model";
+import {
+  collectOpenAIStream,
+  isUnsupportedStreamOptionsError,
+} from "./model";
 import { createTextContent } from "./message";
 
 describe("model", () => {
@@ -311,6 +315,157 @@ describe("model", () => {
       assert.strictEqual(isRetryableError(httpError(404)), false);
       assert.strictEqual(isRetryableError(new Error("plain")), false);
       assert.strictEqual(isRetryableError(undefined), false);
+    });
+  });
+
+  describe("collectOpenAIStream（流式拼装）", () => {
+    async function* asAsync<T>(items: T[]): AsyncIterable<T> {
+      for (const item of items) {
+        yield item;
+      }
+    }
+
+    it("应累加增量文本并逐段回调 onDelta", async () => {
+      const deltas: string[] = [];
+      const message = await collectOpenAIStream(
+        [
+          { choices: [{ delta: { content: "你" } }] },
+          { choices: [{ delta: { content: "好" } }] },
+          {
+            choices: [{ delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 12, completion_tokens: 2, total_tokens: 14 },
+          },
+        ],
+        (delta) => deltas.push(delta),
+      );
+
+      assert.deepStrictEqual(deltas, ["你", "好"]);
+      assert.strictEqual(message.content.length, 1);
+      assert.strictEqual(message.content[0].type, "text");
+      assert.strictEqual(
+        (message.content[0] as { type: "text"; text: string }).text,
+        "你好",
+      );
+      assert.strictEqual(message.stopReason, "stop");
+      assert.deepStrictEqual(message.usage, { input: 12, output: 2, totalTokens: 14 });
+    });
+
+    it("应把跨分片切开的工具调用拼回完整参数", async () => {
+      const message = await collectOpenAIStream([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: "call_1", function: { name: "read_file", arguments: '{"pa' } },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            { delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"a.txt"}' } }] } },
+          ],
+        },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      ]);
+
+      assert.strictEqual(message.stopReason, "toolUse");
+      assert.deepStrictEqual(message.content, [
+        { type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } },
+      ]);
+    });
+
+    it("应支持多个工具调用并按 index 排序", async () => {
+      const message = await collectOpenAIStream([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 1, id: "b", function: { name: "bash", arguments: "{}" } },
+                  { index: 0, id: "a", function: { name: "list_files", arguments: "{}" } },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]);
+
+      assert.deepStrictEqual(
+        message.content.map((block) => (block as { id: string }).id),
+        ["a", "b"],
+      );
+    });
+
+    it("参数不是合法 JSON 时降级为空对象而不是抛错", async () => {
+      const message = await collectOpenAIStream([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, id: "c", function: { name: "bash", arguments: "{oops" } }],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]);
+
+      assert.deepStrictEqual(
+        (message.content[0] as { arguments: unknown }).arguments,
+        {},
+      );
+    });
+
+    it("应映射 finish_reason", async () => {
+      const length = await collectOpenAIStream([
+        { choices: [{ delta: {}, finish_reason: "length" }] },
+      ]);
+      assert.strictEqual(length.stopReason, "aborted");
+
+      const filtered = await collectOpenAIStream([
+        { choices: [{ delta: {}, finish_reason: "content_filter" }] },
+      ]);
+      assert.strictEqual(filtered.stopReason, "error");
+    });
+
+    it("空流返回空消息而不是抛错", async () => {
+      const message = await collectOpenAIStream([]);
+
+      assert.deepStrictEqual(message.content, []);
+      assert.strictEqual(message.stopReason, "stop");
+      assert.deepStrictEqual(message.usage, { input: 0, output: 0, totalTokens: 0 });
+    });
+
+    it("应支持 SDK 的异步可迭代流", async () => {
+      const deltas: string[] = [];
+      const message = await collectOpenAIStream(
+        asAsync([{ choices: [{ delta: { content: "hi" } }] }]),
+        (delta) => deltas.push(delta),
+      );
+
+      assert.deepStrictEqual(deltas, ["hi"]);
+      assert.strictEqual(
+        (message.content[0] as { type: "text"; text: string }).text,
+        "hi",
+      );
+    });
+
+    it("应只把 stream_options 相关的错误判为可降级", () => {
+      assert.strictEqual(
+        isUnsupportedStreamOptionsError(
+          new Error("Unrecognized request argument supplied: stream_options"),
+        ),
+        true,
+      );
+      assert.strictEqual(
+        isUnsupportedStreamOptionsError(new Error("model not found")),
+        false,
+      );
+      assert.strictEqual(isUnsupportedStreamOptionsError(undefined), false);
     });
   });
 });

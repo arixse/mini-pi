@@ -45,14 +45,15 @@ mini-pi/
 
 ## 核心功能
 
-1. **智能对话** - 支持多轮对话，流式响应输出
-2. **文件操作** - 读取、编辑文件
-3. **命令执行** - 执行 bash 命令
-4. **工具调用** - 通过 Function Calling 机制调用工具
-5. **会话管理** - 支持多会话管理，每个会话独立存储
-6. **模型切换** - 支持 OpenAI 和 Anthropic 模型
-7. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
-8. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
+1. **智能对话** - 支持多轮对话，回复**逐字流式输出**（真流式：`stream: true` / `messages.stream()`）
+2. **工作状态可见** - 等待模型、压缩上下文、执行工具时显示 `⠋ 思考中…`、`⠋ 执行 npm test… 4.1s`，工具卡片附耗时
+3. **文件操作** - 读取、编辑文件
+4. **命令执行** - 执行 bash 命令
+5. **工具调用** - 通过 Function Calling 机制调用工具
+6. **会话管理** - 支持多会话管理，每个会话独立存储
+7. **模型切换** - 支持 OpenAI 和 Anthropic 模型
+8. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
+9. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
 
 ## 运行方式
 

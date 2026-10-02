@@ -12,6 +12,7 @@ import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
+import { createStatusLine, formatDuration } from "./status";
 
 /** 触发上下文压缩的近似 token 上限 */
 export const MAX_CONTEXT_TOKENS = 6000;
@@ -70,6 +71,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   });
 
   const beforeToolCall = options.beforeToolCall ?? approval;
+
+  // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行
+  const status = createStatusLine({
+    stream: process.stdout,
+    enabled: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
+    ascii: Boolean(process.env.MINI_PI_ASCII),
+  });
+  const quiet = (...args: unknown[]): void => {
+    status.stop();
+    console.log(...args);
+  };
 
   // Ctrl+C：任务执行中 -> 取消任务；空闲时 -> 退出
   let activeRun: AbortController | null = null;
@@ -199,10 +211,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       console.log(chalk.dim("─".repeat(60)));
       console.log("");
 
+      // 压缩要调模型生成摘要，可能静默数秒：先给出可见状态
+      const willCompact =
+        options.sessionStore?.needsCompaction(
+          MAX_CONTEXT_TOKENS,
+          KEEP_RECENT_MESSAGES,
+        ) ?? false;
+      if (willCompact) {
+        status.set({ kind: "compacting", startedAt: Date.now() });
+      }
+
       // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
       await appendUserMessage(options, createUserMessage(input));
 
       activeRun = new AbortController();
+      status.set({ kind: "thinking", startedAt: Date.now() });
+
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
@@ -214,29 +238,40 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         signal: activeRun.signal,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
+            // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
+            status.stop();
             process.stdout.write(event.delta);
           }
           if (event.type === "tool_execution_start") {
-            printToolInfo(event)
+            status.set({
+              kind: "tool",
+              toolName: event.toolName,
+              detail: summarizeToolCall(event.toolName, event.args),
+              startedAt: Date.now(),
+            });
           }
           if (event.type === "tool_execution_end") {
-            printToolInfo(event)
+            status.stop();
+            printToolInfo(event);
           }
           if (event.type === "tool_permission") {
             const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
-            console.log(chalk.dim(`\n${label}: ${event.toolName}`));
+            quiet(chalk.dim(`\n${label}: ${event.toolName}`));
           }
         },
       });
 
+      status.stop();
       await appendAgentMessages(options, result.newMessages);
 
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
       console.log("");
     } catch (error) {
+      status.stop();
       console.error(chalk.red("\n❌ 错误:"), error instanceof Error ? error.message : error);
     } finally {
+      status.stop();
       activeRun = null;
     }
 
@@ -312,7 +347,25 @@ export function startNewSession(options: ReplOptions): boolean {
 }
 
 // 缓存 tool_execution_start 事件信息
-const toolStartCache = new Map<string, { toolName: string; args: Record<string, unknown> }>();
+const toolStartCache = new Map<
+  string,
+  { toolName: string; args: Record<string, unknown>; startedAt: number }
+>();
+
+/** 状态行里的工具摘要：bash 用命令，其余优先用路径 */
+export function summarizeToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
+  const pick = (key: string): string =>
+    typeof args[key] === "string" ? (args[key] as string) : "";
+  const candidate = toolName === "bash" ? pick("command") : pick("path") || pick("command");
+  const oneLine = candidate.replace(/\s+/g, " ").trim();
+  if (!oneLine) {
+    return toolName;
+  }
+  return oneLine.length > 40 ? `${oneLine.slice(0, 39)}…` : oneLine;
+}
 
 export function printToolInfo(event: AgentEvent) {
   const toolIcons: Record<string, string> = {
@@ -381,7 +434,8 @@ export function printToolInfo(event: AgentEvent) {
     toolName: string,
     args: Record<string, unknown>,
     result: ToolResult | null,
-    isError: boolean | null
+    isError: boolean | null,
+    durationMs: number | null = null,
   ) => {
     const icon = getToolIcon(toolName);
     const colors = getToolColors(toolName);
@@ -397,7 +451,8 @@ export function printToolInfo(event: AgentEvent) {
     if (result !== null) {
       const statusIcon = isError ? "❌" : "✅";
       const statusText = isError ? "Failed" : "Success";
-      statusLine = `${statusIcon} ${statusText}`;
+      const duration = durationMs === null ? "" : ` · ${formatDuration(durationMs)}`;
+      statusLine = `${statusIcon} ${statusText}${duration}`;
       resultLine = `📄 ${formatResult(result)}`;
     }
 
@@ -424,6 +479,7 @@ export function printToolInfo(event: AgentEvent) {
     toolStartCache.set(event.toolCallId, {
       toolName: event.toolName,
       args: event.args,
+      startedAt: Date.now(),
     });
   }
 
@@ -431,9 +487,10 @@ export function printToolInfo(event: AgentEvent) {
     // 获取缓存的 start 信息
     const cached = toolStartCache.get(event.toolCallId);
     const args = cached?.args || {};
+    const durationMs = cached ? Date.now() - cached.startedAt : null;
     
     // 输出完整的工具信息块
-    printToolBlock(event.toolName, args, event.result, event.isError);
+    printToolBlock(event.toolName, args, event.result, event.isError, durationMs);
     
     // 清理缓存
     toolStartCache.delete(event.toolCallId);

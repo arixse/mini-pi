@@ -144,9 +144,10 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 | 事件 | 终端表现 |
 | ---- | -------- |
-| `message_update`（含 `delta`） | 直接 `process.stdout.write(delta)` 实时流式打印模型文本 |
-| `tool_execution_start` | 缓存工具调用信息（等待结束事件一起输出） |
-| `tool_execution_end` | 打印完整工具调用卡片（见 4.2） |
+| `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.6） |
+| `tool_execution_start` | 状态行切换为 `⠋ 执行 <工具摘要>… <耗时>` |
+| `tool_execution_end` | 清除状态行，打印完整工具调用卡片（见 4.2，含耗时） |
+| `tool_permission` | 打印 `✅ 已允许` / `❌ 已拒绝: <工具名>` |
 
 每条对话开始与结束时都会打印一条 60 字符的分隔线 `────`。
 
@@ -175,8 +176,24 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 展示细节：
 
 - **参数行**：过滤掉 `content` / `oldText` / `newText` 等大段内容；字符串参数截断到 40 字符；对象参数显示为 `{key1,key2}`。
-- **状态行**：成功为绿色 `✅ Success`，失败为红色 `❌ Failed`。
+- **状态行**：成功为绿色 `✅ Success · 3.2s`，失败为红色 `❌ Failed · 0.3s`；耗时由 `tool_execution_start` / `tool_execution_end` 的时间戳计算。
 - **结果行**：拼接工具结果中的文本，截断到 100 字符；无内容时显示 `(empty)`。
+
+### 4.6 工作状态行
+
+任何超过一瞬的等待都会给出可见反馈（`src/cli/status.ts`）：
+
+| 阶段 | 状态行 |
+| ---- | ------ |
+| 等待模型首个 token | `⠋ 思考中… 1.4s` |
+| 上下文压缩（要调模型生成摘要） | `⠋ 压缩上下文… 2.1s` |
+| 工具执行中 | `⠋ 执行 npm test… 4.1s` |
+| 收到首个 token / 工具结束 | 状态行被清除，让位给正文或卡片 |
+
+- 状态行**原地刷新**（每 100ms 一帧），不会在转录里留下垃圾行；
+- 非 TTY（管道、重定向）不刷屏、不使用光标控制，仅在每次状态变化时静态打印一行
+  `… 思考中…`，便于 CI 日志回溯；
+- `NO_COLOR` 环境变量会关闭原地刷新；`MINI_PI_ASCII=1` 把 Braille 帧换成 `|/-\`。
 
 ### 4.3 可用工具
 
@@ -498,7 +515,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | ---- | ---- |
 | `agent_start` / `agent_end` | 一次 Agent 运行开始 / 结束 |
 | `turn_start` / `turn_end` | 单轮开始 / 结束 |
-| `message_start` / `message_update` / `message_end` | 消息生命周期，`message_update` 携带流式 `delta` |
+| `message_start` / `message_update` / `message_end` | 消息生命周期，`message_update` 携带流式 `delta`。流式时三段事件引用**同一个消息对象**（先发空占位，最终字段写回该对象）；不支持流式的模型会在结束时补发一次性 `message_update` |
 | `tool_execution_start` / `tool_execution_end` | 工具执行开始 / 结束 |
 | `tool_permission` | 工具权限控制（`beforeToolCall` 钩子；仅在 allow 之外的动作时发出） |
 | `compaction` | 上下文压缩（当前尚未发出） |

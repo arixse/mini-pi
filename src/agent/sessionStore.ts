@@ -238,6 +238,23 @@ export class JsonlSessionStore {
   }
 
   /**
+   * 是否满足压缩条件。
+   *
+   * UI 需要在真正压缩前给出"压缩中"提示（压缩要调模型，可能静默数秒），
+   * 因此把判定单独暴露出来，与 compactIfNedded 共用同一份逻辑，避免两处条件分叉。
+   */
+  needsCompaction(maxApproxTokens: number, keepRecentMessages: number): boolean {
+    const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
+    const messageEntries = this.pathToLeaf().filter(
+      (entry): entry is MessageEntry => entry.type === "message",
+    );
+    if (messageEntries.length <= keepRecent) {
+      return false;
+    }
+    return estimateTokens(this.buildContext()) > maxApproxTokens;
+  }
+
+  /**
    * 上下文超限时把较早的消息压缩成一条摘要记录。
    *
    * @param maxApproxTokens 近似 token 上限，未超过则不做任何事
@@ -248,16 +265,16 @@ export class JsonlSessionStore {
     maxApproxTokens: number,
     keepRecentMessages: number,
   ): Promise<CompactionEntry | undefined> {
+    if (!this.needsCompaction(maxApproxTokens, keepRecentMessages)) {
+      return undefined;
+    }
+
     const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
     const path = this.pathToLeaf();
     const messageEntries = path.filter(
       (entry): entry is MessageEntry => entry.type === "message",
     );
-    const currentContext = this.buildContext();
-    const tokensBefore = estimateTokens(currentContext);
-    if (tokensBefore <= maxApproxTokens || messageEntries.length <= keepRecent) {
-      return undefined;
-    }
+    const tokensBefore = estimateTokens(this.buildContext());
     const kept = messageEntries.slice(-keepRecent);
     const summarized = messageEntries.slice(0, -keepRecent);
 
