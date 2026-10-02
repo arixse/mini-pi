@@ -515,6 +515,84 @@ describe("tools", () => {
     });
   });
 
+  describe("工具 details 元数据（展示层契约）", () => {
+    it("write_file 应标明新增/覆盖与行数", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const created = await registry.execute("write_file", {
+        path: "new.txt",
+        content: "a\nb\nc",
+      });
+      assert.strictEqual((created.details as Record<string, unknown>).created, true);
+      assert.strictEqual((created.details as Record<string, unknown>).lines, 3);
+
+      const overwritten = await registry.execute("write_file", {
+        path: "new.txt",
+        content: "x",
+      });
+      assert.strictEqual(
+        (overwritten.details as Record<string, unknown>).created,
+        false,
+        "第二次写入应识别为覆盖",
+      );
+      assert.strictEqual((overwritten.details as Record<string, unknown>).lines, 1);
+    });
+
+    it("edit_file 应给出首个替换所在行号", async () => {
+      writeFileSync(join(testDir, "edit.txt"), "l1\nl2\nl3\nl4\n", "utf8");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("edit_file", {
+        path: "edit.txt",
+        oldText: "l3",
+        newText: "L3",
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.lineNumber, 3);
+      assert.strictEqual(details.replacements, 1);
+    });
+
+    it("bash 应把 stdout 与 stderr 分开返回", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("bash", {
+        command: 'node -e "console.error(\'boom\')"',
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.exitCode, 0);
+      assert.strictEqual(details.stdout, "");
+      assert.ok(String(details.stderr).includes("boom"));
+    });
+
+    it("bash 失败时 exitCode 应为数字", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("bash", {
+        command: 'node -e "process.exit(3)"',
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.exitCode, 3);
+      assert.strictEqual(typeof details.exitCode, "number");
+    });
+
+    it("list_files 应给出目录与文件计数", async () => {
+      writeFileSync(join(testDir, "f1.txt"), "x");
+      writeFileSync(join(testDir, "f2.txt"), "x");
+      mkdirSync(join(testDir, "sub"));
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("list_files", { path: "." });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.dirCount, 1);
+      assert.strictEqual(details.fileCount, 2);
+      assert.strictEqual((details.entries as string[]).length, 3);
+    });
+  });
+
   describe("bash 路径守卫（checkBashCommand）", () => {
     it("should reject quoted absolute paths（旧实现可用引号绕过）", () => {
       assert.throws(

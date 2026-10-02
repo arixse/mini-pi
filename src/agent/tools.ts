@@ -1,5 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { readdir, readFile } from "node:fs/promises";
@@ -69,6 +69,7 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
     async execute(args) {
       const dir = resolveInsideWorkspace(workspaceRoot, stringArg(args.path,"."));
       const entries = await listFiles(dir, workspaceRoot);
+      const dirCount = entries.filter((entry) => entry.endsWith("/")).length;
       return {
         content: [
           createTextContent(
@@ -77,6 +78,8 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
         ],
         details: {
           entries,
+          dirCount,
+          fileCount: entries.length - dirCount,
         },
       };
     },
@@ -265,12 +268,18 @@ function writeFileTool(workspaceRoot: string): RegisteredTool {
       const { mkdir, writeFile } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
       
+      const created = !existsSync(filePath);
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, "utf8");
       
       return {
         content: [createTextContent(`File written successfully: ${relative(workspaceRoot, filePath)}`)],
-        details: { path: relative(workspaceRoot, filePath), bytesWritten: content.length },
+        details: {
+          path: relative(workspaceRoot, filePath),
+          bytesWritten: content.length,
+          lines: content === "" ? 0 : content.split("\n").length,
+          created,
+        },
       };
     },
   };
@@ -352,6 +361,11 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
       // 写入文件
       await writeFile(filePath, newContent, "utf8");
       
+      // 第一次替换所在的行号（1 起），供卡片标注 @@ 位置
+      const firstIndex = content.indexOf(oldText);
+      const lineNumber =
+        firstIndex === -1 ? null : content.slice(0, firstIndex).split("\n").length;
+      
       return {
         content: [createTextContent(`File edited successfully: ${replacementCount} replacement(s) made in ${relative(workspaceRoot, filePath)}`)],
         details: {
@@ -359,6 +373,7 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
           replacements: replacementCount,
           oldTextLength: oldText.length,
           newTextLength: newText.length,
+          lineNumber,
         },
       };
     },
@@ -405,13 +420,21 @@ function bashTool(workspaceRoot: string): RegisteredTool {
         const output = [stdout, stderr].filter(Boolean).join("\n");
         return {
           content: [createTextContent(output || "(no output)")],
-          details: { command, exitCode: 0 },
+          // stdout / stderr 分开返回，卡片才能对 stderr 单独着色
+          details: { command, exitCode: 0, stdout, stderr },
         };
       } catch (error: any) {
         const errorMessage = error.stderr || error.message || "Command failed";
         return {
           content: [createTextContent(`Error: ${errorMessage}`)],
-          details: { command, exitCode: error.code || 1 },
+          details: {
+            command,
+            // error.code 在超时等情况下是字符串（如 ETIMEDOUT），统一成数字
+            exitCode: typeof error.code === "number" ? error.code : 1,
+            errorCode: typeof error.code === "string" ? error.code : undefined,
+            stdout: error.stdout ?? "",
+            stderr: error.stderr ?? errorMessage,
+          },
           terminate: false,
         };
       }
