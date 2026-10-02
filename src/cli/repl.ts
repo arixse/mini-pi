@@ -71,6 +71,21 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
   const beforeToolCall = options.beforeToolCall ?? approval;
 
+  // Ctrl+C：任务执行中 -> 取消任务；空闲时 -> 退出
+  let activeRun: AbortController | null = null;
+  rl.on("SIGINT", () => {
+    if (activeRun) {
+      const run = activeRun;
+      activeRun = null;
+      run.abort();
+      console.log(chalk.yellow("\n⏹️  已请求取消当前任务\n"));
+      return;
+    }
+    console.log(chalk.yellow("\n👋 再见！\n"));
+    rl.close();
+    process.exit(0);
+  });
+
   rl.prompt();
 
   rl.on("line", async (line) => {
@@ -187,6 +202,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
       await appendUserMessage(options, createUserMessage(input));
 
+      activeRun = new AbortController();
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
@@ -195,6 +211,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         toolRegistry: options.toolRegistry,
         maxTurns: 100,
         beforeToolCall,
+        signal: activeRun.signal,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             process.stdout.write(event.delta);
@@ -219,6 +236,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       console.log("");
     } catch (error) {
       console.error(chalk.red("\n❌ 错误:"), error instanceof Error ? error.message : error);
+    } finally {
+      activeRun = null;
     }
 
     rl.prompt();

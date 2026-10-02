@@ -298,4 +298,135 @@ describe("loop", () => {
       assert.ok(errorResult);
     });
   });
+
+  describe("取消信号（signal）", () => {
+    function createToolCallResponse(): AssistantMessage {
+      return createAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "test_tool",
+            arguments: {},
+          },
+        ],
+        "toolUse",
+      );
+    }
+
+    it("should pass the abort signal to the model", async () => {
+      const controller = new AbortController();
+      let received: AbortSignal | undefined;
+      const model: LlmModel = {
+        async complete(input) {
+          received = input.signal;
+          return createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(received, controller.signal);
+    });
+
+    it("should not execute tools when the signal is already aborted", async () => {
+      let executed = 0;
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "test_tool",
+        description: "test",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          executed += 1;
+          return { content: [createTextContent("ran")] };
+        },
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("go")], timestamp: Date.now() }],
+        tools: [],
+        model: createMockModel([createToolCallResponse()]),
+        toolRegistry: registry,
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(executed, 0, "已取消时工具不应执行");
+      assert.ok(!result.events.some((event) => event.type === "tool_execution_start"));
+      assert.strictEqual(result.events[result.events.length - 1].type, "agent_end");
+    });
+
+    it("should forward the signal to tools and stop before the next turn once aborted", async () => {
+      const controller = new AbortController();
+      let received: AbortSignal | undefined;
+      let modelCalls = 0;
+
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "test_tool",
+        description: "test",
+        parameters: { type: "object", properties: {} },
+        async execute(_args, signal) {
+          received = signal;
+          // 模拟用户在执行工具期间按下 Ctrl+C
+          controller.abort();
+          return { content: [createTextContent("ran")] };
+        },
+      });
+
+      const model: LlmModel = {
+        async complete() {
+          modelCalls += 1;
+          return createToolCallResponse();
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("go")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: registry,
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(received, controller.signal, "工具应收到同一个取消信号");
+      assert.strictEqual(modelCalls, 1, "取消后不应再进入下一轮");
+    });
+
+    it("should return an aborted assistant message when the model aborts", async () => {
+      const controller = new AbortController();
+      const model: LlmModel = {
+        async complete() {
+          controller.abort();
+          return createAssistantMessage([createTextContent("已取消")], "aborted");
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(result.newMessages.length, 1);
+      assert.strictEqual(
+        (result.newMessages[0] as AssistantMessage).stopReason,
+        "aborted",
+      );
+    });
+  });
 });

@@ -16,7 +16,50 @@ export type CompleteInput = {
   systemPrompt: string;
   messages: AgentMessage[];
   tools: ToolDefinition[];
+  /** 取消信号：用户中断（Ctrl+C）时用于中止请求 */
+  signal?: AbortSignal;
 };
+
+/** 单次模型请求的超时时间（毫秒） */
+export const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * 判断错误是否来自 abort（用户取消）。
+ *
+ * 注意：SDK 抛出的取消错误 `name` 依然是 "Error"，只有构造函数名是
+ * `APIUserAbortError`（cause 里是 DOMException AbortError），
+ * 因此这里沿 cause 链同时检查 name 与构造函数名。
+ */
+const ABORT_ERROR_NAMES = new Set(["AbortError", "APIUserAbortError"]);
+
+function isAbortError(error: unknown): boolean {
+  let current: unknown = error;
+
+  for (let depth = 0; current && typeof current === "object" && depth < 5; depth += 1) {
+    const candidate = current as {
+      name?: unknown;
+      constructor?: { name?: unknown };
+      cause?: unknown;
+    };
+    const name = candidate.name;
+    const constructorName = candidate.constructor?.name;
+
+    if (
+      (typeof name === "string" && ABORT_ERROR_NAMES.has(name)) ||
+      (typeof constructorName === "string" && ABORT_ERROR_NAMES.has(constructorName))
+    ) {
+      return true;
+    }
+
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 export type ModelConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -40,16 +83,21 @@ export class OpenAIModel implements LlmModel {
     try {
       const messages = this.convertMessages(input.systemPrompt, input.messages);
       const tools = this.convertTools(input.tools);
-      const response = await this.client.chat.completions.create({
-        model: this.model,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? "auto" : undefined,
-      });
+      const response = await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages,
+          tools: tools.length > 0 ? tools : undefined,
+          tool_choice: tools.length > 0 ? "auto" : undefined,
+        },
+        { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+      );
       return this.convertResponse(response);
     } catch (error) {
-      console.error("OpenAI API error:", error);
-      return this.createErrorResponse(error);
+      if (!isAbortError(error)) {
+        console.error("OpenAI API error:", error);
+      }
+      return this.createErrorResponse(error, input.signal);
     }
   }
   private convertResponse(response: OpenAI.ChatCompletion): AssistantMessage {
@@ -106,14 +154,23 @@ export class OpenAIModel implements LlmModel {
       timestamp: Date.now(),
     };
   }
-  private createErrorResponse(error: unknown): AssistantMessage {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
+    if (signal?.aborted || isAbortError(error)) {
+      return {
+        role: "assistant",
+        content: [createTextContent("模型调用已取消")],
+        stopReason: "aborted",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        errorMessage: "aborted",
+        timestamp: Date.now(),
+      };
+    }
     return {
       role: "assistant",
-      content: [createTextContent(`模型调用失败：${errorMessage}`)],
+      content: [createTextContent(`模型调用失败：${describeError(error)}`)],
       stopReason: "error",
       usage: { input: 0, output: 0, totalTokens: 0 },
-      errorMessage: errorMessage,
+      errorMessage: describeError(error),
       timestamp: Date.now(),
     };
   }
@@ -198,17 +255,22 @@ export class AnthropicModel implements LlmModel {
       );
       const tools = this.convertTools(input.tools);
 
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 4096,
-        system,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-      });
+      const response = await this.client.messages.create(
+        {
+          model: this.model,
+          max_tokens: 4096,
+          system,
+          messages,
+          tools: tools.length > 0 ? tools : undefined,
+        },
+        { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+      );
       return this.convertResponse(response);
     } catch (error) {
-      console.error("Anthropic API error:", error);
-      return this.createErrorResponse(error);
+      if (!isAbortError(error)) {
+        console.error("Anthropic API error:", error);
+      }
+      return this.createErrorResponse(error, input.signal);
     }
   }
   private convertMessages(
@@ -320,15 +382,24 @@ export class AnthropicModel implements LlmModel {
       timestamp: Date.now(),
     };
   }
-  private createErrorResponse(error: unknown): AssistantMessage {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
+    if (signal?.aborted || isAbortError(error)) {
+      return {
+        role: "assistant",
+        content: [createTextContent("模型调用已取消")],
+        stopReason: "aborted",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        errorMessage: "aborted",
+        timestamp: Date.now(),
+      };
+    }
     return {
       role: "assistant",
-      content: [createTextContent(`Anthropic 模型调用失败：${errorMessage}`)],
+      content: [createTextContent(`Anthropic 模型调用失败：${describeError(error)}`)],
       stopReason: "error",
       usage: { input: 0, output: 0, totalTokens: 0 },
       timestamp: Date.now(),
-      errorMessage,
+      errorMessage: describeError(error),
     };
   }
 }

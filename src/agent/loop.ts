@@ -19,6 +19,8 @@ export type RunAgentLoopOptions = {
     /** 最大循环轮次，默认值为 100 */
     maxTurns?:number
     beforeToolCall?:BeforeToolCall
+    /** 外部取消信号（例如 Ctrl+C）：中止模型请求与正在执行的工具 */
+    signal?:AbortSignal
     onEvent?:(event:AgentEvent)=>void
 }
 
@@ -63,11 +65,13 @@ function emitMessageLifeCycle(
 async function executeToolCall(
   toolCall: ToolCallContent,
   toolRegistry: ToolRegistry,
+  signal?: AbortSignal,
 ): Promise<ToolResultMessage> {
   try {
     const result = await toolRegistry.execute(
       toolCall.name,
       toolCall.arguments,
+      signal,
     );
     return {
       role: "toolResult",
@@ -127,6 +131,8 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
     const context = [...options.messages]
     const newMessages:AgentMessage[] = []
     const maxTurns = options.maxTurns ?? 100
+    // 取消信号：外部传入（Ctrl+C）则直接复用，否则内部创建一个（不会被取消的信号）
+    const signal = options.signal ?? new AbortController().signal
     emit({type:"agent_start"})
 
     for(let turn=1;turn<=maxTurns;turn++) {
@@ -134,7 +140,8 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         const assistant = await options.model.complete({
             systemPrompt:options.systemPrompt,
             messages:context,
-            tools:options.tools
+            tools:options.tools,
+            signal
         })
         context.push(assistant)
         newMessages.push(assistant)
@@ -142,6 +149,16 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         emitMessageLifeCycle(assistant, emit);
 
         if(assistant.stopReason==="error" || assistant.stopReason==="aborted") {
+            emit({type:"turn_end",turn,message:assistant,toolResults:[]})
+            emit({type:"agent_end",messages:newMessages})
+            return {
+                newMessages,
+                events
+            }
+        }
+
+        // 兜底：模型实现未响应取消信号时，这里不再继续执行工具
+        if(signal.aborted) {
             emit({type:"turn_end",turn,message:assistant,toolResults:[]})
             emit({type:"agent_end",messages:newMessages})
             return {
@@ -163,6 +180,9 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         const toolResults:ToolResultMessage[] = []
 
         for(const toolCall of toolCalls) {
+            if(signal.aborted) {
+                break
+            }
             const decision = await decideToolCall(toolCall,options.beforeToolCall);
             if(decision.action!=="allow") {
                 emit({
@@ -193,7 +213,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
                 args:executableToolCall.arguments
             })
 
-            const toolResult = await executeToolCall(executableToolCall,options.toolRegistry)
+            const toolResult = await executeToolCall(executableToolCall,options.toolRegistry, signal)
 
             toolResults.push(toolResult)
             context.push(toolResult)
@@ -213,6 +233,15 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         }
 
         emit({type:"turn_end",turn,message:assistant,toolResults})
+
+        // 被取消：不再进入下一轮
+        if(signal.aborted) {
+            emit({type:"agent_end",messages:newMessages})
+            return {
+                newMessages,
+                events
+            }
+        }
         
     }
 

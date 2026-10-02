@@ -33,12 +33,13 @@ export class ToolRegistry {
   async execute(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Tool not found: ${name}`);
     }
-    return tool.execute(args);
+    return tool.execute(args, signal);
   }
 }
 
