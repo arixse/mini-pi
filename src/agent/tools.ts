@@ -265,7 +265,9 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
 function bashTool(workspaceRoot: string): RegisteredTool {
   return {
     name: "bash",
-    description: "Execute a bash command inside the safe workspace.",
+    description:
+      "Execute a shell command with the workspace as the working directory. " +
+      "Not sandboxed: paths outside the workspace are rejected and the user must approve the command first.",
     parameters: {
       type: "object",
       properties: {
@@ -315,55 +317,197 @@ function bashTool(workspaceRoot: string): RegisteredTool {
 }
 
 /**
- * 检查 bash 命令是否包含路径逃逸模式
- * 注意：这是一个基本检查，复杂的命令组合可能绕过此检查
+ * bash 工具的路径守卫。
+ *
+ * 重要说明：bash 工具**没有真正的沙箱**——它通过 shell 执行任意命令，
+ * 静态检查不可能拦住 `node -e "..."`、变量拼接、编码变换等构造。
+ * 这里是「尽力而为的守卫 + 明确报错」，真正的防线是执行前的用户审批
+ * （`beforeToolCall`，见 src/cli/approval.ts）。
+ *
+ * 相比旧实现（按空白切分 token + 正则匹配 token 开头）的关键改进：
+ * - 先做引号感知的词法切分并去掉引号/转义，`cat "D:\secret.txt"` 不再漏检；
+ * - 同时扫描整条命令，能发现写在字符串内部拼接出来的绝对路径；
+ * - 识别出的路径统一走 resolveInsideWorkspace 的**真实路径**校验；
+ * - 只在确实逃逸出工作区时才拒绝，`sed 's/../x/'` 这类误报被消除。
  */
-function checkBashCommand(command: string, workspaceRoot: string): void {
-  const normalizedCommand = command.toLowerCase();
-  
-  // 检查是否包含绝对路径（Windows 驱动器号或 Unix 根路径）
-  const absolutePathPatterns = [
-    /^[a-z]:\\/i,  // Windows 绝对路径，如 D:\、C:\
-    /^[a-z]:\//i,   // Windows 绝对路径，如 D:/、C:/
-    /^\//,           // Unix 绝对路径，如 /etc、/home
-    /^~/,            // home 目录路径
-  ];
-  
-  for (const pattern of absolutePathPatterns) {
-    // 检查命令中的路径部分（跳过命令选项）
-    const pathMatches = command.match(/(?:^|\s)([^\s]+)/g);
-    if (pathMatches) {
-      for (const match of pathMatches) {
-        const pathPart = match.trim();
-        // 跳过命令选项（以-开头）和环境变量赋值
-        if (pathPart.startsWith('-') || pathPart.includes('=')) continue;
-        if (pattern.test(pathPart)) {
-          throw new Error(`Bash command contains absolute path outside workspace: ${pathPart}`);
-        }
-      }
+export function checkBashCommand(command: string, workspaceRoot: string): void {
+  if (HOME_REFERENCE_PATTERN.test(command)) {
+    throw new Error(
+      "Bash command references a home-directory variable, which is outside the workspace: " +
+        command.match(HOME_REFERENCE_PATTERN)![0],
+    );
+  }
+
+  for (const candidate of extractPathCandidates(command)) {
+    if (candidate.startsWith("~")) {
+      throw new Error(
+        `Bash command contains a home-directory path outside the workspace: ${candidate}`,
+      );
+    }
+    try {
+      resolveInsideWorkspace(workspaceRoot, candidate);
+    } catch {
+      throw new Error(
+        `Bash command contains a path outside the workspace: ${candidate}`,
+      );
     }
   }
-  
-  // 检查是否包含明显的路径逃逸模式
-  const escapePatterns = [
-    /\.\.[\\/]/,  // ../
-    /[\\/]\.\.$/,  // /..
-    /\.\./,        // 包含 .. 的路径
-  ];
-  
-  // 提取命令中的路径参数
-  const pathArgs = command.match(/(?:^|\s)([^\s]*\.\.[^\s]*)/g);
-  if (pathArgs) {
-    for (const arg of pathArgs) {
-      const pathArg = arg.trim();
-      // 跳过命令选项和环境变量
-      if (pathArg.startsWith('-') || pathArg.includes('=')) continue;
-      // 检查是否是路径逃逸
-      if (escapePatterns.some(p => p.test(pathArg))) {
-        throw new Error(`Bash command contains path escape pattern: ${pathArg}`);
+}
+
+/** `$HOME` / `%USERPROFILE%` 这类指向工作区之外的引用 */
+const HOME_REFERENCE_PATTERN = /\$HOME\b|%USERPROFILE%|%HOMEPATH%|\$env:USERPROFILE/i;
+
+/** 类 URL 片段（`https://x`、`s3://b`）先剔除，避免把 `//` 误判为 POSIX 根路径 */
+const URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"']*/g;
+
+/**
+ * 文本中的绝对路径：Windows 盘符 / UNC / POSIX 根。
+ *
+ * 要求路径前面是「起点或分隔符」，这样才不会被相对路径与表达式误伤：
+ * - `s/a/../b/` 里的 `/b/` 前面是 `.`，不算绝对路径；
+ * - `a/b` 里的 `/` 前面是单词字符，不算；
+ * - `cat /etc/passwd`、`--file=/etc/x`、`readFileSync('/etc/x')` 都能命中；
+ * - `~/x` 里 `/` 前面是 `~`，因此交给 token 的 `~` 规则处理。
+ */
+const ABSOLUTE_PATH_IN_TEXT =
+  /(?:^|[\s=:;|&<>("'`])((?:[a-zA-Z]:[\\/]|\\\\|\/)[^\s"']*)/g;
+
+/**
+ * token 内的 `..` 路径段：两侧不能是普通单词字符或点，
+ * 以免命中 `a..b` 这类合法名字；`s/../x/` 这类会命中，
+ * 但后续的真实路径校验会确认它仍在工作区内，因此不会误报。
+ */
+const TRAVERSAL_IN_TOKEN = /(?:^|[^A-Za-z0-9._-])\.\.(?:[^A-Za-z0-9._-]|$)/;
+
+/** Windows 上形如 `/b`、`/s` 的开关，豁免 POSIX 绝对路径判定（dir /b、findstr /s） */
+const WINDOWS_SWITCH_LIKE = /^\/[A-Za-z]{1,3}$/;
+
+/**
+ * 按 shell 词法切分命令：处理单/双引号与反斜杠转义，
+ * 并把 `| & ; < > ( )` 作为独立分隔符返回。
+ *
+ * 反斜杠的处理需要同时兼顾两种 shell：
+ * - POSIX sh：`\x` 会去掉反斜杠；`\/` 也是 `/`；
+ * - Windows cmd：`\` 是路径分隔符，`..\..` 不能被反转义成 `....`。
+ *
+ * 因此只有「反斜杠 + 可能被转义的字符」才做反转义，其余场合保留反斜杠本身。
+ */
+export function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: '"' | "'" | null = null;
+
+  const flush = (): void => {
+    if (started) {
+      tokens.push(current);
+    }
+    current = "";
+    started = false;
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    const next = command[i + 1];
+
+    if (quote === "'") {
+      // 单引号内没有转义
+      if (char === "'") {
+        quote = null;
+      } else {
+        current += char;
       }
+      continue;
+    }
+
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+      } else if (char === "\\" && (next === '"' || next === "\\" || next === "$" || next === "`")) {
+        i += 1;
+        current += next;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (char === "\\" && next !== undefined && UNQUOTED_ESCAPABLE.has(next)) {
+      i += 1;
+      current += next === "/" ? "/" : next;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      flush();
+      continue;
+    }
+    if ("|;&<>()".includes(char)) {
+      flush();
+      tokens.push(char);
+      continue;
+    }
+
+    current += char;
+    started = true;
+  }
+
+  flush();
+  return tokens;
+}
+
+/** 未被引号包裹时，反斜杠后面出现这些字符才视为转义（否则按字面保留，兼容 Windows 路径） */
+const UNQUOTED_ESCAPABLE = new Set([
+  '"',
+  "'",
+  "\\",
+  "/",
+  " ",
+  "$",
+  "`",
+  "|",
+  "&",
+  ";",
+  "<",
+  ">",
+  "(",
+  ")",
+]);
+
+/**
+ * 从命令中提取需要校验的路径候选。
+ * 返回的是「按 shell 语义去引号后」的片段，因此 `cat "D:\x"` 也能被识别。
+ */
+export function extractPathCandidates(command: string): string[] {
+  const candidates = new Set<string>();
+
+  // 1) 整条命令中出现的绝对路径（含字符串内部拼接出来的）
+  const scanned = command.replace(URL_PATTERN, " ");
+  for (const match of scanned.matchAll(ABSOLUTE_PATH_IN_TEXT)) {
+    const value = match[1];
+    if (process.platform === "win32" && WINDOWS_SWITCH_LIKE.test(value)) {
+      continue;
+    }
+    candidates.add(value);
+  }
+
+  // 2) 逐个 token：~ 开头、或含 .. 路径段
+  for (const token of tokenizeCommand(command)) {
+    if (token.startsWith("~")) {
+      candidates.add(token);
+      continue;
+    }
+    if (TRAVERSAL_IN_TOKEN.test(token)) {
+      candidates.add(token);
     }
   }
+
+  return [...candidates];
 }
 
 /**

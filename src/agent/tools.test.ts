@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -330,7 +330,7 @@ describe("tools", () => {
       await assert.rejects(
         () => registry.execute("bash", { command: "cat D:\\secret.txt" }),
         {
-          message: /Bash command contains absolute path outside workspace/,
+          message: /Bash command contains a path outside the workspace/,
         },
       );
     });
@@ -340,7 +340,7 @@ describe("tools", () => {
       await assert.rejects(
         () => registry.execute("bash", { command: "cat /etc/passwd" }),
         {
-          message: /Bash command contains absolute path outside workspace/,
+          message: /Bash command contains a path outside the workspace/,
         },
       );
     });
@@ -350,7 +350,7 @@ describe("tools", () => {
       await assert.rejects(
         () => registry.execute("bash", { command: "cat ../../etc/passwd" }),
         {
-          message: /Bash command contains path escape pattern/,
+          message: /Bash command contains a path outside the workspace/,
         },
       );
     });
@@ -360,9 +360,99 @@ describe("tools", () => {
       await assert.rejects(
         () => registry.execute("bash", { command: "cat ~/secret.txt" }),
         {
-          message: /Bash command contains absolute path outside workspace/,
+          message: /home-directory path outside the workspace/,
         },
       );
+    });
+  });
+
+  describe("bash 路径守卫（checkBashCommand）", () => {
+    it("should reject quoted absolute paths（旧实现可用引号绕过）", () => {
+      assert.throws(
+        () => checkBashCommand('cat "D:\\secret.txt"', testDir),
+        /path outside the workspace/,
+      );
+      assert.throws(
+        () => checkBashCommand("cat '/etc/passwd'", testDir),
+        /path outside the workspace/,
+      );
+    });
+
+    it("should reject absolute paths embedded in strings", () => {
+      assert.throws(
+        () =>
+          checkBashCommand(
+            'node -e "require(\'fs\').readFileSync(\'D:/secret.txt\')"',
+            testDir,
+          ),
+        /path outside the workspace/,
+      );
+    });
+
+    it("should reject quoted relative escapes", () => {
+      assert.throws(
+        () => checkBashCommand('cat "..\\..\\secret.txt"', testDir),
+        /path outside the workspace/,
+      );
+      assert.throws(
+        () => checkBashCommand("cat '../etc/passwd'", testDir),
+        /path outside the workspace/,
+      );
+    });
+
+    it("should reject home-directory references", () => {
+      assert.throws(
+        () => checkBashCommand("cat ~/secret.txt", testDir),
+        /home-directory path outside the workspace/,
+      );
+      assert.throws(
+        () => checkBashCommand("cat %USERPROFILE%\\secret.txt", testDir),
+        /home-directory variable/,
+      );
+      assert.throws(
+        () => checkBashCommand("cat $HOME/secret.txt", testDir),
+        /home-directory variable/,
+      );
+    });
+
+    it("should allow commands that stay inside the workspace", () => {
+      assert.doesNotThrow(() => checkBashCommand("echo hello", testDir));
+      assert.doesNotThrow(() => checkBashCommand("git status", testDir));
+      // `..` 仍在工作区内（s/a/../b -> s/b），不应误报
+      assert.doesNotThrow(() => checkBashCommand("sed s/a/../b/ file.txt", testDir));
+      // `a..b` 不是路径段，不应误报
+      assert.doesNotThrow(() => checkBashCommand('grep "a..b" file.txt', testDir));
+      // URL 内的 `//` 不是 POSIX 根路径
+      assert.doesNotThrow(() =>
+        checkBashCommand("curl https://api.example.com/v1/models", testDir),
+      );
+      assert.doesNotThrow(() => checkBashCommand("cat src/index.ts", testDir));
+    });
+
+    it("should tolerate Windows-style switches on Windows only", () => {
+      if (process.platform === "win32") {
+        assert.doesNotThrow(() => checkBashCommand("dir /b", testDir));
+      } else {
+        assert.throws(
+          () => checkBashCommand("dir /b", testDir),
+          /path outside the workspace/,
+        );
+      }
+    });
+
+    it("should tokenize quoted arguments without leaking quotes", () => {
+      assert.deepStrictEqual(tokenizeCommand('cat "a b" c'), [
+        "cat",
+        "a b",
+        "c",
+      ]);
+      assert.deepStrictEqual(tokenizeCommand("echo 'x|y' | grep x"), [
+        "echo",
+        "x|y",
+        "|",
+        "grep",
+        "x",
+      ]);
     });
   });
 
