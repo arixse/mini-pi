@@ -9,8 +9,9 @@
 | --- | --- | --- |
 | 1 | 真流式输出、工作状态行（spinner）、工具耗时 | ✅ 已实现 |
 | 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code） | ⏳ 待做 |
-| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做 |
+| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做（`read_file` 的规模元数据已就位） |
 | 4 | `render.ts` 收口、`NO_COLOR`/`--no-emoji`/窄终端降级 | ⏳ 待做（部分降级已随第 1 档落地） |
+| — | `read_file` 分页与上限（12.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
 
 第 1 档实际落地内容：
 
@@ -227,7 +228,7 @@ IDLE ──用户回车──▶ THINKING ──首个 token──▶ STREAMING 
 | 工具 | 现状 `details` | 需补充 |
 | --- | --- | --- |
 | `bash` | `command`, `exitCode` | `stdout`, `stderr`（分开），`truncated` |
-| `read_file` | `path` | `totalLines`, `totalBytes`（`544738b` 起工具返回完整内容，卡片需要规模元数据才能显示"529 行 · 18.6 KB"，展示窗口化由渲染层负责） |
+| `read_file` | ✅ `path`, `totalLines`, `totalBytes`, `returnedFrom`, `returnedTo`, `returnedLines`, `truncated` | 已补齐，第 3 档可直接用 |
 | `write_file` | `path`, `bytesWritten` | `lines`, `created`（新增还是覆盖） |
 | `edit_file` | `path`, `replacements`, `oldTextLength`, `newTextLength` | `hunks`（可选，用于折叠提示） |
 | `list_files` | `entries` | `dirCount`, `fileCount`, `truncated` |
@@ -390,21 +391,21 @@ export function renderStatus(state: RunState, ctx): string;
 4. **`list_files` 折叠阈值**（默认 10 项是否合适）
 5. **是否保留每轮首尾的 60 字符分隔线**？（工具块已有 gutter，连续多轮时分隔线可能冗余）
 
-### 12.1 新增：工具结果完整性 vs 上下文预算
+### 12.1 工具结果完整性 vs 上下文预算（已实施）
 
 `544738b`「保留完整toolResult结果」取消了 `read_file` 的 1800 字符截断，好处是模型能看到完整内容，
 代价是**单次读取可能撑爆上下文**（读一个 200KB 的文件 ≈ 十万字符进 context），
 而压缩只在下一轮开始时触发，救不回已经发出的这一次请求。
 
-可选方案（未实施，等你定）：
+**已按方案 B + C 实施**（`read_file` 分页与上限）：
 
-| 方案 | 说明 |
-| --- | --- |
-| A. 保持现状 | 完全信任模型与压缩机制，仅在上下文估算里体现 |
-| B. 给 `read_file` 加分页参数 | `path` + `offset` + `limit`（行），默认返回有限行并在 `details` 里给出总行数，模型按需翻页 |
-| C. 大文件硬上限 + 明确提示 | 超过 N 字符（如 20k）时截断，并在结果里写明"已截断，可用 offset 继续"，同时进入 `details.truncated` |
+- 新增 `offset` / `limit` 参数（1 起、硬上限 2000 行）；
+- 单次返回 20000 字符硬上限，触发时在结果末尾给出显式标注
+  （`...[已截断：本次返回第 X-Y 行（原因），文件共 N 行。用 offset/limit 继续读取]`）；
+- `details` 补充 `totalLines` / `totalBytes` / `returnedFrom` / `returnedTo` / `returnedLines` / `truncated`，
+  第 3 档的卡片可以直接报出真实规模。
 
-倾向 **B + C 组合**：既保留"不偷偷丢内容"的原则，又给模型可控的翻页手段。
+原则：**不偷偷丢内容**——要么完整返回，要么明确告知被截断以及如何继续读。
 
 ## 相关文档
 

@@ -13,6 +13,7 @@ import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
 import { createStatusLine, formatDuration } from "./status";
+import { ExitCoordinator } from "./exit";
 
 /** 触发上下文压缩的近似 token 上限 */
 export const MAX_CONTEXT_TOKENS = 6000;
@@ -83,19 +84,41 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     console.log(...args);
   };
 
-  // Ctrl+C：任务执行中 -> 取消任务；空闲时 -> 退出
+  // 本轮是否正在处理中。
+  // 必须从 line 处理函数的第一行就为 true：/exit 或 Ctrl+C 可能在本轮
+  // 尚未走到模型调用（例如还在写会话文件）时到达，若只看 activeRun
+  // 就会误判为"空闲"而直接 process.exit，丢掉这一轮。
+  let turnInFlight = false;
   let activeRun: AbortController | null = null;
+
+  // 退出协调：任务进行中收到 /exit 或 EOF 时，先取消、等本轮落盘后再退出
+  const exitCoordinator = new ExitCoordinator({
+    abort: () => {
+      if (!turnInFlight) {
+        return false;
+      }
+      activeRun?.abort();
+      return true;
+    },
+    onExit: (code) => {
+      status.stop();
+      console.log(chalk.yellow("\n👋 再见！\n"));
+      process.exit(code);
+    },
+    onWaiting: () =>
+      quiet(chalk.yellow("\n⏹️  正在取消当前任务，本轮结束后自动退出\n")),
+    onTimeout: () =>
+      quiet(chalk.yellow("\n⚠️  任务未在 3s 内结束，强制退出\n")),
+  });
+
+  // Ctrl+C：本轮执行中 -> 取消本轮；空闲时 -> 退出
   rl.on("SIGINT", () => {
-    if (activeRun) {
-      const run = activeRun;
-      activeRun = null;
-      run.abort();
+    if (turnInFlight) {
+      activeRun?.abort();
       console.log(chalk.yellow("\n⏹️  已请求取消当前任务\n"));
       return;
     }
-    console.log(chalk.yellow("\n👋 再见！\n"));
-    rl.close();
-    process.exit(0);
+    exitCoordinator.requestExit(0);
   });
 
   rl.prompt();
@@ -109,9 +132,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/exit" || input === "/quit") {
-      console.log(chalk.yellow("\n👋 再见！\n"));
-      rl.close();
-      process.exit(0);
+      // 任务进行中会先取消，等本轮收尾后再退出（见 ExitCoordinator）
+      exitCoordinator.requestExit(0);
+      return;
     }
 
     if (input === "/clear") {
@@ -206,6 +229,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return;
     }
 
+    // 从这一刻起本轮即"进行中"：此后到达的 /exit 或 Ctrl+C 会取消本轮，
+    // 而不是直接退出进程（取消信号也覆盖落盘阶段之后的所有步骤）
+    turnInFlight = true;
+    const run = new AbortController();
+    activeRun = run;
+
     try {
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
@@ -224,7 +253,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
       await appendUserMessage(options, createUserMessage(input));
 
-      activeRun = new AbortController();
       status.set({ kind: "thinking", startedAt: Date.now() });
 
       const result = await runAgentLoop({
@@ -235,7 +263,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         toolRegistry: options.toolRegistry,
         maxTurns: 100,
         beforeToolCall,
-        signal: activeRun.signal,
+        signal: run.signal,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
@@ -273,13 +301,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     } finally {
       status.stop();
       activeRun = null;
+      turnInFlight = false;
+      // 若此前收到 /exit 或 EOF，则在本轮收尾（含落盘）之后退出
+      exitCoordinator.notifyRunFinished();
     }
 
     rl.prompt();
   });
 
   rl.on("close", () => {
-    process.exit(0);
+    // stdin EOF（Ctrl+D / 管道结束）同样走协调流程，避免打断进行中的任务
+    exitCoordinator.requestExit(0);
   });
 }
 

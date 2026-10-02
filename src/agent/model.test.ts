@@ -10,6 +10,7 @@ import {
 import { isRetryableError, withRetry } from "./model";
 import {
   collectOpenAIStream,
+  isAbortError,
   isUnsupportedStreamOptionsError,
 } from "./model";
 import { createTextContent } from "./message";
@@ -134,8 +135,7 @@ describe("model", () => {
       assert.strictEqual(result.stopReason, "aborted");
     });
 
-    it("should not log an API error when the call is aborted", async () => {
-      // SDK 抛出的取消错误 name 是 "Error"、构造函数名才是 APIUserAbortError，
+    it("should not log an API error when the call is aborted", async () => {      // SDK 抛出的取消错误 name 是 "Error"、构造函数名才是 APIUserAbortError，
       // 只检查 name 会把用户取消误报成 API 故障
       const originalError = console.error;
       const logged: unknown[] = [];
@@ -315,6 +315,39 @@ describe("model", () => {
       assert.strictEqual(isRetryableError(httpError(404)), false);
       assert.strictEqual(isRetryableError(new Error("plain")), false);
       assert.strictEqual(isRetryableError(undefined), false);
+    });
+  });
+
+  describe("isAbortError（取消错误识别）", () => {
+    it("应识别构造函数名带打包后缀的取消错误（esbuild 会改名）", () => {
+      // 端到端跑打包产物时发现：esbuild 把 APIUserAbortError 改名为
+      // APIUserAbortError2，按全等匹配会漏判，用户取消被误报成 API 故障
+      const error = new Error("Request was aborted.");
+      Object.defineProperty(error, "constructor", {
+        value: { name: "APIUserAbortError2" },
+      });
+
+      assert.strictEqual(isAbortError(error), true);
+    });
+
+    it("应识别 DOMException 形态的 AbortError", () => {
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+
+      assert.strictEqual(isAbortError(error), true);
+    });
+
+    it("应沿 cause 链识别", () => {
+      const cause = Object.assign(new Error("aborted"), { name: "AbortError" });
+      const wrapper = new Error("Request failed", { cause });
+
+      assert.strictEqual(isAbortError(wrapper), true);
+    });
+
+    it("普通错误与非法输入不应被误判", () => {
+      assert.strictEqual(isAbortError(new Error("model not found")), false);
+      assert.strictEqual(isAbortError(undefined), false);
+      assert.strictEqual(isAbortError("boom"), false);
     });
   });
 

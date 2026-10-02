@@ -128,13 +128,17 @@ export async function withRetry<T>(
 /**
  * 判断错误是否来自 abort（用户取消）。
  *
- * 注意：SDK 抛出的取消错误 `name` 依然是 "Error"，只有构造函数名是
- * `APIUserAbortError`（cause 里是 DOMException AbortError），
- * 因此这里沿 cause 链同时检查 name 与构造函数名。
+ * 注意两点：
+ * 1. SDK 抛出的取消错误 `name` 依然是 "Error"，只有构造函数名是
+ *    `APIUserAbortError`（cause 里是 DOMException AbortError）；
+ * 2. **打包后会改名**：esbuild 会把类名改成 `APIUserAbortError2` 之类，
+ *    因此这里用模式匹配而不是全等比较。
+ *
+ * 调用方另外应以 `signal.aborted` 为准，避免任何命名差异导致误判。
  */
-const ABORT_ERROR_NAMES = new Set(["AbortError", "APIUserAbortError"]);
+const ABORT_ERROR_PATTERNS = [/^AbortError$/i, /APIUserAbortError/i];
 
-function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
   let current: unknown = error;
 
   for (let depth = 0; current && typeof current === "object" && depth < 5; depth += 1) {
@@ -143,14 +147,14 @@ function isAbortError(error: unknown): boolean {
       constructor?: { name?: unknown };
       cause?: unknown;
     };
-    const name = candidate.name;
-    const constructorName = candidate.constructor?.name;
 
-    if (
-      (typeof name === "string" && ABORT_ERROR_NAMES.has(name)) ||
-      (typeof constructorName === "string" && ABORT_ERROR_NAMES.has(constructorName))
-    ) {
-      return true;
+    for (const value of [candidate.name, candidate.constructor?.name]) {
+      if (
+        typeof value === "string" &&
+        ABORT_ERROR_PATTERNS.some((pattern) => pattern.test(value))
+      ) {
+        return true;
+      }
     }
 
     current = candidate.cause;
@@ -332,7 +336,8 @@ export class OpenAIModel implements LlmModel {
           error = retryError;
         }
       }
-      if (!isAbortError(error)) {
+      // 以取消信号为准：打包改名等任何命名差异都不该把"用户取消"报成 API 故障
+      if (!isAbortError(error) && !input.signal?.aborted) {
         console.error("OpenAI API error:", error);
       }
       return this.createErrorResponse(error, input.signal);
@@ -491,7 +496,7 @@ export class AnthropicModel implements LlmModel {
       );
       return this.convertResponse(response);
     } catch (error) {
-      if (!isAbortError(error)) {
+      if (!isAbortError(error) && !input.signal?.aborted) {
         console.error("Anthropic API error:", error);
       }
       return this.createErrorResponse(error, input.signal);
