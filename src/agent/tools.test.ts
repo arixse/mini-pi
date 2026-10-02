@@ -118,14 +118,15 @@ describe("tools", () => {
       assert.strictEqual(result.content[0].text, "hello world");
     });
 
-    it("should truncate long content", async () => {
+    it("should return the full content without truncation", async () => {
+      // 544738b「保留完整toolResult结果」起：工具不再截断内容，
+      // 完整结果交给模型（展示层的分页/窗口化见 docs/cli-ux-design.md）
       const longContent = "x".repeat(2000);
       writeFileSync(join(testDir, "long.txt"), longContent);
       const registry = createToolRegistry(testDir);
       const result = await registry.execute("read_file", { path: "long.txt" });
 
-      assert.ok(result.content[0].text.length < 2000);
-      assert.ok(result.content[0].text.includes("truncated"));
+      assert.strictEqual(result.content[0].text, longContent);
     });
 
     it("should throw error for non-existent file", async () => {
