@@ -5,6 +5,7 @@ import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
+import { AgentMessage } from "../shared/protocol";
 
 describe("sessionStore", () => {
   const testDir = join(process.cwd(), ".test-session-store");
@@ -34,6 +35,41 @@ describe("sessionStore", () => {
       const store1 = new JsonlSessionStore(sessionFile, testDir);
       const store2 = new JsonlSessionStore(sessionFile, testDir);
       assert.strictEqual(store2.getSessionId(), store1.getSessionId());
+    });
+
+    it("should restore full history when the session file is reopened", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("first")],
+        timestamp: Date.now(),
+      });
+      await store.appendMessage({
+        role: "assistant",
+        content: [createTextContent("answer")],
+        stopReason: "stop",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      });
+
+      // 模拟进程重启：用同一个会话文件新建 store
+      const reopened = new JsonlSessionStore(sessionFile, testDir);
+      const restored = reopened.buildContext();
+
+      assert.strictEqual(restored.length, 2);
+      assert.strictEqual(
+        (restored[0].content[0] as { type: "text"; text: string }).text,
+        "first",
+      );
+      assert.strictEqual(restored[1].role, "assistant");
+
+      // 续写时应接在恢复出来的 leaf 之后，而不是另起一条链
+      await reopened.appendMessage({
+        role: "user",
+        content: [createTextContent("third")],
+        timestamp: Date.now(),
+      });
+      assert.strictEqual(reopened.buildContext().length, 3);
     });
 
     it("should append messages", async () => {
@@ -92,7 +128,7 @@ describe("sessionStore", () => {
       });
     });
 
-    it("should build context from messages", async () => {
+    it("should build context from the full message chain in order", async () => {
       const store = new JsonlSessionStore(sessionFile, testDir);
       await store.appendMessage({
         role: "user",
@@ -106,10 +142,97 @@ describe("sessionStore", () => {
         usage: { input: 0, output: 0, totalTokens: 0 },
         timestamp: Date.now(),
       });
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("second question")],
+        timestamp: Date.now(),
+      });
 
+      // 回归用例：parentId 只回溯一层时，这里只会拿到 1 条消息
       const context = store.buildContext();
-      assert.ok(context.length >= 1);
-      assert.ok(context[0].role === "user" || context[0].role === "assistant");
+      assert.strictEqual(context.length, 3);
+      assert.deepStrictEqual(
+        context.map((message) => message.role),
+        ["user", "assistant", "user"],
+      );
+      assert.strictEqual(
+        (context[2].content[0] as { type: "text"; text: string }).text,
+        "second question",
+      );
+    });
+
+    it("should build context along the branch after switching leaf", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      const baseId = await store.appendMessage({
+        role: "user",
+        content: [createTextContent("branch base")],
+        timestamp: Date.now(),
+      });
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("abandoned")],
+        timestamp: Date.now(),
+      });
+
+      store.switchLeafId(baseId);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("new branch")],
+        timestamp: Date.now(),
+      });
+
+      const texts = store
+        .buildContext()
+        .map(
+          (message) =>
+            (message.content[0] as { type: "text"; text: string }).text,
+        );
+      assert.deepStrictEqual(texts, ["branch base", "new branch"]);
+    });
+
+    it("should sync context into an existing array reference", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("synced")],
+        timestamp: Date.now(),
+      });
+
+      const stale: AgentMessage = {
+        role: "assistant",
+        content: [createTextContent("stale")],
+        stopReason: "stop",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      };
+      const target: AgentMessage[] = [stale];
+
+      const returned = store.syncContext(target);
+
+      assert.strictEqual(returned, target, "必须保持数组引用不变");
+      assert.strictEqual(target.length, 1);
+      assert.strictEqual(
+        (target[0].content[0] as { type: "text"; text: string }).text,
+        "synced",
+      );
+    });
+
+    it("should reset session state and the session file", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("to be cleared")],
+        timestamp: Date.now(),
+      });
+
+      await store.reset();
+
+      assert.strictEqual(store.getLeafId(), null);
+      assert.deepStrictEqual(store.buildContext(), []);
+
+      const lines = readFileSync(sessionFile, "utf8").trim().split("\n");
+      assert.strictEqual(lines.length, 1, "只应保留新的会话头");
+      assert.ok(lines[0].includes('"type":"session"'));
     });
 
     it("should persist data to file", async () => {
@@ -126,7 +249,7 @@ describe("sessionStore", () => {
       assert.ok(lines[1].includes("persisted"));
     });
 
-    it("should compact messages when context is too long", async () => {
+    it("should compact messages and keep only the recent window", async () => {
       const store = new JsonlSessionStore(sessionFile, testDir);
       
       // 添加足够的消息以触发压缩
@@ -145,16 +268,72 @@ describe("sessionStore", () => {
         });
       }
 
-      // 尝试压缩，保留最近2条消息
+      // 压缩时保留最近 2 条消息
       const compaction = await store.compactIfNedded(100, 2);
-      
-      // 如果触发了压缩，验证摘要内容
-      if (compaction) {
-        assert.ok(compaction.summary.length > 0);
-        assert.ok(compaction.summary.includes("对话共"));
-        assert.ok(compaction.summary.includes("用户消息"));
-        assert.ok(compaction.summary.includes("助手回复"));
+
+      assert.ok(compaction, "超过 token 阈值时必须触发压缩");
+      assert.ok(compaction.summary.length > 0);
+      assert.ok(compaction.summary.includes("对话共"));
+      assert.ok(compaction.summary.includes("用户消息"));
+      assert.ok(compaction.summary.includes("助手回复"));
+
+      // 压缩后上下文 = 1 条摘要 + 最近 keepRecent 条消息
+      const context = store.buildContext();
+      assert.strictEqual(context.length, 3);
+      assert.ok(
+        (context[0].content[0] as { type: "text"; text: string }).text.includes(
+          "旧的上下文摘要",
+        ),
+      );
+      assert.strictEqual(
+        (context[2].content[0] as { type: "text"; text: string }).text,
+        `Response 9: ${"b".repeat(100)}`,
+      );
+    });
+
+    it("should treat keepRecentMessages = 0 as keeping the last message", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      for (let i = 0; i < 4; i++) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`Message ${i}: ${"a".repeat(60)}`)],
+          timestamp: Date.now(),
+        });
       }
+
+      // slice(-0) 等价于 slice(0)，修复前这里会"保留全部、摘要为空"
+      const compaction = await store.compactIfNedded(10, 0);
+
+      assert.ok(compaction);
+      const context = store.buildContext();
+      assert.strictEqual(context.length, 2, "摘要 + 最近 1 条消息");
+      assert.ok(
+        (context[0].content[0] as { type: "text"; text: string }).text.includes(
+          "旧的上下文摘要",
+        ),
+      );
+      assert.strictEqual(
+        (context[1].content[0] as { type: "text"; text: string }).text,
+        `Message 3: ${"a".repeat(60)}`,
+      );
+    });
+
+    it("should fall back to a simple summary when no model is configured", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      for (let i = 0; i < 3; i++) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`问题 ${i} ${"x".repeat(60)}`)],
+          timestamp: Date.now(),
+        });
+      }
+
+      // 未 setModel：不能抛错中断对话，必须回退到简单摘要
+      const compaction = await store.compactIfNedded(10, 1);
+
+      assert.ok(compaction);
+      assert.ok(compaction.summary.includes("对话共"));
+      assert.ok(compaction.summary.includes("用户主要请求"));
     });
 
     it("should build context with compaction summary", async () => {
@@ -174,25 +353,33 @@ describe("sessionStore", () => {
         timestamp: Date.now(),
       });
       
-      // 强制压缩（设置很低的 token 阈值）
+      // 强制压缩（设置很低的 token 阈值，保留最近 1 条）
       const compaction = await store.compactIfNedded(10, 0);
-      
-      if (compaction) {
-        // 添加新消息
-        await store.appendMessage({
-          role: "user",
-          content: [createTextContent("new question")],
-          timestamp: Date.now(),
-        });
-        
-        const context = store.buildContext();
-        
-        // 验证上下文包含摘要
-        const firstMessage = context[0];
-        assert.strictEqual(firstMessage.role, "user");
-        const text = firstMessage.content[0];
-        assert.ok(text.type === "text" && text.text.includes("旧的上下文摘要"));
-      }
+      assert.ok(compaction, "低阈值下必须触发压缩");
+
+      // 添加新消息
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("new question")],
+        timestamp: Date.now(),
+      });
+
+      const context = store.buildContext();
+
+      // 摘要 + 压缩时保留的最后一条消息 + 新消息
+      assert.strictEqual(context.length, 3);
+      const firstMessage = context[0];
+      assert.strictEqual(firstMessage.role, "user");
+      const text = firstMessage.content[0];
+      assert.ok(text.type === "text" && text.text.includes("旧的上下文摘要"));
+      assert.strictEqual(
+        (context[1].content[0] as { type: "text"; text: string }).text,
+        "first answer",
+      );
+      assert.strictEqual(
+        (context[2].content[0] as { type: "text"; text: string }).text,
+        "new question",
+      );
     });
 
     it("should use model for summarization when model is set", async () => {
@@ -229,11 +416,10 @@ describe("sessionStore", () => {
       
       // 强制压缩
       const compaction = await store.compactIfNedded(10, 0);
-      
-      if (compaction) {
-        // 验证摘要来自模型
-        assert.strictEqual(compaction.summary, "用户询问了排序算法，助手实现了快速排序");
-      }
+
+      assert.ok(compaction, "低阈值下必须触发压缩");
+      // 验证摘要来自模型
+      assert.strictEqual(compaction.summary, "用户询问了排序算法，助手实现了快速排序");
     });
   });
 });

@@ -184,7 +184,10 @@ export class JsonlSessionStore {
     }
   }
 
-  private async reset(): Promise<void> {
+  /**
+   * 清空当前会话：重置内存状态并重写会话文件（只保留新的会话头）。
+   */
+  async reset(): Promise<void> {
     if (existsSync(this.filePath)) {
       await rm(this.filePath);
     }
@@ -234,33 +237,36 @@ export class JsonlSessionStore {
     await appendFile(this.filePath, `${JSON.stringify(entry)}\n`, "utf8");
   }
 
+  /**
+   * 上下文超限时把较早的消息压缩成一条摘要记录。
+   *
+   * @param maxApproxTokens 近似 token 上限，未超过则不做任何事
+   * @param keepRecentMessages 压缩后保留的最近消息条数，最小为 1
+   *   （`slice(-0)` 等价于 `slice(0)`，即"全部保留"，因此 0 会被规范化为 1）
+   */
   async compactIfNedded(
     maxApproxTokens: number,
     keepRecentMessages: number,
   ): Promise<CompactionEntry | undefined> {
+    const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
     const path = this.pathToLeaf();
     const messageEntries = path.filter(
       (entry): entry is MessageEntry => entry.type === "message",
     );
     const currentContext = this.buildContext();
     const tokensBefore = estimateTokens(currentContext);
-    if (
-      tokensBefore <= maxApproxTokens ||
-      messageEntries.length <= keepRecentMessages
-    ) {
+    if (tokensBefore <= maxApproxTokens || messageEntries.length <= keepRecent) {
       return undefined;
     }
-    const kept = messageEntries.slice(-keepRecentMessages);
-    const summarized = messageEntries.slice(0, -keepRecentMessages);
-    
-    // 使用模型生成摘要，如果没有模型则使用简单摘要
-    let summary: string;
-    if (this.model) {
-      summary = await summarizeEntries(summarized, this.model);
-    } else {
-      throw new Error('please set the default model first')
-    }
-    
+    const kept = messageEntries.slice(-keepRecent);
+    const summarized = messageEntries.slice(0, -keepRecent);
+
+    // 优先用模型生成摘要；未配置模型时回退到简单摘要，
+    // 不抛错中断当前对话（压缩只是优化，失败不应让整轮对话失败）。
+    const summary = this.model
+      ? await summarizeEntries(summarized, this.model)
+      : generateSimpleSummary(summarized);
+
     const firstKeptEntryId = kept[0]?.id;
     if (!firstKeptEntryId) {
       return undefined;
@@ -278,10 +284,18 @@ export class JsonlSessionStore {
     this.leafId = entry.id;
     return entry;
   }
+  /**
+   * 从 leaf 沿 parentId 回溯到根，返回 root -> leaf 顺序的完整链路。
+   *
+   * 必须是循环：只回溯一层会让 buildContext() 永远只返回最后一条消息，
+   * 历史上下文和压缩定位（firstKeptEntryId）全部失效。
+   */
   private pathToLeaf(): SessionEntry[] {
     const path: SessionEntry[] = [];
-    let current = this.leafId ? this.byId.get(this.leafId) : null;
-    if (current) {
+    let current: SessionEntry | undefined = this.leafId
+      ? this.byId.get(this.leafId)
+      : undefined;
+    while (current) {
       path.unshift(current);
       current =
         "parentId" in current && current.parentId
@@ -329,6 +343,19 @@ export class JsonlSessionStore {
     }
     return messages
   } 
+
+  /**
+   * 用当前会话上下文（含压缩摘要）覆盖 target 数组的内容。
+   *
+   * 保持数组引用不变，供 REPL 这类长期持有 messages 引用的调用方使用，
+   * 使会话文件成为上下文的唯一事实来源，压缩结果因此真正生效。
+   */
+  syncContext(target: AgentMessage[]): AgentMessage[] {
+    const context = this.buildContext();
+    target.length = 0;
+    target.push(...context);
+    return target;
+  }
 
 }
 
