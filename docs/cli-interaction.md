@@ -134,9 +134,9 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    - 若 `model` 为空，打印 `⚠️ 尚未配置模型，请使用 /login 和 /model 命令进行配置` 并返回（这条消息不会写入会话）；
    - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(6000, 10)` 判断是否需要压缩；
    - 用 `sessionStore.syncContext()` 依据会话文件重建内存上下文 —— **会话文件是上下文的唯一事实来源**，压缩结果因此立即生效；
-   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`；
+   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.4 节）与取消信号（4.5 节）；
    - 将本轮新增消息逐条写入会话文件，并再次 `syncContext()` 同步内存上下文。
-5. 重新显示提示符，等待下一次输入。
+5. 重新显示提示符，等待下一次输入（执行期间按 Ctrl+C 取消当前任务）。
 
 ### 4.1 对话过程的事件与输出
 
@@ -186,7 +186,40 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - `read_file`：读取文件
 - `write_file`：写入文件
 - `edit_file`：按精确文本匹配编辑文件
-- `bash`：执行命令
+- `bash`：执行命令（`cwd` 为工作区）
+
+文件类工具会做两层路径校验（词法 + 真实路径），工作区内的 symlink/junction
+指向外部时同样会被拒绝；`read_file` / `write_file` / `edit_file` 还会拒绝访问
+凭据类文件（`.env*`、SSH 私钥、`*.pem`、`.git-credentials`，模板文件
+`.env.example` / `.sample` / `.template` 除外）。
+
+### 4.4 工具调用审批
+
+写文件与执行命令都属于危险动作，执行前必须由用户逐次确认：
+
+```
+⚠️  工具调用待确认: bash
+   命令: npm test
+   允许执行? [y/N]
+```
+
+- **只读工具自动放行**：`list_files`、`read_file` 不询问；
+- **需要确认**：`write_file`、`edit_file`、`bash`；
+- 输入 `y` / `yes` / `是` / `允许` 表示同意，其它输入一律视为拒绝；
+- 拒绝时不会执行工具，而是生成一条 `isError` 的 toolResult 交回模型
+  （模型能据此换方案），终端显示 `❌ 已拒绝: <工具名>`；
+- 非交互式终端（管道输入等）无法确认，**按拒绝处理**，并打印一次提示；
+- `/trust` 可切换「信任模式」，本会话内跳过确认（见 5.10）。
+
+> 安全边界：`bash` 没有真正的沙箱，路径守卫只是尽力而为的静态检查
+> （它挡不住 `node -e "..."` 这类构造），**审批才是真正的防线**。
+
+### 4.5 取消与超时
+
+- 任务执行期间按 **Ctrl+C** 会取消当前任务：模型请求被中止、正在执行的命令被杀掉，
+  终端显示 `⏹️  已请求取消当前任务`；空闲时按 Ctrl+C 则退出程序。
+- 单次模型请求有 120 秒超时（`REQUEST_TIMEOUT_MS`），不会无限等待。
+- 取消会以 `stopReason: "aborted"` 结束本次运行，不会被误报为 API 故障。
 
 ---
 
@@ -203,7 +236,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
-| `/clear` | 清除当前对话历史（内存中的消息） |
+| `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
+| `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit` | 退出程序 |
 | `/quit` | 退出程序 |
 
@@ -220,6 +254,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   /reload  - 重载配置文件
   /skills  - 列出所有可用的 skills
   /load <name> - 加载指定 skill 的完整内容
+  /trust   - 切换信任模式（跳过写文件/执行命令的确认）
   /help    - 显示帮助信息
   /clear   - 清除对话历史
   /exit    - 退出程序
@@ -314,6 +349,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - `~/.mini-pi/skills/`
 - `项目目录/.mini-pi/skills/`
 - `项目目录/.pi/skills/`
+- `项目目录/.agents/skills/`（AGENTS.md 约定的项目级 Skill 目录）
 
 ### 5.7 `/load <name>` —— 加载 Skill
 
@@ -334,6 +370,19 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 - 输出 `👋 再见！` 并退出进程（`process.exit(0)`）。
 - 另外，当 readline 接口被关闭时（`close` 事件）也会退出。
+
+### 5.10 `/trust` —— 信任模式
+
+```
+> /trust
+🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认
+> /trust
+🔒 已关闭信任模式：写文件与执行命令需逐次确认
+```
+
+- 每次执行 `/trust` 切换一次状态，仅对当前会话有效（重启后恢复为需确认）；
+- 开启后 `write_file` / `edit_file` / `bash` 不再询问，请只在可信任务下使用；
+- `list_files` / `read_file` 本来就免确认，不受影响。
 
 ---
 
@@ -384,7 +433,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 1. `~/.agents/skills`（global-agents，最低）
 2. `~/.mini-pi/skills`（global-mini-pi）
 3. `<workspaceRoot>/.mini-pi/skills`（project）
-4. `<workspaceRoot>/.pi/skills`（project，最高；AGENTS.md 中约定的项目级 Skill 目录）
+4. `<workspaceRoot>/.pi/skills`（project）
+5. `<workspaceRoot>/.agents/skills`（project，最高；AGENTS.md 中约定的项目级 Skill 目录）
 
 ---
 
@@ -397,7 +447,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | 会话记录 | `~/.mini-pi/sessions/*.jsonl` | 每个会话一个文件 |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
-| Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
+| Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/`、`<workspaceRoot>/.agents/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
 
 ### 8.1 auth.json 示例
 
@@ -424,6 +474,16 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `minimax-cn` | Anthropic | `https://api.minimax.chat/anthropic` |
 | `openai` | OpenAI | `https://api.openai.com/v1` |
 
+### 8.4 凭据文件权限
+
+`auth.json` 与 `settings.json` 在写入时即按 **0600（仅属主可读写）** 创建，
+并在写入后再次收紧已存在文件的权限；chmod 失败（网络盘等不支持）会静默忽略，
+不会导致配置写入失败。
+
+> **Windows**：`chmod` 只能影响只读属性，无法表达 0600。
+> 请自行限制 `%USERPROFILE%\.mini-pi` 目录的访问权限（例如只保留当前用户），
+> 否则同机其它用户可能读到 API Key。
+
 ---
 
 ## 9. Agent 事件类型
@@ -436,13 +496,14 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `turn_start` / `turn_end` | 单轮开始 / 结束 |
 | `message_start` / `message_update` / `message_end` | 消息生命周期，`message_update` 携带流式 `delta` |
 | `tool_execution_start` / `tool_execution_end` | 工具执行开始 / 结束 |
-| `tool_permission` | 工具权限控制（`beforeToolCall` 钩子） |
-| `compaction` | 上下文压缩 |
-| `branch_switch` | 切换会话分支叶子节点 |
+| `tool_permission` | 工具权限控制（`beforeToolCall` 钩子；仅在 allow 之外的动作时发出） |
+| `compaction` | 上下文压缩（当前尚未发出） |
+| `branch_switch` | 切换会话分支叶子节点（当前尚未发出） |
 
 CLI 使用的回调：
 - `message_update` → 流式打印；
-- `tool_execution_start` / `tool_execution_end` → 工具卡片展示。
+- `tool_execution_start` / `tool_execution_end` → 工具卡片展示；
+- `tool_permission` → 打印「✅ 已允许 / ❌ 已拒绝」。
 
 ---
 

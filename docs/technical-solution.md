@@ -69,9 +69,20 @@ CLI 内置工具（`src/agent/tools.ts`，全部限制在 `workspaceRoot` 内）
 ### 3.4 主循环 (Loop)
 
 - 接收用户输入
-- 调用模型推理
-- 执行工具调用
+- 调用模型推理（支持取消信号与 120 秒超时）
+- 执行工具调用前先经过审批钩子（`beforeToolCall`）
 - 返回结果
+
+### 3.5 工具审批 (Approval)
+
+`src/cli/approval.ts` 把审批策略包装成 `beforeToolCall` 钩子：
+
+- 只读工具（`list_files` / `read_file`）自动放行；
+- `write_file` / `edit_file` / `bash` 需用户确认，拒绝即 `block`；
+- 确认过程抛错按拒绝处理（fail closed）；
+- `/trust` 切换会话级信任模式。
+
+> 路径校验与 bash 守卫都是尽力而为的静态检查，**审批才是安全边界**。
 
 ## 4. 数据流
 

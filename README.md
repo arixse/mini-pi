@@ -57,34 +57,58 @@ mini-pi/
 ## 运行方式
 
 ```bash
-# 安装依赖
+# 安装依赖（prepare 会自动执行 build:cli 生成 bin/mini-pi-cli.cjs）
 pnpm install
 
-# 开发模式（前后端并行）
+# 开发模式（监听源码变动重启 CLI）
 pnpm dev
 
-# 仅后端
-pnpm dev:server
-
-# 命令行交互
+# 命令行交互（等价别名）
 pnpm dev:cli
 
-# 运行测试
+# 打包 CLI（esbuild 单文件产物）
+pnpm build:cli
+
+# 类型检查 / 测试
+pnpm typecheck
 pnpm test
 ```
+
+> 第二阶段（Web 界面 + API 服务）尚未实现，因此 `dev:server` / `dev:web` / `build`
+> 三个脚本暂时移除；详见 [技术方案](docs/technical-solution.md)。
+
+## 安全模型
+
+写文件与执行命令属于危险动作，CLI 会**逐次询问**：
+
+```
+⚠️  工具调用待确认: bash
+   命令: npm test
+   允许执行? [y/N]
+```
+
+1. **审批是主要防线**：`write_file` / `edit_file` / `bash` 必须确认；
+   拒绝时工具不会执行，而是把「被拒绝」的结果交回模型。
+   `/trust` 可在当前会话内跳过确认（详见 [CLI 交互文档](docs/cli-interaction.md)）。
+2. **文件访问限制**：所有文件操作被限制在工作区内，并做真实路径校验
+   （工作区内的软链接指向外部同样会被拒绝）。
+3. **凭据保护**：`.env*`、私钥、`*.pem`、`.git-credentials` 默认禁止读写；
+   `auth.json` / `settings.json` 以 0600 权限落盘（Windows 需自行设置目录权限）。
+4. **可中断**：执行期间按 Ctrl+C 取消当前任务，模型请求有 120 秒超时。
 
 ## 设计亮点
 
 1. **统一接口** - `LlmModel` 接口支持不同模型无缝切换
 2. **事件驱动** - 完整的事件生命周期（message_start/update/end）
-3. **工具拦截** - 支持 `beforeToolCall` 钩子进行权限控制
+3. **工具拦截** - `beforeToolCall` 钩子已接入 CLI：危险操作逐次审批，可 block/rewrite
 4. **类型安全** - 全程 TypeScript 类型检查
-5. **测试覆盖** - 每个模块都有对应的单元测试
+5. **测试覆盖** - 每个模块都有对应的单元测试（含真实 symlink 逃逸、审批拦截等安全回归用例）
+6. **可取消** - 取消信号贯穿模型调用与工具执行，Ctrl+C 立即中断
 
 ## 工作原理
 
 ```
-用户输入 → API 服务器 → Agent Loop → 模型推理 → 工具调用 → 结果返回
+用户输入 → Agent Loop → 模型推理 → 工具审批 → 工具调用 → 结果返回
 ```
 
 Mini Pi 采用典型的 **代理模式（Agent Pattern）**，通过模型推理 + 工具调用的方式实现智能辅助功能。
@@ -154,8 +178,12 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/new`   | 创建新会话                    |
 | `/login` | 登录模型服务商（输入 apiKey） |
 | `/model` | 选择模型供应商和模型          |
+| `/reload` | 重载配置（重新读取模型与 System Prompt） |
+| `/skills` | 列出所有可用的 Skills |
+| `/load <name>` | 加载指定 Skill 的完整内容 |
+| `/trust` | 切换信任模式（跳过工具调用确认） |
 | `/help`  | 显示帮助信息                  |
-| `/clear` | 清除对话历史                  |
+| `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit`  | 退出程序                      |
 | `/quit`  | 退出程序                      |
 

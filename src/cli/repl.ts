@@ -482,7 +482,8 @@ export function handleSkills(sessionManager?: SessionManager): void {
     console.log(chalk.dim("  - ~/.agents/skills/"));
     console.log(chalk.dim("  - ~/.mini-pi/skills/"));
     console.log(chalk.dim("  - 项目目录/.mini-pi/skills/"));
-    console.log(chalk.dim("  - 项目目录/.pi/skills/\n"));
+    console.log(chalk.dim("  - 项目目录/.pi/skills/"));
+    console.log(chalk.dim("  - 项目目录/.agents/skills/\n"));
     return;
   }
 
