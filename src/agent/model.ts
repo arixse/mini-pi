@@ -23,6 +23,107 @@ export type CompleteInput = {
 /** 单次模型请求的超时时间（毫秒） */
 export const REQUEST_TIMEOUT_MS = 120_000;
 
+/** 单次模型请求的最大尝试次数（含首次） */
+export const MAX_REQUEST_ATTEMPTS = 3;
+
+/** 首次重试的等待时间（毫秒），之后按指数退避 */
+export const RETRY_BASE_DELAY_MS = 1_000;
+
+/** 可重试的错误码（网络类） */
+const RETRYABLE_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+/**
+ * 判断错误是否值得重试：限流（429）、超时（408）与服务端错误（5xx）重试，
+ * 其余（401/400/404 等）重试没有意义，直接失败。
+ */
+export function isRetryableError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === "number") {
+    return status === 429 || status === 408 || status >= 500;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && RETRYABLE_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  return false;
+}
+
+/** 可中断的等待 */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("aborted"));
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new Error("aborted"));
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export type RetryOptions = {
+  /** 最大尝试次数，默认 {@link MAX_REQUEST_ATTEMPTS} */
+  attempts?: number;
+  /** 首次退避时间，默认 {@link RETRY_BASE_DELAY_MS} */
+  baseDelayMs?: number;
+  signal?: AbortSignal;
+  /** 等待实现，便于测试注入 */
+  wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** 每次重试前回调（用于日志） */
+  onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
+};
+
+/**
+ * 带指数退避的重试。取消信号会立即中断（不重试，也不继续等待）。
+ */
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  options: RetryOptions = {},
+): Promise<T> {
+  const attempts = Math.max(1, options.attempts ?? MAX_REQUEST_ATTEMPTS);
+  const baseDelayMs = options.baseDelayMs ?? RETRY_BASE_DELAY_MS;
+  const wait = options.wait ?? sleep;
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const cancelled = options.signal?.aborted === true || isAbortError(error);
+      if (cancelled || attempt >= attempts || !isRetryableError(error)) {
+        throw error;
+      }
+
+      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      options.onRetry?.(attempt, error, delayMs);
+      await wait(delayMs, options.signal);
+    }
+  }
+}
+
 /**
  * 判断错误是否来自 abort（用户取消）。
  *
@@ -83,14 +184,24 @@ export class OpenAIModel implements LlmModel {
     try {
       const messages = this.convertMessages(input.systemPrompt, input.messages);
       const tools = this.convertTools(input.tools);
-      const response = await this.client.chat.completions.create(
+      const response = await withRetry(
+        () =>
+          this.client.chat.completions.create(
+            {
+              model: this.model,
+              messages,
+              tools: tools.length > 0 ? tools : undefined,
+              tool_choice: tools.length > 0 ? "auto" : undefined,
+            },
+            { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+          ),
         {
-          model: this.model,
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
-          tool_choice: tools.length > 0 ? "auto" : undefined,
+          signal: input.signal,
+          onRetry: (attempt, error, delayMs) =>
+            console.error(
+              `OpenAI 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
+            ),
         },
-        { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
       );
       return this.convertResponse(response);
     } catch (error) {
@@ -255,15 +366,25 @@ export class AnthropicModel implements LlmModel {
       );
       const tools = this.convertTools(input.tools);
 
-      const response = await this.client.messages.create(
+      const response = await withRetry(
+        () =>
+          this.client.messages.create(
+            {
+              model: this.model,
+              max_tokens: 4096,
+              system,
+              messages,
+              tools: tools.length > 0 ? tools : undefined,
+            },
+            { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
+          ),
         {
-          model: this.model,
-          max_tokens: 4096,
-          system,
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
+          signal: input.signal,
+          onRetry: (attempt, error, delayMs) =>
+            console.error(
+              `Anthropic 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
+            ),
         },
-        { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
       );
       return this.convertResponse(response);
     } catch (error) {
