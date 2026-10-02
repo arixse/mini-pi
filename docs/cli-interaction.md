@@ -29,11 +29,13 @@ pnpm dev:cli
 
 ### 2.2 免安装运行
 
-`bin/mini-pi.js` 会通过 `npx tsx` 执行 `src/cli/index.ts`：
+`bin/mini-pi.js` 会用项目本地的 tsx 执行 `src/cli/entry.ts`（不联网、不依赖全局 npx）：
 
 ```bash
 node bin/mini-pi.js
 ```
+
+> `entry.ts` 只负责调用 `main()`；`src/cli/index.ts` 仅导出函数，直接运行它不会有任何输出。
 
 ### 2.3 全局命令
 
@@ -47,6 +49,9 @@ pnpm link:cli
 # 之后在任意项目目录下执行
 mini-pi
 ```
+
+> `bin/mini-pi-cli.cjs` 属于构建产物，已加入 `.gitignore`；
+> `pnpm install` 会通过 `prepare` 脚本自动生成它，因此 `pnpm link:cli` 之前无需手动打包。
 
 **运行要求**：Node.js 18+，并在工作目录下执行（工作目录将被作为 `workspaceRoot`）。
 
@@ -66,7 +71,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    - 存在 `apiKey` 时用 `createModelFromProvider()` 生成 `LlmModel`；否则 `model = null`。
 4. **创建工具注册表**：`createToolRegistry(workspaceRoot)`。
 5. **创建会话管理器**：`SessionManager`，并把模型注入其中（`setModel`）。
-6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载最近一个，否则新建。
+6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载最近一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。
 7. **加载固定上下文**：`getFixedContext()` 读取全局与项目的 `AGENTS.md`。
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览，并在控制台打印已发现的 Skill 名称。
 9. **构建 System Prompt**：基础提示词 + 固定上下文 + Skill 摘要。
@@ -126,11 +131,11 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 3. **匹配斜杠命令**：按顺序判断并执行（见第 5 节）。
 4. **普通对话输入**：
    - 调用 `checkSkillMatch()` 进行 Skill 匹配提示（见第 7 节）；
-   - 将输入封装为 `userMessage` 追加到 `messages`，并写入会话文件；
-   - 调用 `sessionStore.compactIfNedded(6000, 10)` 判断是否需要压缩上下文；
-   - 若 `model` 为空，打印 `Plase set the model first!` 并返回；
+   - 若 `model` 为空，打印 `⚠️ 尚未配置模型，请使用 /login 和 /model 命令进行配置` 并返回（这条消息不会写入会话）；
+   - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(6000, 10)` 判断是否需要压缩；
+   - 用 `sessionStore.syncContext()` 依据会话文件重建内存上下文 —— **会话文件是上下文的唯一事实来源**，压缩结果因此立即生效；
    - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`；
-   - 将新增消息追加到 `messages` 并逐条写入会话文件。
+   - 将本轮新增消息逐条写入会话文件，并再次 `syncContext()` 同步内存上下文。
 5. 重新显示提示符，等待下一次输入。
 
 ### 4.1 对话过程的事件与输出
@@ -229,9 +234,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ### 5.2 `/new` —— 创建新会话
 
-- 调用 `onNewSession()` 回调，内部 `sessionManager.createNewSession()` 生成新的会话文件；
-- 清空内存中的消息（`messages.length = 0`）；
-- 输出 `✅ 已创建新会话`。
+- 调用 `onNewSession()` 回调，内部 `sessionManager.createNewSession()` 生成新的会话文件并返回该 store；
+- REPL 切换到新的 store，并用它（空会话）重建内存上下文，历史因此被清空；
+- 之后的消息写入**新**会话文件，旧文件不再变化；
+- 输出 `✅ 已创建新会话`；未配置回调时输出 `❌ 新会话功能未配置`。
 
 ```
 > /new
@@ -318,9 +324,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ### 5.8 `/clear` —— 清除对话历史
 
-- 清空内存消息数组（`messages.length = 0`）；
+- 清空内存消息数组，并重置当前会话文件（只保留新的会话头）；
 - 输出 `🗑️  历史已清除`；
-- 注意：不会删除已写入的会话文件，仅清空当前上下文。
+- 说明：由于会话文件是上下文的唯一事实来源，只清内存会让历史在下一轮重建上下文时「复活」，
+  因此这里同时清空会话文件。若想保留旧会话记录，请改用 `/new`。
 
 ### 5.9 `/exit` 与 `/quit` —— 退出
 
@@ -334,7 +341,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - **存储目录**：`~/.mini-pi/sessions/`
 - **文件格式**：JSONL（每行一个条目）
 - **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序）
-- **启动行为**：加载最近一个会话；无会话则新建。
+- **启动行为**：加载最近一个会话，并把它的历史消息（含压缩摘要）恢复进内存上下文；无会话则新建。
 
 ### 6.1 会话条目类型
 
@@ -347,8 +354,9 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 每轮用户输入会调用 `compactIfNedded(6000, 10)`：
 
 - 当上下文估算 token 超过 6000 且消息数超过保留数 10 时触发；
-- 保留最近 10 条消息，较早的消息用模型生成摘要（失败则回退到简单摘要）；
-- 压缩结果写为新的 `compaction` 条目，后续构建上下文时以摘要替代旧消息。
+- 保留最近 10 条消息，较早的消息用模型生成摘要（未配置模型或摘要调用失败时回退到简单摘要，不会中断对话）；
+- `keepRecentMessages` 最小按 1 处理（`slice(-0)` 等价于 `slice(0)`，否则会退化成「保留全部、摘要为空」）；
+- 压缩结果写为新的 `compaction` 条目，并立即通过 `syncContext()` 作用于内存上下文，后续调用模型时以摘要替代旧消息。
 
 ---
 

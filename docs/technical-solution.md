@@ -52,8 +52,12 @@ mini-pi/
 
 ### 3.2 工具层 (Tools)
 
-- 文件读取：`read`
-- 文件编辑：`edit`
+CLI 内置工具（`src/agent/tools.ts`，全部限制在 `workspaceRoot` 内）：
+
+- 目录列举：`list_files`
+- 文件读取：`read_file`
+- 文件写入：`write_file`
+- 文件编辑：`edit_file`
 - 命令执行：`bash`
 
 ### 3.3 会话层 (Session)
@@ -78,17 +82,20 @@ mini-pi/
 ## 5. 开发命令
 
 ```bash
-# 安装依赖
+# 安装依赖（prepare 会自动执行 build:cli 生成 bin/mini-pi-cli.cjs）
 pnpm install
 
-# 开发模式（前后端并行）
+# 开发模式（监听源码变动重启 CLI）
 pnpm dev
 
-# 仅后端
-pnpm dev:server
+# 等价别名
+pnpm dev:cli
 
-# 仅前端
-pnpm dev:web
+# 打包 CLI（esbuild 单文件产物 bin/mini-pi-cli.cjs）
+pnpm build:cli
+
+# 链接为全局命令 mini-pi
+pnpm link:cli
 
 # 类型检查
 pnpm typecheck
@@ -96,6 +103,11 @@ pnpm typecheck
 # 测试
 pnpm test
 ```
+
+> **前端/后端命令暂未提供**：`pnpm dev:server`、`pnpm dev:web`、`pnpm build` 属于第二阶段
+> （Web 界面 + API 服务）。该阶段尚未实现（仓库中还没有 `src/server`、`src/client`），
+> 为避免出现「文档里存在但必然失败」的命令，这些脚本暂时移除；
+> 第二阶段实现时会连同 `src/server/index.ts`、`src/client/main.tsx` 一起恢复。
 
 ## 6. 配置
 

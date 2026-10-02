@@ -9,5 +9,10 @@ examples/teaching-agent/dist/
 .vercel/
 .env
 .test-workspace
+test-workspace/
+.test-session-store/
 test-out.txt
 tmp-exp
+
+# CLI 打包产物（由 pnpm build:cli / prepare 生成，不入库）
+bin/mini-pi-cli.cjs

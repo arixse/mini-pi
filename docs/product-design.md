@@ -14,7 +14,9 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 - 快捷键支持
 
 
-### 2.2 页面交互（第二阶段）
+### 2.2 页面交互（第二阶段，尚未实现）
+
+> 当前仓库只包含第一阶段的 CLI 实现，尚无 `src/server` 与 `src/client`。
 
 - Web 图形界面
 - 可视化文件操作
