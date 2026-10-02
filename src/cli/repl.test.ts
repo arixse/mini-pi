@@ -1,14 +1,24 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ReplOptions, printToolInfo } from "./repl";
+import {
+  KEEP_RECENT_MESSAGES,
+  ReplOptions,
+  appendAgentMessages,
+  appendUserMessage,
+  clearSession,
+  printToolInfo,
+  startNewSession,
+} from "./repl";
 import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
 import { LlmModel } from "../agent/model";
+import { createTextContent, createUserMessage } from "../agent/message";
+import { AgentMessage } from "../shared/protocol";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -431,5 +441,147 @@ describe("ReplOptions", () => {
         console.log = originalLog;
       }
     });
+  });
+});
+
+describe("session context wiring", () => {
+  let testDir: string;
+  let sessionFile: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `mini-pi-repl-session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    await mkdir(testDir, { recursive: true });
+    sessionFile = join(testDir, "session.jsonl");
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  function createOptions(overrides: Partial<ReplOptions> = {}): ReplOptions {
+    return {
+      prompt: "You: ",
+      systemPrompt: "test system prompt",
+      messages: [],
+      model: null,
+      toolRegistry: {} as any,
+      workspaceRoot: testDir,
+      ...overrides,
+    };
+  }
+
+  function createAssistantMessage(text: string): AgentMessage {
+    return {
+      role: "assistant",
+      content: [createTextContent(text)],
+      stopReason: "stop",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      timestamp: Date.now(),
+    };
+  }
+
+  it("should keep working in memory-only mode without a session store", async () => {
+    const options = createOptions();
+
+    await appendUserMessage(options, createUserMessage("a"));
+    await appendAgentMessages(options, [createAssistantMessage("b")]);
+
+    assert.strictEqual(options.messages.length, 2);
+    assert.strictEqual(options.messages[0].role, "user");
+    assert.strictEqual(options.messages[1].role, "assistant");
+  });
+
+  it("should persist messages and derive the context from the store", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    await appendUserMessage(options, createUserMessage("q1"));
+    await appendAgentMessages(options, [createAssistantMessage("a1")]);
+    await appendUserMessage(options, createUserMessage("q2"));
+
+    // 会话文件是唯一事实来源
+    assert.deepStrictEqual(options.messages, store.buildContext());
+    assert.strictEqual(options.messages.length, 3);
+    assert.strictEqual(
+      store.getEntries().filter((entry) => entry.type === "message").length,
+      3,
+    );
+  });
+
+  it("should apply compaction to the in-memory context", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    // 先写入足以触发压缩的历史（约 8000 个近似 token）
+    for (let i = 0; i < 80; i++) {
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+        timestamp: Date.now(),
+      });
+    }
+    const options = createOptions({
+      sessionStore: store,
+      model: createMockModel("summarizer"),
+    });
+    store.setModel(createMockModel("summarizer"));
+
+    await appendUserMessage(options, createUserMessage("最新问题"));
+
+    // 修复前压缩只写进文件、内存上下文照旧增长
+    assert.strictEqual(options.messages.length, KEEP_RECENT_MESSAGES + 1);
+    assert.ok(
+      (
+        options.messages[0].content[0] as { type: "text"; text: string }
+      ).text.includes("旧的上下文摘要"),
+    );
+    assert.deepStrictEqual(options.messages, store.buildContext());
+  });
+
+  it("clearSession should clear both memory and the session file", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    await appendUserMessage(options, createUserMessage("will be cleared"));
+    await appendAgentMessages(options, [createAssistantMessage("answer")]);
+    assert.strictEqual(options.messages.length, 2);
+
+    await clearSession(options);
+
+    assert.strictEqual(options.messages.length, 0);
+    assert.strictEqual(store.buildContext().length, 0);
+  });
+
+  it("startNewSession should switch the store and reset the context", async () => {
+    const oldStore = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: oldStore });
+
+    await appendUserMessage(options, createUserMessage("old question"));
+    assert.strictEqual(options.messages.length, 1);
+
+    const newFile = join(testDir, "new-session.jsonl");
+    let created: JsonlSessionStore | undefined;
+    options.onNewSession = () => {
+      created = new JsonlSessionStore(newFile, testDir);
+      return created;
+    };
+
+    assert.strictEqual(startNewSession(options), true);
+    assert.strictEqual(options.sessionStore, created);
+    assert.strictEqual(options.messages.length, 0, "新会话应清空上下文");
+
+    // 后续消息只写入新会话，旧会话不再增长
+    await appendUserMessage(options, createUserMessage("new question"));
+    assert.strictEqual(created!.buildContext().length, 1);
+    assert.strictEqual(oldStore.buildContext().length, 1);
+  });
+
+  it("startNewSession should report failure when no callback is configured", () => {
+    const options = createOptions({ sessionStore: new JsonlSessionStore(sessionFile, testDir) });
+
+    assert.strictEqual(startNewSession(options), false);
   });
 });

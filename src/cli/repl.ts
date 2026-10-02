@@ -1,8 +1,8 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage, AssistantMessage, ToolResult } from "../shared/protocol";
-import { createTextContent, messageText,createUserMessage, sliceText } from "../agent/message";
+import { AgentEvent, AgentMessage, ToolResult } from "../shared/protocol";
+import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop } from "../agent/loop";
@@ -11,6 +11,11 @@ import { JsonlSessionStore } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
+
+/** 触发上下文压缩的近似 token 上限 */
+export const MAX_CONTEXT_TOKENS = 6000;
+/** 上下文压缩时保留的最近消息条数 */
+export const KEEP_RECENT_MESSAGES = 10;
 
 export type ReplOptions = {
   prompt: string;
@@ -23,12 +28,12 @@ export type ReplOptions = {
   settingsStore?: SettingsStore;
   sessionStore?: JsonlSessionStore;
   sessionManager?: SessionManager;
-  onNewSession?: () => void;
+  /** 创建新会话并返回新的 session store；返回空值表示不切换 */
+  onNewSession?: () => JsonlSessionStore | undefined;
   onReload?: () => Promise<{ model: LlmModel | null; systemPrompt: string }>;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
-  const sessionStore = options.sessionStore
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -52,7 +57,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/clear") {
-      options.messages.length = 0;
+      await clearSession(options);
       console.log(chalk.dim("\n🗑️  历史已清除\n"));
       rl.prompt();
       return;
@@ -77,8 +82,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/new") {
-      if (options.onNewSession) {
-        options.onNewSession();
+      if (startNewSession(options)) {
+        console.log("✅ 已创建新会话");
+      } else {
+        console.log(chalk.red("\n❌ 新会话功能未配置\n"));
       }
       rl.prompt();
       return;
@@ -89,8 +96,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         try {
           const { model, systemPrompt } = await options.onReload();
           // 更新外部传入的 model 和 systemPrompt
-          (options as any).model = model;
-          (options as any).systemPrompt = systemPrompt;
+          options.model = model;
+          options.systemPrompt = systemPrompt;
           console.log(chalk.green("\n✅ 配置已重载\n"));
         } catch (error) {
           console.log(chalk.red("\n❌ 重载失败:"), error instanceof Error ? error.message : error);
@@ -120,27 +127,21 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     // 渐进式披露：检查用户输入是否匹配某个 skill
-    checkSkillMatch(options.sessionManager, input);  
+    checkSkillMatch(options.sessionManager, input);
 
-    const userMessage = createUserMessage(input)
-
-    options.messages.push(userMessage);
-
-    if(sessionStore) {
-      sessionStore.appendMessage(userMessage)
-      await sessionStore?.compactIfNedded(6000,10)
-    } 
-
-    if(!options.model) {
+    if (!options.model) {
       console.log(chalk.yellow("⚠️  尚未配置模型，请使用 /login 和 /model 命令进行配置"));
       rl.prompt();
-      return
+      return;
     }
 
     try {
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
       console.log("");
+
+      // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
+      await appendUserMessage(options, createUserMessage(input));
 
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
@@ -162,11 +163,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         },
       });
 
-      options.messages.push(...result.newMessages);
-
-      for(const message of result.newMessages) {
-        await sessionStore?.appendMessage(message)
-      }
+      await appendAgentMessages(options, result.newMessages);
 
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
@@ -181,6 +178,69 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   rl.on("close", () => {
     process.exit(0);
   });
+}
+
+/**
+ * 追加一条用户消息并同步上下文。
+ *
+ * 未接会话存储时退回纯内存模式；接了会话存储时以会话文件为准，
+ * 并在必要时压缩上下文，使压缩结果真正作用于后续的模型调用。
+ */
+export async function appendUserMessage(
+  options: ReplOptions,
+  message: AgentMessage,
+): Promise<void> {
+  const store = options.sessionStore;
+  if (!store) {
+    options.messages.push(message);
+    return;
+  }
+  await store.appendMessage(message);
+  await store.compactIfNedded(MAX_CONTEXT_TOKENS, KEEP_RECENT_MESSAGES);
+  store.syncContext(options.messages);
+}
+
+/**
+ * 把 Agent 本轮产生的消息写入会话存储，并同步上下文。
+ */
+export async function appendAgentMessages(
+  options: ReplOptions,
+  messages: AgentMessage[],
+): Promise<void> {
+  const store = options.sessionStore;
+  if (!store) {
+    options.messages.push(...messages);
+    return;
+  }
+  for (const message of messages) {
+    await store.appendMessage(message);
+  }
+  store.syncContext(options.messages);
+}
+
+/**
+ * 清空当前会话上下文：内存与持久化同时清空，
+ * 否则下一次从会话文件重建上下文时历史会被"复活"。
+ */
+export async function clearSession(options: ReplOptions): Promise<void> {
+  options.messages.length = 0;
+  await options.sessionStore?.reset();
+}
+
+/**
+ * 切换到新会话：由 onNewSession 创建并返回新的 session store。
+ *
+ * 切换后以新会话（空）重建上下文，旧会话文件不会再被写入。
+ * @returns 是否成功切换
+ */
+export function startNewSession(options: ReplOptions): boolean {
+  const created = options.onNewSession?.();
+  if (!created) {
+    return false;
+  }
+  options.sessionStore = created;
+  created.syncContext(options.messages);
+  return true;
 }
 
 // 缓存 tool_execution_start 事件信息
@@ -414,8 +474,7 @@ export async function handleLoadSkill(
 
   // 将 skill 内容添加到 system prompt
   const skillSection = `\n\n## 已加载 Skill: ${skillName}\n\n${skillContent}`;
-  (options as any).systemPrompt = options.systemPrompt + skillSection;
-
+  options.systemPrompt = options.systemPrompt + skillSection;
   console.log(chalk.green(`\n✅ 已加载 skill: ${skillName}\n`));
   console.log(chalk.dim("该 skill 的内容已注入到上下文中，后续对话将参考此 skill。\n"));
 }

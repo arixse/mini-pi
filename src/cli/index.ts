@@ -164,17 +164,20 @@ export async function main() {
 
   let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
 
-  const messages: AgentMessage[] = [];
+  // 从会话文件恢复历史上下文（含压缩摘要），而不是丢弃历史重新开始
+  const messages: AgentMessage[] = sessionStore.syncContext([]);
 
   // 显示 logo 和欢迎信息
   printLogo();
   printWelcome(providerName, modelName);
+  if (messages.length > 0) {
+    console.log(chalk.dim(`[Session] 已恢复 ${messages.length} 条历史消息`));
+    console.log();
+  }
 
-  // 创建新会话的回调函数
+  // 创建新会话的回调函数：返回新的 store，由 REPL 切换并重建上下文
   const onNewSession = () => {
-    const newSession = sessionManager.createNewSession();
-    messages.length = 0; // 清空当前消息
-    console.log("✅ 已创建新会话");
+    return sessionManager.createNewSession();
   };
 
   // 重载配置的回调函数
