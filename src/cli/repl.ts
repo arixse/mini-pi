@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage, ToolResult } from "../shared/protocol";
+import { AgentEvent, AgentMessage } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
@@ -12,7 +12,8 @@ import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
-import { createStatusLine, formatDuration } from "./status";
+import { createStatusLine } from "./status";
+import { createRenderContext, renderToolCall, RenderContext } from "./render";
 import { ExitCoordinator } from "./exit";
 
 /** 触发上下文压缩的近似 token 上限 */
@@ -399,113 +400,16 @@ export function summarizeToolCall(
   return oneLine.length > 40 ? `${oneLine.slice(0, 39)}…` : oneLine;
 }
 
-export function printToolInfo(event: AgentEvent) {
-  const toolIcons: Record<string, string> = {
-    "list_files": "📂",
-    "read_file": "📖",
-    "write_file": "✏️",
-    "edit_file": "🔧",
-    "bash": "💻",
-  };
-
-  // 工具类型对应的颜色主题
-  const toolColors: Record<string, { title: typeof chalk }> = {
-    "list_files": { title: chalk.blue.bold },
-    "read_file": { title: chalk.cyan.bold },
-    "write_file": { title: chalk.magenta.bold },
-    "edit_file": { title: chalk.yellow.bold },
-    "bash": { title: chalk.green.bold },
-  };
-
-  const defaultColors = { title: chalk.white.bold };
-
-  const getToolIcon = (toolName: string): string => {
-    return toolIcons[toolName] || "🛠️";
-  };
-
-  const getToolColors = (toolName: string) => {
-    return toolColors[toolName] || defaultColors;
-  };
-
-  const truncateText = (text: string, maxLength: number = 80): string => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength) + "...";
-  };
-
-  const formatArgs = (args: Record<string, unknown>): string => {
-    const formatted = Object.entries(args)
-      .filter(([key]) => key !== "content" && key !== "oldText" && key !== "newText") // 过滤掉大段内容
-      .map(([key, value]) => {
-        let valueStr: string;
-        if (typeof value === "string") {
-          valueStr = truncateText(value, 40);
-        } else if (typeof value === "object") {
-          valueStr = "{" + Object.keys(value as object).join(",") + "}";
-        } else {
-          valueStr = String(value);
-        }
-        return `${key}=${valueStr}`;
-      })
-      .join(", ");
-    return formatted;
-  };
-
-  const formatResult = (result: ToolResult): string => {
-    if (result.content && result.content.length > 0) {
-      const text = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map(c => c.text || "")
-        .join(" ");
-      return truncateText(text, 100);
-    }
-    return "(empty)";
-  };
-
-  // 绘制工具信息块
-  const printToolBlock = (
-    toolName: string,
-    args: Record<string, unknown>,
-    result: ToolResult | null,
-    isError: boolean | null,
-    durationMs: number | null = null,
-  ) => {
-    const icon = getToolIcon(toolName);
-    const colors = getToolColors(toolName);
-    const argsStr = formatArgs(args);
-
-    // 标题行
-    const titleLine = `${icon} ${toolName}`;
-    const argsLine = argsStr ? `📋 Args: ${argsStr}` : "";
-
-    // 结果行
-    let resultLine = "";
-    let statusLine = "";
-    if (result !== null) {
-      const statusIcon = isError ? "❌" : "✅";
-      const statusText = isError ? "Failed" : "Success";
-      const duration = durationMs === null ? "" : ` · ${formatDuration(durationMs)}`;
-      statusLine = `${statusIcon} ${statusText}${duration}`;
-      resultLine = `📄 ${formatResult(result)}`;
-    }
-
-    // 输出块 - 使用工具特定的文字颜色
-    console.log("");
-    console.log(colors.title(`  ${titleLine}`));
-    
-    if (argsLine) {
-      console.log(chalk.cyan(`  ${argsLine}`));
-    }
-    
-    if (statusLine) {
-      const statusColor = isError ? chalk.red.bold : chalk.green.bold;
-      console.log(statusColor(`  ${statusLine}`));
-    }
-    
-    if (resultLine) {
-      console.log(chalk.dim(`  ${resultLine}`));
-    }
-  };
-
+/**
+ * 打印一次工具调用。
+ *
+ * start 事件只记录时间戳与参数（此时还没有结果），end 事件才输出卡片。
+ * 卡片排版全部在 `src/cli/render.ts`（纯函数、可单测），这里只负责缓存与打印。
+ */
+export function printToolInfo(
+  event: AgentEvent,
+  context: RenderContext = createRenderContext(),
+): void {
   if (event.type === "tool_execution_start") {
     // 缓存 start 事件信息，等待 end 事件一起输出
     toolStartCache.set(event.toolCallId, {
@@ -513,22 +417,33 @@ export function printToolInfo(event: AgentEvent) {
       args: event.args,
       startedAt: Date.now(),
     });
+    return;
   }
 
-  if (event.type === "tool_execution_end") {
-    // 获取缓存的 start 信息
-    const cached = toolStartCache.get(event.toolCallId);
-    const args = cached?.args || {};
-    const durationMs = cached ? Date.now() - cached.startedAt : null;
-    
-    // 输出完整的工具信息块
-    printToolBlock(event.toolName, args, event.result, event.isError, durationMs);
-    
-    // 清理缓存
-    toolStartCache.delete(event.toolCallId);
+  if (event.type !== "tool_execution_end") {
+    return;
+  }
+
+  const cached = toolStartCache.get(event.toolCallId);
+  toolStartCache.delete(event.toolCallId);
+  const finishedAt = Date.now();
+
+  const lines = renderToolCall(
+    {
+      name: event.toolName,
+      args: cached?.args ?? {},
+      startedAt: cached?.startedAt ?? finishedAt,
+      finishedAt,
+      result: event.result,
+      isError: event.isError,
+    },
+    context,
+  );
+
+  for (const line of lines) {
+    console.log(line);
   }
 }
-
 
 function printHelp() {
   console.log("");

@@ -8,10 +8,18 @@
 | 档位 | 内容 | 状态 |
 | --- | --- | --- |
 | 1 | 真流式输出、工作状态行（spinner）、工具耗时 | ✅ 已实现 |
-| 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code） | ⏳ 待做 |
-| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做（`read_file` 的规模元数据已就位） |
-| 4 | `render.ts` 收口、`NO_COLOR`/`--no-emoji`/窄终端降级 | ⏳ 待做（部分降级已随第 1 档落地） |
+| 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code/stderr） | ✅ 已实现（`src/cli/render.ts`） |
+| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做（`read_file` 的规模元数据与卡片缩进/规模提示已随第 2 档落地，剩 `/last`） |
+| 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | 🟡 部分完成（渲染已收口到 `render.ts`，降级已支持 NO_COLOR / `MINI_PI_ASCII` / 窄终端换行） |
 | — | `read_file` 分页与上限（12.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
+
+第 2 档与设计稿的两处偏差（实现时按可行性调整）：
+
+1. **diff 只保留一个 hunk**：`edit_file` 的语义就是"把 oldText 换成 newText"，
+   因此直接对这两个参数做前后缀折叠，得到"变更行 + 各一行上下文"，
+   不需要通用 LCS，也就不存在"超过 6 组 hunk 折叠"的问题（改成超 20 行折叠）。
+2. **`list_files` 不做按目录分组计数**：改为把条目按宽度紧凑排布（多条目一行），
+   页脚给总项数与"目录/文件"计数，信息密度更高且实现更简单。
 
 第 1 档实际落地内容：
 
@@ -225,13 +233,15 @@ IDLE ──用户回车──▶ THINKING ──首个 token──▶ STREAMING 
 稿面里的"行数 / 大小 / exit code"目前**取不到**，需要工具在 `details` 里补充元数据。
 `edit_file` 的 diff 例外——`oldText` / `newText` 本就在调用参数里，渲染层可直接取用。
 
-| 工具 | 现状 `details` | 需补充 |
-| --- | --- | --- |
-| `bash` | `command`, `exitCode` | `stdout`, `stderr`（分开），`truncated` |
-| `read_file` | ✅ `path`, `totalLines`, `totalBytes`, `returnedFrom`, `returnedTo`, `returnedLines`, `truncated` | 已补齐，第 3 档可直接用 |
-| `write_file` | `path`, `bytesWritten` | `lines`, `created`（新增还是覆盖） |
-| `edit_file` | `path`, `replacements`, `oldTextLength`, `newTextLength` | `hunks`（可选，用于折叠提示） |
-| `list_files` | `entries` | `dirCount`, `fileCount`, `truncated` |
+| 工具 | `details` 现状 |
+| --- | --- |
+| `bash` | ✅ `command`, `exitCode`（数字）, `stdout`, `stderr`, `errorCode` |
+| `read_file` | ✅ `path`, `totalLines`, `totalBytes`, `returnedFrom`, `returnedTo`, `returnedLines`, `truncated` |
+| `write_file` | ✅ `path`, `bytesWritten`, `lines`, `created` |
+| `edit_file` | ✅ `path`, `replacements`, `oldTextLength`, `newTextLength`, `lineNumber` |
+| `list_files` | ✅ `entries`, `dirCount`, `fileCount` |
+
+卡片所需的元数据已全部就位，第 3 档的 `/last` 也可直接复用。
 
 耗时由渲染层用 `tool_execution_start` / `end` 的时间戳计算，不需要工具返回。
 

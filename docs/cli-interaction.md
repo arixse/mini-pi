@@ -153,31 +153,68 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 4.2 工具调用展示格式
 
-工具执行结束时，会以「标题 + 参数 + 状态 + 结果摘要」的卡片形式展示（`printToolInfo`）：
+工具执行结束时输出一张卡片（`printToolInfo` → `src/cli/render.ts`）：
 
 ```
-  📂 list_files
-  📋 Args: path=src
-  ✅ Success
-  📄 src/cli 下的文件列表……
+<图标> <关键参数>                              <状态> · <耗时> [· <附加>]
+│ <正文>
+└ <规模摘要>
 ```
+
+标题行左半是**标识**（图标 + 关键参数：`bash` 显示完整命令，其余显示路径），
+右半是**结果**（`✅`/`❌` + 耗时 + `exit 0` / `529 行` / `42 项`），右对齐到终端宽度；
+窄终端（放不下）时右半自动另起一行。
 
 各工具对应的图标与标题颜色：
 
-| 工具 | 图标 | 标题颜色 |
-| ---- | ---- | -------- |
-| `list_files` | 📂 | 蓝色加粗 |
-| `read_file` | 📖 | 青色加粗 |
-| `write_file` | ✏️ | 品红加粗 |
-| `edit_file` | 🔧 | 黄色加粗 |
-| `bash` | 💻 | 绿色加粗 |
-| 其他 | 🛠️ | 白色加粗 |
+| 工具 | 图标 | 标题颜色 | 正文 | 页脚 |
+| ---- | ---- | -------- | ---- | ---- |
+| `list_files` | 📂 | 蓝色 | 紧凑排布前若干条 | `42 项（12 目录 / 30 文件）` |
+| `read_file` | 📖 | 青色 | 带行号的前 8 行 | `共 529 行 · 18.6 KB [· 本次返回 N 行] [· 显示前 8 行]` |
+| `write_file` | ✏️ | 品红 | ——（不重复展示写入内容） | `新增/覆盖 · 42 行 · 2.1 KB` |
+| `edit_file` | 🔧 | 黄色 | unified diff | `1 处修改 · +12 -3` |
+| `bash` | 💻 | 绿色 | stdout 随后 stderr（黄） | `21 行 · 1.2 KB [· stderr]` |
+| 其他 | 🛠️ | 白色 | 结果文本前若干行 | `<N> 行` |
+
+示例：
+
+```
+💻 npm test                                                                 ✅ 3.2s · exit 0
+│ > mini-pi@1.0.0 test
+│ ℹ tests 375
+│ ℹ pass 372
+└ 5 行 · 71 B
+
+💻 npm run build                                                           ❌ 400ms · exit 1
+│ npm error Missing script: "build"
+└ 1 行 · 29 B · stderr
+
+🔧 src/agent/model.ts                                                             ✅ 12ms
+│ @@ -313,2 +313,3 @@
+│     const tools = this.convertTools(input.tools);
+│ -   const response = await this.client.chat.completions.create({
+│ +   const response = await this.client.chat.completions.create(
+└ 1 处修改 · +1 -1
+
+📖 src/agent/tools.ts                                                       ✅ 8ms · 744 行
+│ 1 │ import { existsSync, realpathSync } from "node:fs";
+│ 2 │ import { ToolDefinition, ToolResult } from "../shared/protocol";
+└ 共 744 行 · 24.2 KB · 显示前 2 行
+
+📂 .                                                                          ✅ 6ms · 8 项
+│ AGENTS.md  README.md  bin/  docs/  src/  package.json  tsconfig.json
+└ 8 项（3 目录 / 5 文件）
+```
 
 展示细节：
 
-- **参数行**：过滤掉 `content` / `oldText` / `newText` 等大段内容；字符串参数截断到 40 字符；对象参数显示为 `{key1,key2}`。
-- **状态行**：成功为绿色 `✅ Success · 3.2s`，失败为红色 `❌ Failed · 0.3s`；耗时由 `tool_execution_start` / `tool_execution_end` 的时间戳计算。
-- **结果行**：拼接工具结果中的文本，截断到 100 字符；无内容时显示 `(empty)`。
+- **正文上限**：普通工具最多 8 行、`edit_file` 的 diff 最多 20 行，超出以 `… 省略 N 行` 收尾；
+  单行最多 200 列，超出按**显示宽度**（CJK/emoji 记 2 列）截断。
+- **diff 来源**：由调用参数里的 `oldText` / `newText` 计算（前后缀折叠，只保留变更行与各一行上下文），
+  行号来自 `edit_file` 返回的 `details.lineNumber`；多处替换时用 `@@ 共 N 处替换 @@`。
+- **错误**：`❌` 红色；工具抛错（无 `details`）时错误信息整行红色，`bash` 失败则按 stdout/stderr 分别着色。
+- **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`，
+  竖线改用 `|`、页脚改用 `+`；`NO_COLOR` 或非 TTY 时不输出 ANSI。
 
 ### 4.6 工作状态行
 

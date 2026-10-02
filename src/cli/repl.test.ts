@@ -19,6 +19,7 @@ import { JsonlSessionStore } from "../agent/sessionStore";
 import { LlmModel } from "../agent/model";
 import { createTextContent, createUserMessage } from "../agent/message";
 import { AgentMessage } from "../shared/protocol";
+import { PLAIN_CONTEXT, RenderContext } from "./render";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -274,172 +275,188 @@ describe("ReplOptions", () => {
   });
 
   describe("printToolInfo", () => {
-    it("should print tool execution end info with args and success result", () => {
-      // 先发送 start 事件缓存参数
-      const startEvent = {
-        type: "tool_execution_start" as const,
-        toolCallId: "call-1",
-        toolName: "read_file",
-        args: { path: "src/index.ts" },
-      };
+    // 固定宽度 + 纯文本样式：断言不依赖测试终端的实际列数与色彩能力
+    const context = { ...PLAIN_CONTEXT, width: 100 } as RenderContext;
 
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-1",
-        toolName: "read_file",
-        result: {
-          content: [{ type: "text" as const, text: "File content here" }],
-        },
-        isError: false,
-      };
-
-      // 捕获控制台输出
+    function capture(run: () => void): string {
       const originalLog = console.log;
       const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
       };
-
       try {
-        // start 事件只缓存，不输出
-        printToolInfo(startEvent);
-        assert.strictEqual(output.length, 0);
+        run();
+      } finally {
+        console.log = originalLog;
+      }
+      return output.join("\n");
+    }
 
-        // end 事件输出完整块
-        printToolInfo(endEvent);
-        assert.ok(output.length > 0);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("📖"));
-        assert.ok(fullOutput.includes("read_file"));
-        assert.ok(fullOutput.includes("Args: path=src/index.ts"));
-        assert.ok(fullOutput.includes("✅"));
-        assert.ok(fullOutput.includes("Success"));
-        assert.ok(fullOutput.includes("File content here"));
+    it("start 事件只缓存，end 事件才输出卡片", () => {
+      const output: string[] = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
+      };
+      try {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            args: { path: "src/index.ts" },
+          },
+          context,
+        );
+        assert.strictEqual(output.length, 0, "start 事件不应输出");
       } finally {
         console.log = originalLog;
       }
     });
 
-    it("should print tool execution end info with error", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-2",
-        toolName: "bash",
-        result: {
-          content: [{ type: "text" as const, text: "Command not found" }],
-        },
-        isError: true,
-      };
+    it("read_file 卡片应包含图标、路径、状态、规模与内容", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            args: { path: "src/index.ts" },
+          },
+          context,
+        );
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            result: {
+              content: [{ type: "text", text: "File content here" }],
+              details: {
+                path: "src/index.ts",
+                totalLines: 1,
+                totalBytes: 17,
+                returnedFrom: 1,
+                returnedTo: 1,
+                returnedLines: 1,
+                truncated: false,
+              },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("💻"));
-        assert.ok(fullOutput.includes("bash"));
-        assert.ok(fullOutput.includes("❌"));
-        assert.ok(fullOutput.includes("Failed"));
-        assert.ok(fullOutput.includes("Command not found"));
-      } finally {
-        console.log = originalLog;
-      }
+      assert.ok(text.includes("📖"));
+      assert.ok(text.includes("src/index.ts"));
+      assert.ok(text.includes("✅"));
+      assert.ok(text.includes("共 1 行"), `应给出规模页脚，实际输出：\n${text}`);
+      assert.ok(text.includes("1 │ File content here"), "正文应带行号");
     });
 
-    it("should handle unknown tool names", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-3",
-        toolName: "unknown_tool",
-        result: {
-          content: [{ type: "text" as const, text: "result" }],
-        },
-        isError: false,
-      };
+    it("失败的工具应显示红色状态与错误内容", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-2",
+            toolName: "bash",
+            result: {
+              content: [{ type: "text", text: "Command not found" }],
+            },
+            isError: true,
+          },
+          context,
+        );
+      });
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("🛠️"));
-        assert.ok(fullOutput.includes("unknown_tool"));
-        assert.ok(fullOutput.includes("✅"));
-      } finally {
-        console.log = originalLog;
-      }
+      assert.ok(text.includes("💻"));
+      assert.ok(text.includes("❌"));
+      assert.ok(text.includes("Command not found"));
     });
 
-    it("should truncate long result content", () => {
-      const longContent = "a".repeat(150);
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-4",
-        toolName: "read_file",
-        result: {
-          content: [{ type: "text" as const, text: longContent }],
-        },
-        isError: false,
-      };
+    it("未知工具使用兜底图标并显示工具名", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-3",
+            toolName: "unknown_tool",
+            result: {
+              content: [{ type: "text", text: "result" }],
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("..."));
-        assert.ok(!fullOutput.includes(longContent)); // 完整内容不应出现
-      } finally {
-        console.log = originalLog;
-      }
+      assert.ok(text.includes("🛠️"));
+      assert.ok(text.includes("unknown_tool"));
+      assert.ok(text.includes("✅"));
     });
 
-    it("should display tool block with background color", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-5",
-        toolName: "bash",
-        args: { command: "ls -la" },
-        result: {
-          content: [{ type: "text" as const, text: "total 0" }],
-        },
-        isError: false,
-      };
+    it("bash 卡片应显示命令、退出码与输出", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-5",
+            toolName: "bash",
+            args: { command: "ls -la" },
+          },
+          context,
+        );
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-5",
+            toolName: "bash",
+            result: {
+              content: [{ type: "text", text: "total 0" }],
+              details: { command: "ls -la", exitCode: 0, stdout: "total 0", stderr: "" },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
+      assert.ok(text.includes("💻 ls -la"), `标题行应带完整命令：\n${text}`);
+      assert.ok(text.includes("✅"));
+      assert.ok(text.includes("exit 0"));
+      assert.ok(text.includes("│ total 0"));
+    });
 
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        // 检查是否包含工具信息
-        assert.ok(fullOutput.includes("💻"));
-        assert.ok(fullOutput.includes("bash"));
-        assert.ok(fullOutput.includes("✅"));
-        assert.ok(fullOutput.includes("Success"));
-        assert.ok(fullOutput.includes("total 0"));
-      } finally {
-        console.log = originalLog;
-      }
+    it("超长内容按显示宽度截断，不会整段刷屏", () => {
+      const longContent = "a".repeat(500);
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-4",
+            toolName: "read_file",
+            result: {
+              content: [{ type: "text", text: longContent }],
+              details: {
+                path: "long.txt",
+                totalLines: 1,
+                totalBytes: 500,
+                returnedFrom: 1,
+                returnedTo: 1,
+                returnedLines: 1,
+                truncated: false,
+              },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
+
+      assert.ok(text.includes("…"), "应出现截断标记");
+      assert.ok(!text.includes(longContent), "完整内容不应出现");
     });
   });
 });
