@@ -5,12 +5,13 @@ import { AgentEvent, AgentMessage, ToolResult } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
-import { runAgentLoop } from "../agent/loop";
+import { runAgentLoop, BeforeToolCall } from "../agent/loop";
 import { ModelProviderService, SettingsStore } from "../provider";
 import { JsonlSessionStore } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
+import { createToolApproval } from "./approval";
 
 /** 触发上下文压缩的近似 token 上限 */
 export const MAX_CONTEXT_TOKENS = 6000;
@@ -31,6 +32,8 @@ export type ReplOptions = {
   /** 创建新会话并返回新的 session store；返回空值表示不切换 */
   onNewSession?: () => JsonlSessionStore | undefined;
   onReload?: () => Promise<{ model: LlmModel | null; systemPrompt: string }>;
+  /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
+  beforeToolCall?: BeforeToolCall;
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -39,6 +42,34 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     output: process.stdout,
     prompt: chalk.cyan("> "),
   });
+
+  // 工具审批：只读工具自动放行，写文件 / 执行命令需用户逐次确认。
+  // 非交互式终端（管道输入等）无法确认，按「拒绝」处理（fail closed）。
+  let trusted = false;
+  let warnedNonInteractive = false;
+  const canPrompt = Boolean(process.stdin.isTTY);
+
+  const approval: BeforeToolCall = createToolApproval({
+    isTrusted: () => trusted,
+    confirm: async (promptText) => {
+      if (!canPrompt) {
+        if (!warnedNonInteractive) {
+          warnedNonInteractive = true;
+          console.log(
+            chalk.yellow(
+              "\n⚠️  当前不是交互式终端，无法确认工具调用，写文件与执行命令将被拒绝。\n" +
+                "   如需放开，请在真实终端中运行，或使用 /trust。\n",
+            ),
+          );
+        }
+        return false;
+      }
+      const answer = await question(rl, chalk.yellow(promptText));
+      return /^(y|yes|是|允许)$/i.test(answer.trim());
+    },
+  });
+
+  const beforeToolCall = options.beforeToolCall ?? approval;
 
   rl.prompt();
 
@@ -59,6 +90,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     if (input === "/clear") {
       await clearSession(options);
       console.log(chalk.dim("\n🗑️  历史已清除\n"));
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/trust") {
+      trusted = !trusted;
+      console.log(
+        trusted
+          ? chalk.yellow(
+              "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认\n",
+            )
+          : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
+      );
       rl.prompt();
       return;
     }
@@ -150,6 +194,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         model: options.model,
         toolRegistry: options.toolRegistry,
         maxTurns: 100,
+        beforeToolCall,
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             process.stdout.write(event.delta);
@@ -159,6 +204,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
           }
           if (event.type === "tool_execution_end") {
             printToolInfo(event)
+          }
+          if (event.type === "tool_permission") {
+            const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
+            console.log(chalk.dim(`\n${label}: ${event.toolName}`));
           }
         },
       });
@@ -383,6 +432,7 @@ function printHelp() {
   console.log(chalk.white("  /reload") + chalk.dim("   - 重载配置文件"));
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
+  console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
   console.log(chalk.white("  /help") + chalk.dim("    - 显示帮助信息"));
   console.log(chalk.white("  /clear") + chalk.dim("   - 清除对话历史"));
   console.log(chalk.white("  /exit") + chalk.dim("    - 退出程序"));
