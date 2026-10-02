@@ -15,6 +15,9 @@ export interface Provider {
   
   /** 获取模型列表 */
   getModelList(apiKey: string): Promise<string[]>;
+
+  /** 获取默认模型列表（可选，用于自动生成默认配置） */
+  getDefaultModels?(): string[];
 }
 
 /**
@@ -33,8 +36,8 @@ export class ModelProviderService {
     this.registerDefaultProviders();
   }
   
-  /** 注册默认的Provider */
-  private registerDefaultProviders(): void {
+  /** 注册默认的Provider（子类可覆写以控制默认注册行为） */
+  protected registerDefaultProviders(): void {
     this.registerProvider(new MiniMaxCnProvider());
     this.registerProvider(new DeepSeekProvider());
     this.registerProvider(new OpenAIProvider());

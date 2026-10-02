@@ -132,7 +132,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     } 
 
     if(!options.model) {
-      console.log('Please set the model first!')
+      console.log(chalk.yellow("⚠️  尚未配置模型，请使用 /login 和 /model 命令进行配置"));
+      rl.prompt();
       return
     }
 

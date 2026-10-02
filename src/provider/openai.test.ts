@@ -65,8 +65,9 @@ describe("OpenAIProvider", () => {
         { id: "gpt-3.5-turbo", object: "model", created: 1234567890, owned_by: "openai" },
       ];
 
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.openai.com/v1/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ data: mockModels }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -80,8 +81,9 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle API error response", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.openai.com/v1/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
             status: 401,
             headers: { "Content-Type": "application/json" },
@@ -97,8 +99,9 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle empty response", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.openai.com/v1/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ data: [] }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -112,8 +115,9 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle response without data array", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.openai.com/v1/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({}), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -127,7 +131,8 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle network error", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
         throw new Error("Network error");
       };
 
@@ -139,8 +144,9 @@ describe("OpenAIProvider", () => {
 
     it("should send correct authorization header", async () => {
       let capturedHeaders: Headers | undefined;
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.openai.com/v1/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.openai.com/v1/models") {
           capturedHeaders = new Headers(options?.headers);
           return new Response(JSON.stringify({ data: [] }), {
             status: 200,

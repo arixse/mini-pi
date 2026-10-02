@@ -31,10 +31,10 @@ export class OpenAIModel implements LlmModel {
   private defaultTools: ToolDefinition[] = [];
   constructor(config?: ModelConfig) {
     this.client = new OpenAI({
-      apiKey: config?.apiKey || process.env.OPENAI_API_KEY,
-      baseURL: config?.baseUrl || process.env.OPENAI_BASE_URL,
+      apiKey: config?.apiKey,
+      baseURL: config?.baseUrl,
     });
-    this.model = config?.model || process.env.OPENAI_MODEL || "gpt-3.5-turbo";
+    this.model = config?.model || "gpt-3.5-turbo";
   }
   async complete(input: CompleteInput): Promise<AssistantMessage> {
     try {
@@ -185,13 +185,10 @@ export class AnthropicModel implements LlmModel {
 
   constructor(config?: ModelConfig) {
     this.client = new Anthropic({
-      apiKey: config?.apiKey || process.env.ANTHROPIC_API_KEY,
-      baseURL: config?.baseUrl || process.env.ANTHROPIC_BASE_URL,
+      apiKey: config?.apiKey,
+      baseURL: config?.baseUrl,
     });
-    this.model =
-      config?.model ||
-      process.env.ANTHROPIC_MODEL ||
-      "claude-3-sonnet-20240229";
+    this.model = config?.model || "claude-3-sonnet-20240229";
   }
   async complete(input: CompleteInput): Promise<AssistantMessage> {
     try {
@@ -339,30 +336,6 @@ export class AnthropicModel implements LlmModel {
 
 export function createAnthropicModel(config?:ModelConfig):AnthropicModel {
     return new AnthropicModel(config)
-}
-
-export function createModelFromEnv():LlmModel {
-    const provider = process.env.MODEL_PROVIDER || "openai";
-    switch(provider.toLowerCase()) {
-        case "openai":
-            return createOpenAIModel({
-                apiKey:process.env.OPENAI_API_KEY,
-                baseUrl:process.env.OPENAI_BASE_URL,
-                model:process.env.OPENAI_MODEL
-            });
-        case "anthropic":
-            return createAnthropicModel({
-                apiKey:process.env.ANTHROPIC_API_KEY,
-                baseUrl:process.env.ANTHROPIC_BASE_URL,
-                model:process.env.ANTHROPIC_MODEL
-            });
-        default:
-            return createOpenAIModel({
-                apiKey:process.env.OPENAI_API_KEY,
-                baseUrl:process.env.OPENAI_BASE_URL,
-                model:process.env.OPENAI_MODEL
-            });
-    }
 }
 
 export async function createModelFromProvider(

@@ -179,20 +179,10 @@ export interface Provider {
 
 ---
 
-## 环境变量配置
+## 配置方式
 
-除了通过 `/login` 命令配置，也可以通过环境变量设置：
-
-```bash
-# DeepSeek
-DEEPSEEK_API_KEY=sk-xxxxxxxx
-
-# MiniMax-CN
-MINIMAX_CN_API_KEY=xxxxxxxx
-
-# OpenAI
-OPENAI_API_KEY=sk-xxxxxxxx
-```
+使用 `/login` 命令配置 API Key，使用 `/model` 命令选择模型供应商和模型。
+配置会保存到 `~/.mini-pi/` 目录（`auth.json` 与 `settings.json`），不再从环境变量读取。
 
 ---
 

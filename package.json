@@ -10,9 +10,9 @@
     "dev": "concurrently -k -n api,web -c cyan,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite --host 0.0.0.0 --port 5174",
-    "dev:cli": "tsx src/cli/index.ts",
+    "dev:cli": "tsx src/cli/entry.ts",
     "build": "vite build",
-    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --outfile=bin/mini-pi-cli.cjs --format=cjs --external:react --external:react-dom --external:lucide-react --external:vite",
+    "build:cli": "esbuild src/cli/entry.ts --bundle --platform=node --outfile=bin/mini-pi-cli.cjs --format=cjs --external:react --external:react-dom --external:lucide-react --external:vite",
     "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\""

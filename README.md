@@ -113,11 +113,10 @@ OpenAI 提供商使用官方 OpenAI 接口，base_url 为 `https://api.openai.co
 - `gpt-3.5-turbo` - 经典对话模型
 
 使用方法：
-1. 在 Mini Pi 中选择 OpenAI 作为模型提供商
-2. 输入 OpenAI API Key
-3. 选择要使用的模型
+1. 在 Mini Pi 中使用 `/login` 命令配置 OpenAI API Key
+2. 使用 `/model` 命令选择 OpenAI 提供商与模型
 
-也可以通过 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 环境变量进行配置。
+（配置不再从环境变量读取，请使用 `/login` 和 `/model` 命令进行配置）
 
 OpenAI API 文档：https://platform.openai.com/docs/api-reference/models/list
 

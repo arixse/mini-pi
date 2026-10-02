@@ -18,6 +18,11 @@ export function printWelcome(providerName: string | null, modelName: string | nu
     console.log(chalk.dim("  Provider: ") + chalk.white(providerName));
     console.log(chalk.dim("  Model:    ") + chalk.white(modelName));
     console.log(chalk.dim("─".repeat(60)));
+  } else {
+    console.log(chalk.dim("─".repeat(60)));
+    console.log(chalk.yellow("  ⚠️  尚未配置模型"));
+    console.log(chalk.yellow("  请使用 ") + chalk.cyan("/login") + chalk.yellow(" 配置 API Key，再使用 ") + chalk.cyan("/model") + chalk.yellow(" 选择模型"));
+    console.log(chalk.dim("─".repeat(60)));
   }
   
   console.log();

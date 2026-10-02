@@ -97,12 +97,6 @@ pnpm typecheck
 pnpm test
 ```
 
-## 6. 环境变量
+## 6. 配置
 
-| 变量            | 说明        | 默认值                    |
-| --------------- | ----------- | ------------------------- |
-| MODEL_PROVIDER  | 模型提供商  | mock                      |
-| OPENAI_API_KEY  | OpenAI 密钥 | -                         |
-| OPENAI_BASE_URL | OpenAI 地址 | https://api.openai.com/v1 |
-| OPENAI_MODEL    | OpenAI 模型 | gpt-3.5-turbo             |
-| PORT            | 服务端口    | 4317                      |
+配置通过 `/login` 命令设置 API Key、通过 `/model` 命令选择模型，保存在 `~/.mini-pi/` 目录中，不从环境变量读取。

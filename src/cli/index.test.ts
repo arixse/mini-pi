@@ -131,33 +131,13 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(settings.defaultModel, "deepseek/deepseek-flash");
   });
 
-  it("should fallback to env model when no provider has apiKey", async () => {
+  it("should return null model when no provider has apiKey", async () => {
     // 没有设置 defaultModel，也没有任何 provider 配置
-    // 应该回退到环境变量
-    const originalEnv = process.env.MODEL_PROVIDER;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    
-    try {
-      process.env.MODEL_PROVIDER = "openai";
-      process.env.OPENAI_API_KEY = "test-key";
-      
-      const result = await createModelFromSettings(providerService, settingsStore);
-      
-      assert.ok(result.model);
-      assert.strictEqual(result.providerName, "env");
-      assert.strictEqual(result.modelName, "default");
-    } finally {
-      // 恢复环境变量
-      if (originalEnv !== undefined) {
-        process.env.MODEL_PROVIDER = originalEnv;
-      } else {
-        delete process.env.MODEL_PROVIDER;
-      }
-      if (originalApiKey !== undefined) {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      } else {
-        delete process.env.OPENAI_API_KEY;
-      }
-    }
+    // 不应从环境变量读取配置，应返回 null，由调用方提示用户使用 /login 和 /model 配置
+    const result = await createModelFromSettings(providerService, settingsStore);
+
+    assert.strictEqual(result.model, null);
+    assert.strictEqual(result.providerName, null);
+    assert.strictEqual(result.modelName, null);
   });
 });

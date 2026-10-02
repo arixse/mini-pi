@@ -1,6 +1,11 @@
-#!/usr/bin/env node
-
-import { createModelFromEnv, createModelFromProvider, LlmModel } from "../agent/model";
+/**
+ * CLI 核心逻辑模块
+ *
+ * 注意：本模块禁止包含 import 副作用（例如直接启动 REPL）。
+ * 可执行入口在 entry.ts，本模块只导出函数供入口和单元测试使用，
+ * 否则测试文件 import 时会启动 REPL 占住 stdin 导致测试挂起。
+ */
+import { createModelFromProvider, LlmModel } from "../agent/model";
 import { createToolRegistry } from "../agent/tools";
 import { AgentMessage } from "../shared/protocol";
 import { startRepl } from "./repl";
@@ -14,7 +19,7 @@ export async function createModelFromSettings(
   providerService: ModelProviderService,
   settingsStore: SettingsStore,
 ): Promise<{ model: LlmModel | null; providerName: string | null; modelName: string | null }> {
-  // 从 settings.json 读取 defaultModel
+  // 1. 从 settings.json 读取 defaultModel
   const parsed = await settingsStore.parseDefaultModel();
 
   if (parsed) {
@@ -33,11 +38,29 @@ export async function createModelFromSettings(
       return { model, providerName, modelName };
     }
   }
+
+  // 2. 没有可用的默认配置时，自动从已有 provider 创建默认配置
+  const autoCreated = await tryCreateDefaultSettings(providerService, settingsStore);
+  if (autoCreated) {
+    const { providerName, modelName } = autoCreated;
+    const providerConfig = await providerService.getProviderConfig(providerName);
+    if (providerConfig.apiKey) {
+      const model = await createModelFromProvider({
+        apiKey: providerConfig.apiKey,
+        baseUrl: providerConfig.baseUrl,
+        model: modelName,
+        sdkType: providerConfig.sdkType
+      });
+      return { model, providerName, modelName };
+    }
+  }
+
+  // 3. 没有可用配置时返回 null，交由调用方提示用户使用 /login 和 /model 配置
   return {
     model: null,
     providerName: null,
     modelName: null
-  }
+  };
 }
 
 /**
@@ -58,15 +81,12 @@ async function tryCreateDefaultSettings(
         const provider = providerService.getProvider(providerName);
         if (!provider) continue;
 
-        const providerWithDefaults = provider as any;
         let modelName: string | undefined;
 
         // 尝试获取 provider 的默认模型列表
-        if (typeof providerWithDefaults.getDefaultModels === 'function') {
-          const defaultModels = providerWithDefaults.getDefaultModels();
-          if (defaultModels.length > 0) {
-            modelName = defaultModels[0];
-          }
+        const defaultModels = provider.getDefaultModels?.();
+        if (defaultModels && defaultModels.length > 0) {
+          modelName = defaultModels[0];
         }
 
         // 如果没有默认模型，使用一个通用的模型名
@@ -116,7 +136,7 @@ function buildSystemPrompt(workspaceRoot: string, fixedContext: string, skillSum
   return prompt;
 }
 
-async function main() {
+export async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();
@@ -196,4 +216,4 @@ async function main() {
   });
 }
 
-main().catch(console.error);
+
