@@ -8,6 +8,10 @@ import { SkillLoader, SkillSource, SkillWithSource } from "./skillLoader";
 export interface SessionManagerOptions {
   /** 自定义 skill 目录列表（用于测试） */
   customSkillDirs?: Array<{ path: string; source: SkillSource }>;
+  /** 会话存储目录，默认 ~/.mini-pi/sessions */
+  sessionsDir?: string;
+  /** 全局 AGENTS.md 路径，默认 ~/.mini-pi/AGENTS.md */
+  globalAgentsPath?: string;
 }
 
 export class SessionManager {
@@ -19,8 +23,11 @@ export class SessionManager {
   private readonly skillLoader: SkillLoader;
 
   constructor(private readonly workspaceRoot: string, options?: SessionManagerOptions) {
-    this.sessionsDir = join(homedir(), ".mini-pi", "sessions");
-    this.globalAgentsPath = join(homedir(), ".mini-pi", "AGENTS.md");
+    // 可注入：单元测试必须能完全避开真实的 ~/.mini-pi，
+    // 否则测试会读写甚至删除用户的真实配置与历史会话。
+    this.sessionsDir = options?.sessionsDir ?? join(homedir(), ".mini-pi", "sessions");
+    this.globalAgentsPath =
+      options?.globalAgentsPath ?? join(homedir(), ".mini-pi", "AGENTS.md");
     this.projectAgentsPath = join(workspaceRoot, "AGENTS.md");
     this.skillLoader = new SkillLoader(workspaceRoot, options?.customSkillDirs);
     this.ensureSessionsDir();
