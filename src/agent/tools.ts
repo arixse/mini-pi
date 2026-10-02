@@ -127,7 +127,7 @@ function readFileTool(workspaceRoot: string): RegisteredTool {
       assertNotCredentialFile(filePath, workspaceRoot);
       const content = await readFile(filePath, "utf8");
       return {
-        content: [createTextContent(truncate(content, 1800))],
+        content: [createTextContent(content)],
         details: { path: relative(workspaceRoot, filePath) },
       };
     },
