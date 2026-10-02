@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
 import { ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { readdir, readFile } from "node:fs/promises";
@@ -122,6 +123,7 @@ function readFileTool(workspaceRoot: string): RegisteredTool {
         workspaceRoot,
         stringArg(args.path, ""),
       );
+      assertNotCredentialFile(filePath, workspaceRoot);
       const content = await readFile(filePath, "utf8");
       return {
         content: [createTextContent(truncate(content, 1800))],
@@ -155,6 +157,7 @@ function writeFileTool(workspaceRoot: string): RegisteredTool {
         workspaceRoot,
         stringArg(args.path, ""),
       );
+      assertNotCredentialFile(filePath, workspaceRoot);
       const content = stringArg(args.content, "");
       const { mkdir, writeFile } = await import("node:fs/promises");
       const { dirname } = await import("node:path");
@@ -201,6 +204,7 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
         workspaceRoot,
         stringArg(args.path, ""),
       );
+      assertNotCredentialFile(filePath, workspaceRoot);
       const oldText = stringArg(args.oldText, "");
       const newText = stringArg(args.newText, "");
       const replaceAll = args.replaceAll === true;
@@ -362,14 +366,93 @@ function checkBashCommand(command: string, workspaceRoot: string): void {
   }
 }
 
-function resolveInsideWorkspace(workspaceRoot: string, input: string): string {
-  const target = resolve(workspaceRoot, input);
+/**
+ * 凭据类文件名：默认禁止 read_file / write_file / edit_file 访问。
+ *
+ * 系统提示词里已经写了「禁止读取 .env」，但此前只是提示，模型仍可直接读到；
+ * 这里把它落到工具层强制生效。模板文件（.env.example 等）本身不含真实凭据，允许访问。
+ */
+const CREDENTIAL_FILE_PATTERNS: ReadonlyArray<RegExp> = [
+  /^\.env$/,                       // .env
+  /^\.env\./i,                     // .env.local / .env.production ...
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i, // SSH 私钥
+  /\.pem$/i,
+  /^\.git-credentials$/i,
+];
+
+const CREDENTIAL_TEMPLATE_PATTERN = /^\.env\.(example|sample|template)$/i;
+
+export function isCredentialFile(filePath: string): boolean {
+  const name = basename(filePath);
+  if (CREDENTIAL_TEMPLATE_PATTERN.test(name)) {
+    return false;
+  }
+  return CREDENTIAL_FILE_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+function assertNotCredentialFile(filePath: string, workspaceRoot: string): void {
+  if (!isCredentialFile(filePath)) {
+    return;
+  }
+  throw new Error(
+    `Refusing to access credential file: ${relative(workspaceRoot, filePath)}. ` +
+      `凭据类文件（.env、私钥等）默认禁止读写；如确需处理，请先向用户说明并取得同意。`,
+  );
+}
+
+/**
+ * 把路径解析到工作区内，并做两层校验：
+ *
+ * 1. 词法校验：resolve 之后必须仍位于 workspaceRoot 内（挡住 `..` 与绝对路径）；
+ * 2. 真实路径校验：逐段解析 symlink / junction（含尚不存在的末段），
+ *    挡住「工作区内的软链接指向外部」这类逃逸。
+ *
+ * 返回词法路径（便于调用方按 workspaceRoot 计算相对路径）；
+ * 由于第 2 步已保证其真实路径位于工作区内，后续 I/O 是安全的。
+ */
+export function resolveInsideWorkspace(workspaceRoot: string, input: string): string {
+  if (typeof input !== "string" || input.trim() === "") {
+    throw new Error("Path cannot be empty");
+  }
+
   const root = resolve(workspaceRoot);
+  const target = resolve(root, input);
+
+  assertInsideRoot(root, target, input);
+  assertInsideRoot(realpathSync(root), realpathAllowMissing(target), input);
+
+  return target;
+}
+
+function assertInsideRoot(root: string, target: string, input: string): void {
   const rel = relative(root, target);
-  if (rel.startsWith("..") || (rel === "" && input.includes("..")) || isAbsolute(rel)) {
+  const escapes = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (escapes) {
     throw new Error(`Path escapes workspace:${input}`);
   }
-  return target;
+}
+
+/**
+ * 解析真实路径；末段（甚至中间若干段）尚不存在时，用最近的存在祖先解析后拼回剩余部分。
+ * 这样 write_file 创建新文件时也能做 symlink 校验。
+ */
+function realpathAllowMissing(target: string): string {
+  const missing: string[] = [];
+  let current = target;
+
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return missing.length === 0 ? real : join(real, ...missing.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        throw new Error(`Cannot resolve real path: ${target}`);
+      }
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
 }
 
 function truncate(input: string, max: number): string {

@@ -1,8 +1,9 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { ToolRegistry, createToolRegistry } from "./tools";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 describe("tools", () => {
   const testDir = join(process.cwd(), ".test-workspace");
@@ -362,6 +363,136 @@ describe("tools", () => {
           message: /Bash command contains absolute path outside workspace/,
         },
       );
+    });
+  });
+
+  describe("真实路径校验（symlink 逃逸）", () => {
+    let outsideDir: string;
+    let linkPath: string;
+
+    beforeEach(() => {
+      outsideDir = join(
+        tmpdir(),
+        `mini-pi-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      );
+      mkdirSync(outsideDir, { recursive: true });
+      writeFileSync(join(outsideDir, "secret.txt"), "top secret");
+
+      linkPath = join(testDir, "link-outside");
+      // Windows 上目录 junction 不需要管理员权限；POSIX 用普通目录符号链接
+      symlinkSync(outsideDir, linkPath, process.platform === "win32" ? "junction" : "dir");
+    });
+
+    afterEach(() => {
+      if (existsSync(outsideDir)) {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it("should reject reading through a symlink pointing outside the workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "link-outside/secret.txt" }),
+        { message: /Path escapes workspace/ },
+      );
+    });
+
+    it("should reject writing through a symlink pointing outside the workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () =>
+          registry.execute("write_file", {
+            path: "link-outside/planted.txt",
+            content: "escaped",
+          }),
+        { message: /Path escapes workspace/ },
+      );
+      assert.ok(!existsSync(join(outsideDir, "planted.txt")));
+    });
+
+    it("should reject listing through a symlink pointing outside the workspace", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("list_files", { path: "link-outside" }),
+        { message: /Path escapes workspace/ },
+      );
+    });
+
+    it("should allow names that merely start with dots", async () => {
+      // 回归：旧实现用 rel.startsWith("..") 判断逃逸，会误伤 ..name 这类合法名字
+      writeFileSync(join(testDir, "..config.json"), '{"ok":true}');
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("read_file", { path: "..config.json" });
+      assert.ok(result.content[0].text.includes("ok"));
+    });
+
+    it("should reject an empty path", async () => {
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(() => registry.execute("read_file", { path: "" }), {
+        message: /Path cannot be empty/,
+      });
+    });
+  });
+
+  describe("凭据文件保护", () => {
+    it("should refuse to read .env", async () => {
+      writeFileSync(join(testDir, ".env"), "OPENAI_API_KEY=sk-secret");
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(() => registry.execute("read_file", { path: ".env" }), {
+        message: /Refusing to access credential file/,
+      });
+    });
+
+    it("should refuse to read nested credential files", async () => {
+      mkdirSync(join(testDir, "config"), { recursive: true });
+      writeFileSync(join(testDir, "config", ".env.local"), "SECRET=1");
+      const registry = createToolRegistry(testDir);
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "config/.env.local" }),
+        { message: /Refusing to access credential file/ },
+      );
+    });
+
+    it("should refuse to write or edit credential files", async () => {
+      writeFileSync(join(testDir, ".env"), "A=1");
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(
+        () => registry.execute("write_file", { path: ".env", content: "A=2" }),
+        { message: /Refusing to access credential file/ },
+      );
+      await assert.rejects(
+        () =>
+          registry.execute("edit_file", {
+            path: ".env",
+            oldText: "A=1",
+            newText: "A=3",
+          }),
+        { message: /Refusing to access credential file/ },
+      );
+      assert.strictEqual(readFileSync(join(testDir, ".env"), "utf8"), "A=1");
+    });
+
+    it("should refuse private keys", async () => {
+      writeFileSync(join(testDir, "id_rsa"), "-----BEGIN PRIVATE KEY-----");
+      writeFileSync(join(testDir, "server.pem"), "-----BEGIN CERTIFICATE-----");
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(() => registry.execute("read_file", { path: "id_rsa" }), {
+        message: /Refusing to access credential file/,
+      });
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "server.pem" }),
+        { message: /Refusing to access credential file/ },
+      );
+    });
+
+    it("should still allow template files such as .env.example", async () => {
+      writeFileSync(join(testDir, ".env.example"), "OPENAI_API_KEY=");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: ".env.example" });
+      assert.ok(result.content[0].text.includes("OPENAI_API_KEY"));
     });
   });
 });
