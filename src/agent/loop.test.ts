@@ -549,6 +549,153 @@ describe("loop", () => {
     });
   });
 
+  describe("工具并发执行", () => {
+    const delay = (ms: number): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+
+    function twoCallModel(nameA: string, nameB: string): LlmModel {
+      let call = 0;
+      return {
+        async complete() {
+          call += 1;
+          if (call > 1) {
+            return createAssistantMessage([createTextContent("done")]);
+          }
+          return createAssistantMessage(
+            [
+              { type: "toolCall", id: "call_a", name: nameA, arguments: {} },
+              { type: "toolCall", id: "call_b", name: nameB, arguments: {} },
+            ],
+            "toolUse",
+          );
+        },
+      };
+    }
+
+    function countingRegistry(readOnly: boolean, delayMs: number) {
+      const registry = new ToolRegistry();
+      const counters = { active: 0, maxActive: 0, order: [] as string[] };
+      for (const name of ["tool_a", "tool_b"]) {
+        registry.register({
+          name,
+          description: "test",
+          parameters: {},
+          readOnly,
+          async execute() {
+            counters.active += 1;
+            counters.maxActive = Math.max(counters.maxActive, counters.active);
+            await delay(delayMs);
+            counters.order.push(name);
+            counters.active -= 1;
+            return { content: [createTextContent(`${name} done`)] };
+          },
+        });
+      }
+      return { registry, counters };
+    }
+
+    it("连续的只读调用应并发执行", async () => {
+      const { registry, counters } = countingRegistry(true, 30);
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model: twoCallModel("tool_a", "tool_b"),
+        toolRegistry: registry,
+      });
+
+      assert.strictEqual(counters.maxActive, 2, "两个只读调用应同时在跑");
+      const results = result.newMessages.filter((m) => m.role === "toolResult");
+      assert.strictEqual(results.length, 2);
+    });
+
+    it("写类工具仍按顺序执行", async () => {
+      const { registry, counters } = countingRegistry(false, 20);
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model: twoCallModel("tool_a", "tool_b"),
+        toolRegistry: registry,
+      });
+
+      assert.strictEqual(counters.maxActive, 1, "非只读工具不应并发");
+      assert.deepStrictEqual(counters.order, ["tool_a", "tool_b"]);
+    });
+
+    it("结果顺序应与调用顺序一致（即使完成顺序相反）", async () => {
+      const registry = new ToolRegistry();
+      const registryWithDelay = new Map<string, number>([
+        ["slow", 40],
+        ["fast", 1],
+      ]);
+      for (const [name, ms] of registryWithDelay) {
+        registry.register({
+          name,
+          description: "test",
+          parameters: {},
+          readOnly: true,
+          async execute() {
+            await delay(ms);
+            return { content: [createTextContent(`${name} done`)] };
+          },
+        });
+      }
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model: twoCallModel("slow", "fast"),
+        toolRegistry: registry,
+      });
+
+      const texts = result.newMessages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => (message.content[0] as { text: string }).text);
+
+      assert.deepStrictEqual(texts, ["slow done", "fast done"], "慢的先调用，结果也应在前");
+    });
+
+    it("同一批里被拒绝的只读调用不执行", async () => {
+      const registry = new ToolRegistry();
+      const executed: string[] = [];
+      for (const name of ["tool_a", "tool_b"]) {
+        registry.register({
+          name,
+          description: "test",
+          parameters: {},
+          readOnly: true,
+          async execute() {
+            executed.push(name);
+            return { content: [createTextContent(`${name} done`)] };
+          },
+        });
+      }
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model: twoCallModel("tool_a", "tool_b"),
+        toolRegistry: registry,
+        beforeToolCall: async (call) =>
+          call.name === "tool_a" ? { action: "block", reason: "no" } : { action: "allow" },
+      });
+
+      assert.deepStrictEqual(executed, ["tool_b"]);
+      const results = result.newMessages.filter((m) => m.role === "toolResult");
+      assert.strictEqual(results.length, 2);
+      assert.strictEqual(
+        (results[0] as { isError: boolean }).isError,
+        true,
+        "被拒绝的结果应排在自己的位置上",
+      );
+    });
+  });
+
   describe("流式消息生命周期", () => {
     function eventsOfType<T extends AgentEvent["type"]>(
       events: AgentEvent[],

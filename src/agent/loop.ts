@@ -272,60 +272,125 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
             }
         }
 
-        const toolResults:ToolResultMessage[] = []
+        const slots:Array<ToolResultMessage | undefined> = new Array(toolCalls.length)
 
-        for(const toolCall of toolCalls) {
+        /**
+         * 执行一批工具调用。
+         *
+         * 只读工具（read_file / glob / grep / list_files）会批量并发执行：
+         * 模型经常一次发多个读取类调用，串行等于把延迟叠加。
+         * 写类工具始终单独执行（一次一个），避免互相踩状态。
+         *
+         * 无论并发与否，结果都按**原始顺序**归档到 slots / context / newMessages，
+         * 因为协议要求 toolResult 与 toolCall 一一对应且顺序一致。
+         */
+        const runBatch = async (indices:number[]):Promise<void> => {
+            const decisions = await Promise.all(
+                indices.map((index) => decideToolCall(toolCalls[index], options.beforeToolCall)),
+            )
+
+            const executables = new Map<number,ToolCallContent>()
+            const blocked = new Map<number,ToolResultMessage>()
+
+            indices.forEach((index,position) => {
+                const toolCall = toolCalls[index]
+                const decision = decisions[position]
+
+                if(decision.action!=="allow") {
+                    emit({
+                        type:"tool_permission",
+                        toolCallId:toolCall.id,
+                        toolName:toolCall.name,
+                        action:decision.action,
+                        reason:decision.reason,
+                        originalArgs:toolCall.arguments,
+                        args:decision.action==="rewrite"?decision.args:toolCall.arguments
+                    })
+                }
+
+                if(decision.action==="block") {
+                    blocked.set(index, createBlockedToolResult(toolCall,decision.reason))
+                    return
+                }
+
+                const executable = decision.action==="rewrite"?{...toolCall,arguments:decision.args}:toolCall
+                executables.set(index, executable)
+                emit({
+                    type:"tool_execution_start",
+                    toolCallId:executable.id,
+                    toolName:executable.name,
+                    args:executable.arguments
+                })
+            })
+
+            const executed = new Map<number,ToolResultMessage>()
+            await Promise.all(
+                [...executables.entries()].map(async ([index,executable]) => {
+                    executed.set(index, await executeToolCall(executable, options.toolRegistry, signal))
+                }),
+            )
+
+            for(const index of indices) {
+                const blockedResult = blocked.get(index)
+                if(blockedResult) {
+                    slots[index] = blockedResult
+                    context.push(blockedResult)
+                    newMessages.push(blockedResult)
+                    emitMessageLifeCycle(blockedResult, emit)
+                    continue
+                }
+
+                const executable = executables.get(index)
+                const toolResult = executed.get(index)
+                if(!executable || !toolResult) {
+                    continue
+                }
+
+                slots[index] = toolResult
+                context.push(toolResult)
+                newMessages.push(toolResult)
+
+                emit({
+                    type:"tool_execution_end",
+                    toolCallId: executable.id,
+                    toolName: executable.name,
+                    result:{
+                        content:toolResult.content,
+                        details:toolResult.details
+                    },
+                    isError:toolResult.isError
+                })
+                emitMessageLifeCycle(toolResult, emit)
+            }
+        }
+
+        let cursor = 0
+        while(cursor < toolCalls.length) {
             if(signal.aborted) {
                 break
             }
-            const decision = await decideToolCall(toolCall,options.beforeToolCall);
-            if(decision.action!=="allow") {
-                emit({
-                    type:"tool_permission",
-                    toolCallId:toolCall.id,
-                    toolName:toolCall.name,
-                    action:decision.action,
-                    reason:decision.reason,
-                    originalArgs:toolCall.arguments,
-                    args:decision.action==="rewrite"?decision.args:toolCall.arguments
-                })
-            }
 
-            if(decision.action==="block") {
-                const blockedResult = createBlockedToolResult(toolCall,decision.reason)
-                toolResults.push(blockedResult)
-                context.push(blockedResult)
-                newMessages.push(blockedResult)
-                emitMessageLifeCycle(blockedResult, emit);
+            if(options.toolRegistry.isReadOnly(toolCalls[cursor].name)) {
+                // 收集连续的只读调用，一起并发
+                const batch:number[] = []
+                while(
+                    cursor + batch.length < toolCalls.length &&
+                    options.toolRegistry.isReadOnly(toolCalls[cursor + batch.length].name)
+                ) {
+                    batch.push(cursor + batch.length)
+                }
+                await runBatch(batch)
+                cursor += batch.length
                 continue
             }
-            const executableToolCall = decision.action==="rewrite"?{...toolCall,arguments:decision.args}:toolCall
 
-            emit({
-                type:"tool_execution_start",
-                toolCallId:executableToolCall.id,
-                toolName:executableToolCall.name,
-                args:executableToolCall.arguments
-            })
-
-            const toolResult = await executeToolCall(executableToolCall,options.toolRegistry, signal)
-
-            toolResults.push(toolResult)
-            context.push(toolResult)
-            newMessages.push(toolResult)
-
-            emit({
-                type:"tool_execution_end",
-                toolCallId: executableToolCall.id,
-                toolName: executableToolCall.name,
-                result:{
-                    content:toolResult.content,
-                    details:toolResult.details
-                },
-                isError:toolResult.isError
-            })
-            emitMessageLifeCycle(toolResult, emit);
+            await runBatch([cursor])
+            cursor += 1
         }
+
+        const toolResults = slots.filter(
+            (result):result is ToolResultMessage => result !== undefined,
+        )
 
         emit({type:"turn_end",turn,message:assistant,toolResults})
 
