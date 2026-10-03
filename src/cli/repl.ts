@@ -70,6 +70,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       const answer = await question(rl, chalk.yellow(promptText));
       return /^(y|yes|是|允许)$/i.test(answer.trim());
     },
+    // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
+    autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
   });
 
   const beforeToolCall = options.beforeToolCall ?? approval;

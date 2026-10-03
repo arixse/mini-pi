@@ -391,6 +391,18 @@ function headerSuffix(
   if (view.name === "list_files" && Array.isArray(details.entries)) {
     suffixes.push(`${(details.entries as string[]).length} 项`);
   }
+  if (view.name === "glob") {
+    const count = numberOf(details.count);
+    if (count !== null) {
+      suffixes.push(`${count} 个文件`);
+    }
+  }
+  if (view.name === "grep") {
+    const count = numberOf(details.count);
+    if (count !== null) {
+      suffixes.push(`${count} 处匹配`);
+    }
+  }
 
   return suffixes;
 }
@@ -601,7 +613,19 @@ function footerText(
         : [];
       const dirCount = numberOf(details.dirCount) ?? 0;
       const fileCount = numberOf(details.fileCount) ?? 0;
-      return `${entries.length} 项（${dirCount} 目录 / ${fileCount} 文件）`;
+      const truncated = details.truncated === true ? " · 已截断" : "";
+      return `${entries.length} 项（${dirCount} 目录 / ${fileCount} 文件）${truncated}`;
+    }
+    case "glob": {
+      const count = numberOf(details.count) ?? 0;
+      const truncated = details.truncated === true ? " · 已截断" : "";
+      return `${count} 个文件${truncated}`;
+    }
+    case "grep": {
+      const count = numberOf(details.count) ?? 0;
+      const files = numberOf(details.files) ?? 0;
+      const truncated = details.truncated === true ? " · 已截断" : "";
+      return `${count} 处匹配 · 扫描 ${files} 个文件${truncated}`;
     }
     default: {
       const lines = toLines(resultText(view)).length;

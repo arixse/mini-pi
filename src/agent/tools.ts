@@ -2,11 +2,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import {
   DEFAULT_IGNORE_PATTERNS,
   IgnoreMatcher,
   createIgnoreMatcher,
+  matchesGlob,
   parseIgnorePatterns,
 } from "./patterns";
 
@@ -15,7 +16,11 @@ type ToolExecutor = (
   signal?: AbortSignal,
 ) => Promise<ToolResult>;
 
-type RegisteredTool = ToolDefinition & { execute: ToolExecutor };
+type RegisteredTool = ToolDefinition & {
+  execute: ToolExecutor;
+  /** 只读工具：可并发执行，且无需用户确认 */
+  readOnly?: boolean;
+};
 
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
@@ -36,6 +41,18 @@ export class ToolRegistry {
     );
   }
 
+  /** 工具是否只读（只读工具可并发执行、无需审批） */
+  isReadOnly(name: string): boolean {
+    return this.tools.get(name)?.readOnly === true;
+  }
+
+  /** 所有只读工具名，供审批策略复用，避免两处各写一份白名单 */
+  readOnlyToolNames(): string[] {
+    return Array.from(this.tools.values())
+      .filter((tool) => tool.readOnly === true)
+      .map((tool) => tool.name);
+  }
+
   async execute(
     name: string,
     args: Record<string, unknown>,
@@ -52,6 +69,8 @@ export class ToolRegistry {
 export function createToolRegistry(workspaceRoot: string): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(listFilesTool(workspaceRoot));
+  registry.register(globTool(workspaceRoot));
+  registry.register(grepTool(workspaceRoot));
   registry.register(readFileTool(workspaceRoot));
   registry.register(writeFileTool(workspaceRoot));
   registry.register(editFileTool(workspaceRoot));
@@ -81,18 +100,25 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
         },
       },
     },
+    readOnly: true,
     async execute(args) {
       const dir = resolveInsideWorkspace(workspaceRoot, stringArg(args.path,"."));
       const ignore = createWorkspaceIgnore(workspaceRoot);
-      const state: ListState = { entries: [], truncated: false };
+      const entries: string[] = [];
 
-      await collectEntries(dir, workspaceRoot, 1, ignore, state);
+      const result = await walkEntries(
+        dir,
+        workspaceRoot,
+        { ignore, maxEntries: MAX_LIST_ENTRIES, maxDepth: MAX_LIST_DEPTH },
+        (relativePath, _absolute, isDirectory) => {
+          entries.push(isDirectory ? `${relativePath}/` : relativePath);
+        },
+      );
 
-      state.entries.sort();
-      const dirCount = state.entries.filter((entry) => entry.endsWith("/")).length;
-      const body =
-        state.entries.length > 0 ? state.entries.join("\n") : "(empty)";
-      const text = state.truncated
+      entries.sort();
+      const dirCount = entries.filter((entry) => entry.endsWith("/")).length;
+      const body = entries.length > 0 ? entries.join("\n") : "(empty)";
+      const text = result.truncated
         ? `${body}\n\n${listTruncationNotice()}`
         : body;
 
@@ -100,10 +126,10 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
         content: [createTextContent(text)],
         details: {
           path: relative(workspaceRoot, dir).split(sep).join("/") || ".",
-          entries: state.entries,
+          entries,
           dirCount,
-          fileCount: state.entries.length - dirCount,
-          truncated: state.truncated,
+          fileCount: entries.length - dirCount,
+          truncated: result.truncated,
         },
       };
     },
@@ -122,6 +148,18 @@ function listTruncationNotice(): string {
   );
 }
 
+/** 单次 glob 最多返回的文件数 */
+export const MAX_GLOB_RESULTS = 200;
+/** 单次 grep 最多返回的匹配数 */
+export const MAX_GREP_MATCHES = 100;
+/** glob / grep 遍历的条目与深度上限（防病态目录树，不用于限制返回结果） */
+const MAX_SEARCH_ENTRIES = 5_000;
+const MAX_SEARCH_DEPTH = 12;
+/** grep 跳过的超大文件 */
+const MAX_GREP_FILE_BYTES = 1_000_000;
+/** grep 单行展示长度 */
+const MAX_GREP_LINE_CHARS = 200;
+
 /**
  * 工作区忽略规则：内置依赖/产物目录 + 根目录 .gitignore。
  * 只读根目录的 .gitignore（不处理嵌套与 .git/info/exclude），够用且可预测。
@@ -139,53 +177,289 @@ function createWorkspaceIgnore(workspaceRoot: string): IgnoreMatcher {
   return createIgnoreMatcher(patterns);
 }
 
+type WalkOptions = {
+  ignore: IgnoreMatcher;
+  maxEntries: number;
+  maxDepth: number;
+};
+
+type WalkResult = {
+  visited: number;
+  truncated: boolean;
+};
+
 /**
- * 递归收集条目。
+ * 按忽略规则在工作区内遍历（list_files / glob / grep 共用）。
  *
- * 相比旧实现：跳过依赖/产物目录与 .gitignore 命中项、
- * 限制条目数与深度、不再隐藏点文件（`.gitignore`/`.github` 这类需要能看到）、
- * 单个目录读不动也不让整次列举失败。
+ * - 目录与文件都会回调，便于调用方自行取舍；
+ * - 单个目录读不动时跳过，不让整次遍历失败；
+ * - 条目数与深度到顶时置 truncated 并停止。
  */
-async function collectEntries(
-  dir: string,
+async function walkEntries(
+  startDir: string,
   workspaceRoot: string,
-  depth: number,
-  ignore: IgnoreMatcher,
-  state: ListState,
-): Promise<void> {
-  if (depth > MAX_LIST_DEPTH) {
-    state.truncated = true;
-    return;
-  }
+  options: WalkOptions,
+  visit: (
+    relativePath: string,
+    absolutePath: string,
+    isDirectory: boolean,
+  ) => void | Promise<void>,
+): Promise<WalkResult> {
+  let visited = 0;
+  let truncated = false;
 
-  let dirents;
-  try {
-    dirents = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  dirents.sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const dirent of dirents) {
-    if (state.entries.length >= MAX_LIST_ENTRIES) {
-      state.truncated = true;
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (truncated) {
+      return;
+    }
+    if (depth > options.maxDepth) {
+      truncated = true;
       return;
     }
 
-    const absolute = resolve(dir, dirent.name);
-    const relativePath = relative(workspaceRoot, absolute).split(sep).join("/");
-    const isDirectory = dirent.isDirectory();
-
-    if (ignore(relativePath, isDirectory)) {
-      continue;
+    let dirents;
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
     }
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
 
-    if (isDirectory) {
-      state.entries.push(`${relativePath}/`);
-      await collectEntries(absolute, workspaceRoot, depth + 1, ignore, state);
-    } else {
-      state.entries.push(relativePath);
+    for (const dirent of dirents) {
+      if (visited >= options.maxEntries) {
+        truncated = true;
+        return;
+      }
+
+      const absolute = resolve(dir, dirent.name);
+      const relativePath = relative(workspaceRoot, absolute)
+        .split(sep)
+        .join("/");
+      const isDirectory = dirent.isDirectory();
+
+      if (options.ignore(relativePath, isDirectory)) {
+        continue;
+      }
+
+      visited += 1;
+      await visit(relativePath, absolute, isDirectory);
+
+      if (isDirectory) {
+        await walk(absolute, depth + 1);
+      }
     }
+  };
+
+  await walk(startDir, 1);
+  return { visited, truncated };
+}
+
+function globTool(workspaceRoot: string): RegisteredTool {
+  return {
+    name: "glob",
+    description:
+      "Find files by glob pattern under the workspace (supports *, ?, ** and {a,b}; " +
+      'a pattern without "/" matches the file name at any depth, e.g. "*.test.ts"). ' +
+      "Dependency/build directories and .gitignore entries are skipped. Returns files only, " +
+      `at most ${MAX_GLOB_RESULTS} of them.`,
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: 'Glob pattern, for example "src/**/*.ts" or "*.md".',
+        },
+        path: {
+          type: "string",
+          description: 'Directory to search in, relative to workspace. Defaults to ".".',
+        },
+      },
+      required: ["pattern"],
+    },
+    readOnly: true,
+    async execute(args) {
+      const pattern = stringArg(args.pattern, "");
+      if (!pattern.trim()) {
+        throw new Error("pattern cannot be empty");
+      }
+      const root = resolveInsideWorkspace(workspaceRoot, stringArg(args.path, "."));
+      const ignore = createWorkspaceIgnore(workspaceRoot);
+      const matches: string[] = [];
+      let truncated = false;
+
+      const result = await walkEntries(
+        root,
+        workspaceRoot,
+        { ignore, maxEntries: MAX_SEARCH_ENTRIES, maxDepth: MAX_SEARCH_DEPTH },
+        (relativePath, _absolute, isDirectory) => {
+          if (isDirectory || matches.length >= MAX_GLOB_RESULTS) {
+            if (!isDirectory && matches.length >= MAX_GLOB_RESULTS) {
+              truncated = true;
+            }
+            return;
+          }
+          if (matchesGlob(relativePath, pattern)) {
+            matches.push(relativePath);
+          }
+        },
+      );
+
+      matches.sort();
+      const cut = truncated || result.truncated;
+      const body = matches.length > 0 ? matches.join("\n") : "(no match)";
+      const text = cut
+        ? `${body}\n\n...[已截断：最多返回 ${MAX_GLOB_RESULTS} 个文件，请用更精确的模式或指定子目录]`
+        : body;
+
+      return {
+        content: [createTextContent(text)],
+        details: {
+          pattern,
+          path: relative(workspaceRoot, root).split(sep).join("/") || ".",
+          matches,
+          count: matches.length,
+          truncated: cut,
+        },
+      };
+    },
+  };
+}
+
+function grepTool(workspaceRoot: string): RegisteredTool {
+  return {
+    name: "grep",
+    description:
+      "Search file contents with a JavaScript regular expression under the workspace. " +
+      "Returns matches as <path>:<line>: <text>. Dependency/build directories and .gitignore " +
+      "entries are skipped, as are files larger than 1 MB and binary files. " +
+      `At most ${MAX_GREP_MATCHES} matches are returned.`,
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: "JavaScript regular expression, for example \"export function \\\\w+\".",
+        },
+        path: {
+          type: "string",
+          description: 'Directory to search in, relative to workspace. Defaults to ".".',
+        },
+        include: {
+          type: "string",
+          description: 'Only search files matching this glob, for example "*.ts".',
+        },
+        ignoreCase: {
+          type: "boolean",
+          description: "Case-insensitive match. Defaults to false.",
+        },
+      },
+      required: ["pattern"],
+    },
+    readOnly: true,
+    async execute(args) {
+      const source = stringArg(args.pattern, "");
+      if (!source.trim()) {
+        throw new Error("pattern cannot be empty");
+      }
+
+      let regexp: RegExp;
+      try {
+        regexp = new RegExp(source, args.ignoreCase === true ? "i" : "");
+      } catch (error) {
+        throw new Error(
+          `Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      const root = resolveInsideWorkspace(workspaceRoot, stringArg(args.path, "."));
+      const include = stringArg(args.include, "");
+      const ignore = createWorkspaceIgnore(workspaceRoot);
+      const matches: Array<{ path: string; line: number; text: string }> = [];
+      const searchedFiles = new Set<string>();
+      let truncated = false;
+
+      const result = await walkEntries(
+        root,
+        workspaceRoot,
+        { ignore, maxEntries: MAX_SEARCH_ENTRIES, maxDepth: MAX_SEARCH_DEPTH },
+        async (relativePath, absolutePath, isDirectory) => {
+          if (isDirectory || truncated) {
+            return;
+          }
+          if (matches.length >= MAX_GREP_MATCHES) {
+            truncated = true;
+            return;
+          }
+          if (include && !matchesGlob(relativePath, include)) {
+            return;
+          }
+
+          const content = await readSearchableFile(absolutePath);
+          if (content === null) {
+            return;
+          }
+          searchedFiles.add(relativePath);
+
+          const lines = content.split("\n");
+          for (let index = 0; index < lines.length; index += 1) {
+            if (matches.length >= MAX_GREP_MATCHES) {
+              truncated = true;
+              break;
+            }
+            const line = lines[index].endsWith("\r")
+              ? lines[index].slice(0, -1)
+              : lines[index];
+            if (!regexp.test(line)) {
+              continue;
+            }
+            matches.push({
+              path: relativePath,
+              line: index + 1,
+              text:
+                line.length > MAX_GREP_LINE_CHARS
+                  ? `${line.slice(0, MAX_GREP_LINE_CHARS)}…`
+                  : line,
+            });
+          }
+        },
+      );
+
+      const cut = truncated || result.truncated;
+      const body =
+        matches.length > 0
+          ? matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n")
+          : "(no match)";
+      const text = cut
+        ? `${body}\n\n...[已截断：匹配过多，仅返回前 ${MAX_GREP_MATCHES} 处。请用更精确的正则或叠加 include]`
+        : body;
+
+      return {
+        content: [createTextContent(text)],
+        details: {
+          pattern: source,
+          path: relative(workspaceRoot, root).split(sep).join("/") || ".",
+          matches,
+          count: matches.length,
+          files: searchedFiles.size,
+          truncated: cut,
+        },
+      };
+    },
+  };
+}
+
+/** 读取可供检索的文件；过大或二进制时返回 null */
+async function readSearchableFile(absolutePath: string): Promise<string | null> {
+  try {
+    const info = await stat(absolutePath);
+    if (!info.isFile() || info.size > MAX_GREP_FILE_BYTES) {
+      return null;
+    }
+    const content = await readFile(absolutePath, "utf8");
+    // NUL 字节基本可以判定为二进制
+    return content.includes("\u0000") ? null : content;
+  } catch {
+    return null;
   }
 }
 
@@ -227,6 +501,7 @@ function readFileTool(workspaceRoot: string): RegisteredTool {
       },
       required: ["path"],
     },
+    readOnly: true,
     async execute(args) {
       const filePath = resolveInsideWorkspace(
         workspaceRoot,
