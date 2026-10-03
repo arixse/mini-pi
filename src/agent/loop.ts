@@ -21,6 +21,14 @@ export type RunAgentLoopOptions = {
     beforeToolCall?:BeforeToolCall
     /** 外部取消信号（例如 Ctrl+C）：中止模型请求与正在执行的工具 */
     signal?:AbortSignal
+    /**
+     * 每轮结束（含工具结果）后回调，用于落盘与检查上下文压缩。
+     *
+     * 参数是本轮新增的消息；返回新的上下文表示已压缩，
+     * 循环会用返回值替换内部上下文（不返回则保持不变）。
+     * 单轮内可以跑很多次工具调用，只有每轮都给一次机会才兜得住上下文增长。
+     */
+    onTurnEnd?:(turnMessages:AgentMessage[])=>Promise<AgentMessage[] | undefined>
     onEvent?:(event:AgentEvent)=>void
 }
 
@@ -195,6 +203,37 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
     const signal = options.signal ?? new AbortController().signal
     emit({type:"agent_start"})
 
+    // 已交给 onTurnEnd 的消息数（调用方负责落盘，循环只负责转发增量）
+    let syncedCount = 0
+
+    /**
+     * 每轮结束时把本轮新增消息交给调用方（落盘 / 检查压缩）。
+     *
+     * 单轮内可能跑很多次工具调用，上下文会在一轮里持续增长；
+     * 只靠"用户回合开始时压缩一次"不足以兜住，因此这里每轮都给一次机会。
+     * 调用方返回新上下文表示已压缩，循环会用它替换内部上下文。
+     * 钩子抛错不中断本次运行：持久化与压缩是调用方的职责，它自己会记录。
+     */
+    const syncTurn = async (): Promise<void> => {
+        if (!options.onTurnEnd) {
+            return
+        }
+        const delta = newMessages.slice(syncedCount)
+        if (delta.length === 0) {
+            return
+        }
+        syncedCount = newMessages.length
+        try {
+            const compacted = await options.onTurnEnd(delta)
+            if (compacted) {
+                context.length = 0
+                context.push(...compacted)
+            }
+        } catch {
+            // 忽略：不影响本轮回合继续
+        }
+    }
+
     for(let turn=1;turn<=maxTurns;turn++) {
         emit({type:"turn_start",turn})
         const assistant = await completeAssistantMessage(options, context, signal, emit)
@@ -203,6 +242,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
 
         if(assistant.stopReason==="error" || assistant.stopReason==="aborted") {
             emit({type:"turn_end",turn,message:assistant,toolResults:[]})
+            await syncTurn()
             emit({type:"agent_end",messages:newMessages})
             return {
                 newMessages,
@@ -213,6 +253,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         // 兜底：模型实现未响应取消信号时，这里不再继续执行工具
         if(signal.aborted) {
             emit({type:"turn_end",turn,message:assistant,toolResults:[]})
+            await syncTurn()
             emit({type:"agent_end",messages:newMessages})
             return {
                 newMessages,
@@ -223,6 +264,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         const toolCalls = assistant.content.filter((block):block is ToolCallContent=>block.type==="toolCall")
         if(toolCalls.length===0) {
             emit({type:"turn_end",turn,message:assistant,toolResults:[]})
+            await syncTurn()
             emit({type:"agent_end",messages:newMessages})
             return {
                 newMessages,
@@ -286,6 +328,9 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         }
 
         emit({type:"turn_end",turn,message:assistant,toolResults})
+
+        // 每轮结束都落盘并检查一次压缩：单轮内的上下文同样可能超出预算
+        await syncTurn()
 
         // 被取消：不再进入下一轮
         if(signal.aborted) {

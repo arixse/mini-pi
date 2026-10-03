@@ -6,6 +6,7 @@ import {
   appendAgentMessages,
   appendUserMessage,
   clearSession,
+  compactContext,
   printToolInfo,
   startNewSession,
 } from "./repl";
@@ -20,6 +21,7 @@ import { LlmModel } from "../agent/model";
 import { createTextContent, createUserMessage } from "../agent/message";
 import { AgentMessage } from "../shared/protocol";
 import { PLAIN_CONTEXT, RenderContext } from "./render";
+import { RunState, StatusController } from "./status";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -502,6 +504,26 @@ describe("session context wiring", () => {
     };
   }
 
+  /** 记录状态切换的假状态行，用于验证压缩期间的状态提示 */
+  function createFakeStatus(): {
+    status: StatusController;
+    states: RunState[];
+    counters: { stopped: number };
+  } {
+    const states: RunState[] = [];
+    const counters = { stopped: 0 };
+    const status: StatusController = {
+      set: (state) => {
+        states.push(state);
+      },
+      stop: () => {
+        counters.stopped += 1;
+      },
+      isActive: () => false,
+    };
+    return { status, states, counters };
+  }
+
   it("should keep working in memory-only mode without a session store", async () => {
     const options = createOptions();
 
@@ -594,6 +616,49 @@ describe("session context wiring", () => {
     await appendUserMessage(options, createUserMessage("new question"));
     assert.strictEqual(created!.buildContext().length, 1);
     assert.strictEqual(oldStore.buildContext().length, 1);
+  });
+
+  it("compactContext：未超阈值时返回 undefined", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+    const { status } = createFakeStatus();
+
+    assert.strictEqual(await compactContext(options, status), undefined);
+  });
+
+  it("compactContext：超阈值时返回压缩后的上下文并驱动状态行", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    store.setModel(createMockModel("summarizer"));
+    for (let index = 0; index < 80; index += 1) {
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent(`历史 ${index} ${"x".repeat(200)}`)],
+        timestamp: Date.now(),
+      });
+    }
+    const options = createOptions({
+      sessionStore: store,
+      model: createMockModel("summarizer"),
+    });
+    const { status, states, counters } = createFakeStatus();
+
+    const result = await compactContext(options, status);
+
+    assert.ok(result, "超阈值时应压缩并返回新上下文");
+    assert.strictEqual(result!.length, KEEP_RECENT_MESSAGES + 1);
+    assert.deepStrictEqual(
+      states.map((state) => state.kind),
+      ["compacting"],
+      "压缩期间应显示状态行",
+    );
+    assert.strictEqual(counters.stopped, 1, "结束后应清除状态行");
+  });
+
+  it("compactContext：无会话存储时返回 undefined", async () => {
+    const options = createOptions();
+    const { status } = createFakeStatus();
+
+    assert.strictEqual(await compactContext(options, status), undefined);
   });
 
   it("startNewSession should report failure when no callback is configured", () => {

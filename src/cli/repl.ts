@@ -12,7 +12,7 @@ import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
-import { createStatusLine } from "./status";
+import { createStatusLine, StatusController } from "./status";
 import { createRenderContext, renderToolCall, RenderContext } from "./render";
 import { ExitCoordinator } from "./exit";
 
@@ -256,6 +256,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
       status.set({ kind: "thinking", startedAt: Date.now() });
 
+      // 循环每轮都会回调：先把本轮消息落盘，再检查是否需要压缩
+      // （单轮内可能跑很多次工具调用，只在用户回合开始时压一次兜不住）
+      let syncedMessages = 0;
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
@@ -265,6 +268,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         maxTurns: 100,
         beforeToolCall,
         signal: run.signal,
+        onTurnEnd: async (turnMessages) => {
+          await appendAgentMessages(options, turnMessages);
+          syncedMessages += turnMessages.length;
+          return await compactContext(options, status);
+        },
         onEvent: (event) => {
           if (event.type === "message_update" && event.delta) {
             // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
@@ -291,7 +299,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       });
 
       status.stop();
-      await appendAgentMessages(options, result.newMessages);
+      // 只补写尚未落盘的部分（例如到达最大轮次时的 guardrail 消息）
+      await appendAgentMessages(options, result.newMessages.slice(syncedMessages));
 
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
@@ -314,6 +323,36 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     // stdin EOF（Ctrl+D / 管道结束）同样走协调流程，避免打断进行中的任务
     exitCoordinator.requestExit(0);
   });
+}
+
+/**
+ * 检查并在需要时压缩上下文。
+ *
+ * 压缩要调模型生成摘要、可能静默数秒，因此期间显示状态行。
+ * @returns 压缩后的上下文；未触发压缩时返回 undefined
+ */
+export async function compactContext(
+  options: ReplOptions,
+  status: StatusController,
+): Promise<AgentMessage[] | undefined> {
+  const store = options.sessionStore;
+  if (
+    !store ||
+    !store.needsCompaction(MAX_CONTEXT_TOKENS, KEEP_RECENT_MESSAGES)
+  ) {
+    return undefined;
+  }
+
+  status.set({ kind: "compacting", startedAt: Date.now() });
+  try {
+    const entry = await store.compactIfNedded(
+      MAX_CONTEXT_TOKENS,
+      KEEP_RECENT_MESSAGES,
+    );
+    return entry ? store.buildContext() : undefined;
+  } finally {
+    status.stop();
+  }
 }
 
 /**

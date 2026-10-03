@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { runAgentLoop } from "./loop";
-import { AgentEvent, AssistantMessage, ToolCallContent, ToolDefinition } from "../shared/protocol";
+import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools";
@@ -427,6 +427,125 @@ describe("loop", () => {
         (result.newMessages[0] as AssistantMessage).stopReason,
         "aborted",
       );
+    });
+  });
+
+  describe("每轮回调（落盘 / 压缩）", () => {
+    function toolCallResponse(): AssistantMessage {
+      return createAssistantMessage(
+        [{ type: "toolCall", id: "call_1", name: "test_tool", arguments: {} }],
+        "toolUse",
+      );
+    }
+
+    it("每轮都会收到本轮新增消息（含最后一轮）", async () => {
+      const batches: AgentMessage[][] = [];
+      let call = 0;
+      const model: LlmModel = {
+        async complete() {
+          call += 1;
+          return call === 1
+            ? toolCallResponse()
+            : createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onTurnEnd: async (turnMessages) => {
+          batches.push(turnMessages);
+          return undefined;
+        },
+      });
+
+      assert.strictEqual(batches.length, 2);
+      assert.deepStrictEqual(
+        batches[0].map((message) => message.role),
+        ["assistant", "toolResult"],
+      );
+      assert.deepStrictEqual(
+        batches[1].map((message) => message.role),
+        ["assistant"],
+        "没有工具调用的那一轮也要回调",
+      );
+    });
+
+    it("返回新上下文时会替换循环内部上下文", async () => {
+      const seen: AgentMessage[][] = [];
+      let call = 0;
+      const model: LlmModel = {
+        async complete(input) {
+          seen.push([...input.messages]);
+          call += 1;
+          return call === 1
+            ? toolCallResponse()
+            : createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      const compacted: AgentMessage[] = [
+        { role: "user", content: [createTextContent("旧上下文摘要")], timestamp: 0 },
+      ];
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onTurnEnd: async () => compacted,
+      });
+
+      assert.strictEqual(seen.length, 2);
+      assert.deepStrictEqual(seen[1], compacted, "第二次调用应使用压缩后的上下文");
+    });
+
+    it("回调抛错不应中断本次运行", async () => {
+      let call = 0;
+      const model: LlmModel = {
+        async complete() {
+          call += 1;
+          return call === 1
+            ? toolCallResponse()
+            : createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onTurnEnd: async () => {
+          throw new Error("落盘失败");
+        },
+      });
+
+      assert.strictEqual(call, 2, "运行应继续到结束");
+      assert.ok(result.newMessages.length >= 3);
+    });
+
+    it("未提供回调时行为不变", async () => {
+      const model: LlmModel = {
+        async complete() {
+          return createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+      });
+
+      assert.strictEqual(result.newMessages.length, 1);
     });
   });
 
