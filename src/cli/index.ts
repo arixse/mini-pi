@@ -21,6 +21,8 @@ export async function createModelFromSettings(
 ): Promise<{ model: LlmModel | null; providerName: string | null; modelName: string | null }> {
   // 1. 从 settings.json 读取 defaultModel
   const parsed = await settingsStore.parseDefaultModel();
+  // 输出上限（可选）：settings.json 的 maxTokens，非法值由 SettingsStore 过滤
+  const maxTokens = await settingsStore.getMaxTokens();
 
   if (parsed) {
     const { providerName, modelName } = parsed;
@@ -33,7 +35,8 @@ export async function createModelFromSettings(
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
-        sdkType: providerConfig.sdkType
+        sdkType: providerConfig.sdkType,
+        maxTokens,
       });
       return { model, providerName, modelName };
     }
@@ -49,7 +52,8 @@ export async function createModelFromSettings(
         apiKey: providerConfig.apiKey,
         baseUrl: providerConfig.baseUrl,
         model: modelName,
-        sdkType: providerConfig.sdkType
+        sdkType: providerConfig.sdkType,
+        maxTokens,
       });
       return { model, providerName, modelName };
     }

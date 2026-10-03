@@ -24,6 +24,37 @@ export type CompleteInput = {
 /** 单次模型请求的超时时间（毫秒） */
 export const REQUEST_TIMEOUT_MS = 120_000;
 
+/**
+ * Anthropic 默认 max_tokens。
+ *
+ * 原来的 4096 容易把长回答截断成 stop_reason=max_tokens；
+ * 可通过 settings.json 的 maxTokens 覆盖。
+ */
+export const DEFAULT_MAX_TOKENS = 8_192;
+
+/** 组装 Anthropic 请求体（纯函数，便于单测 max_tokens 的取值与夹取） */
+export function buildAnthropicRequest(params: {
+  model: string;
+  system: string;
+  messages: Anthropic.MessageParam[];
+  tools: Anthropic.Tool[];
+  maxTokens?: number;
+}): {
+  model: string;
+  max_tokens: number;
+  system: string;
+  messages: Anthropic.MessageParam[];
+  tools?: Anthropic.Tool[];
+} {
+  return {
+    model: params.model,
+    max_tokens: Math.max(1, Math.floor(params.maxTokens ?? DEFAULT_MAX_TOKENS)),
+    system: params.system,
+    messages: params.messages,
+    tools: params.tools.length > 0 ? params.tools : undefined,
+  };
+}
+
 /** 单次模型请求的最大尝试次数（含首次） */
 export const MAX_REQUEST_ATTEMPTS = 3;
 
@@ -298,6 +329,8 @@ export type ModelConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /** Anthropic 路径的输出上限；默认 {@link DEFAULT_MAX_TOKENS} */
+  maxTokens?: number;
 };
 export interface LlmModel {
   complete(input: CompleteInput): Promise<AssistantMessage>;
@@ -468,6 +501,7 @@ export function createOpenAIModel(config?: ModelConfig): OpenAIModel {
 export class AnthropicModel implements LlmModel {
   private client: Anthropic;
   private model: string;
+  private maxTokens: number;
 
   constructor(config?: ModelConfig) {
     this.client = new Anthropic({
@@ -475,6 +509,7 @@ export class AnthropicModel implements LlmModel {
       baseURL: config?.baseUrl,
     });
     this.model = config?.model || "claude-3-sonnet-20240229";
+    this.maxTokens = Math.max(1, Math.floor(config?.maxTokens ?? DEFAULT_MAX_TOKENS));
   }
   async complete(input: CompleteInput): Promise<AssistantMessage> {
     try {
@@ -511,13 +546,13 @@ export class AnthropicModel implements LlmModel {
     tools: Anthropic.Tool[],
   ): Promise<Anthropic.Message> {
     const stream = this.client.messages.stream(
-      {
+      buildAnthropicRequest({
         model: this.model,
-        max_tokens: 4096,
         system,
         messages,
-        tools: tools.length > 0 ? tools : undefined,
-      },
+        tools,
+        maxTokens: this.maxTokens,
+      }),
       { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
     );
 
@@ -665,7 +700,7 @@ export function createAnthropicModel(config?:ModelConfig):AnthropicModel {
 }
 
 export async function createModelFromProvider(
-  config: { apiKey: string; baseUrl?: string; model?: string;sdkType:string }): Promise<LlmModel> {
+  config: { apiKey: string; baseUrl?: string; model?: string;sdkType:string;maxTokens?:number }): Promise<LlmModel> {
   // 根据Provider的SDK类型创建对应的Model
   switch(config.sdkType) {
     case "OpenAI":
@@ -673,12 +708,14 @@ export async function createModelFromProvider(
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
+        maxTokens: config.maxTokens,
       });
     case "Anthropic":
       return createAnthropicModel({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
+        maxTokens: config.maxTokens,
       });
     default:
       // 默认使用 Anthropic SDK（因为 MiniMax-CN 使用的是 Anthropic 兼容接口）
@@ -686,6 +723,7 @@ export async function createModelFromProvider(
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
+        maxTokens: config.maxTokens,
       });
   }
 }

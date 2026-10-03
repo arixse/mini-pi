@@ -870,7 +870,11 @@ export async function handleModel(
   console.log(chalk.dim(`\n🔍 正在获取 ${selectedProvider} 的模型列表...`));
   
   try {
-    const models = await providerService.getModelList(selectedProvider, config.apiKey);
+    const models = await providerService.getModelList(
+      selectedProvider,
+      config.apiKey,
+      config.baseUrl,
+    );
     
     if (models.length === 0) {
       console.log(chalk.red("❌ 没有可用的模型"));

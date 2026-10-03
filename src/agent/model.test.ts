@@ -9,6 +9,10 @@ import {
 } from "./model";
 import { isRetryableError, withRetry } from "./model";
 import {
+  DEFAULT_MAX_TOKENS,
+  buildAnthropicRequest,
+} from "./model";
+import {
   collectOpenAIStream,
   isAbortError,
   isUnsupportedStreamOptionsError,
@@ -348,6 +352,64 @@ describe("model", () => {
       assert.strictEqual(isAbortError(new Error("model not found")), false);
       assert.strictEqual(isAbortError(undefined), false);
       assert.strictEqual(isAbortError("boom"), false);
+    });
+  });
+
+  describe("Anthropic 请求体（max_tokens 可配置）", () => {
+    it("默认使用 DEFAULT_MAX_TOKENS", () => {
+      const body = buildAnthropicRequest({
+        model: "m",
+        system: "s",
+        messages: [],
+        tools: [],
+      });
+
+      assert.strictEqual(body.max_tokens, DEFAULT_MAX_TOKENS);
+      assert.strictEqual(body.tools, undefined, "无工具时不应带 tools 字段");
+    });
+
+    it("应使用配置的 maxTokens 并做夹取", () => {
+      const custom = buildAnthropicRequest({
+        model: "m",
+        system: "s",
+        messages: [],
+        tools: [],
+        maxTokens: 1234,
+      });
+      assert.strictEqual(custom.max_tokens, 1234);
+
+      const clamped = buildAnthropicRequest({
+        model: "m",
+        system: "s",
+        messages: [],
+        tools: [],
+        maxTokens: 0,
+      });
+      assert.strictEqual(clamped.max_tokens, 1, "至少为 1，避免非法请求");
+    });
+
+    it("有工具时应带上 tools", () => {
+      const tool = {
+        name: "t",
+        description: "d",
+        input_schema: { type: "object" as const },
+      };
+      const body = buildAnthropicRequest({
+        model: "m",
+        system: "s",
+        messages: [],
+        tools: [tool],
+      });
+
+      assert.deepStrictEqual(body.tools, [tool]);
+    });
+
+    it("模型实例应带上配置的 maxTokens", () => {
+      const model = createAnthropicModel({ apiKey: "k", maxTokens: 999 });
+      assert.strictEqual(
+        (model as unknown as { maxTokens: number }).maxTokens,
+        999,
+      );
     });
   });
 

@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { SettingsStore } from "./settings-store";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -20,6 +20,35 @@ describe("SettingsStore", () => {
     }
 
     store = new SettingsStore(testFilePath);
+  });
+
+  describe("getMaxTokens", () => {
+    it("未配置时返回 undefined", async () => {
+      assert.strictEqual(await store.getMaxTokens(), undefined);
+    });
+
+    it("返回配置的正整数", async () => {
+      writeFileSync(testFilePath, JSON.stringify({ maxTokens: 12345 }), "utf-8");
+      const fresh = new SettingsStore(testFilePath);
+
+      assert.strictEqual(await fresh.getMaxTokens(), 12345);
+    });
+
+    it("非法值一律忽略", async () => {
+      for (const value of [0, -5, "abc", null]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ maxTokens: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getMaxTokens(),
+          undefined,
+          `maxTokens=${JSON.stringify(value)} 应被忽略`,
+        );
+      }
+    });
   });
 
   afterEach(async () => {

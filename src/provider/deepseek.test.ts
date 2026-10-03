@@ -42,6 +42,43 @@ describe("DeepSeekProvider", () => {
     });
   });
 
+  describe("getModelsUrl", () => {
+    it("默认与自定义 Base URL 都应拼出 /models", () => {
+      assert.strictEqual(
+        provider.getModelsUrl(provider.getBaseUrl()),
+        "https://api.deepseek.com/models",
+      );
+      assert.strictEqual(
+        provider.getModelsUrl("https://gateway.example.com/deepseek/"),
+        "https://gateway.example.com/deepseek/models",
+      );
+    });
+  });
+
+  describe("getModelList 与自定义 baseUrl", () => {
+    it("应请求自定义 Base URL 而不是官方地址", async () => {
+      const requested: string[] = [];
+      global.fetch = async (url: string | URL | Request) => {
+        const target = url instanceof Request ? url.url : String(url);
+        requested.push(target);
+        return new Response(JSON.stringify({ data: [{ id: "proxied-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const models = await provider.getModelList(
+        "test-api-key",
+        "https://gateway.example.com/deepseek",
+      );
+
+      assert.deepStrictEqual(models, ["proxied-model"]);
+      assert.deepStrictEqual(requested, [
+        "https://gateway.example.com/deepseek/models",
+      ]);
+    });
+  });
+
   describe("getModelList", () => {
     it("should throw error when API key is missing", async () => {
       await assert.rejects(

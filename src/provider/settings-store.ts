@@ -6,6 +6,8 @@ import { PRIVATE_FILE_MODE, restrictFilePermissions } from "./private-file";
 
 type Settings = {
   defaultModel?: string; // 格式: [模型供应商]/[模型名称]
+  /** 模型输出上限（Anthropic 路径使用），缺省用内置默认值 */
+  maxTokens?: number;
 };
 
 export class SettingsStore {
@@ -119,6 +121,19 @@ export class SettingsStore {
     await this.initialize();
     delete this.settings.defaultModel;
     await this.persist();
+  }
+
+  /**
+   * 获取模型输出上限。
+   * @returns 合法（正数）时返回该值，否则返回 undefined（由调用方使用默认值）
+   */
+  async getMaxTokens(): Promise<number | undefined> {
+    await this.initialize();
+    const value = this.settings.maxTokens;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+    return Math.floor(value);
   }
 
   /**
