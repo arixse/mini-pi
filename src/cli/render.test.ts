@@ -283,6 +283,28 @@ describe("renderToolCall", () => {
     assert.strictEqual(lines[2], "└ 新增 · 3 行 · 5 B");
   });
 
+  it("bash 被截断时页脚应标注", () => {
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "npm test" },
+        result: {
+          content: [{ type: "text", text: "row\n...[已截断：共 30000 字符]" }],
+          details: {
+            command: "npm test",
+            exitCode: 0,
+            stdout: "row",
+            stderr: "",
+            truncated: true,
+          },
+        },
+      }),
+      ctx,
+    );
+
+    assert.ok(lines.at(-1)?.includes("已截断"), `页脚应标注截断：${lines.at(-1)}`);
+  });
+
   it("edit_file：展示 diff 与增删统计", () => {
     const lines = renderToolCall(
       view({

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES, MAX_BASH_OUTPUT_CHARS } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -590,6 +590,34 @@ describe("tools", () => {
       assert.strictEqual(details.dirCount, 1);
       assert.strictEqual(details.fileCount, 2);
       assert.strictEqual((details.entries as string[]).length, 3);
+    });
+  });
+
+  describe("bash 输出上限", () => {
+    it("超长输出应被截断并标注收窄建议", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("bash", {
+        command: 'node -e "console.log(\'x\'.repeat(30000))"',
+      });
+      const text = result.content[0].text;
+      const details = result.details as Record<string, unknown>;
+
+      assert.ok(text.length <= MAX_BASH_OUTPUT_CHARS + 300, "返回应被限制在上限附近");
+      assert.ok(text.includes("已截断"), "应明确标注被截断");
+      assert.ok(text.includes("收窄输出"), "应给出收窄输出的建议");
+      assert.strictEqual(details.truncated, true);
+      assert.ok(Number(details.outputChars) > MAX_BASH_OUTPUT_CHARS);
+    });
+
+    it("普通输出不应被截断", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("bash", { command: "echo hello" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(result.content[0].text.trim(), "hello");
+      assert.strictEqual(details.truncated, false);
     });
   });
 

@@ -557,7 +557,8 @@ function footerText(
       const lines = toLines(text).length;
       const bytes = Buffer.byteLength(text, "utf8");
       const hasStderr = stringOf(details.stderr).trim() !== "";
-      return `${lines} 行 · ${formatBytes(bytes)}${hasStderr ? " · stderr" : ""}`;
+      const truncated = details.truncated === true ? " · 已截断" : "";
+      return `${lines} 行 · ${formatBytes(bytes)}${hasStderr ? " · stderr" : ""}${truncated}`;
     }
     case "read_file": {
       const totalLines = numberOf(details.totalLines);

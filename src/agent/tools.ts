@@ -380,6 +380,31 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
   };
 }
 
+/** 单次 bash 返回的最大行数 */
+export const MAX_BASH_OUTPUT_CHARS = 20_000;
+
+/**
+ * exec 的缓冲区上限：比返回上限宽松得多。
+ * 超过它 Node 会直接杀掉子进程并抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER，
+ * 那时连有用输出都拿不到，所以留足余量。
+ */
+const BASH_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+
+/**
+ * 给模型看的输出统一加上明确的上限。
+ * 与 read_file 同一原则：不偷偷丢内容，要么完整返回，要么写明被截断以及如何收窄。
+ */
+function capForModel(text: string): string {
+  if (text.length <= MAX_BASH_OUTPUT_CHARS) {
+    return text;
+  }
+  return (
+    `${text.slice(0, MAX_BASH_OUTPUT_CHARS)}\n` +
+    `...[已截断：共 ${text.length} 字符，仅返回前 ${MAX_BASH_OUTPUT_CHARS} 字符。` +
+    `请用更精确的命令收窄输出（如 grep / head / --quiet / 只取必要字段）]`
+  );
+}
+
 function bashTool(workspaceRoot: string): RegisteredTool {
   return {
     name: "bash",
@@ -413,20 +438,28 @@ function bashTool(workspaceRoot: string): RegisteredTool {
         const { stdout, stderr } = await execAsync(command, {
           cwd: workspaceRoot,
           timeout: 30000,
+          maxBuffer: BASH_MAX_BUFFER_BYTES,
           signal,
           windowsHide: true,
         });
-        
-        const output = [stdout, stderr].filter(Boolean).join("\n");
+
+        const raw = [stdout, stderr].filter(Boolean).join("\n");
         return {
-          content: [createTextContent(output || "(no output)")],
+          content: [createTextContent(capForModel(raw) || "(no output)")],
           // stdout / stderr 分开返回，卡片才能对 stderr 单独着色
-          details: { command, exitCode: 0, stdout, stderr },
+          details: {
+            command,
+            exitCode: 0,
+            stdout,
+            stderr,
+            outputChars: raw.length,
+            truncated: raw.length > MAX_BASH_OUTPUT_CHARS,
+          },
         };
       } catch (error: any) {
         const errorMessage = error.stderr || error.message || "Command failed";
         return {
-          content: [createTextContent(`Error: ${errorMessage}`)],
+          content: [createTextContent(`Error: ${capForModel(errorMessage)}`)],
           details: {
             command,
             // error.code 在超时等情况下是字符串（如 ETIMEDOUT），统一成数字
@@ -434,6 +467,8 @@ function bashTool(workspaceRoot: string): RegisteredTool {
             errorCode: typeof error.code === "string" ? error.code : undefined,
             stdout: error.stdout ?? "",
             stderr: error.stderr ?? errorMessage,
+            outputChars: String(errorMessage).length,
+            truncated: String(errorMessage).length > MAX_BASH_OUTPUT_CHARS,
           },
           terminate: false,
         };
@@ -724,12 +759,6 @@ function realpathAllowMissing(target: string): string {
     }
   }
 }
-
-function truncate(input: string, max: number): string {
-  if (input.length <= max) return input;
-  return `${input.slice(0, max)}\n...[truncated ${input.length - max} characters]`;
-}
-
 
 function stringArg(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
