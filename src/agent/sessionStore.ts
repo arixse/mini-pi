@@ -226,6 +226,21 @@ export class JsonlSessionStore {
     return [...this.loadWarnings];
   }
 
+  /** 会话文件路径（/status 展示用） */
+  getFilePath(): string {
+    return this.filePath;
+  }
+
+  /** 当前上下文消息条数（不含压缩摘要合成的那条） */
+  messageCount(): number {
+    return this.buildContext().length;
+  }
+
+  /** 当前上下文的近似 token 数（与压缩判定同一套估算） */
+  estimateContextTokens(): number {
+    return estimateTokens(this.buildContext());
+  }
+
   /**
    * 清空当前会话：重置内存状态并重写会话文件（只保留新的会话头）。
    */

@@ -193,6 +193,11 @@ export async function main() {
     return sessionManager.createNewSession();
   };
 
+  // 切换到已有会话（/switch）
+  const onSwitchSession = (target: string) => {
+    return sessionManager.loadSession(target);
+  };
+
   // 重载配置的回调函数
   const onReload = async (): Promise<{ model: LlmModel | null; systemPrompt: string }> => {
     // 重新从配置创建模型
@@ -228,6 +233,9 @@ export async function main() {
     sessionStore,
     sessionManager,
     onNewSession,
+    onSwitchSession,
+    modelLabel:
+      providerName && modelName ? `${providerName}/${modelName}` : undefined,
     onReload,
   });
 }

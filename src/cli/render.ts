@@ -634,6 +634,59 @@ function footerText(
   }
 }
 
+/**
+ * 渲染 `/last`：展示上一条工具输出的完整内容（带行号）。
+ *
+ * 卡片正文最多 8 行，用户因此看不到"模型实际看到了什么"；
+ * 这里补上可审计的完整视图。
+ */
+export function renderLastToolOutput(
+  view: ToolCallView,
+  ctx: RenderContext,
+  options: { maxLines: number } = { maxLines: 200 },
+): string[] {
+  const text = resultText(view);
+  const lines = toLines(text);
+  const total = lines.length;
+  const maxLines = Math.max(1, options.maxLines);
+  const shown = lines.slice(0, maxLines);
+  const numberWidth = String(Math.max(1, shown.length)).length;
+
+  const title = `${toolIcon(view.name, ctx)} 上一条工具输出：${view.name} ${truncateToWidth(
+    primaryText(view),
+    60,
+  )}`;
+  const rightPlain = `${total} 行 · ${formatBytes(Buffer.byteLength(text, "utf8"))}`;
+  const layout = layoutHeader(
+    displayWidth(title),
+    displayWidth(rightPlain),
+    ctx.width,
+  );
+
+  const out: string[] = [""];
+  if (layout.mode === "inline") {
+    out.push(`${title}${" ".repeat(layout.pad)}${ctx.style.dim(rightPlain)}`);
+  } else {
+    out.push(title);
+    out.push(`  ${ctx.style.dim(rightPlain)}`);
+  }
+
+  const gutter = ctx.style.dim(gutterGlyph(ctx));
+  shown.forEach((line, index) => {
+    const numbered = `${String(index + 1).padStart(numberWidth)} │ ${line}`;
+    out.push(`${gutter} ${truncateToWidth(numbered, MAX_TEXT_WIDTH)}`);
+  });
+
+  const hidden = total - shown.length;
+  const footer =
+    hidden > 0
+      ? `显示第 1-${shown.length} 行，共 ${total} 行 · /last ${shown.length + maxLines} 查看后续`
+      : `共 ${total} 行`;
+  out.push(`${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
+
+  return out;
+}
+
 function paintBodyLine(line: BodyLine, ctx: RenderContext): string {
   switch (line.kind) {
     case "stderr":

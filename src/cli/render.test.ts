@@ -12,6 +12,7 @@ import {
   formatBytes,
   layoutHeader,
   packItems,
+  renderLastToolOutput,
   renderToolCall,
   toLines,
   truncateToWidth,
@@ -303,6 +304,48 @@ describe("renderToolCall", () => {
     );
 
     assert.ok(lines.at(-1)?.includes("已截断"), `页脚应标注截断：${lines.at(-1)}`);
+  });
+
+  it("renderLastToolOutput：带行号展示完整内容并给出续看提示", () => {
+    const target = view({
+      name: "read_file",
+      args: { path: "src/agent/tools.ts" },
+      result: {
+        content: [
+          {
+            type: "text",
+            text: Array.from({ length: 12 }, (_, i) => `line-${i + 1}`).join("\n"),
+          },
+        ],
+        details: { path: "src/agent/tools.ts", totalLines: 12, totalBytes: 100 },
+      },
+    });
+
+    const lines = renderLastToolOutput(target, ctx, { maxLines: 5 });
+
+    assert.ok(lines[1].includes("上一条工具输出"));
+    assert.ok(lines[1].includes("tools.ts"));
+    assert.ok(lines[1].includes("12 行"));
+    assert.strictEqual(lines[2], "│ 1 │ line-1");
+    assert.strictEqual(lines[6], "│ 5 │ line-5");
+    assert.ok(lines.at(-1)?.includes("显示第 1-5 行，共 12 行"));
+    assert.ok(lines.at(-1)?.includes("/last 10"));
+  });
+
+  it("renderLastToolOutput：内容不足时不需要续看提示", () => {
+    const target = view({
+      name: "bash",
+      args: { command: "echo hi" },
+      result: {
+        content: [{ type: "text", text: "hi" }],
+        details: { exitCode: 0, stdout: "hi", stderr: "" },
+      },
+    });
+
+    const lines = renderLastToolOutput(target, ctx, { maxLines: 50 });
+
+    assert.strictEqual(lines[2], "│ 1 │ hi");
+    assert.strictEqual(lines.at(-1), "└ 共 1 行");
   });
 
   it("edit_file：展示 diff 与增删统计", () => {

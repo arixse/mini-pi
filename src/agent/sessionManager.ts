@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { JsonlSessionStore } from "./sessionStore";
@@ -178,7 +178,12 @@ export class SessionManager {
   /**
    * 列出所有 session 文件
    */
-  listSessions(): Array<{ fileName: string; timestamp: string }> {
+  listSessions(): Array<{
+    fileName: string;
+    timestamp: string;
+    path: string;
+    sizeBytes: number;
+  }> {
     if (!existsSync(this.sessionsDir)) {
       return [];
     }
@@ -187,10 +192,61 @@ export class SessionManager {
       .filter(file => file.endsWith(".jsonl"))
       .sort(); // 按文件名排序，也就是按时间排序
 
-    return files.map(fileName => ({
-      fileName,
-      timestamp: fileName.replace(".jsonl", ""),
-    }));
+    return files.map(fileName => {
+      const filePath = join(this.sessionsDir, fileName);
+      let sizeBytes = 0;
+      try {
+        sizeBytes = statSync(filePath).size;
+      } catch {
+        // 读不到大小不影响列举
+      }
+      return {
+        fileName,
+        timestamp: fileName.replace(".jsonl", ""),
+        path: filePath,
+        sizeBytes,
+      };
+    });
+  }
+
+  /**
+   * 加载指定会话并设为当前会话。
+   *
+   * @param target 会话序号（1 起，对应 listSessions 的顺序）或文件名/时间戳
+   * @returns 加载好的 session store；找不到时返回 null
+   */
+  loadSession(target: string): JsonlSessionStore | null {
+    const sessions = this.listSessions();
+    const trimmed = target.trim();
+    if (sessions.length === 0 || trimmed === "") {
+      return null;
+    }
+
+    let fileName: string | undefined;
+    if (/^\d+$/.test(trimmed)) {
+      const index = Number(trimmed);
+      if (index < 1 || index > sessions.length) {
+        return null;
+      }
+      fileName = sessions[index - 1].fileName;
+    } else {
+      const wanted = trimmed.endsWith(".jsonl") ? trimmed : `${trimmed}.jsonl`;
+      fileName = sessions.find(session => session.fileName === wanted)?.fileName;
+    }
+
+    if (!fileName) {
+      return null;
+    }
+
+    this.currentSession = new JsonlSessionStore(
+      join(this.sessionsDir, fileName),
+      this.workspaceRoot,
+    );
+    if (this.model) {
+      this.currentSession.setModel(this.model);
+    }
+
+    return this.currentSession;
   }
 
   /**

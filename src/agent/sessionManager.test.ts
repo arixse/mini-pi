@@ -82,6 +82,60 @@ describe("SessionManager", () => {
     assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/.test(lastSession.timestamp));
   });
 
+  it("should list sessions with path and size", () => {
+    sessionManager.createNewSession();
+
+    const sessions = sessionManager.listSessions();
+
+    assert.ok(sessions[0].path.endsWith(".jsonl"));
+    assert.ok(sessions[0].sizeBytes > 0, "应给出文件大小");
+  });
+
+  /** 直接写一个只有会话头的文件，便于构造多个不同会话 */
+  function writeSessionFile(fileName: string): void {
+    writeFileSync(
+      join(sessionsDir, fileName),
+      `${JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "mini-pi-session",
+        timestamp: new Date().toISOString(),
+        cwd: testWorkspace,
+      })}\n`,
+      "utf8",
+    );
+  }
+
+  it("should load a session by index", () => {
+    writeSessionFile("2026-01-01T00-00-01.jsonl");
+    writeSessionFile("2026-01-01T00-00-02.jsonl");
+
+    const loaded = sessionManager.loadSession("1");
+
+    assert.ok(loaded);
+    assert.ok(loaded!.getFilePath().endsWith("2026-01-01T00-00-01.jsonl"));
+    assert.strictEqual(sessionManager.getCurrentSession(), loaded);
+  });
+
+  it("should load a session by file name or timestamp", () => {
+    writeSessionFile("2026-02-02T10-00-00.jsonl");
+
+    const byFileName = sessionManager.loadSession("2026-02-02T10-00-00.jsonl");
+    const byTimestamp = sessionManager.loadSession("2026-02-02T10-00-00");
+
+    assert.ok(byFileName);
+    assert.ok(byTimestamp);
+    assert.strictEqual(byFileName!.getFilePath(), byTimestamp!.getFilePath());
+  });
+
+  it("should return null for unknown session targets", () => {
+    writeSessionFile("2026-03-03T10-00-00.jsonl");
+
+    assert.strictEqual(sessionManager.loadSession("999"), null);
+    assert.strictEqual(sessionManager.loadSession("no-such-session"), null);
+    assert.strictEqual(sessionManager.loadSession("  "), null);
+  });
+
   it("should load latest session", () => {
     // 先创建一个 session
     const firstSession = sessionManager.createNewSession();

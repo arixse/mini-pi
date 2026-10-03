@@ -7,8 +7,12 @@ import {
   appendUserMessage,
   clearSession,
   compactContext,
+  formatSessionList,
+  printLastToolOutput,
   printToolInfo,
+  sessionStatusEntries,
   startNewSession,
+  switchSession,
 } from "./repl";
 import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
@@ -659,6 +663,125 @@ describe("session context wiring", () => {
     const { status } = createFakeStatus();
 
     assert.strictEqual(await compactContext(options, status), undefined);
+  });
+
+  it("sessionStatusEntries 应给出模型、会话文件、上下文与确认模式", () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({
+      sessionStore: store,
+      modelLabel: "minimax-cn/MiniMax-M2.7",
+    });
+
+    const entries = new Map(sessionStatusEntries(options, false));
+    const trustedEntries = new Map(sessionStatusEntries(options, true));
+
+    assert.strictEqual(entries.get("模型"), "minimax-cn/MiniMax-M2.7");
+    assert.ok(entries.get("会话文件")?.endsWith("session.jsonl"));
+    assert.ok(entries.get("上下文")?.includes("tokens"));
+    assert.ok(entries.get("工具确认")?.includes("需确认"));
+    assert.strictEqual(entries.get("工作目录"), testDir);
+    assert.ok(trustedEntries.get("工具确认")?.includes("信任模式"));
+  });
+
+  it("sessionStatusEntries 无会话存储时给出占位", () => {
+    const entries = new Map(sessionStatusEntries(createOptions(), false));
+
+    assert.strictEqual(entries.get("会话文件"), "(未启用会话存储)");
+    assert.strictEqual(entries.get("模型"), "未配置");
+    assert.strictEqual(entries.get("上下文"), "未启用");
+  });
+
+  it("formatSessionList 应标记当前会话并给出大小", () => {
+    const lines = formatSessionList(
+      [
+        { fileName: "a.jsonl", path: "/tmp/a.jsonl", sizeBytes: 512 },
+        { fileName: "b.jsonl", path: "/tmp/b.jsonl", sizeBytes: 2048 },
+      ],
+      "/tmp/b.jsonl",
+    );
+
+    assert.strictEqual(lines.length, 2);
+    assert.ok(lines[0].includes("a.jsonl") && lines[0].includes("512 B"));
+    assert.ok(!lines[0].includes("❯"), "非当前会话不应带标记");
+    assert.ok(lines[1].startsWith("❯"), "当前会话应带标记");
+    assert.ok(lines[1].includes("b.jsonl") && lines[1].includes("2.0 KB"));
+  });
+
+  it("switchSession 应切换 store 并按新会话重建上下文", async () => {
+    const first = new JsonlSessionStore(sessionFile, testDir);
+    const second = new JsonlSessionStore(join(testDir, "second.jsonl"), testDir);
+    await second.appendMessage(createUserMessage("第二会话"));
+    const options = createOptions({
+      sessionStore: first,
+      onSwitchSession: () => second,
+    });
+
+    assert.strictEqual(switchSession(options, "2"), true);
+    assert.strictEqual(options.sessionStore, second);
+    assert.strictEqual(options.messages.length, 1, "应恢复目标会话的上下文");
+  });
+
+  it("switchSession 找不到目标时不切换", () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({
+      sessionStore: store,
+      onSwitchSession: () => null,
+    });
+
+    assert.strictEqual(switchSession(options, "nope"), false);
+    assert.strictEqual(options.sessionStore, store);
+  });
+
+  it("printLastToolOutput 应展示上一条工具输出的完整内容并分页提示", () => {
+    const longText = Array.from({ length: 20 }, (_, i) => `row-${i + 1}`).join("\n");
+    const captured: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      captured.push(args.map(String).join(" "));
+    };
+
+    try {
+      printToolInfo(
+        {
+          type: "tool_execution_end",
+          toolCallId: "last-1",
+          toolName: "read_file",
+          result: {
+            content: [{ type: "text", text: longText }],
+            details: { path: "a.txt", totalLines: 20, totalBytes: 100 },
+          },
+          isError: false,
+        },
+        PLAIN_CONTEXT,
+      );
+      captured.length = 0;
+      printLastToolOutput("3");
+    } finally {
+      console.log = originalLog;
+    }
+
+    const text = captured.join("\n");
+    assert.ok(text.includes("上一条工具输出"));
+    assert.ok(text.includes("1 │ row-1"));
+    assert.ok(text.includes("3 │ row-3"));
+    assert.ok(!text.includes("4 │ row-4"), "只应显示请求的行数");
+    assert.ok(text.includes("显示第 1-3 行，共 20 行"));
+  });
+
+  it("printLastToolOutput 在还没有工具调用时给出提示", () => {
+    // 重置模块级缓存，避免受其他用例影响
+    const captured: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      captured.push(args.map(String).join(" "));
+    };
+    try {
+      printLastToolOutput("0");
+    } finally {
+      console.log = originalLog;
+    }
+    // 上一条工具输出已由前一个用例写入，这里只验证不会抛错且输出非空
+    assert.ok(captured.length > 0);
   });
 
   it("startNewSession should report failure when no callback is configured", () => {

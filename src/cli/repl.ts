@@ -13,7 +13,7 @@ import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
 import { createStatusLine, StatusController } from "./status";
-import { createRenderContext, renderToolCall, RenderContext } from "./render";
+import { createRenderContext, renderLastToolOutput, renderToolCall, RenderContext, ToolCallView } from "./render";
 import { ExitCoordinator } from "./exit";
 
 /** 触发上下文压缩的近似 token 上限 */
@@ -34,6 +34,10 @@ export type ReplOptions = {
   sessionManager?: SessionManager;
   /** 创建新会话并返回新的 session store；返回空值表示不切换 */
   onNewSession?: () => JsonlSessionStore | undefined;
+  /** 切换到已有会话（序号或文件名）；返回新的 session store，找不到返回空值 */
+  onSwitchSession?: (target: string) => JsonlSessionStore | null | undefined;
+  /** 供 /status 展示的模型标签，例如 "minimax-cn/MiniMax-M2.7" */
+  modelLabel?: string;
   onReload?: () => Promise<{ model: LlmModel | null; systemPrompt: string }>;
   /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
   beforeToolCall?: BeforeToolCall;
@@ -156,6 +160,35 @@ export async function startRepl(options: ReplOptions): Promise<void> {
             )
           : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
       );
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/status") {
+      printStatus(options, trusted);
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/sessions") {
+      handleSessions(options);
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith("/switch ")) {
+      const target = input.slice(8).trim();
+      if (switchSession(options, target)) {
+        console.log(chalk.green(`\n✅ 已切换到会话 ${target}（已恢复其历史上下文）\n`));
+      } else {
+        console.log(chalk.red(`\n❌ 未找到会话：${target}（用 /sessions 查看列表）\n`));
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/last" || input.startsWith("/last ")) {
+      printLastToolOutput(input.slice(5).trim());
       rl.prompt();
       return;
     }
@@ -328,6 +361,111 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 }
 
 /**
+ * 切换到已有会话。
+ *
+ * 与 startNewSession 的差别只是 store 来自"加载已有文件"而不是"新建"；
+ * 两者都要求调用方返回 store，再由这里完成切换与上下文重建。
+ */
+export function switchSession(options: ReplOptions, target: string): boolean {
+  const store = options.onSwitchSession?.(target);
+  if (!store) {
+    return false;
+  }
+  options.sessionStore = store;
+  store.syncContext(options.messages);
+  return true;
+}
+
+/** /status 的条目（纯数据，便于测试） */
+export function sessionStatusEntries(
+  options: ReplOptions,
+  trusted: boolean,
+): Array<[string, string]> {
+  const store = options.sessionStore;
+  return [
+    ["模型", options.modelLabel ?? (options.model ? "已配置" : "未配置")],
+    ["会话文件", store ? store.getFilePath() : "(未启用会话存储)"],
+    [
+      "上下文",
+      store
+        ? `约 ${store.estimateContextTokens()} tokens（上限 ${MAX_CONTEXT_TOKENS}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`
+        : "未启用",
+    ],
+    ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
+    ["工作目录", options.workspaceRoot],
+  ];
+}
+
+export function printStatus(options: ReplOptions, trusted: boolean): void {
+  console.log("");
+  console.log(chalk.cyan("📊 会话状态"));
+  for (const [label, value] of sessionStatusEntries(options, trusted)) {
+    console.log(
+      `${chalk.dim("│")} ${chalk.dim(label.padEnd(8, " "))} ${value}`,
+    );
+  }
+  console.log(chalk.dim("└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换"));
+  console.log("");
+}
+
+/** /sessions 的展示行（纯函数，便于测试） */
+export function formatSessionList(
+  sessions: Array<{ fileName: string; path: string; sizeBytes: number }>,
+  currentPath: string | undefined,
+): string[] {
+  return sessions.map((session, index) => {
+    const marker = session.path === currentPath ? "❯" : " ";
+    const size = session.sizeBytes < 1024
+      ? `${session.sizeBytes} B`
+      : `${(session.sizeBytes / 1024).toFixed(1)} KB`;
+    return `${marker} ${String(index + 1).padStart(2, " ")}  ${session.fileName}  ${size}`;
+  });
+}
+
+export function handleSessions(options: ReplOptions): void {
+  if (!options.sessionManager) {
+    console.log(chalk.red("\n❌ SessionManager 未初始化\n"));
+    return;
+  }
+
+  const sessions = options.sessionManager.listSessions();
+  if (sessions.length === 0) {
+    console.log(chalk.dim("\n📭 还没有任何会话\n"));
+    return;
+  }
+
+  console.log("");
+  console.log(chalk.cyan(`📚 会话列表（共 ${sessions.length} 个，越靠下越新）`));
+  for (const line of formatSessionList(
+    sessions,
+    options.sessionStore?.getFilePath(),
+  )) {
+    console.log(`${chalk.dim("│")} ${line}`);
+  }
+  console.log(chalk.dim("└ 用 /switch <序号> 切换（会恢复该会话的历史上下文）"));
+  console.log("");
+}
+
+/** /last：查看上一条工具输出的完整内容 */
+export function printLastToolOutput(argument: string): void {
+  const view = getLastToolCall();
+  if (!view) {
+    console.log(chalk.dim("\n还没有工具调用记录\n"));
+    return;
+  }
+
+  const parsed = Number.parseInt(argument, 10);
+  const maxLines = Number.isFinite(parsed) && parsed > 0 ? parsed : 200;
+
+  for (const line of renderLastToolOutput(view, createRenderContext(), {
+    maxLines,
+  })) {
+    console.log(line);
+  }
+  console.log("");
+}
+
+/**
  * 检查并在需要时压缩上下文。
  *
  * 压缩要调模型生成摘要、可能静默数秒，因此期间显示状态行。
@@ -426,6 +564,14 @@ const toolStartCache = new Map<
   { toolName: string; args: Record<string, unknown>; startedAt: number }
 >();
 
+// 最近一次工具调用（供 /last 查看完整输出）。
+// 与 toolStartCache 一样是会话级状态；后续可整体收进一个渲染上下文对象。
+let lastToolCall: ToolCallView | null = null;
+
+export function getLastToolCall(): ToolCallView | null {
+  return lastToolCall;
+}
+
 /** 状态行里的工具摘要：bash 用命令，其余优先用路径 */
 export function summarizeToolCall(
   toolName: string,
@@ -469,19 +615,17 @@ export function printToolInfo(
   toolStartCache.delete(event.toolCallId);
   const finishedAt = Date.now();
 
-  const lines = renderToolCall(
-    {
-      name: event.toolName,
-      args: cached?.args ?? {},
-      startedAt: cached?.startedAt ?? finishedAt,
-      finishedAt,
-      result: event.result,
-      isError: event.isError,
-    },
-    context,
-  );
+  const view: ToolCallView = {
+    name: event.toolName,
+    args: cached?.args ?? {},
+    startedAt: cached?.startedAt ?? finishedAt,
+    finishedAt,
+    result: event.result,
+    isError: event.isError,
+  };
+  lastToolCall = view;
 
-  for (const line of lines) {
+  for (const line of renderToolCall(view, context)) {
     console.log(line);
   }
 }
@@ -497,6 +641,10 @@ function printHelp() {
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
   console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
+  console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文用量与确认模式"));
+  console.log(chalk.white("  /sessions") + chalk.dim(" - 列出所有会话"));
+  console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));
+  console.log(chalk.white("  /last [n]") + chalk.dim(" - 查看上一条工具输出的完整内容（默认 200 行）"));
   console.log(chalk.white("  /help") + chalk.dim("    - 显示帮助信息"));
   console.log(chalk.white("  /clear") + chalk.dim("   - 清除对话历史"));
   console.log(chalk.white("  /exit") + chalk.dim("    - 退出程序"));
