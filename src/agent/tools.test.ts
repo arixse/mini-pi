@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES, MAX_BASH_OUTPUT_CHARS } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES, MAX_BASH_OUTPUT_CHARS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -106,6 +106,75 @@ describe("tools", () => {
           message: /Path escapes workspace/,
         },
       );
+    });
+
+    it("应跳过依赖与产物目录", async () => {
+      writeFileSync(join(testDir, "keep.txt"), "x");
+      for (const ignored of ["node_modules", "dist", ".git"]) {
+        mkdirSync(join(testDir, ignored), { recursive: true });
+        writeFileSync(join(testDir, ignored, "inside.txt"), "x");
+      }
+
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("list_files", { path: "." });
+      const text = result.content[0].text;
+
+      assert.ok(text.includes("keep.txt"));
+      for (const ignored of ["node_modules", "dist", ".git"]) {
+        assert.ok(!text.includes(ignored), `${ignored} 不应出现在列表里`);
+      }
+    });
+
+    it("应遵守根目录 .gitignore", async () => {
+      writeFileSync(join(testDir, ".gitignore"), "# 注释\nsecret.txt\nlogs/\n*.log\n!keep.log\n");
+      writeFileSync(join(testDir, "secret.txt"), "x");
+      writeFileSync(join(testDir, "visible.txt"), "x");
+      writeFileSync(join(testDir, "drop.log"), "x");
+      writeFileSync(join(testDir, "keep.log"), "x");
+      mkdirSync(join(testDir, "logs"), { recursive: true });
+      writeFileSync(join(testDir, "logs", "a.txt"), "x");
+
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("list_files", { path: "." });
+      const text = result.content[0].text;
+
+      assert.ok(text.includes("visible.txt"));
+      assert.ok(!text.includes("secret.txt"), "被忽略的文件不应出现");
+      assert.ok(!text.includes("logs/"), "被忽略的目录不应出现");
+      assert.ok(!text.includes("drop.log"), "通配规则应生效");
+      assert.ok(text.includes("keep.log"), "! 取反应生效");
+      assert.ok(text.includes(".gitignore"), "点文件应当可见（旧实现全部隐藏）");
+    });
+
+    it("超过条目上限时应截断并提示", async () => {
+      for (let index = 0; index < MAX_LIST_ENTRIES + 10; index += 1) {
+        writeFileSync(join(testDir, `f-${String(index).padStart(4, "0")}.txt`), "x");
+      }
+
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("list_files", { path: "." });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual((details.entries as string[]).length, MAX_LIST_ENTRIES);
+      assert.strictEqual(details.truncated, true);
+      assert.ok(result.content[0].text.includes("已截断"));
+      assert.ok(result.content[0].text.includes("glob"));
+    });
+
+    it("超过深度上限时应截断", async () => {
+      let nested = testDir;
+      for (let depth = 0; depth < MAX_LIST_DEPTH + 2; depth += 1) {
+        nested = join(nested, `d${depth}`);
+      }
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(nested, "deep.txt"), "x");
+
+      const registry = createToolRegistry(testDir);
+      const result = await registry.execute("list_files", { path: "." });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.truncated, true);
+      assert.ok(!result.content[0].text.includes("deep.txt"));
     });
   });
 

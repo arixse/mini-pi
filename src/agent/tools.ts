@@ -1,8 +1,14 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { readdir, readFile } from "node:fs/promises";
+import {
+  DEFAULT_IGNORE_PATTERNS,
+  IgnoreMatcher,
+  createIgnoreMatcher,
+  parseIgnorePatterns,
+} from "./patterns";
 
 type ToolExecutor = (
   args: Record<string, unknown>,
@@ -53,10 +59,19 @@ export function createToolRegistry(workspaceRoot: string): ToolRegistry {
   return registry;
 }
 
+/** 单次 list_files 返回的最大条目数 */
+export const MAX_LIST_ENTRIES = 300;
+/** list_files 相对起始目录的最大递归深度 */
+export const MAX_LIST_DEPTH = 5;
+
 function listFilesTool(workspaceRoot: string): RegisteredTool {
   return {
     name: "list_files",
-    description: "List files inside the safe workspace",
+    description:
+      "List files inside the workspace (recursive, sorted). " +
+      "Dependency and build directories (.git, node_modules, dist, build, ...) and .gitignore entries are skipped. " +
+      `Returns at most ${MAX_LIST_ENTRIES} entries and ${MAX_LIST_DEPTH} levels below the given path; ` +
+      "the result says so explicitly when it is cut, in which case list a more specific subdirectory.",
     parameters: {
       type: "object",
       properties: {
@@ -68,44 +83,110 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
     },
     async execute(args) {
       const dir = resolveInsideWorkspace(workspaceRoot, stringArg(args.path,"."));
-      const entries = await listFiles(dir, workspaceRoot);
-      const dirCount = entries.filter((entry) => entry.endsWith("/")).length;
+      const ignore = createWorkspaceIgnore(workspaceRoot);
+      const state: ListState = { entries: [], truncated: false };
+
+      await collectEntries(dir, workspaceRoot, 1, ignore, state);
+
+      state.entries.sort();
+      const dirCount = state.entries.filter((entry) => entry.endsWith("/")).length;
+      const body =
+        state.entries.length > 0 ? state.entries.join("\n") : "(empty)";
+      const text = state.truncated
+        ? `${body}\n\n${listTruncationNotice()}`
+        : body;
+
       return {
-        content: [
-          createTextContent(
-            entries.length > 0 ? entries.join("\n") : "(empty)",
-          ),
-        ],
+        content: [createTextContent(text)],
         details: {
-          entries,
+          path: relative(workspaceRoot, dir).split(sep).join("/") || ".",
+          entries: state.entries,
           dirCount,
-          fileCount: entries.length - dirCount,
+          fileCount: state.entries.length - dirCount,
+          truncated: state.truncated,
         },
       };
     },
   };
 }
 
-async function listFiles(
+type ListState = {
+  entries: string[];
+  truncated: boolean;
+};
+
+function listTruncationNotice(): string {
+  return (
+    `...[已截断：最多列出 ${MAX_LIST_ENTRIES} 项、${MAX_LIST_DEPTH} 层。` +
+    `请指定更具体的子目录，或用 glob 精确查找文件]`
+  );
+}
+
+/**
+ * 工作区忽略规则：内置依赖/产物目录 + 根目录 .gitignore。
+ * 只读根目录的 .gitignore（不处理嵌套与 .git/info/exclude），够用且可预测。
+ */
+function createWorkspaceIgnore(workspaceRoot: string): IgnoreMatcher {
+  const patterns: string[] = [...DEFAULT_IGNORE_PATTERNS];
+  try {
+    const gitignorePath = join(workspaceRoot, ".gitignore");
+    if (existsSync(gitignorePath)) {
+      patterns.push(...parseIgnorePatterns(readFileSync(gitignorePath, "utf8")));
+    }
+  } catch {
+    // .gitignore 读不到就只用内置规则
+  }
+  return createIgnoreMatcher(patterns);
+}
+
+/**
+ * 递归收集条目。
+ *
+ * 相比旧实现：跳过依赖/产物目录与 .gitignore 命中项、
+ * 限制条目数与深度、不再隐藏点文件（`.gitignore`/`.github` 这类需要能看到）、
+ * 单个目录读不动也不让整次列举失败。
+ */
+async function collectEntries(
   dir: string,
   workspaceRoot: string,
-): Promise<string[]> {
-  const dirents = await readdir(dir, { withFileTypes: true });
-  const results: string[] = [];
+  depth: number,
+  ignore: IgnoreMatcher,
+  state: ListState,
+): Promise<void> {
+  if (depth > MAX_LIST_DEPTH) {
+    state.truncated = true;
+    return;
+  }
+
+  let dirents;
+  try {
+    dirents = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  dirents.sort((a, b) => a.name.localeCompare(b.name));
+
   for (const dirent of dirents) {
-    if (dirent.name.startsWith(".")) continue;
+    if (state.entries.length >= MAX_LIST_ENTRIES) {
+      state.truncated = true;
+      return;
+    }
+
     const absolute = resolve(dir, dirent.name);
-    const rel = relative(workspaceRoot, absolute);
-    if (dirent.isDirectory()) {
-      results.push(`${rel}/`);
-      let nested = await listFiles(absolute, workspaceRoot);
-      nested = nested.map((_p) => _p.replace(/\\/g, "/"));
-      results.push(...nested);
+    const relativePath = relative(workspaceRoot, absolute).split(sep).join("/");
+    const isDirectory = dirent.isDirectory();
+
+    if (ignore(relativePath, isDirectory)) {
+      continue;
+    }
+
+    if (isDirectory) {
+      state.entries.push(`${relativePath}/`);
+      await collectEntries(absolute, workspaceRoot, depth + 1, ignore, state);
     } else {
-      results.push(rel);
+      state.entries.push(relativePath);
     }
   }
-  return results.sort();
 }
 
 /**
