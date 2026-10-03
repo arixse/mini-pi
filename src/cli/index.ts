@@ -175,6 +175,19 @@ export async function main() {
     console.log();
   }
 
+  // 会话文件有损坏行时明确告知（加载时已跳过，不影响继续使用）
+  const loadWarnings = sessionStore.getLoadWarnings();
+  if (loadWarnings.length > 0) {
+    console.log(
+      chalk.yellow(
+        `⚠️  会话文件有 ${loadWarnings.length} 行损坏，已跳过：第 ${loadWarnings
+          .map((warning) => warning.line)
+          .join("、")} 行`,
+      ),
+    );
+    console.log();
+  }
+
   // 创建新会话的回调函数：返回新的 store，由 REPL 切换并重建上下文
   const onNewSession = () => {
     return sessionManager.createNewSession();

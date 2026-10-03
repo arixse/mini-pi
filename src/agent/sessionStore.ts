@@ -127,6 +127,7 @@ export class JsonlSessionStore {
   private leafId: string | null = null;
   private counter = 0;
   private model: LlmModel | null = null;
+  private readonly loadWarnings: Array<{ line: number; reason: string }> = [];
   
   constructor(
     private readonly filePath: string,
@@ -158,6 +159,12 @@ export class JsonlSessionStore {
     this.leafId = leafId;
   }
 
+  /**
+   * 加载会话文件。
+   *
+   * 逐行解析，**单行损坏只跳过该行并记下警告**，不再让整份会话打不开
+   * （进程被强杀在写一半、磁盘错误等都可能留下半行 JSON）。
+   */
   private loadOrCreate(): void {
     if (!existsSync(this.filePath)) {
       this.writeHeader();
@@ -166,8 +173,12 @@ export class JsonlSessionStore {
     const lines = readFileSync(this.filePath, "utf8")
       .split("\n")
       .filter(Boolean);
-    for (const line of lines) {
-      const entry = JSON.parse(line) as SessionEntry;
+
+    lines.forEach((line, index) => {
+      const entry = this.parseEntry(line, index + 1);
+      if (!entry) {
+        return;
+      }
       this.entries.push(entry);
       if (entry.type !== "session") {
         this.byId.set(entry.id, entry);
@@ -177,11 +188,42 @@ export class JsonlSessionStore {
           Number(entry.id.replace("entry_", "")) || 0,
         );
       }
-    }
+    });
+
     if (!this.entries.some((entry) => entry.type === "session")) {
       this.entries.length = 0;
       this.writeHeader();
     }
+  }
+
+  /** 解析单行；损坏时记录警告并返回 null */
+  private parseEntry(line: string, lineNumber: number): SessionEntry | null {
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch (error) {
+      this.loadWarnings.push({
+        line: lineNumber,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+
+    if (
+      !value ||
+      typeof value !== "object" ||
+      typeof (value as { type?: unknown }).type !== "string"
+    ) {
+      this.loadWarnings.push({ line: lineNumber, reason: "缺少 type 字段" });
+      return null;
+    }
+
+    return value as SessionEntry;
+  }
+
+  /** 加载时被跳过的损坏行（行号从 1 起） */
+  getLoadWarnings(): Array<{ line: number; reason: string }> {
+    return [...this.loadWarnings];
   }
 
   /**

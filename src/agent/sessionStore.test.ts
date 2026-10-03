@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { JsonlSessionStore } from "./sessionStore";
-import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
@@ -215,6 +215,76 @@ describe("sessionStore", () => {
         (target[0].content[0] as { type: "text"; text: string }).text,
         "synced",
       );
+    });
+
+    it("单行损坏时应跳过该行而不是整份打不开", () => {
+      const header = JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "mini-pi-session",
+        timestamp: new Date().toISOString(),
+        cwd: testDir,
+      });
+      const first = JSON.stringify({
+        type: "message",
+        id: "entry_1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("一")], timestamp: 1 },
+      });
+      const broken = '{"type":"message","id":"entry_2",';
+      const third = JSON.stringify({
+        type: "message",
+        id: "entry_3",
+        parentId: "entry_1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("三")], timestamp: 3 },
+      });
+      writeFileSync(
+        sessionFile,
+        [header, first, broken, third].join("\n") + "\n",
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.deepStrictEqual(
+        store.getLoadWarnings().map((warning) => warning.line),
+        [3],
+        "应报告损坏行号",
+      );
+      assert.strictEqual(store.getLeafId(), "entry_3");
+      assert.strictEqual(store.buildContext().length, 2);
+    });
+
+    it("非法 JSON 与缺少 type 的行都应被跳过", () => {
+      const header = JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "mini-pi-session",
+        timestamp: new Date().toISOString(),
+        cwd: testDir,
+      });
+      writeFileSync(
+        sessionFile,
+        [header, "not json at all", '{"foo":1}', ""].join("\n"),
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.getLoadWarnings().length, 2);
+      assert.deepStrictEqual(store.buildContext(), []);
+    });
+
+    it("全部损坏时应重建会话头", () => {
+      writeFileSync(sessionFile, "garbage\nalso garbage\n", "utf8");
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.getEntries().length, 1);
+      assert.strictEqual(store.getEntries()[0].type, "session");
+      assert.strictEqual(store.getLoadWarnings().length, 2);
     });
 
     it("should reset session state and the session file", async () => {
