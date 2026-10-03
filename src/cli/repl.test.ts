@@ -12,6 +12,7 @@ import {
   printToolInfo,
   sessionStatusEntries,
   startNewSession,
+  summarizeToolCall,
   switchSession,
 } from "./repl";
 import { ModelProviderService, Provider } from "../provider";
@@ -782,6 +783,33 @@ describe("session context wiring", () => {
     }
     // 上一条工具输出已由前一个用例写入，这里只验证不会抛错且输出非空
     assert.ok(captured.length > 0);
+  });
+
+  it("summarizeToolCall 应为不同工具挑选有信息量的参数", () => {
+    assert.strictEqual(summarizeToolCall("bash", { command: "npm test" }), "npm test");
+    assert.strictEqual(
+      summarizeToolCall("read_file", { path: "src/a.ts" }),
+      "src/a.ts",
+    );
+    // 检索类工具的关键参数是 pattern，只显示工具名等于没有信息
+    assert.strictEqual(
+      summarizeToolCall("glob", { pattern: "docs/**/*.md" }),
+      "docs/**/*.md",
+    );
+    assert.strictEqual(
+      summarizeToolCall("grep", { pattern: "P0", include: "*.md" }),
+      "P0",
+    );
+    assert.strictEqual(
+      summarizeToolCall("grep", { pattern: "x", path: "docs" }),
+      "x",
+    );
+    assert.strictEqual(summarizeToolCall("unknown_tool", {}), "unknown_tool");
+    assert.strictEqual(
+      summarizeToolCall("bash", { command: "x".repeat(60) }).length,
+      40,
+      "过长应截断",
+    );
   });
 
   it("startNewSession should report failure when no callback is configured", () => {

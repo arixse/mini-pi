@@ -572,14 +572,20 @@ export function getLastToolCall(): ToolCallView | null {
   return lastToolCall;
 }
 
-/** 状态行里的工具摘要：bash 用命令，其余优先用路径 */
+/** 状态行里的工具摘要：bash 用命令，检索类用模式，其余优先用路径 */
 export function summarizeToolCall(
   toolName: string,
   args: Record<string, unknown>,
 ): string {
   const pick = (key: string): string =>
     typeof args[key] === "string" ? (args[key] as string) : "";
-  const candidate = toolName === "bash" ? pick("command") : pick("path") || pick("command");
+  // glob / grep 的关键参数是 pattern（只有 pattern 时显示工具名等于没信息）
+  const candidate =
+    toolName === "bash"
+      ? pick("command")
+      : toolName === "glob" || toolName === "grep"
+        ? pick("pattern") || pick("path")
+        : pick("path") || pick("command");
   const oneLine = candidate.replace(/\s+/g, " ").trim();
   if (!oneLine) {
     return toolName;
