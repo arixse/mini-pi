@@ -47,14 +47,15 @@ mini-pi/
 
 1. **智能对话** - 支持多轮对话，回复**逐字流式输出**（真流式：`stream: true` / `messages.stream()`）
 2. **工作状态可见** - 等待模型、压缩上下文、执行工具时显示 `⠋ 思考中…`、`⠋ 执行 npm test… 4.1s`，工具卡片附耗时
-3. **文件操作** - 读取（支持 `offset`/`limit` 分页，单次上限 2000 行 / 20000 字符并显式标注）、编辑文件
-4. **命令执行** - 执行 bash 命令
-5. **工具调用** - 通过 Function Calling 机制调用工具
-6. **会话管理** - 支持多会话管理，每个会话独立存储
-7. **模型切换** - 支持 OpenAI 和 Anthropic 模型
-8. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
-9. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
-10. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+3. **代码检索** - `glob` 按模式找文件、`grep` 搜内容（只读工具会并发执行），另有可分页的 `read_file`
+4. **文件操作** - 读取（`offset`/`limit` 分页，单次上限 2000 行 / 20000 字符并显式标注）、编辑文件
+5. **命令执行** - 执行 bash 命令（单次输出 20000 字符上限，超出会标注并建议收窄）
+6. **工具调用** - 通过 Function Calling 机制调用工具
+7. **会话管理** - `/sessions` 列表、`/switch` 切换并恢复历史、`/status` 查看用量；每个会话独立存储
+8. **模型切换** - 支持 OpenAI 和 Anthropic 模型；模型列表与请求都会走你配置的 Base URL
+9. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
+10. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
+11. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -185,6 +186,10 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
+| `/status` | 查看模型、会话文件、上下文用量与确认模式 |
+| `/sessions` | 列出所有会话 |
+| `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |
+| `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行） |
 | `/help`  | 显示帮助信息                  |
 | `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit`  | 退出程序                      |

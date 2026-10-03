@@ -7,7 +7,7 @@
 | 供应商 | SDK类型 | 默认Base URL | 状态 |
 |--------|---------|--------------|------|
 | DeepSeek | OpenAI | https://api.deepseek.com | ✅ 已对接 |
-| MiniMax-CN | Anthropic | https://api.minimax.chat/anthropic | ✅ 已对接 |
+| MiniMax-CN | Anthropic | https://api.minimax.cn/anthropic | ✅ 已对接 |
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
 
 ---
@@ -78,11 +78,17 @@ MiniMax-CN 使用 Anthropic 兼容接口：
 
 ```typescript
 // Base URL
-https://api.minimax.chat/anthropic
+https://api.minimax.cn/anthropic
 
 // SDK类型
 Anthropic
+
+// 模型列表（注意：路径与 Base URL 不同源）
+https://api.minimax.cn/v1/models
 ```
+
+> Base URL 与模型列表路径不一致，因此 Provider 覆写了 `getModelsUrl()`；
+> 若配置了自定义 Base URL（代理/私有网关），模型列表也会跟着走同一网关。
 
 ### 配置示例
 

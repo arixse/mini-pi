@@ -169,7 +169,9 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 | 工具 | 图标 | 标题颜色 | 正文 | 页脚 |
 | ---- | ---- | -------- | ---- | ---- |
-| `list_files` | 📂 | 蓝色 | 紧凑排布前若干条 | `42 项（12 目录 / 30 文件）` |
+| `list_files` | 📂 | 蓝色 | 紧凑排布前若干条 | `42 项（12 目录 / 30 文件）[· 已截断]` |
+| `glob` | 🔎 | 青色 | 匹配到的文件路径 | `12 个文件[· 已截断]` |
+| `grep` | 🔍 | 青色 | `<文件>:<行号>: <内容>` | `3 处匹配 · 扫描 12 个文件` |
 | `read_file` | 📖 | 青色 | 带行号的前 8 行 | `共 529 行 · 18.6 KB [· 本次返回 N 行] [· 显示前 8 行]` |
 | `write_file` | ✏️ | 品红 | ——（不重复展示写入内容） | `新增/覆盖 · 42 行 · 2.1 KB` |
 | `edit_file` | 🔧 | 黄色 | unified diff | `1 处修改 · +12 -3` |
@@ -236,11 +238,28 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `workspaceRoot` 内：
 
-- `list_files`：列出目录文件
-- `read_file`：读取文件，支持 `offset` / `limit` 分页（见下）
-- `write_file`：写入文件
-- `edit_file`：按精确文本匹配编辑文件
-- `bash`：执行命令（`cwd` 为工作区）
+| 工具 | 说明 |
+| ---- | ---- |
+| `list_files` | 递归列出目录（跳过依赖/产物目录与 `.gitignore` 命中项，最多 300 项 / 5 层） |
+| `glob` | 按 glob 模式找文件（`*` `?` `**` `{a,b}`；不含 `/` 的模式匹配任意层级），最多 200 个 |
+| `grep` | 按正则搜索内容，返回 `<文件>:<行号>: <内容>`；支持 `include` 与 `ignoreCase`，最多 100 处 |
+| `read_file` | 读取文件，支持 `offset` / `limit` 分页 |
+| `write_file` | 写入文件 |
+| `edit_file` | 按精确文本匹配编辑文件 |
+| `bash` | 执行命令（`cwd` 为工作区） |
+
+**只读工具**（`list_files` / `glob` / `grep` / `read_file`）由注册表的 `readOnly` 标记统一定义：
+它们无需审批，并且在同一轮里**连续的只读调用会并发执行**（写类工具仍一次一个），
+结果始终按调用顺序归档，保证 `toolResult` 与 `toolCall` 一一对应。
+
+`list_files` / `glob` / `grep` 共用的过滤规则：
+
+- 内置忽略：`node_modules/`、`.git/`、`dist/`、`build/`、`coverage/`、`.next/`、
+  `__pycache__/`、`.venv/`、`target/` 等依赖与产物目录；
+- 叠加工作区根目录的 `.gitignore`（支持 `#` 注释、`!` 取反、结尾 `/` 仅目录、
+  含 `/` 为根相对；不处理嵌套 `.gitignore` 与 `.git/info/exclude`）；
+- 点文件不再隐藏（`.gitignore` / `.agents/` / `.github/` 可见）；
+- `grep` 另会跳过二进制文件（含 NUL 字节）与超过 1MB 的文件。
 
 `read_file` 的参数与上限：
 
@@ -274,7 +293,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
    允许执行? [y/N]
 ```
 
-- **只读工具自动放行**：`list_files`、`read_file` 不询问；
+- **只读工具自动放行**：`list_files`、`glob`、`grep`、`read_file` 不询问
+  （白名单来自注册表的只读标记，与并发调度共用同一份定义）；
 - **需要确认**：`write_file`、`edit_file`、`bash`；
 - 输入 `y` / `yes` / `是` / `允许` 表示同意，其它输入一律视为拒绝；
 - 拒绝时不会执行工具，而是生成一条 `isError` 的 toolResult 交回模型
@@ -312,6 +332,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
+| `/status` | 查看模型、会话文件、上下文用量与确认模式 |
+| `/sessions` | 列出所有会话（标注当前会话与大小） |
+| `/switch <序号\|文件名>` | 切换到指定会话并恢复其历史上下文 |
+| `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行，带行号） |
 | `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit` | 退出程序 |
 | `/quit` | 退出程序 |
@@ -330,6 +354,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   /skills  - 列出所有可用的 skills
   /load <name> - 加载指定 skill 的完整内容
   /trust   - 切换信任模式（跳过写文件/执行命令的确认）
+  /status  - 查看模型、会话文件、上下文用量与确认模式
+  /sessions - 列出所有会话
+  /switch <n> - 切换到指定会话（恢复其历史上下文）
+  /last [n] - 查看上一条工具输出的完整内容（默认 200 行）
   /help    - 显示帮助信息
   /clear   - 清除对话历史
   /exit    - 退出程序
@@ -556,7 +584,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | 名称 | SDK 类型 | 默认 Base URL |
 | ---- | -------- | ------------- |
 | `deepseek` | OpenAI | `https://api.deepseek.com` |
-| `minimax-cn` | Anthropic | `https://api.minimax.chat/anthropic` |
+| `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | `openai` | OpenAI | `https://api.openai.com/v1` |
 
 ### 8.4 凭据文件权限

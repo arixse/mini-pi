@@ -9,9 +9,11 @@
 | --- | --- | --- |
 | 1 | 真流式输出、工作状态行（spinner）、工具耗时 | ✅ 已实现 |
 | 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code/stderr） | ✅ 已实现（`src/cli/render.ts`） |
-| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ⏳ 待做（`read_file` 的规模元数据与卡片缩进/规模提示已随第 2 档落地，剩 `/last`） |
-| 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | 🟡 部分完成（渲染已收口到 `render.ts`，降级已支持 NO_COLOR / `MINI_PI_ASCII` / 窄终端换行） |
+| 3 | 结果逐行缩进、规模提示、`/last` 回看 | ✅ 已实现（`/last [n]` 带行号查看完整输出；卡片缩进与规模提示随第 2 档落地） |
+| 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | 🟡 部分完成（渲染已收口到 `render.ts`，降级支持 NO_COLOR / `MINI_PI_ASCII` / 窄终端换行；工具状态对象仍为模块级） |
 | — | `read_file` 分页与上限（12.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
+| — | bash 输出上限、`list_files` 忽略规则与上限、循环内压缩、会话文件容错 | ✅ 已实现 |
+| — | `glob` / `grep` 工具、只读工具并发、`/status` `/sessions` `/switch` | ✅ 已实现 |
 
 第 2 档与设计稿的两处偏差（实现时按可行性调整）：
 

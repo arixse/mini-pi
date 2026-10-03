@@ -348,6 +348,45 @@ describe("renderToolCall", () => {
     assert.strictEqual(lines.at(-1), "└ 共 1 行");
   });
 
+  it("glob / grep 卡片应有专用图标与计数", () => {
+    const globLines = renderToolCall(
+      view({
+        name: "glob",
+        args: { pattern: "*.ts" },
+        result: {
+          content: [{ type: "text", text: "a.ts\nb.ts" }],
+          details: { pattern: "*.ts", matches: ["a.ts", "b.ts"], count: 2, truncated: false },
+        },
+      }),
+      ctx,
+    );
+    assert.ok(globLines[1].startsWith("🔎"));
+    assert.ok(globLines[1].includes("2 个文件"));
+    assert.strictEqual(globLines.at(-1), "└ 2 个文件");
+
+    const grepLines = renderToolCall(
+      view({
+        name: "grep",
+        args: { pattern: "needle" },
+        result: {
+          content: [{ type: "text", text: "a.ts:3: needle" }],
+          details: {
+            pattern: "needle",
+            matches: [{ path: "a.ts", line: 3, text: "needle" }],
+            count: 1,
+            files: 7,
+            truncated: true,
+          },
+        },
+      }),
+      ctx,
+    );
+    assert.ok(grepLines[1].startsWith("🔍"));
+    assert.ok(grepLines[1].includes("1 处匹配"));
+    assert.strictEqual(grepLines[2], "│ a.ts:3: needle");
+    assert.strictEqual(grepLines.at(-1), "└ 1 处匹配 · 扫描 7 个文件 · 已截断");
+  });
+
   it("edit_file：展示 diff 与增删统计", () => {
     const lines = renderToolCall(
       view({

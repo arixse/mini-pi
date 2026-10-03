@@ -183,6 +183,8 @@ export function layoutHeader(
 
 const ASCII_ICONS: Record<string, string> = {
   list_files: "[list]",
+  glob: "[glob]",
+  grep: "[grep]",
   read_file: "[read]",
   write_file: "[write]",
   edit_file: "[edit]",
@@ -191,6 +193,8 @@ const ASCII_ICONS: Record<string, string> = {
 
 const EMOJI_ICONS: Record<string, string> = {
   list_files: "📂",
+  glob: "🔎",
+  grep: "🔍",
   read_file: "📖",
   write_file: "✏️",
   edit_file: "🔧",
@@ -199,6 +203,8 @@ const EMOJI_ICONS: Record<string, string> = {
 
 const TOOL_COLORS: Record<string, keyof Style> = {
   list_files: "blue",
+  glob: "cyan",
+  grep: "cyan",
   read_file: "cyan",
   write_file: "magenta",
   edit_file: "yellow",
