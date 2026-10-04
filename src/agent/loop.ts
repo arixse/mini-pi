@@ -1,4 +1,4 @@
-import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResult, ToolResultMessage } from "../shared/protocol";
+import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools";

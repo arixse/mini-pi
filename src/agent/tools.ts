@@ -137,11 +137,6 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
   };
 }
 
-type ListState = {
-  entries: string[];
-  truncated: boolean;
-};
-
 function listTruncationNotice(): string {
   return (
     `...[已截断：最多列出 ${MAX_LIST_ENTRIES} 项、${MAX_LIST_DEPTH} 层。` +
@@ -953,7 +948,6 @@ function bashTool(workspaceRoot: string): RegisteredTool {
       
       const { exec } = await import("node:child_process");
 
-      let child: ChildProcess | null = null;
       let forcedTimeout = false;
       let timer: NodeJS.Timeout | null = null;
 
@@ -982,7 +976,6 @@ function bashTool(workspaceRoot: string): RegisteredTool {
               resolve({ stdout, stderr });
             },
           );
-          child = running;
 
           timer = setTimeout(() => {
             forcedTimeout = true;

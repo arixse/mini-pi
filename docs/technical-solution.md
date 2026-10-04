@@ -126,7 +126,24 @@ pnpm typecheck
 
 # 测试
 pnpm test
+
+# 类型检查 + 测试（提交前跑这一条即可）
+pnpm check
 ```
+
+### 5.1 工程基线
+
+| 项目 | 现状 |
+| --- | --- |
+| 类型检查 | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters` |
+| 单元测试 | `tsx --test "src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖 |
+| 持续集成 | `.github/workflows/ci.yml`：install → typecheck → test（push / PR / 手动触发） |
+| Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策 |
+
+未开启 `noUncheckedIndexedAccess`：实测会新增约 184 处报错，
+集中在未参与近期改动的代码上，需要一次专门的、逐个确认的收敛；
+在此之前用 `noUnusedLocals` / `noUnusedParameters` 先兜住"死代码与漏用参数"这类问题
+（开启时即清出 22 处，含 2 处重构遗留的死变量）。
 
 > **前端/后端命令暂未提供**：`pnpm dev:server`、`pnpm dev:web`、`pnpm build` 属于第二阶段
 > （Web 界面 + API 服务）。该阶段尚未实现（仓库中还没有 `src/server`、`src/client`），

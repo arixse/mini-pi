@@ -1,45 +1,13 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { createModelFromSettings } from "./index";
-import { ModelProviderService, Provider } from "../provider";
+import { ModelProviderService } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { SettingsStore } from "../provider/settings-store";
 import { existsSync } from "node:fs";
 import { unlink, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-// Mock Provider for testing
-class MockProvider implements Provider {
-  private name: string;
-  private sdkType: string;
-  private baseUrl: string;
-
-  constructor(name: string, sdkType: string, baseUrl: string) {
-    this.name = name;
-    this.sdkType = sdkType;
-    this.baseUrl = baseUrl;
-  }
-
-  getProviderName(): string {
-    return this.name;
-  }
-
-  getSdkType(): string {
-    return this.sdkType;
-  }
-
-  getBaseUrl(): string {
-    return this.baseUrl;
-  }
-
-  async getModelList(apiKey: string): Promise<string[]> {
-    if (!apiKey) {
-      throw new Error("API key is required");
-    }
-    return ["model1", "model2"];
-  }
-}
 
 describe("createModelFromSettings", () => {
   let testDir: string;

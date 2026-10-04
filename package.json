@@ -13,7 +13,8 @@
     "prepare": "npm run build:cli",
     "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test"
   },
   "keywords": [],
   "author": "",

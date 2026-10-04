@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { runAgentLoop } from "./loop";
-import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition } from "../shared/protocol";
+import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools";

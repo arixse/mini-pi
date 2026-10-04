@@ -338,7 +338,6 @@ export interface LlmModel {
 export class OpenAIModel implements LlmModel {
   private client: OpenAI;
   private model: string;
-  private defaultTools: ToolDefinition[] = [];
   /** 提供方是否支持 stream_options.include_usage；不支持时自动关闭，避免每次请求都失败 */
   private includeStreamUsage = true;
 

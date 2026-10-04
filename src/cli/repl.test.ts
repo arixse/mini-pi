@@ -62,7 +62,7 @@ class MockProvider implements Provider {
 }
 
 // Mock model for reload testing
-function createMockModel(name: string): LlmModel {
+function createMockModel(_name: string): LlmModel {
   return {
     async complete() {
       return {

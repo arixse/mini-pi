@@ -100,7 +100,7 @@ describe("DeepSeekProvider", () => {
         { id: "deepseek-v4-pro", object: "model", created: 1234567890, owned_by: "deepseek" },
       ];
 
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ data: mockModels }), {
@@ -116,7 +116,7 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle API error response", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -134,7 +134,7 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle empty response", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ data: [] }), {
@@ -150,7 +150,7 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle response without data array", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({}), {
@@ -166,8 +166,7 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle network error", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
-      const target = url instanceof Request ? url.url : String(url);
+      global.fetch = async () => {
         throw new Error("Network error");
       };
 

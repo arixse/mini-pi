@@ -65,7 +65,7 @@ describe("OpenAIProvider", () => {
         { id: "gpt-3.5-turbo", object: "model", created: 1234567890, owned_by: "openai" },
       ];
 
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ data: mockModels }), {
@@ -81,7 +81,7 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle API error response", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -99,7 +99,7 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle empty response", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({ data: [] }), {
@@ -115,7 +115,7 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle response without data array", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
       const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.openai.com/v1/models") {
           return new Response(JSON.stringify({}), {
@@ -131,8 +131,7 @@ describe("OpenAIProvider", () => {
     });
 
     it("should handle network error", async () => {
-      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
-      const target = url instanceof Request ? url.url : String(url);
+      global.fetch = async () => {
         throw new Error("Network error");
       };
 

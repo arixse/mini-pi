@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 /**
@@ -77,7 +77,7 @@ export class SkillLoader {
    * @param customDirs 自定义 skill 目录列表（用于测试）
    */
   constructor(
-    private readonly workspaceRoot: string,
+    workspaceRoot: string,
     customDirs?: Array<{ path: string; source: SkillSource }>,
   ) {
     if (customDirs) {
@@ -157,8 +157,6 @@ export class SkillLoader {
     if (this.metadataCache) {
       return [...this.metadataCache];
     }
-
-    const allSkills: SkillWithSource[] = [];
 
     // 按优先级加载：后面的目录优先级更高
     // 后加载的会覆盖先加载的同名 skill
