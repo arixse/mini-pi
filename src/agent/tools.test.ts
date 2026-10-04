@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, MAX_READ_CHARS, MAX_READ_LINES, MAX_BASH_OUTPUT_CHARS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,17 +8,27 @@ import { tmpdir } from "node:os";
 describe("tools", () => {
   const testDir = join(process.cwd(), ".test-workspace");
 
-  beforeEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true });
+  /**
+   * 清理临时工作区。
+   *
+   * Windows 上如果刚被 kill 的子进程（bash 超时用例）还持有该目录作为 cwd，
+   * 删除会短暂失败并抛 EPERM，进而让后续所有用例的 setup 连锁失败；
+   * 因此这里带重试。
+   */
+  function removeTestDir(): void {
+    if (!existsSync(testDir)) {
+      return;
     }
+    rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+
+  beforeEach(() => {
+    removeTestDir();
     mkdirSync(testDir, { recursive: true });
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true });
-    }
+    removeTestDir();
   });
 
   describe("ToolRegistry", () => {
@@ -850,6 +860,153 @@ describe("tools", () => {
       assert.strictEqual(registry.isReadOnly("write_file"), false);
       assert.strictEqual(registry.isReadOnly("bash"), false);
       assert.strictEqual(registry.isReadOnly("unknown"), false);
+    });
+  });
+
+  describe("read_file 二进制与超大文件保护", () => {
+    it("二进制文件应被拒绝并给出替代方案", async () => {
+      // PNG 头 + NUL 字节
+      writeFileSync(
+        join(testDir, "image.png"),
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]),
+      );
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "image.png" }),
+        (error: Error) =>
+          /二进制文件/.test(error.message) && /bash/.test(error.message),
+      );
+    });
+
+    it("NUL 出现在前缀之外时按文本处理", async () => {
+      // 前缀（前 8000 字节）内没有 NUL，后面的 NUL 不应误判
+      writeFileSync(join(testDir, "later-nul.txt"), `${"a".repeat(9_000)}\u0000tail`);
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "later-nul.txt",
+        limit: 1,
+      });
+
+      assert.ok(result.content[0].text.startsWith("a".repeat(100)));
+    });
+
+    it("超过大小上限的文件应被拒绝并提示改用 grep", async () => {
+      writeFileSync(join(testDir, "huge.txt"), "a".repeat(MAX_READ_BYTES + 1));
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(
+        () => registry.execute("read_file", { path: "huge.txt" }),
+        (error: Error) =>
+          /文件过大/.test(error.message) && /grep/.test(error.message),
+      );
+    });
+
+    it("普通文本文件仍可正常读取", async () => {
+      writeFileSync(join(testDir, "plain.txt"), "第一行\n第二行\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", { path: "plain.txt" });
+
+      assert.ok(result.content[0].text.includes("第一行"));
+      assert.ok(result.content[0].text.includes("第二行"));
+    });
+  });
+
+  describe("bash 超时", () => {
+    it("resolveBashTimeout 应夹取到合法区间", () => {
+      assert.strictEqual(resolveBashTimeout(undefined), DEFAULT_BASH_TIMEOUT_MS);
+      assert.strictEqual(resolveBashTimeout(5_000), 5_000);
+      assert.strictEqual(resolveBashTimeout("8000"), 8_000, "数字字符串也接受");
+      assert.strictEqual(resolveBashTimeout(10), MIN_BASH_TIMEOUT_MS);
+      assert.strictEqual(resolveBashTimeout(10_000_000), MAX_BASH_TIMEOUT_MS);
+      assert.strictEqual(resolveBashTimeout("abc"), DEFAULT_BASH_TIMEOUT_MS);
+    });
+
+    it("classifyBashFailure 应区分超时、取消与普通失败", () => {
+      const timeout = classifyBashFailure(
+        { killed: true, signal: "SIGTERM", message: "Command failed: sleep 99" },
+        false,
+        30_000,
+      );
+      assert.strictEqual(timeout.timedOut, true);
+      assert.strictEqual(timeout.exitCode, 124);
+      assert.strictEqual(timeout.errorCode, "ETIMEDOUT");
+      assert.ok(timeout.message.includes("命令超时（30000ms）"));
+      assert.ok(timeout.message.includes("timeoutMs"), "应告诉模型可以放宽超时");
+
+      const etimedout = classifyBashFailure({ code: "ETIMEDOUT" }, false, 1_000);
+      assert.strictEqual(etimedout.timedOut, true);
+
+      const aborted = classifyBashFailure(
+        { killed: true, signal: "SIGTERM", message: "aborted" },
+        true,
+        30_000,
+      );
+      assert.strictEqual(aborted.aborted, true);
+      assert.strictEqual(aborted.timedOut, false, "取消不应被当成超时");
+
+      const failed = classifyBashFailure(
+        { code: 2, stderr: "not found" },
+        false,
+        30_000,
+      );
+      assert.strictEqual(failed.timedOut, false);
+      assert.strictEqual(failed.exitCode, 2);
+      assert.strictEqual(failed.message, "not found");
+    });
+
+    it("forcedTimeout 应覆盖 error 形态（Windows taskkill 后 error 不可靠）", () => {
+      const forced = classifyBashFailure({ code: 1 }, false, 2_000, true);
+
+      assert.strictEqual(forced.timedOut, true);
+      assert.strictEqual(forced.exitCode, 124);
+      assert.ok(forced.message.includes("命令超时（2000ms）"));
+    });
+
+    it("真实超时应被终止并标注 timedOut", async () => {
+      // 用独立临时工作区：Windows 上 exec 超时只杀掉 shell，
+      // 孙进程可能继续存活并锁住自己作为 cwd 的目录，
+      // 若用共享的 .test-workspace 会让后续所有用例的清理连锁失败。
+      const timeoutDir = join(
+        tmpdir(),
+        `mini-pi-timeout-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      );
+      mkdirSync(timeoutDir, { recursive: true });
+
+      try {
+        const registry = createToolRegistry(timeoutDir);
+
+        const result = await registry.execute("bash", {
+          command: 'node -e "setTimeout(() => {}, 3000)"',
+          timeoutMs: 1_000,
+        });
+        const details = result.details as Record<string, unknown>;
+
+        assert.ok(result.content[0].text.includes("命令超时"));
+        assert.strictEqual(details.timedOut, true);
+        assert.strictEqual(details.exitCode, 124);
+        assert.strictEqual(details.timeoutMs, 1_000);
+      } finally {
+        // 孤儿进程可能仍持有该目录，删不掉就交给系统清理临时目录
+        try {
+          rmSync(timeoutDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        } catch {
+          // 忽略
+        }
+      }
+    });
+
+    it("正常命令不受超时影响且带 timeoutMs", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("bash", { command: "echo ok" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(result.content[0].text.trim(), "ok");
+      assert.strictEqual(details.timedOut, undefined);
+      assert.strictEqual(details.timeoutMs, DEFAULT_BASH_TIMEOUT_MS);
     });
   });
 
