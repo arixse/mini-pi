@@ -576,7 +576,12 @@ function footerText(
       const bytes = Buffer.byteLength(text, "utf8");
       const hasStderr = stringOf(details.stderr).trim() !== "";
       const truncated = details.truncated === true ? " · 已截断" : "";
-      return `${lines} 行 · ${formatBytes(bytes)}${hasStderr ? " · stderr" : ""}${truncated}`;
+      const timeout = numberOf(details.timeoutMs);
+      const timedOut =
+        details.timedOut === true
+          ? ` · 超时${timeout !== null ? `（${formatDuration(timeout)}）` : ""}`
+          : "";
+      return `${lines} 行 · ${formatBytes(bytes)}${hasStderr ? " · stderr" : ""}${truncated}${timedOut}`;
     }
     case "read_file": {
       const totalLines = numberOf(details.totalLines);

@@ -452,6 +452,36 @@ describe("renderToolCall", () => {
     assert.ok(displayWidth(lines[2]) <= MAX_TEXT_WIDTH + 2);
   });
 
+  it("bash 超时时页脚应标注超时与上限", () => {
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "npm test" },
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "Error: 命令超时（30000ms）已被终止" }],
+          details: {
+            command: "npm test",
+            exitCode: 124,
+            errorCode: "ETIMEDOUT",
+            timedOut: true,
+            timeoutMs: 30_000,
+            stderr: "命令超时",
+          },
+        },
+      }),
+      ctx,
+    );
+
+    const footer = lines.at(-1) ?? "";
+    assert.ok(footer.includes("超时"), `页脚应标注超时：${footer}`);
+    assert.ok(footer.includes("30"), `页脚应带上限时长：${footer}`);
+    assert.ok(
+      lines[1].includes("exit 124"),
+      `标题行应显示超时退出码：${lines[1]}`,
+    );
+  });
+
   it("edit_file：展示 diff 与增删统计", () => {
     const lines = renderToolCall(
       view({
