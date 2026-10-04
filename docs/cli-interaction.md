@@ -295,6 +295,11 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - 超时与普通失败可区分：结果里写明 `命令超时（30000ms）已被终止`，
   `details` 带 `timedOut: true`、`aborted`、`timeoutMs`，退出码沿用 shell 约定的 `124`，
   卡片页脚显示 `· 超时（30.0s）`；
+- **失败必须如实标记**：非零退出与超时都会返回 `isError: true`，
+  卡片标题显示 `❌`（成功为 `✅`），Anthropic 侧还会带上 `tool_result.is_error`
+  让模型从协议层看出这次调用失败（OpenAI 的 tool 消息无该字段，只能靠正文）；
+- 正文优先展示 stdout / stderr（stderr 黄色）；两者都为空时回退到结果文本，
+  因此失败卡片不会只剩一句 `(no output)`；
 - 用户取消（Ctrl+C）同样结束整棵进程树，并标记为 `aborted` 而不是超时；
 - 输出超过 20000 字符会截断并标注（`details.truncated`，页脚显示 `· 已截断`）。
 
