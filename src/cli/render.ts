@@ -641,6 +641,19 @@ function footerText(
 }
 
 /**
+ * 正文可用宽度。
+ *
+ * 此前正文直接按 MAX_TEXT_WIDTH(200) 截断：80 列终端上长行会被终端折行，
+ * 卡片边框因此错乱。这里按终端宽度计算，MAX_TEXT_WIDTH 只作为绝对上限。
+ *
+ * @param ctx 渲染上下文
+ * @param prefixWidth 该行正文左侧已被占用的宽度（竖线、行号等）
+ */
+function contentWidth(ctx: RenderContext, prefixWidth: number): number {
+  return Math.max(20, Math.min(MAX_TEXT_WIDTH, ctx.width - prefixWidth - 1));
+}
+
+/**
  * 渲染 `/last`：展示上一条工具输出的完整内容（带行号）。
  *
  * 卡片正文最多 8 行，用户因此看不到"模型实际看到了什么"；
@@ -678,9 +691,12 @@ export function renderLastToolOutput(
   }
 
   const gutter = ctx.style.dim(gutterGlyph(ctx));
+  const linePrefixWidth = displayWidth(gutterGlyph(ctx)) + numberWidth + 3;
   shown.forEach((line, index) => {
     const numbered = `${String(index + 1).padStart(numberWidth)} │ ${line}`;
-    out.push(`${gutter} ${truncateToWidth(numbered, MAX_TEXT_WIDTH)}`);
+    out.push(
+      `${gutter} ${truncateToWidth(numbered, contentWidth(ctx, linePrefixWidth))}`,
+    );
   });
 
   const hidden = total - shown.length;
@@ -761,7 +777,10 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   const limit = bodyLimit(view);
   const shown = body.slice(0, limit);
   for (const line of shown) {
-    const text = truncateToWidth(line.text, MAX_TEXT_WIDTH);
+    const text = truncateToWidth(
+      line.text,
+      contentWidth(ctx, displayWidth(gutterGlyph(ctx)) + 1),
+    );
     lines.push(`${gutter} ${paintBodyLine({ ...line, text }, ctx)}`);
   }
   if (body.length > shown.length) {

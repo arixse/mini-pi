@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   MAX_BODY_LINES,
+  MAX_TEXT_WIDTH,
   PLAIN_CONTEXT,
   PLAIN_STYLE,
   RenderContext,
@@ -385,6 +386,70 @@ describe("renderToolCall", () => {
     assert.ok(grepLines[1].includes("1 处匹配"));
     assert.strictEqual(grepLines[2], "│ a.ts:3: needle");
     assert.strictEqual(grepLines.at(-1), "└ 1 处匹配 · 扫描 7 个文件 · 已截断");
+  });
+
+  it("窄终端下正文行不应超过终端宽度", () => {
+    const narrow = { ...PLAIN_CONTEXT, width: 40 };
+    const lines = renderToolCall(
+      view({
+        name: "read_file",
+        args: { path: "a.ts" },
+        result: {
+          content: [{ type: "text", text: "x".repeat(300) }],
+          details: { path: "a.ts", totalLines: 1, totalBytes: 300, returnedLines: 1 },
+        },
+      }),
+      narrow,
+    );
+
+    for (const line of lines) {
+      assert.ok(
+        displayWidth(line) <= narrow.width,
+        `行宽 ${displayWidth(line)} 超出 ${narrow.width}`,
+      );
+    }
+    assert.ok(lines[2].length < 60, "正文应被截断到终端宽度");
+  });
+
+  it("窄终端下 /last 的行号正文也不应超出宽度", () => {
+    const narrow = { ...PLAIN_CONTEXT, width: 40 };
+    const lines = renderLastToolOutput(
+      view({
+        name: "read_file",
+        args: { path: "a.ts" },
+        result: {
+          content: [{ type: "text", text: "y".repeat(300) }],
+          details: { path: "a.ts", totalLines: 1, totalBytes: 300, returnedLines: 1 },
+        },
+      }),
+      narrow,
+      { maxLines: 3 },
+    );
+
+    for (const line of lines) {
+      assert.ok(
+        displayWidth(line) <= narrow.width,
+        `行宽 ${displayWidth(line)} 超出 ${narrow.width}`,
+      );
+    }
+  });
+
+  it("宽终端下正文仍受 MAX_TEXT_WIDTH 约束", () => {
+    const wide = { ...PLAIN_CONTEXT, width: 400 };
+    const lines = renderToolCall(
+      view({
+        name: "read_file",
+        args: { path: "a.ts" },
+        result: {
+          content: [{ type: "text", text: "z".repeat(500) }],
+          details: { path: "a.ts", totalLines: 1, totalBytes: 500, returnedLines: 1 },
+        },
+      }),
+      wide,
+    );
+
+    // 竖线 + 空格 + 正文，正文不超过 200
+    assert.ok(displayWidth(lines[2]) <= MAX_TEXT_WIDTH + 2);
   });
 
   it("edit_file：展示 diff 与增删统计", () => {
