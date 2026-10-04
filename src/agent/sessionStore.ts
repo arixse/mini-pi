@@ -450,11 +450,40 @@ function findLastIndex<T>(items:T[],predicate:(item:T)=>boolean):number {
 }
 
 
-function estimateTokens(messages:AgentMessage[]):number {
-    return messages.reduce((sum,message)=> {
-        const content = extractText(message)
-        return sum + Math.ceil(content.length / 2)
-    },0)
+/**
+ * 估算一条文本的 token 数。
+ *
+ * 此前的 `length / 2` 对中英混排偏差很大：英文按字符数约 4:1 才接近真实 token，
+ * 于是英文内容被高估约一倍、中文反而略被低估（P2 #17）。
+ * 这里按字符类别分别计价：
+ * - ASCII（字母/数字/标点，含换行）：约 4 字符 1 token；
+ * - CJK 汉字与全角标点：约 1 字符 1 token（略偏保守，早压缩比超窗安全）；
+ * - 其余（emoji、其它文种）：约 1 字符 1 token。
+ *
+ * 仍然是估算：只用于"是否压缩"的阈值判断，不参与计费或协议字段。
+ */
+export function estimateTextTokens(text: string): number {
+  let ascii = 0;
+  let wide = 0;
+
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x80) {
+      ascii += 1;
+    } else {
+      wide += 1;
+    }
+  }
+
+  return Math.ceil(ascii / 4 + wide);
+}
+
+/** 估算整个上下文的 token 数 */
+export function estimateTokens(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => {
+    const content = extractText(message);
+    return sum + estimateTextTokens(content);
+  }, 0);
 }
 
 function extractText(message:AgentMessage):string {

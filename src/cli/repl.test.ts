@@ -2,6 +2,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import {
   KEEP_RECENT_MESSAGES,
+  MAX_CONTEXT_TOKENS,
   ReplOptions,
   appendAgentMessages,
   appendUserMessage,
@@ -559,14 +560,20 @@ describe("session context wiring", () => {
 
   it("should apply compaction to the in-memory context", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
-    // 先写入足以触发压缩的历史（约 8000 个近似 token）
+    // 先写入足以触发压缩的历史。
+    // 注意：estimateTextTokens 对 ASCII 按 4 字符/token 估算，
+    // 因此 80 × 400 个 ASCII 字符 ≈ 8000 token，能稳定超过上限 6000。
     for (let i = 0; i < 80; i++) {
       await store.appendMessage({
         role: "user",
-        content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+        content: [createTextContent(`历史 ${i} ${"x".repeat(400)}`)],
         timestamp: Date.now(),
       });
     }
+    assert.ok(
+      store.estimateContextTokens() > MAX_CONTEXT_TOKENS,
+      "样本必须真的超过预算，否则这个用例证明不了压缩生效",
+    );
     const options = createOptions({
       sessionStore: store,
       model: createMockModel("summarizer"),
@@ -634,13 +641,15 @@ describe("session context wiring", () => {
   it("compactContext：超阈值时返回压缩后的上下文并驱动状态行", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     store.setModel(createMockModel("summarizer"));
+    // ASCII 按 4 字符/token 估算：80 × 400 字符 ≈ 8000 token，稳定超过上限 6000
     for (let index = 0; index < 80; index += 1) {
       await store.appendMessage({
         role: "user",
-        content: [createTextContent(`历史 ${index} ${"x".repeat(200)}`)],
+        content: [createTextContent(`历史 ${index} ${"x".repeat(400)}`)],
         timestamp: Date.now(),
       });
     }
+    assert.ok(store.estimateContextTokens() > MAX_CONTEXT_TOKENS);
     const options = createOptions({
       sessionStore: store,
       model: createMockModel("summarizer"),

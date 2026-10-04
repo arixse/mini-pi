@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { JsonlSessionStore } from "./sessionStore";
+import { JsonlSessionStore, estimateTextTokens, estimateTokens } from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
@@ -24,7 +24,40 @@ describe("sessionStore", () => {
     }
   });
 
-  describe("JsonlSessionStore", () => {
+  describe("estimateTextTokens（token 估算）", () => {
+  it("ASCII 约 4 字符 1 token（旧实现按 2 字符算，英文被高估一倍）", () => {
+    assert.strictEqual(estimateTextTokens(""), 0);
+    assert.strictEqual(estimateTextTokens("abcd"), 1);
+    assert.strictEqual(estimateTextTokens("a".repeat(400)), 100);
+    assert.strictEqual(estimateTextTokens('{"a": 1, "b": 2}'), 4);
+  });
+
+  it("CJK 按 1 字符 1 token", () => {
+    assert.strictEqual(estimateTextTokens("请帮我写一个排序算法"), 10);
+  });
+
+  it("中英混排按类别分别计价", () => {
+    // 3 个 ASCII → 1 token（向上取整），1 个汉字 → 1 token
+    assert.strictEqual(estimateTextTokens("abc中"), 2);
+    // 8 个 ASCII → 2 token，2 个汉字 → 2 token
+    assert.strictEqual(estimateTextTokens("abcdefgh中文"), 4);
+  });
+
+  it("emoji 等非 ASCII 字符按 1 token 计（不被当成半个）", () => {
+    assert.strictEqual(estimateTextTokens("📖🔎"), 2);
+  });
+
+  it("estimateTokens 汇总各条消息", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [createTextContent("a".repeat(400))], timestamp: 0 },
+      { role: "user", content: [createTextContent("中文十个字啊啊啊")], timestamp: 0 },
+    ];
+
+    assert.strictEqual(estimateTokens(messages), 108);
+  });
+});
+
+describe("JsonlSessionStore", () => {
     it("should create new session file", () => {
       const store = new JsonlSessionStore(sessionFile, testDir);
       assert.ok(existsSync(sessionFile));
@@ -424,7 +457,9 @@ describe("sessionStore", () => {
       });
       
       // 强制压缩（设置很低的 token 阈值，保留最近 1 条）
-      const compaction = await store.compactIfNedded(10, 0);
+      // 注：两条消息共 26 个 ASCII 字符 ≈ 7 token（estimateTextTokens 按 4 字符/token），
+      // 因此阈值取 5 才能确保触发；阈值不能按字符数来设。
+      const compaction = await store.compactIfNedded(5, 0);
       assert.ok(compaction, "低阈值下必须触发压缩");
 
       // 添加新消息
