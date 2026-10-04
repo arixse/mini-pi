@@ -1007,6 +1007,25 @@ describe("tools", () => {
       assert.strictEqual(result.content[0].text.trim(), "ok");
       assert.strictEqual(details.timedOut, undefined);
       assert.strictEqual(details.timeoutMs, DEFAULT_BASH_TIMEOUT_MS);
+      assert.notStrictEqual(result.isError, true, "成功不应标记为错误");
+    });
+
+    it("失败结果必须标记 isError（否则卡片会显示成功）", async () => {
+      const registry = createToolRegistry(testDir);
+
+      const timedOut = await registry.execute("bash", {
+        command: 'node -e "setTimeout(() => {}, 3000)"',
+        timeoutMs: 1_000,
+      });
+      assert.strictEqual(timedOut.isError, true, "超时应标记为错误");
+
+      const nonZero = await registry.execute("bash", {
+        command: 'node -e "process.exit(3)"',
+      });
+      const details = nonZero.details as Record<string, unknown>;
+      assert.strictEqual(nonZero.isError, true, "非零退出应标记为错误");
+      assert.strictEqual(details.exitCode, 3);
+      assert.strictEqual(details.timedOut, false, "非零退出不是超时");
     });
   });
 

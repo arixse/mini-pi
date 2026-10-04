@@ -1038,6 +1038,8 @@ function bashTool(workspaceRoot: string): RegisteredTool {
             outputChars: failure.message.length,
             truncated: failure.message.length > MAX_BASH_OUTPUT_CHARS,
           },
+          // 保留 stdout/stderr/details 的同时如实标记失败
+          isError: true,
           terminate: false,
         };
       } finally {

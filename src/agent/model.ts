@@ -472,6 +472,7 @@ export class OpenAIModel implements LlmModel {
         }
         result.push(assistantMessage);
       } else if (message.role === "toolResult") {
+        // OpenAI 的 tool 消息没有 is_error 字段，失败只能靠正文里的 "Error: ..." 传达
         result.push({
           role: "tool",
           tool_call_id: message.toolCallId,
@@ -615,6 +616,9 @@ export class AnthropicModel implements LlmModel {
               type: "tool_result",
               tool_use_id: message.toolCallId,
               content: messageText(message),
+              // 如实告知模型这次工具调用失败了（超时/非零退出等），
+              // 让它能据此换方案，而不是把失败输出当成正常结果
+              is_error: message.isError ? true : undefined,
             },
           ],
         });

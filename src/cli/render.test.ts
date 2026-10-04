@@ -482,6 +482,50 @@ describe("renderToolCall", () => {
     );
   });
 
+  it("bash 失败且 stdout/stderr 为空时，正文应回退到结果文本", () => {
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "node -e \"process.exit(3)\"" },
+        isError: true,
+        result: {
+          content: [{ type: "text", text: 'Error: Command failed: node -e "process.exit(3)"' }],
+          details: {
+            command: 'node -e "process.exit(3)"',
+            exitCode: 3,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+          },
+        },
+      }),
+      ctx,
+    );
+
+    assert.ok(lines[1].includes("❌"), "失败应显示 ❌");
+    assert.ok(lines[1].includes("exit 3"));
+    assert.ok(
+      lines[2].includes("Command failed"),
+      `正文不应是 (no output)：${lines[2]}`,
+    );
+  });
+
+  it("bash 成功但没有输出时仍显示 (no output)", () => {
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "true" },
+        result: {
+          content: [{ type: "text", text: "(no output)" }],
+          details: { command: "true", exitCode: 0, stdout: "", stderr: "" },
+        },
+      }),
+      ctx,
+    );
+
+    assert.strictEqual(lines[2], "│ (no output)");
+  });
+
   it("edit_file：展示 diff 与增删统计", () => {
     const lines = renderToolCall(
       view({

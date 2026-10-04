@@ -659,6 +659,53 @@ describe("loop", () => {
       assert.deepStrictEqual(texts, ["slow done", "fast done"], "慢的先调用，结果也应在前");
     });
 
+    it("工具自己返回 isError 时应如实带出（不只看有没有抛错）", async () => {
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "tool_a",
+        description: "test",
+        parameters: {},
+        readOnly: true,
+        async execute() {
+          return {
+            content: [createTextContent("命令超时已被终止")],
+            details: { timedOut: true, exitCode: 124 },
+            isError: true,
+          };
+        },
+      });
+
+      const events: AgentEvent[] = [];
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model: twoCallModel("tool_a", "tool_a"),
+        toolRegistry: registry,
+        onEvent: (event) => events.push(event),
+      });
+
+      const results = result.newMessages.filter((m) => m.role === "toolResult");
+      assert.strictEqual(results.length, 2);
+      for (const message of results) {
+        assert.strictEqual(
+          (message as { isError: boolean }).isError,
+          true,
+          "工具返回的 isError 必须被带出",
+        );
+      }
+
+      const endEvents = events.filter((event) => event.type === "tool_execution_end");
+      assert.strictEqual(endEvents.length, 2);
+      for (const event of endEvents) {
+        assert.strictEqual(
+          (event as { isError: boolean }).isError,
+          true,
+          "事件里的 isError 也必须一致",
+        );
+      }
+    });
+
     it("同一批里被拒绝的只读调用不执行", async () => {
       const registry = new ToolRegistry();
       const executed: string[] = [];

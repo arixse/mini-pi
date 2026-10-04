@@ -147,7 +147,9 @@ async function executeToolCall(
       toolName: toolCall.name,
       content: result.content,
       details: result.details,
-      isError: false,
+      // 工具自己判定失败时（命令非零退出/超时）必须如实带出，
+      // 否则卡片会显示 ✅，与"Error: ..."的正文自相矛盾
+      isError: result.isError === true,
       timestamp: Date.now(),
     };
   } catch (error) {

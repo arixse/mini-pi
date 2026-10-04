@@ -435,7 +435,7 @@ function bodyLines(
 
   switch (view.name) {
     case "bash":
-      return bashBody(details);
+      return bashBody(view, details);
     case "read_file":
       return readFileBody(view, details);
     case "list_files":
@@ -450,14 +450,20 @@ function bodyLines(
   }
 }
 
-function bashBody(details: Record<string, unknown>): BodyLine[] {
+function bashBody(view: ToolCallView, details: Record<string, unknown>): BodyLine[] {
   const stdout = toLines(stringOf(details.stdout)).map(plain);
   const stderr = toLines(stringOf(details.stderr)).map((text) => ({
     text,
     kind: "stderr" as const,
   }));
   const combined = [...stdout, ...stderr];
-  return combined.length > 0 ? combined : [plain("(no output)")];
+  if (combined.length > 0) {
+    return combined;
+  }
+  // stdout/stderr 都为空时，正文里往往仍有可看的信息
+  // （例如失败时的 "Error: Command failed: ..."），不要一律显示 (no output)
+  const fallback = toLines(resultText(view));
+  return fallback.length > 0 ? fallback.map(plain) : [plain("(no output)")];
 }
 
 function readFileBody(

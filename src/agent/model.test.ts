@@ -18,6 +18,7 @@ import {
   isUnsupportedStreamOptionsError,
 } from "./model";
 import { createTextContent } from "./message";
+import { AgentMessage } from "../shared/protocol";
 
 describe("model", () => {
   describe("createOpenAIModel", () => {
@@ -409,6 +410,63 @@ describe("model", () => {
       assert.strictEqual(
         (model as unknown as { maxTokens: number }).maxTokens,
         999,
+      );
+    });
+  });
+
+  describe("工具失败标记（is_error）", () => {
+    function toolResultMessage(isError: boolean): AgentMessage {
+      return {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "bash",
+        content: [createTextContent("Error: 命令超时（2000ms）已被终止")],
+        isError,
+        timestamp: 0,
+      };
+    }
+
+    it("Anthropic 转换应把失败的 toolResult 标成 is_error", () => {
+      const model = createAnthropicModel({ apiKey: "k" });
+      const convert = (
+        model as unknown as {
+          convertMessages(
+            system: string,
+            messages: AgentMessage[],
+          ): { messages: Array<{ content: Array<{ is_error?: boolean }> }> };
+        }
+      ).convertMessages.bind(model);
+
+      const failed = convert("s", [toolResultMessage(true)]).messages[0];
+      const ok = convert("s", [toolResultMessage(false)]).messages[0];
+
+      assert.strictEqual(failed.content[0].is_error, true);
+      assert.strictEqual(
+        ok.content[0].is_error,
+        undefined,
+        "成功的调用不应带 is_error",
+      );
+    });
+
+    it("OpenAI 路径只靠正文传达失败（无 is_error 字段）", () => {
+      const model = createOpenAIModel({ apiKey: "k" });
+      const convert = (
+        model as unknown as {
+          convertMessages(
+            system: string,
+            messages: AgentMessage[],
+          ): Array<{ role: string; content: string }>;
+        }
+      ).convertMessages.bind(model);
+
+      const failed = convert("s", [toolResultMessage(true)]);
+      const toolMessage = failed.find((message) => message.role === "tool");
+
+      assert.ok(toolMessage, "应生成 role=tool 的消息");
+      assert.ok(toolMessage!.content.includes("命令超时"));
+      assert.ok(
+        !("is_error" in toolMessage!),
+        "OpenAI 的 tool 消息没有 is_error 字段",
       );
     });
   });

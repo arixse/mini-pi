@@ -52,6 +52,13 @@ export type ToolDefinition = {
 export type ToolResult = {
     content:TextContent[]
     details?:unknown
+    /**
+     * 工具把这次调用判定为失败（例如命令非零退出或超时）。
+     *
+     * 工具**自己返回**失败结果（而不是抛错）时，仍需要保留 stdout/stderr/details，
+     * 所以失败状态必须显式带出来，不能只靠"有没有抛异常"判断。
+     */
+    isError?:boolean
     terminate?:boolean
 }
 
