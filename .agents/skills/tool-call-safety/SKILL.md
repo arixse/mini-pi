@@ -71,7 +71,44 @@ cat "..\..\secret.txt"                        # 引号内的相对逃逸
 - 取消后要立刻结束本次运行（模型返回后、每个工具执行前、每轮结束时都检查），
   并为「模型实现不响应信号」留兜底检查。
 
-## 六、回归测试写法
+### 5.1 命令超时：exec 的 timeout 会留下孤儿进程
+
+`child_process.exec` 的 `timeout` 只杀掉 **shell**，孙进程会变成孤儿继续运行。
+实测（Windows）：`node -e "setTimeout(() => {}, 60000)"` 超时后，
+该 node 进程仍在运行，并锁住自己作为 cwd 的目录（导致 `rmSync` 抛 EPERM）。
+
+正确做法是**自己管超时**，并且先结束进程树、再让 shell 结束：
+
+```ts
+const running = exec(command, { cwd, maxBuffer, signal, windowsHide: true }, cb);
+timer = setTimeout(() => {
+  forcedTimeout = true;
+  void killProcessTree(running);   // win32: taskkill /PID <pid> /T /F
+}, timeout);                        // POSIX 回退 child.kill("SIGKILL")
+```
+
+- **不要依赖 error 形态判断超时**：`taskkill /F` 之后 `error.killed` / `error.signal`
+  并不可靠，应由自己的计时器置一个 `forcedTimeout` 标志传进分类函数。
+- 用户取消（Ctrl+C）同样要结束整棵树，否则同样留孤儿。
+- 超时**必须与普通失败可区分**（退出码 124 + `timedOut` 字段 + 明确文案），
+  否则模型只会看到 "Command failed"，无法判断该放宽超时还是改命令。
+- 验证方式：跑一个长时间子进程 → 超时返回后查进程表
+  （`Get-CimInstance Win32_Process -Filter "Name='node.exe'"`）确认孤儿已消失。
+
+## 六、输出边界：要么完整，要么写明截断
+
+工具输出是上下文的主要来源，必须逐项设上限，且**不偷偷丢内容**：
+
+- `read_file`：行数 + 字符数上限，超限时在结果末尾写清「已截断 + 如何用 offset/limit 继续」。
+- `bash`：字符上限 + 明确的「请用更精确的命令收窄输出」；
+  同时把 `exec` 的 `maxBuffer` 显式设大（如 4MB）——否则输出一多，
+  Node 会直接杀掉子进程并抛 `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`，连有用输出都拿不到。
+- 二进制嗅探：读文件先取前缀查 NUL 字节（如 8000 字节内），命中即拒绝。
+  否则 PNG/EXE 会按 UTF-8 解码成乱码整段进上下文。
+- 超大文件（如 >5MB）直接拒绝并建议改用 `grep` / `bash` 抽取片段。
+- 上限、`truncated` 等元数据要进 `details`，展示层才能标注「已截断」。
+
+## 七、回归测试写法
 
 - 安全校验优先测**纯函数**（导出的 `resolveInsideWorkspace` / `checkBashCommand` /
   `extractPathCandidates` / `tokenizeCommand`），不必真的执行命令。
@@ -81,12 +118,19 @@ cat "..\..\secret.txt"                        # 引号内的相对逃逸
   跑通 `runAgentLoop`，断言计数为 0 且产生了 `isError` 的 toolResult。
 - POSIX 权限位（0600）在 Windows 上无法断言：把 `chmod` 做成可注入参数，
   用「是否以 0600 调用」的断言保证任何平台都能验证关键常量。
+- **失败分类做成纯函数**（如 `classifyBashFailure(error, aborted, timeoutMs, forcedTimeout)`），
+  就能不起进程覆盖「超时 / 取消 / 普通失败 / error 形态不可靠」全部分支；
+  只留一条真实的超时集成用例。
+- **会被 kill 子进程的用例要隔离工作目录**：孤儿进程可能锁住目录，
+  用共享的 `.test-workspace` 会让后续所有用例的清理连锁失败（EPERM）。
+  给这类用例单独建临时目录，并给清理加 `maxRetries` / `retryDelay`。
 
-## 七、验证命令
+## 八、验证命令
 
 ```bash
 pnpm typecheck
 pnpm test
+pnpm check                          # typecheck + test
 npx tsx --test src/agent/tools.test.ts
 npx tsx --test src/cli/approval.test.ts
 ```

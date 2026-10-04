@@ -175,7 +175,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 | `read_file` | 📖 | 青色 | 带行号的前 8 行 | `共 529 行 · 18.6 KB [· 本次返回 N 行] [· 显示前 8 行]` |
 | `write_file` | ✏️ | 品红 | ——（不重复展示写入内容） | `新增/覆盖 · 42 行 · 2.1 KB` |
 | `edit_file` | 🔧 | 黄色 | unified diff | `1 处修改 · +12 -3` |
-| `bash` | 💻 | 绿色 | stdout 随后 stderr（黄） | `21 行 · 1.2 KB [· stderr]` |
+| `bash` | 💻 | 绿色 | stdout 随后 stderr（黄） | `21 行 · 1.2 KB [· stderr][· 已截断][· 超时（30.0s）]` |
 | 其他 | 🛠️ | 白色 | 结果文本前若干行 | `<N> 行` |
 
 示例：
@@ -243,10 +243,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `list_files` | 递归列出目录（跳过依赖/产物目录与 `.gitignore` 命中项，最多 300 项 / 5 层） |
 | `glob` | 按 glob 模式找文件（`*` `?` `**` `{a,b}`；不含 `/` 的模式匹配任意层级），最多 200 个 |
 | `grep` | 按正则搜索内容，返回 `<文件>:<行号>: <内容>`；支持 `include` 与 `ignoreCase`，最多 100 处 |
-| `read_file` | 读取文件，支持 `offset` / `limit` 分页 |
+| `read_file` | 读取文件，支持 `offset` / `limit` 分页；拒绝二进制与 >5MB 文件 |
 | `write_file` | 写入文件 |
 | `edit_file` | 按精确文本匹配编辑文件 |
-| `bash` | 执行命令（`cwd` 为工作区） |
+| `bash` | 执行命令（`cwd` 为工作区；超时可配，默认 30s，超时/SIGKILL 会结束整棵进程树） |
 
 **只读工具**（`list_files` / `glob` / `grep` / `read_file`）由注册表的 `readOnly` 标记统一定义：
 它们无需审批，并且在同一轮里**连续的只读调用会并发执行**（写类工具仍一次一个），
@@ -275,8 +275,28 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 ...[已截断：本次返回第 1-500 行（已达单次 20000 字符上限），文件共 3000 行。用 offset/limit 继续读取]
 ```
 
-`details` 中同时给出 `totalLines` / `totalBytes` / `returnedFrom` / `returnedTo` / `returnedLines` / `truncated`，
-便于展示层报出真实规模。这样既不"偷偷丢内容"，也不会因为一次读取把上下文撑爆。
+`details` 中同时给出 `totalLines` / `totalBytes` / `returnedFrom` / `returnedTo` / `returnedLines` / `truncated`，便于展示层报出真实规模。这样既不"偷偷丢内容"，也不会因为一次读取把上下文撑爆。
+
+`read_file` 还会拒绝两类文件，避免把无用内容灌进上下文：
+
+- **二进制文件**（前 8000 字节内含 NUL 字节，如 PNG / EXE / 压缩包）：
+  报错并建议改用 `bash`（`file` / `xxd` / `head -c`）；
+- **超过 5MB 的文件**：报错并建议改用 `grep` 定位，或用 `bash` 抽取需要的片段。
+
+### 4.3.1 `bash` 的超时与输出上限
+
+| 参数 | 说明 |
+| ---- | ---- |
+| `command` | 必填，命令本体 |
+| `timeoutMs` | 超时毫秒数，1s~10min，默认 30000 |
+
+- 超时会**结束整棵进程树**（Windows 用 `taskkill /PID <pid> /T /F`，POSIX 回退 `SIGKILL`），
+  不会只杀掉 shell 而把子进程留成孤儿；
+- 超时与普通失败可区分：结果里写明 `命令超时（30000ms）已被终止`，
+  `details` 带 `timedOut: true`、`aborted`、`timeoutMs`，退出码沿用 shell 约定的 `124`，
+  卡片页脚显示 `· 超时（30.0s）`；
+- 用户取消（Ctrl+C）同样结束整棵进程树，并标记为 `aborted` 而不是超时；
+- 输出超过 20000 字符会截断并标注（`details.truncated`，页脚显示 `· 已截断`）。
 
 文件类工具会做两层路径校验（词法 + 真实路径），工作区内的 symlink/junction
 指向外部时同样会被拒绝；`read_file` / `write_file` / `edit_file` 还会拒绝访问
@@ -517,9 +537,25 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 每轮用户输入会调用 `compactIfNedded(6000, 10)`：
 
 - 当上下文估算 token 超过 6000 且消息数超过保留数 10 时触发；
+- **每轮 Agent 循环结束也会检查一次**（`runAgentLoop` 的 `onTurnEnd` 钩子）：
+  单轮内可能跑上百次工具调用，只靠"用户回合开始时压一次"兜不住上下文增长；
 - 保留最近 10 条消息，较早的消息用模型生成摘要（未配置模型或摘要调用失败时回退到简单摘要，不会中断对话）；
 - `keepRecentMessages` 最小按 1 处理（`slice(-0)` 等价于 `slice(0)`，否则会退化成「保留全部、摘要为空」）；
 - 压缩结果写为新的 `compaction` 条目，并立即通过 `syncContext()` 作用于内存上下文，后续调用模型时以摘要替代旧消息。
+
+token 估算口径（`estimateTextTokens`）：ASCII 约 4 字符 1 token，
+CJK 与其它非 ASCII 字符约 1 字符 1 token。
+早期实现用 `length / 2`，会把英文内容高估约一倍、中文略低估，
+导致压缩时机在两种语言下不一致；该估算只用于"是否压缩"，不参与计费或协议字段。
+
+### 6.3 会话文件容错
+
+JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份会话打不开**：
+
+- 逐行解析，单行 JSON 损坏或缺少 `type` 字段时跳过该行并记录行号；
+- 其余记录照常加载，新消息接在最后一条可用记录之后；
+- 启动时若存在损坏行，会打印 `⚠️ 会话文件有 N 行损坏，已跳过：第 x、y 行`；
+- 只有整份文件都不可用时才重写会话头。
 
 ---
 
