@@ -39,6 +39,14 @@ mini-pi/
 - 支持流式响应和工具调用
 - 请求带 120 秒超时与取消信号；限流（429）/超时（408）/服务端（5xx）/
   网络类错误按指数退避重试（最多 3 次尝试，1s、2s）
+- SDK 的 `timeout` 只覆盖到"连接 + 响应头"，因此正文读取另有一条**静默看门狗**
+  （`STREAM_IDLE_TIMEOUT_MS`）：两段数据之间静默超限即中止，并按可重试的
+  `StreamIdleTimeoutError` 处理（与用户取消区分开，否则瞬时故障会被当成用户操作）。
+  注意 abort 之后 SDK 的流迭代器可能**干净地结束**，所以除 catch 外还要在返回前
+  显式判定，否则会产出一个看起来正常的截断回复。
+- `finish_reason = length`（OpenAI）/ `stop_reason = max_tokens`（Anthropic）
+  映射为 `stopReason = "length"`，与 `"aborted"`（用户取消）区分，
+  REPL 据此给出"可调大 maxTokens"的可操作提示。
 
 ### 3.1.1 模型提供商 (Provider)
 

@@ -52,6 +52,12 @@ lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled
 - **取消**：`details.aborted = true`，且不要被误判成超时；
 - **普通失败**：保留原始 stderr 与真实退出码。
 
+**模型侧的"回答没写完"同样要分三类，不能共用一条路径**：用户取消
+（`stopReason: "aborted"`）、上游静默（看门狗掐断，可重试）、输出被 max_tokens
+截断（`stopReason: "length"`，提示可调大 maxTokens）。把 `length` 映射成 `aborted`
+的后果是用户看到"模型调用已取消"，完全不知道可以调大上限或让它继续写——
+详见 `model-stream-reliability`。
+
 实现要点：`error.killed` / `error.signal` 在 Windows 上（taskkill 之后）不可靠，
 应由自己的计时器置一个 `forcedTimeout` 标志传进**纯函数分类器**
 （`classifyBashFailure(error, aborted, timeoutMs, forcedTimeout)`），

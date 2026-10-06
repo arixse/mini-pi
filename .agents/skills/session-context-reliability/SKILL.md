@@ -56,6 +56,13 @@ Mini Pi 的上下文链路存在几处容易「看起来实现了、实际没生
    回归用例不要只断言「几条第几条」，而要断言**配对不变式**：遍历上下文，
    每个 `toolResult` 都能对应到前面某个 `toolCall`，且每个 `toolCall` 都有对应结果。
 
+   **第二个破坏点是循环的提前返回**：assistant 消息里已经带了 `toolCall`，
+   取消时直接 `return`/`break` 就会让它缺结果。取消有两个位置——
+   模型刚返回工具调用时、一批工具执行到一半时——两处都要补"未执行"的占位结果
+   （`isError` + `details.notExecuted = true`），并把这些提前返回**收口到一个
+   收尾函数**，免得以后新增返回路径时再漏。补齐时不要发 `tool_execution_start/end`：
+   卡片缓存靠 start 填参数，只发 end 会渲染出"没有参数、耗时 0ms"的假卡片。
+
 6. **合法 JSON 但结构不合法的一行同样是「损坏行」**
    只校验 `type` 是字符串就放行是不够的：`loadOrCreate` 随后会访问 `entry.id.replace(...)`，
    一行 `{"type":"unknown_thing"}` 或 `{"type":"message"}`（缺 id）就会让**构造函数**抛
