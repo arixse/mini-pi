@@ -21,11 +21,14 @@ import {
 import {
   STREAM_IDLE_TIMEOUT_MS,
   StreamIdleTimeoutError,
+  PartialStreamInterruptedError,
   applyRetryJitter,
   assertStreamNotIdleTimedOut,
   createStreamIdleWatchdog,
+  isPartialStreamInterrupted,
   isStreamIdleTimeoutError,
   retryAfterMsFromError,
+  toNonRetryableIfPartialStream,
 } from "./model";
 import type { ChatCompletionChunkLike } from "./model";
 import { createTextContent } from "./message";
@@ -789,6 +792,68 @@ describe("model", () => {
       );
 
       assert.deepStrictEqual(delays, [1000]);
+    });
+  });
+
+  describe("已外发正文后不再重试（PartialStreamInterrupted）", () => {
+    it("可重试的失败在已外发内容后必须变成不可重试", () => {
+      const retryable = Object.assign(new Error("rate limited"), { status: 429 });
+
+      // 没外发过内容：照常可重试
+      assert.strictEqual(
+        isRetryableError(toNonRetryableIfPartialStream(retryable, false)),
+        true,
+      );
+
+      // 已经外发过正文：重试会重复输出并重复计费
+      const wrapped = toNonRetryableIfPartialStream(retryable, true);
+      assert.strictEqual(isPartialStreamInterrupted(wrapped), true);
+      assert.strictEqual(isRetryableError(wrapped), false);
+      assert.match(
+        (wrapped as Error).message,
+        /已输出部分内容后中断/,
+        "要说明为什么没有重试",
+      );
+      // 原始原因不能丢
+      assert.strictEqual((wrapped as Error).cause, retryable);
+    });
+
+    it("上游静默在已外发内容后同样不可重试（即使它本身可重试）", () => {
+      const idle = new StreamIdleTimeoutError(60);
+      assert.strictEqual(isRetryableError(idle), true);
+
+      const wrapped = toNonRetryableIfPartialStream(idle, true);
+      assert.strictEqual(isRetryableError(wrapped), false);
+    });
+
+    it("本来就不可重试的失败原样报出，不被部分输出的文案盖住", () => {
+      const unauthorized = Object.assign(new Error("bad key"), { status: 401 });
+
+      assert.strictEqual(
+        toNonRetryableIfPartialStream(unauthorized, true),
+        unauthorized,
+      );
+    });
+
+    it("withRetry 不会重试已外发内容的失败", async () => {
+      let calls = 0;
+      const partial = new PartialStreamInterruptedError(
+        Object.assign(new Error("boom"), { status: 500 }),
+      );
+
+      await assert.rejects(
+        () =>
+          withRetry(
+            async () => {
+              calls += 1;
+              throw partial;
+            },
+            { wait: async () => {} },
+          ),
+        /已输出部分内容后中断/,
+      );
+
+      assert.strictEqual(calls, 1, "只应尝试一次");
     });
   });
 

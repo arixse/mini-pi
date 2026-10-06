@@ -195,9 +195,10 @@ export function classifyStreamFailure(
   error: unknown,
   watchdog: StreamIdleWatchdog,
   signal?: AbortSignal,
+  idleMs: number = STREAM_IDLE_TIMEOUT_MS,
 ): unknown {
   if (watchdog.timedOut() && signal?.aborted !== true) {
-    return new StreamIdleTimeoutError(STREAM_IDLE_TIMEOUT_MS);
+    return new StreamIdleTimeoutError(idleMs);
   }
   return error;
 }
@@ -217,6 +218,56 @@ export function assertStreamNotIdleTimedOut(
   if (watchdog.timedOut() && signal?.aborted !== true) {
     throw new StreamIdleTimeoutError(idleMs);
   }
+}
+
+/** 已经外发过正文的失败，其 name 用于识别"不可重试" */
+const PARTIAL_STREAM_ERROR_NAME = "PartialStreamInterruptedError";
+
+/**
+ * 流式响应在**已经外发部分内容之后**中断。
+ *
+ * 这种失败不能重试：重试单元是"请求 + 读完整个流"，而 delta 是实时写终端的，
+ * 再打一次会把同一段正文重复输出，并把同一份 prompt 再计费一次。
+ * 它是"不可重试"的显式标记，{@link isRetryableError} 见到它直接返回 false。
+ */
+export class PartialStreamInterruptedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `流式响应在已输出部分内容后中断，未自动重试（避免重复输出与重复计费）：${describeError(cause)}`,
+    );
+    this.name = PARTIAL_STREAM_ERROR_NAME;
+    this.cause = cause;
+  }
+}
+
+export function isPartialStreamInterrupted(error: unknown): boolean {
+  let current: unknown = error;
+
+  for (let depth = 0; current && typeof current === "object" && depth < 5; depth += 1) {
+    const candidate = current as { name?: unknown; cause?: unknown };
+    if (candidate.name === PARTIAL_STREAM_ERROR_NAME) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
+/**
+ * 已外发内容时，把"本来可以重试的失败"换成不可重试的
+ * {@link PartialStreamInterruptedError}；其余情况原样返回。
+ *
+ * 只包可重试的失败：401 这类本来就该原样报出去，不能被"部分输出"的文案盖住。
+ */
+export function toNonRetryableIfPartialStream(
+  error: unknown,
+  emittedContent: boolean,
+): unknown {
+  if (emittedContent && isRetryableError(error)) {
+    return new PartialStreamInterruptedError(error);
+  }
+  return error;
 }
 
 /** 可重试的错误码（网络类） */
@@ -277,6 +328,11 @@ function findInErrorChain<T>(
  */
 export function isRetryableError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  // 已经外发过内容：重试会重复输出正文并重复计费，必须优先拦住
+  if (isPartialStreamInterrupted(error)) {
     return false;
   }
 
@@ -749,6 +805,14 @@ export class OpenAIModel implements LlmModel {
   ): Promise<AssistantMessage> {
     // SDK 的 timeout 只覆盖到响应头，正文读取另由看门狗兜底
     const watchdog = createStreamIdleWatchdog(input.signal, this.streamIdleTimeoutMs);
+    // 已经外发过正文就不再重试（见 toNonRetryableIfPartialStream）
+    const emitted = { any: false };
+    const onDelta = input.onDelta
+      ? (delta: string): void => {
+          emitted.any = true;
+          input.onDelta?.(delta);
+        }
+      : undefined;
 
     try {
       const stream = await this.client.chat.completions.create(
@@ -765,17 +829,24 @@ export class OpenAIModel implements LlmModel {
         { signal: watchdog.signal, timeout: REQUEST_TIMEOUT_MS },
       );
 
-      const message = await collectOpenAIStream(stream, input.onDelta, watchdog.touch);
+      const message = await collectOpenAIStream(stream, onDelta, watchdog.touch);
       // 被掐断时迭代器可能"干净地结束"，会产出一个看起来正常的截断回复
       assertStreamNotIdleTimedOut(watchdog, this.streamIdleTimeoutMs, input.signal);
       return message;
     } catch (error) {
       // 上游静默要换成"可重试的失败"，不能被当成用户取消
-      throw classifyStreamFailure(error, watchdog, input.signal);
+      const failure = classifyStreamFailure(
+        error,
+        watchdog,
+        input.signal,
+        this.streamIdleTimeoutMs,
+      );
+      throw toNonRetryableIfPartialStream(failure, emitted.any);
     } finally {
       watchdog.dispose();
     }
-  }  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
+  }
+  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
     if (signal?.aborted || isAbortError(error)) {
       return {
         role: "assistant",
@@ -912,6 +983,8 @@ export class AnthropicModel implements LlmModel {
   ): Promise<Anthropic.Message> {
     // SDK 的 timeout 只覆盖到响应头，正文读取另由看门狗兜底
     const watchdog = createStreamIdleWatchdog(input.signal, this.streamIdleTimeoutMs);
+    // 已经外发过正文就不再重试（见 toNonRetryableIfPartialStream）
+    const emitted = { any: false };
 
     try {
       const stream = this.client.messages.stream(
@@ -926,7 +999,10 @@ export class AnthropicModel implements LlmModel {
       );
 
       if (input.onDelta) {
-        stream.on("text", (delta: string) => input.onDelta?.(delta));
+        stream.on("text", (delta: string) => {
+          emitted.any = true;
+          input.onDelta?.(delta);
+        });
       }
 
       // 每个 SSE 事件都重置静默计时：只盯 text 事件会漏掉工具调用等分片
@@ -938,7 +1014,13 @@ export class AnthropicModel implements LlmModel {
       return message;
     } catch (error) {
       // 上游静默要换成"可重试的失败"，不能被当成用户取消
-      throw classifyStreamFailure(error, watchdog, input.signal);
+      const failure = classifyStreamFailure(
+        error,
+        watchdog,
+        input.signal,
+        this.streamIdleTimeoutMs,
+      );
+      throw toNonRetryableIfPartialStream(failure, emitted.any);
     } finally {
       watchdog.dispose();
     }

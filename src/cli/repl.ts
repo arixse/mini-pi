@@ -369,7 +369,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       }
 
       // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
-      await appendUserMessage(options, createUserMessage(input));
+      await appendUserMessage(options, createUserMessage(input), run.signal);
 
       status.set({ kind: "thinking", startedAt: Date.now() });
 
@@ -388,7 +388,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         onTurnEnd: async (turnMessages) => {
           await appendAgentMessages(options, turnMessages);
           syncedMessages += turnMessages.length;
-          return await compactContext(options, status);
+          return await compactContext(options, status, run.signal);
         },
         onEvent: onAgentEvent,
       });
@@ -532,12 +532,14 @@ export function printLastToolOutput(argument: string): void {
 /**
  * 检查并在需要时压缩上下文。
  *
- * 压缩要调模型生成摘要、可能静默数秒，因此期间显示状态行。
+ * 压缩要调模型生成摘要、可能静默数秒，因此期间显示状态行，并把取消信号
+ * 一路传给摘要请求——否则用户按了 Ctrl+C 还要空等一整次模型调用。
  * @returns 压缩后的上下文；未触发压缩时返回 undefined
  */
 export async function compactContext(
   options: ReplOptions,
   status: StatusController,
+  signal?: AbortSignal,
 ): Promise<AgentMessage[] | undefined> {
   const store = options.sessionStore;
   const { budget, overhead } = compactionBudget(options);
@@ -551,6 +553,7 @@ export async function compactContext(
       budget,
       KEEP_RECENT_MESSAGES,
       overhead,
+      signal,
     );
     return entry ? store.buildContext() : undefined;
   } finally {
@@ -563,10 +566,12 @@ export async function compactContext(
  *
  * 未接会话存储时退回纯内存模式；接了会话存储时以会话文件为准，
  * 并在必要时压缩上下文，使压缩结果真正作用于后续的模型调用。
+ * @param signal 取消信号：只用于压缩（写会话文件必须写完）
  */
 export async function appendUserMessage(
   options: ReplOptions,
   message: AgentMessage,
+  signal?: AbortSignal,
 ): Promise<void> {
   const store = options.sessionStore;
   if (!store) {
@@ -575,7 +580,7 @@ export async function appendUserMessage(
   }
   await store.appendMessage(message);
   const { budget, overhead } = compactionBudget(options);
-  await store.compactIfNedded(budget, KEEP_RECENT_MESSAGES, overhead);
+  await store.compactIfNedded(budget, KEEP_RECENT_MESSAGES, overhead, signal);
   store.syncContext(options.messages);
 }
 

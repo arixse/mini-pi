@@ -801,6 +801,89 @@ describe("JsonlSessionStore", () => {
     });
   });
 
+  describe("压缩可取消（signal 贯穿摘要请求）", () => {
+    /** 写入足够触发压缩的历史 */
+    async function seed(store: JsonlSessionStore): Promise<void> {
+      for (let i = 0; i < 4; i += 1) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    it("取消信号必须传到摘要模型（否则 Ctrl+C 后还要空等一次请求）", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      const controller = new AbortController();
+      let received: AbortSignal | undefined;
+      store.setModel({
+        async complete(input) {
+          received = input.signal;
+          return {
+            role: "assistant",
+            content: [createTextContent("摘要")],
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1, 0, controller.signal);
+
+      assert.ok(compaction, "正常情况仍应压缩");
+      assert.strictEqual(received, controller.signal, "必须传同一个取消信号");
+    });
+
+    it("摘要期间被取消时不写任何条目（不能把历史换成降级摘要）", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      const controller = new AbortController();
+      const before = store.buildContext().length;
+      store.setModel({
+        async complete() {
+          // 模拟用户在"压缩中"按了 Ctrl+C：请求被中止
+          controller.abort();
+          throw new Error("aborted");
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1, 0, controller.signal);
+
+      assert.strictEqual(compaction, undefined, "取消后不应产生压缩条目");
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+        "一条 compaction 都不能写：降级摘要会丢掉真实历史",
+      );
+      assert.strictEqual(store.buildContext().length, before, "上下文应保持原样");
+    });
+
+    it("已经取消时直接跳过，不白调一次摘要模型", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      const controller = new AbortController();
+      controller.abort();
+      let calls = 0;
+      store.setModel({
+        async complete() {
+          calls += 1;
+          throw new Error("should not be called");
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1, 0, controller.signal);
+
+      assert.strictEqual(compaction, undefined);
+      assert.strictEqual(calls, 0, "已取消就不该再发起摘要请求");
+    });
+  });
+
   describe("validateSessionEntry（单行结构校验）", () => {
     it("三种合法条目都应通过", () => {
       const cases = [

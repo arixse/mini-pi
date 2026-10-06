@@ -192,7 +192,7 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
    * fetch() resolve 后就 clearTimeout），因此上游"发出响应头之后不再发送数据"
    * 时，正文读取阶段此前**没有任何时限**——本轮永久卡住，重试也不会触发。
    */
-  it("上游发送响应头后挂死时，应被静默看门狗中止并可按瞬时故障重试", async () => {
+  it("上游发送响应头后一直静默时，应被静默看门狗中止并可按瞬时故障重试", async () => {
     let requests = 0;
 
     await withServer(
@@ -205,12 +205,7 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
           "cache-control": "no-cache",
           connection: "keep-alive",
         });
-        if (requests === 1) {
-          // 先给一段数据证明连接是通的，之后既不发送也不结束
-          res.write(
-            `data: ${JSON.stringify({ choices: [{ delta: { content: "半句" } }] })}\n\n`,
-          );
-        }
+        // 只给响应头，正文一个字节都不发
       },
       async (baseUrl) => {
         const model = createOpenAIModel({
@@ -230,14 +225,62 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
           elapsed < 20_000,
           `必须在有限时间内结束，而不是永久卡住（实际 ${elapsed}ms）`,
         );
-        // 上游静默是瞬时故障：不是用户取消，不能报成"模型调用已取消"
+        // 上游静默是瞬时故障：不是用户取消，不能报成"模型调用已取消"；
+        // 且一个字节都没外发，重试是安全的
         assert.strictEqual(message.stopReason, "error");
         assert.notStrictEqual(message.errorMessage, "aborted");
         assert.match(String(message.errorMessage), /没有收到任何数据/);
-        // 中断前已外发的分片不受影响
-        assert.deepStrictEqual(deltas, ["半句"]);
-        // 可重试：重试到 MAX_REQUEST_ATTEMPTS 上限（3 次）都打到了服务器
+        assert.deepStrictEqual(deltas, []);
         assert.strictEqual(requests, 3, "静默超时应作为可重试失败重试到上限");
+      },
+    );
+  });
+
+  /**
+   * 已经外发过正文就不能再重试：重试单元是"请求 + 读完整个流"，
+   * 而 delta 是实时写终端的，再打一次会把同一段正文重复输出，
+   * 并把同一份 prompt 再计费一次。
+   */
+  it("已外发部分正文后中断时不再重试（避免重复输出与重复计费）", async () => {
+    let requests = 0;
+
+    await withServer(
+      (_req, res) => {
+        requests += 1;
+        res.on("error", () => {});
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        // 先给一段数据证明连接是通的，之后既不发送也不结束
+        res.write(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "半句" } }] })}\n\n`,
+        );
+      },
+      async (baseUrl) => {
+        const model = createOpenAIModel({
+          apiKey: "test-key",
+          baseUrl,
+          model: "test-model",
+          streamIdleTimeoutMs: 60,
+        });
+
+        const deltas: string[] = [];
+        const message = await model.complete(baseInput((delta) => deltas.push(delta)));
+
+        assert.deepStrictEqual(deltas, ["半句"]);
+        assert.strictEqual(message.stopReason, "error");
+        assert.match(
+          String(message.errorMessage),
+          /已输出部分内容后中断/,
+          "要说清为什么没有重试",
+        );
+        assert.strictEqual(
+          requests,
+          1,
+          "已经外发过正文时不能再发一次请求（否则正文重复、prompt 重复计费）",
+        );
       },
     );
   });

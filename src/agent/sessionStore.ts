@@ -8,7 +8,20 @@ import { LlmModel } from "./model";
 type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
-async function summarizeEntries(entries: MessageEntry[], model: LlmModel): Promise<string> {
+/**
+ * 让模型把一段历史压成摘要。
+ *
+ * @param signal 取消信号：压缩要调一次模型，可能静默数秒，必须能被 Ctrl+C 中断
+ *   （否则"已请求取消"之后还要空等一整次请求，README 承诺的"立即中断"就不成立）。
+ *
+ * 被取消时**抛出**而不是回退到简单摘要：简单摘要只有"共 N 条消息"这类统计，
+ * 写进会话文件等于把真实历史换成一句废话。
+ */
+async function summarizeEntries(
+  entries: MessageEntry[],
+  model: LlmModel,
+  signal?: AbortSignal,
+): Promise<string> {
   if (entries.length === 0) {
     return "";
   }
@@ -44,6 +57,7 @@ async function summarizeEntries(entries: MessageEntry[], model: LlmModel): Promi
       systemPrompt,
       messages,
       tools: [],
+      signal,
     });
 
     // 提取模型回复的文本
@@ -58,6 +72,9 @@ async function summarizeEntries(entries: MessageEntry[], model: LlmModel): Promi
       return summaryParts.join("\n");
     }
   } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
     console.error("Failed to generate summary with model:", error);
   }
 
@@ -329,12 +346,18 @@ export class JsonlSessionStore {
    * @param keepRecentMessages 压缩后保留的最近消息条数，最小为 1
    *   （`slice(-0)` 等价于 `slice(0)`，即"全部保留"，因此 0 会被规范化为 1）
    * @param overheadTokens 固定开销（系统提示 + 工具定义），见 {@link needsCompaction}
+   * @param signal 取消信号：压缩要调一次模型，必须能被 Ctrl+C 中断
    */
   async compactIfNedded(
     maxApproxTokens: number,
     keepRecentMessages: number,
     overheadTokens = 0,
+    signal?: AbortSignal,
   ): Promise<CompactionEntry | undefined> {
+    if (signal?.aborted) {
+      // 已取消就不要白调一次摘要模型
+      return undefined;
+    }
     if (!this.needsCompaction(maxApproxTokens, keepRecentMessages, overheadTokens)) {
       return undefined;
     }
@@ -364,9 +387,21 @@ export class JsonlSessionStore {
 
     // 优先用模型生成摘要；未配置模型时回退到简单摘要，
     // 不抛错中断当前对话（压缩只是优化，失败不应让整轮对话失败）。
-    const summary = this.model
-      ? await summarizeEntries(summarized, this.model)
-      : generateSimpleSummary(summarized);
+    let summary: string;
+    try {
+      summary = this.model
+        ? await summarizeEntries(summarized, this.model, signal)
+        : generateSimpleSummary(summarized);
+    } catch {
+      // 只可能是"摘要期间被取消"（其它失败已在 summarizeEntries 内回退）。
+      // 此时保持原上下文、不写任何条目：写一条降级摘要等于丢掉真实历史。
+      return undefined;
+    }
+
+    // 摘要期间被取消：同样不要写入
+    if (signal?.aborted) {
+      return undefined;
+    }
 
     const firstKeptEntryId = kept[0]?.id;
     if (!firstKeptEntryId) {
