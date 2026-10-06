@@ -51,8 +51,10 @@ You:
 
 - **启动恢复**：`main()` 会用 `JsonlSessionStore.syncContext()` 把最近会话的历史消息
   （含压缩摘要）恢复进内存上下文，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。
-- **压缩生效**：每轮对话调用 `compactIfNedded(6000, 10)`，压缩结果会立即作用于内存上下文，
-  而不仅仅是写入文件。`keepRecentMessages` 最小按 1 处理。
+- **压缩生效**：每轮对话调用 `compactIfNedded(budget, 10, overhead)`，压缩结果会立即作用于内存上下文，
+  而不仅仅是写入文件。`keepRecentMessages` 最小按 1 处理。阈值 `budget` 由模型窗口推导
+  （`max(8000, 窗口 × 0.6)`，窗口来自 `settings.json` 的 `contextWindow`，
+  未配置时按 16384 保守取值即 9830），并把系统提示与工具定义作为固定开销计入。
 - **压缩窗口不切断工具配对**：窗口起点不能落在 `toolResult` 上，否则它对应的
   assistant `toolCall` 会被摘要吞掉，还原上下文时就成了引用不存在 `tool_call_id`
   的孤儿结果（OpenAI 会直接 400，且非法序列已落盘，该会话之后每轮都会失败）。

@@ -132,7 +132,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 4. **普通对话输入**：
    - 调用 `checkSkillMatch()` 进行 Skill 匹配提示（见第 7 节）；
    - 若 `model` 为空，打印 `⚠️ 尚未配置模型，请使用 /login 和 /model 命令进行配置` 并返回（这条消息不会写入会话）；
-   - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(6000, 10)` 判断是否需要压缩；
+   - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(budget, 10, overhead)` 判断是否需要压缩（阈值推导见 6.2）；
    - 用 `sessionStore.syncContext()` 依据会话文件重建内存上下文 —— **会话文件是上下文的唯一事实来源**，压缩结果因此立即生效；
    - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.4 节）与取消信号（4.5 节）；
    - 将本轮新增消息逐条写入会话文件，并再次 `syncContext()` 同步内存上下文。
@@ -546,25 +546,47 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ### 6.2 上下文压缩
 
-每轮用户输入会调用 `compactIfNedded(6000, 10)`：
+每轮用户输入与每轮 Agent 循环结束都会调用
+`compactIfNedded(budget, 10, overhead)`：
 
-- 当上下文估算 token 超过 6000 且消息数超过保留数 10 时触发；
+- **阈值 `budget` 由模型窗口推导**：`resolveContextBudget(window) = max(8000, window × 0.6)`。
+  窗口来自 `settings.json` 的 `contextWindow`；未配置时用保守默认值 **16384**
+  （取默认模型清单里最小的一个——窗口估大直接 400，估小只是多压缩几次，故保守优先），
+  此时阈值为 **9830**。窗口大的模型（gpt-4o / deepseek 等 128k）建议显式配置，
+  否则会在远未到窗口上限时就开始压缩，而每次压缩都要调一次摘要模型。
+- **阈值还包含固定开销 `overhead`**：系统提示（挂着 AGENTS.md 固定上下文与
+  Skill 摘要）与工具定义都不在消息历史里，但每次请求都会带上，
+  由 `contextOverheadTokens(systemPrompt, tools)` 计入。
+- 当「消息历史 + 固定开销」超过 `budget` 且消息数超过保留数 10 时触发；
 - **每轮 Agent 循环结束也会检查一次**（`runAgentLoop` 的 `onTurnEnd` 钩子）：
   单轮内可能跑上百次工具调用，只靠"用户回合开始时压一次"兜不住上下文增长；
 - 保留最近 10 条消息，较早的消息用模型生成摘要（未配置模型或摘要调用失败时回退到简单摘要，不会中断对话）；
+- 压缩窗口的起点会**向前回退到不与工具结果断链的位置**：直接切在 `toolResult` 上会让它
+  对应的 assistant `toolCall` 被摘要吞掉，还原上下文时就成了引用不存在 `tool_call_id`
+  的孤儿结果（协议层直接 400，且非法序列已落盘）；
 - `keepRecentMessages` 最小按 1 处理（`slice(-0)` 等价于 `slice(0)`，否则会退化成「保留全部、摘要为空」）；
 - 压缩结果写为新的 `compaction` 条目，并立即通过 `syncContext()` 作用于内存上下文，后续调用模型时以摘要替代旧消息。
 
-token 估算口径（`estimateTextTokens`）：ASCII 约 4 字符 1 token，
-CJK 与其它非 ASCII 字符约 1 字符 1 token。
-早期实现用 `length / 2`，会把英文内容高估约一倍、中文略低估，
-导致压缩时机在两种语言下不一致；该估算只用于"是否压缩"，不参与计费或协议字段。
+token 估算口径：
+
+- `estimateTextTokens`：ASCII 约 4 字符 1 token，CJK 与其它非 ASCII 字符约 1 字符 1 token。
+  早期实现用 `length / 2`，会把英文内容高估约一倍、中文略低估，
+  导致压缩时机在两种语言下不一致；该估算只用于"是否压缩"，不参与计费或协议字段。
+- `estimateMessageTokens` 还会计入 **`toolCall` 的参数**（`JSON.stringify` 同口径）。
+  参数不写在 text block 里，但会原样发给模型（`write_file` 的 `content` 可能上万字符）；
+  漏算的后果是"恒为 0"而不是"略有偏差"——实测 20 万字符参数曾被算成 0 token，
+  上下文早就爆了却永不压缩。`toolResult` 的 `details` 不发给模型，因此不计。
+- 生成摘要时只取**正文文本**（不含工具参数），否则摘要请求自己就会超窗。
 
 ### 6.3 会话文件容错
 
 JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份会话打不开**：
 
-- 逐行解析，单行 JSON 损坏或缺少 `type` 字段时跳过该行并记录行号；
+- 逐行解析，单行 JSON 损坏、缺少 `type`、**结构不合法（未知 `type` / 缺 `id` /
+  `parentId` 非法）**时跳过该行并记录行号。
+  只校验 `type` 是字符串是不够的：`loadOrCreate` 随后会访问 `entry.id.replace(...)`，
+  一行 `{"type":"message"}`（缺 id）就会让**构造函数**抛 `TypeError`——不是跳过该行，
+  而是整个 CLI 起不来；这类行能通过 `JSON.parse`，所以 try/catch 兜不住；
 - 其余记录照常加载，新消息接在最后一条可用记录之后；
 - 启动时若存在损坏行，会打印 `⚠️ 会话文件有 N 行损坏，已跳过：第 x、y 行`；
 - 只有整份文件都不可用时才重写会话头。
@@ -623,9 +645,21 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 
 ```json
 {
-  "defaultModel": "deepseek/deepseek-v4-pro"
+  "defaultModel": "deepseek/deepseek-v4-pro",
+  "contextWindow": 128000,
+  "maxTokens": 8192
 }
 ```
+
+| 字段 | 作用 | 缺省行为 |
+| ---- | ---- | -------- |
+| `defaultModel` | 默认模型，格式 `供应商/模型名` | 启动时按已配置的 provider 自动推导 |
+| `contextWindow` | 模型上下文窗口（token），用于推导压缩阈值 `max(8000, 窗口 × 0.6)` | 按 16384 保守取值（阈值 9830） |
+| `maxTokens` | 单次输出上限（Anthropic 路径使用） | 8192 |
+
+> `contextWindow` 请填**你所用模型的真实窗口**：填大了会在压缩触发前就把请求发过窗口上限（直接 400），
+> 填小了只是多压缩几次（每次压缩都要调一次摘要模型，花钱且加延迟）。
+> 修改后执行 `/reload` 即可生效，`/status` 会显示当前的上限与固定开销。
 
 ### 8.3 已注册的模型供应商
 

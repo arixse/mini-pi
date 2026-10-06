@@ -108,6 +108,26 @@ timer = setTimeout(() => {
 - 超大文件（如 >5MB）直接拒绝并建议改用 `grep` / `bash` 抽取片段。
 - 上限、`truncated` 等元数据要进 `details`，展示层才能标注「已截断」。
 
+## 六之补：写入类工具的替换语义（`$` 会被静默展开）
+
+`edit_file` 的默认路径曾写成 `content.replace(oldText, newText)`。
+`String.replace` 的**字符串**替换值里 `$&`、`$1`、`` $` ``、`$'`、`$$`
+是替换模式，会被展开：
+
+```ts
+"const a = 1;".replace("a", "$&_x")   // => "const a_x = 1;"，而不是 "$&_x"
+```
+
+后果是**静默改坏用户文件**：内容里带 `$&` 的代码（正则替换、模板串、jQuery 片段）
+写进去就变了样。而 `replaceAll=true` 走 `split/join` 本来就是对的，
+所以缺陷只藏在最常用的那条路上。
+
+- 正确写法：`content.replace(oldText, () => newText)`——函数返回值不做任何模式展开。
+- 同类风险：任何把「用户/模型给的内容」当替换值或拼接进正则的地方都要检查
+  （`new RegExp(userInput)` 会因特殊字符抛错或改变语义，应转义）。
+- 回归用例要覆盖 `$&`、`$1`、`` $` ``、`$'`、`$$` 与普通 `$100`，
+  并断言写入结果**逐字符相等**——只断言"包含某段文字"抓不住这类改写。
+
 ## 七、回归测试写法
 
 - 安全校验优先测**纯函数**（导出的 `resolveInsideWorkspace` / `checkBashCommand` /
