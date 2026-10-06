@@ -5,6 +5,7 @@ import {
   alignCompactionStart,
   estimateTextTokens,
   estimateTokens,
+  validateSessionEntry,
 } from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -360,6 +361,50 @@ describe("JsonlSessionStore", () => {
       assert.strictEqual(store.getLoadWarnings().length, 2);
     });
 
+    it("合法 JSON 但结构不合法的行也应跳过（回归：旧实现会抛 TypeError 让 CLI 起不来）", () => {
+      const header = JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "mini-pi-session",
+        timestamp: new Date().toISOString(),
+        cwd: testDir,
+      });
+      const good = JSON.stringify({
+        type: "message",
+        id: "entry_1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("一")], timestamp: 1 },
+      });
+      // 这些行都能通过 JSON.parse，只有结构校验能拦住它们。
+      // 未知 type / 缺 id 会让 loadOrCreate 里的 entry.id.replace(...) 抛 TypeError。
+      const unknownType = JSON.stringify({ type: "unknown_thing" });
+      const missingId = JSON.stringify({ type: "message" });
+      const badParent = JSON.stringify({
+        type: "message",
+        id: "entry_9",
+        parentId: 42,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("坏")], timestamp: 9 },
+      });
+      writeFileSync(
+        sessionFile,
+        [header, good, unknownType, missingId, badParent].join("\n") + "\n",
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.deepStrictEqual(
+        store.getLoadWarnings().map((warning) => warning.line),
+        [3, 4, 5],
+        "三条结构不合法的行都应记警告并跳过",
+      );
+      // 其余记录照常加载
+      assert.strictEqual(store.getLeafId(), "entry_1");
+      assert.strictEqual(store.buildContext().length, 1);
+    });
+
     it("should reset session state and the session file", async () => {
       const store = new JsonlSessionStore(sessionFile, testDir);
       await store.appendMessage({
@@ -644,6 +689,60 @@ describe("JsonlSessionStore", () => {
         "摘要之后必须先是带 toolCall 的 assistant，不能是孤儿 toolResult",
       );
       assertMessageSequenceValid(context);
+    });
+  });
+
+  describe("validateSessionEntry（单行结构校验）", () => {
+    it("三种合法条目都应通过", () => {
+      const cases = [
+        { type: "session", version: 1, id: "mini-pi-session", timestamp: "t", cwd: "/w" },
+        {
+          type: "message",
+          id: "entry_1",
+          parentId: null,
+          timestamp: "t",
+          message: { role: "user", content: [], timestamp: 1 },
+        },
+        {
+          type: "compaction",
+          id: "entry_2",
+          parentId: "entry_1",
+          timestamp: "t",
+          summary: "摘要",
+          firstKeptEntryId: "entry_1",
+          tokensBefore: 10,
+        },
+      ];
+
+      for (const value of cases) {
+        const result = validateSessionEntry(value);
+        assert.ok("entry" in result, `${value.type} 应通过校验`);
+      }
+    });
+
+    it("未知类型、缺 id、缺 parentId 等都应给出原因", () => {
+      const rejected: Array<[unknown, RegExp]> = [
+        [null, /不是 JSON 对象/],
+        ["string", /不是 JSON 对象/],
+        [{ foo: 1 }, /缺少 type 字段/],
+        [{ type: "unknown_thing" }, /未知的条目类型/],
+        [{ type: "message" }, /缺少 id 字段/],
+        [{ type: "message", id: "e1" }, /parentId/],
+        [{ type: "message", id: "e1", parentId: null }, /message 字段/],
+        [
+          { type: "message", id: "e1", parentId: null, message: { role: "nope" } },
+          /message\.role 非法/,
+        ],
+        [{ type: "compaction", id: "e1", parentId: null, summary: "s" }, /firstKeptEntryId/],
+        [{ type: "session", version: 1 }, /缺少 id 字段/],
+        [{ type: "session", id: "s" }, /缺少 version 字段/],
+      ];
+
+      for (const [value, pattern] of rejected) {
+        const result = validateSessionEntry(value);
+        assert.ok("reason" in result, `${JSON.stringify(value)} 应被拒绝`);
+        assert.match(result.reason, pattern);
+      }
     });
   });
 });

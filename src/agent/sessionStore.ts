@@ -164,6 +164,10 @@ export class JsonlSessionStore {
    *
    * 逐行解析，**单行损坏只跳过该行并记下警告**，不再让整份会话打不开
    * （进程被强杀在写一半、磁盘错误等都可能留下半行 JSON）。
+   *
+   * "损坏"包括**结构不合法**（未知 type、缺必填字段）：这类行也是合法 JSON，
+   * 只校验 `type` 是字符串就放行，会在后面访问 `entry.id` 时抛 TypeError，
+   * 而构造函数抛错等于 CLI 直接起不来。
    */
   private loadOrCreate(): void {
     if (!existsSync(this.filePath)) {
@@ -196,7 +200,7 @@ export class JsonlSessionStore {
     }
   }
 
-  /** 解析单行；损坏时记录警告并返回 null */
+  /** 解析单行；JSON 非法或结构不合法时记录警告并返回 null */
   private parseEntry(line: string, lineNumber: number): SessionEntry | null {
     let value: unknown;
     try {
@@ -209,16 +213,12 @@ export class JsonlSessionStore {
       return null;
     }
 
-    if (
-      !value ||
-      typeof value !== "object" ||
-      typeof (value as { type?: unknown }).type !== "string"
-    ) {
-      this.loadWarnings.push({ line: lineNumber, reason: "缺少 type 字段" });
+    const result = validateSessionEntry(value);
+    if ("reason" in result) {
+      this.loadWarnings.push({ line: lineNumber, reason: result.reason });
       return null;
     }
-
-    return value as SessionEntry;
+    return result.entry;
   }
 
   /** 加载时被跳过的损坏行（行号从 1 起） */
@@ -459,6 +459,95 @@ function findLastIndex<T>(items:T[],predicate:(item:T)=>boolean):number {
         }
     }
     return -1
+}
+
+/** 单行会话条目的结构校验结果 */
+export type SessionEntryValidation = { entry: SessionEntry } | { reason: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isValidRole(value: unknown): boolean {
+  return value === "user" || value === "assistant" || value === "toolResult";
+}
+
+/** `parentId` 允许为 null（链首），否则必须是非空字符串 */
+function isValidParentId(value: unknown): boolean {
+  return value === null || isNonEmptyString(value);
+}
+
+/**
+ * 校验一行会话数据的结构。
+ *
+ * 只校验**代码真正依赖**的字段，但它们缺一不可：
+ * - `id` 缺失时 `loadOrCreate` 里的 `entry.id.replace(...)` 直接抛 TypeError，
+ *   而它在构造函数里被调用——等于整个 CLI 起不来；
+ * - `parentId` 缺失时链会悄悄断掉（`"parentId" in current` 为假），历史静默丢失。
+ *
+ * 这类行是**合法 JSON**，所以 JSON.parse 的 try/catch 兜不住；必须单独校验。
+ * 校验失败的行由调用方记警告后跳过，与"单行损坏只跳过该行"的契约保持一致。
+ */
+export function validateSessionEntry(value: unknown): SessionEntryValidation {
+  if (!isRecord(value)) {
+    return { reason: "不是 JSON 对象" };
+  }
+
+  const type = value.type;
+  if (typeof type !== "string") {
+    return { reason: "缺少 type 字段" };
+  }
+
+  switch (type) {
+    case "session": {
+      if (typeof value.version !== "number") {
+        return { reason: "session 缺少 version 字段" };
+      }
+      if (!isNonEmptyString(value.id)) {
+        return { reason: "session 缺少 id 字段" };
+      }
+      return { entry: value as unknown as SessionEntry };
+    }
+
+    case "message": {
+      if (!isNonEmptyString(value.id)) {
+        return { reason: "message 缺少 id 字段" };
+      }
+      if (!("parentId" in value) || !isValidParentId(value.parentId)) {
+        return { reason: "message 的 parentId 非法" };
+      }
+      if (!isRecord(value.message)) {
+        return { reason: "message 缺少 message 字段" };
+      }
+      if (!isValidRole(value.message.role)) {
+        return { reason: `message.role 非法：${String(value.message.role)}` };
+      }
+      return { entry: value as unknown as SessionEntry };
+    }
+
+    case "compaction": {
+      if (!isNonEmptyString(value.id)) {
+        return { reason: "compaction 缺少 id 字段" };
+      }
+      if (!("parentId" in value) || !isValidParentId(value.parentId)) {
+        return { reason: "compaction 的 parentId 非法" };
+      }
+      if (typeof value.summary !== "string") {
+        return { reason: "compaction 缺少 summary 字段" };
+      }
+      if (!isNonEmptyString(value.firstKeptEntryId)) {
+        return { reason: "compaction 缺少 firstKeptEntryId 字段" };
+      }
+      return { entry: value as unknown as SessionEntry };
+    }
+
+    default:
+      return { reason: `未知的条目类型：${type}` };
+  }
 }
 
 /**
