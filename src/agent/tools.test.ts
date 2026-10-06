@@ -331,6 +331,57 @@ describe("tools", () => {
       );
     });
 
+    /**
+     * 回归：`String.replace` 的字符串替换值会把 `$&`、`$1`、`` $` ``、`$'`、`$$`
+     * 当成替换模式展开，于是内容里带 `$&` 的代码会被静默改写。
+     * 只用 `oldText`/`newText` 的默认路径（replaceAll 省略）就能复现。
+     */
+    it("should treat $ patterns in newText literally (not as replacement patterns)", async () => {
+      // [newText, 期望写入的结果]
+      const cases: Array<[string, string]> = [
+        ["$&$&", "$&$&"],
+        ["$1-$2", "$1-$2"],
+        ["$`", "$`"],
+        ["$'", "$'"],
+        ["$$", "$$"],
+        ["cost is $100", "cost is $100"],
+      ];
+
+      for (const [newText, expected] of cases) {
+        writeFileSync(join(testDir, "test.txt"), "before\nafter");
+        const registry = createToolRegistry(testDir);
+        await registry.execute("edit_file", {
+          path: "test.txt",
+          oldText: "before",
+          newText,
+        });
+
+        const { readFileSync } = await import("node:fs");
+        assert.strictEqual(
+          readFileSync(join(testDir, "test.txt"), "utf8"),
+          `${expected}\nafter`,
+          `newText=${JSON.stringify(newText)} 必须原样写入`,
+        );
+      }
+    });
+
+    it("should treat $ patterns literally when replaceAll is true", async () => {
+      writeFileSync(join(testDir, "test.txt"), "foo foo");
+      const registry = createToolRegistry(testDir);
+      await registry.execute("edit_file", {
+        path: "test.txt",
+        oldText: "foo",
+        newText: "$&",
+        replaceAll: true,
+      });
+
+      const { readFileSync } = await import("node:fs");
+      assert.strictEqual(
+        readFileSync(join(testDir, "test.txt"), "utf8"),
+        "$& $&",
+      );
+    });
+
     it("should throw error when text not found", async () => {
       writeFileSync(join(testDir, "test.txt"), "hello world");
       const registry = createToolRegistry(testDir);

@@ -760,7 +760,11 @@ function editFileTool(workspaceRoot: string): RegisteredTool {
       } else {
         // 只替换第一个 occurrence
         replacementCount = 1;
-        newContent = content.replace(oldText, newText);
+        // 必须用函数形式：`String.replace` 的**字符串**替换值里，
+        // `$&`、`$1`、`` $` ``、`$'`、`$$` 会被当成替换模式展开，
+        // 于是内容里带 `$&` 的代码（正则替换、模板串、jQuery 片段）会被静默改写。
+        // 函数返回值不做任何模式展开，写什么就是什么。
+        newContent = content.replace(oldText, () => newText);
       }
       
       // 写入文件
