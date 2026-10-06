@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   JsonlSessionStore,
   alignCompactionStart,
+  estimateMessageTokens,
   estimateTextTokens,
   estimateTokens,
   validateSessionEntry,
@@ -95,6 +96,51 @@ describe("sessionStore", () => {
     ];
 
     assert.strictEqual(estimateTokens(messages), 108);
+  });
+
+  it("toolCall 的参数必须计入（回归：旧实现漏算，20 万字符算成 0 token）", () => {
+    const message: AgentMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "write_file",
+          arguments: { path: "a.ts", content: "x".repeat(200_000) },
+        },
+      ],
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      timestamp: 0,
+    };
+
+    const tokens = estimateMessageTokens(message);
+    assert.ok(tokens > 0, "带 20 万字符参数的消息不能估算为 0");
+    // 200000 个 ASCII 字符 ≈ 50000 token（JSON 引号与键名带来少量高估）
+    assert.ok(
+      tokens >= 50_000,
+      `参数应占主导，实际 ${tokens} token`,
+    );
+
+    // 漏算会导致"上下文早就爆了、压缩却永不触发"
+    assert.ok(estimateTokens([message]) >= 50_000);
+  });
+
+  it("toolResult 的 details 不计入（它不会发给模型）", () => {
+    const withDetails: AgentMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "grep",
+      content: [createTextContent("hit")],
+      details: { matches: "x".repeat(100_000) },
+      isError: false,
+      timestamp: 0,
+    };
+
+    assert.strictEqual(
+      estimateMessageTokens(withDetails),
+      estimateTextTokens("hit"),
+    );
   });
 });
 
@@ -689,6 +735,69 @@ describe("JsonlSessionStore", () => {
         "摘要之后必须先是带 toolCall 的 assistant，不能是孤儿 toolResult",
       );
       assertMessageSequenceValid(context);
+    });
+  });
+
+  describe("压缩阈值与固定开销（overheadTokens）", () => {
+    it("系统提示 / 工具定义的固定开销能把判定推过阈值", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      for (let i = 0; i < 3; i += 1) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`问题 ${i} ${"x".repeat(80)}`)],
+          timestamp: Date.now(),
+        });
+      }
+
+      const used = store.estimateContextTokens();
+      assert.ok(used > 0, "样本必须有内容");
+
+      // 只按消息历史估：没超
+      assert.strictEqual(store.needsCompaction(used + 100, 1), false);
+      // 同一个阈值，加上固定开销就超了——固定开销不进消息历史，但每次请求都带上
+      assert.strictEqual(store.needsCompaction(used + 100, 1, 200), true);
+    });
+
+    it("非法开销按 0 处理，不会把阈值算歪", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("a".repeat(400))],
+        timestamp: 0,
+      });
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("b".repeat(400))],
+        timestamp: 0,
+      });
+
+      // 阈值刻意贴近实际用量，这样"忘了规范化 Infinity"会算成 true 而被抓住
+      const threshold = store.estimateContextTokens() + 50;
+      for (const bad of [Number.NaN, -100, Number.POSITIVE_INFINITY]) {
+        assert.strictEqual(
+          store.needsCompaction(threshold, 1, bad),
+          false,
+          `${String(bad)} 应按 0 处理`,
+        );
+      }
+    });
+
+    it("tokensBefore 记录的是含固定开销的真实请求规模", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      for (let i = 0; i < 4; i += 1) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+          timestamp: Date.now(),
+        });
+      }
+
+      const messageOnly = store.estimateContextTokens();
+      const overhead = 500;
+      const compaction = await store.compactIfNedded(10, 1, overhead);
+
+      assert.ok(compaction, "低阈值下必须触发压缩");
+      assert.strictEqual(compaction.tokensBefore, messageOnly + overhead);
     });
   });
 

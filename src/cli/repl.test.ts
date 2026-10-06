@@ -1,17 +1,21 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import {
+  DEFAULT_CONTEXT_WINDOW,
   KEEP_RECENT_MESSAGES,
   MAX_CONTEXT_TOKENS,
+  MIN_CONTEXT_BUDGET,
   ReplOptions,
   appendAgentMessages,
   appendUserMessage,
   clearSession,
   compactContext,
+  contextOverheadTokens,
   createAgentEventHandler,
   formatSessionList,
   printLastToolOutput,
   printToolInfo,
+  resolveContextBudget,
   sessionStatusEntries,
   startNewSession,
   summarizeToolCall,
@@ -24,6 +28,7 @@ import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
+import { estimateTextTokens } from "../agent/sessionStore";
 import { LlmModel } from "../agent/model";
 import { runAgentLoop } from "../agent/loop";
 import { ToolRegistry } from "../agent/tools";
@@ -596,6 +601,49 @@ describe("ReplOptions", () => {
   });
 });
 
+describe("压缩阈值推导与固定开销", () => {
+  it("resolveContextBudget 按窗口比例推导并遵守下限", () => {
+    assert.strictEqual(resolveContextBudget(100_000), 60_000);
+    assert.strictEqual(
+      resolveContextBudget(DEFAULT_CONTEXT_WINDOW),
+      MAX_CONTEXT_TOKENS,
+    );
+    // 窗口配得很小时不低于下限，避免退化成"每轮都压缩"
+    assert.strictEqual(resolveContextBudget(1_000), MIN_CONTEXT_BUDGET);
+  });
+
+  it("resolveContextBudget 对非法窗口回退到默认窗口", () => {
+    for (const bad of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      assert.strictEqual(
+        resolveContextBudget(bad),
+        MAX_CONTEXT_TOKENS,
+        `${String(bad)} 应回退到默认窗口`,
+      );
+    }
+  });
+
+  it("contextOverheadTokens 必须计入工具定义，而不只是系统提示", () => {
+    const tools = [
+      { name: "bash", description: "run a command", parameters: { type: "object" } },
+    ];
+    const promptOnly = estimateTextTokens("你是助手");
+    const tokens = contextOverheadTokens("你是助手", tools);
+
+    assert.ok(tokens > promptOnly, "工具定义也要算进固定开销");
+    assert.strictEqual(
+      tokens,
+      promptOnly + estimateTextTokens(JSON.stringify(tools)),
+    );
+  });
+
+  it("contextOverheadTokens 没有工具时只算系统提示", () => {
+    assert.strictEqual(
+      contextOverheadTokens("abc", []),
+      estimateTextTokens("abc") + estimateTextTokens("[]"),
+    );
+  });
+});
+
 describe("session context wiring", () => {
   let testDir: string;
   let sessionFile: string;
@@ -689,8 +737,10 @@ describe("session context wiring", () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     // 先写入足以触发压缩的历史。
     // 注意：estimateTextTokens 对 ASCII 按 4 字符/token 估算，
-    // 因此 80 × 400 个 ASCII 字符 ≈ 8000 token，能稳定超过上限 6000。
-    for (let i = 0; i < 80; i++) {
+    // 因此 200 × 400 个 ASCII 字符 ≈ 20000 token，能稳定超过当前预算
+    // （默认窗口 16k × 0.6 = 9830）。样本必须真的超预算，否则这个用例
+    // 证明不了"压缩生效"——阈值口径变了就要调样本，而不是只调断言。
+    for (let i = 0; i < 200; i++) {
       await store.appendMessage({
         role: "user",
         content: [createTextContent(`历史 ${i} ${"x".repeat(400)}`)],
@@ -768,8 +818,8 @@ describe("session context wiring", () => {
   it("compactContext：超阈值时返回压缩后的上下文并驱动状态行", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     store.setModel(createMockModel("summarizer"));
-    // ASCII 按 4 字符/token 估算：80 × 400 字符 ≈ 8000 token，稳定超过上限 6000
-    for (let index = 0; index < 80; index += 1) {
+    // ASCII 按 4 字符/token 估算：200 × 400 字符 ≈ 20000 token，稳定超过当前预算 9830
+    for (let index = 0; index < 200; index += 1) {
       await store.appendMessage({
         role: "user",
         content: [createTextContent(`历史 ${index} ${"x".repeat(400)}`)],

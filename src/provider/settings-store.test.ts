@@ -51,6 +51,39 @@ describe("SettingsStore", () => {
     });
   });
 
+  describe("getContextWindow", () => {
+    it("未配置时返回 undefined（由调用方使用保守默认值）", async () => {
+      assert.strictEqual(await store.getContextWindow(), undefined);
+    });
+
+    it("返回配置的正整数", async () => {
+      writeFileSync(
+        testFilePath,
+        JSON.stringify({ contextWindow: 128000 }),
+        "utf-8",
+      );
+      const fresh = new SettingsStore(testFilePath);
+
+      assert.strictEqual(await fresh.getContextWindow(), 128000);
+    });
+
+    it("非法值一律忽略", async () => {
+      for (const value of [0, -5, "abc", null, Number.POSITIVE_INFINITY]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ contextWindow: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getContextWindow(),
+          undefined,
+          `contextWindow=${JSON.stringify(value)} 应被忽略`,
+        );
+      }
+    });
+  });
+
   afterEach(async () => {
     try {
       if (existsSync(testFilePath)) {

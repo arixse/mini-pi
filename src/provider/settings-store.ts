@@ -8,6 +8,12 @@ type Settings = {
   defaultModel?: string; // 格式: [模型供应商]/[模型名称]
   /** 模型输出上限（Anthropic 路径使用），缺省用内置默认值 */
   maxTokens?: number;
+  /**
+   * 模型上下文窗口（token）。用于推导上下文压缩阈值。
+   * 缺省时按内置的保守窗口取值——窗口大的模型建议显式配置，
+   * 否则会在远未到窗口上限时就开始压缩（每次压缩都要调一次摘要模型）。
+   */
+  contextWindow?: number;
 };
 
 export class SettingsStore {
@@ -130,6 +136,19 @@ export class SettingsStore {
   async getMaxTokens(): Promise<number | undefined> {
     await this.initialize();
     const value = this.settings.maxTokens;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+    return Math.floor(value);
+  }
+
+  /**
+   * 获取模型上下文窗口（token）。
+   * @returns 合法（正数）时返回该值，否则返回 undefined（由调用方使用保守默认值）
+   */
+  async getContextWindow(): Promise<number | undefined> {
+    await this.initialize();
+    const value = this.settings.contextWindow;
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
       return undefined;
     }

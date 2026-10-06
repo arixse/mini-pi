@@ -1,13 +1,13 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage } from "../shared/protocol";
+import { AgentEvent, AgentMessage, ToolDefinition } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop, BeforeToolCall } from "../agent/loop";
 import { ModelProviderService, SettingsStore } from "../provider";
-import { JsonlSessionStore } from "../agent/sessionStore";
+import { JsonlSessionStore, estimateTextTokens } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
@@ -16,10 +16,70 @@ import { createStatusLine, StatusController } from "./status";
 import { createRenderContext, renderLastToolOutput, renderToolCall, RenderContext, ToolCallView } from "./render";
 import { ExitCoordinator } from "./exit";
 
-/** 触发上下文压缩的近似 token 上限 */
-export const MAX_CONTEXT_TOKENS = 6000;
+/**
+ * 默认的模型上下文窗口（token）。
+ *
+ * 取默认模型清单里**最小**的一个（gpt-3.5-turbo 的 16k）：窗口估得比真实值大，
+ * 会在压缩触发之前就把请求发过窗口上限，直接 400；估得小只是多压缩几次。
+ * 因此未声明窗口时宁可保守。窗口更大的模型请在 settings.json 里设置
+ * `contextWindow`（或用 `/model` 换模型后自行调整）。
+ */
+export const DEFAULT_CONTEXT_WINDOW = 16_384;
+/** 压缩阈值占上下文窗口的比例：给输出与工具结果留余量 */
+export const CONTEXT_BUDGET_RATIO = 0.6;
+/** 压缩阈值下限：窗口配得过小时不要退化成"每轮都压缩" */
+export const MIN_CONTEXT_BUDGET = 8_000;
+
+/**
+ * 按模型窗口推导压缩阈值（token）。
+ *
+ * 之前是硬编码的 6000：与真实窗口脱节——对 128k 窗口而言小到等于每轮都调一次
+ * 摘要模型（花钱又加延迟），而对小窗口模型又可能来不及压。
+ */
+export function resolveContextBudget(contextWindow: number): number {
+  const window =
+    Number.isFinite(contextWindow) && contextWindow > 0
+      ? contextWindow
+      : DEFAULT_CONTEXT_WINDOW;
+  return Math.max(MIN_CONTEXT_BUDGET, Math.floor(window * CONTEXT_BUDGET_RATIO));
+}
+
+/** 默认窗口下的压缩阈值（导出以便展示与测试） */
+export const MAX_CONTEXT_TOKENS = resolveContextBudget(DEFAULT_CONTEXT_WINDOW);
 /** 上下文压缩时保留的最近消息条数 */
 export const KEEP_RECENT_MESSAGES = 10;
+
+/**
+ * 固定开销：系统提示与工具定义都不在消息历史里，但每次请求都会带上。
+ *
+ * 系统提示里挂着 AGENTS.md 固定上下文与 Skill 摘要，工具定义则是 7 个工具的
+ * 名称/描述/JSON Schema——只按消息历史估算会系统性低估真实请求大小。
+ */
+export function contextOverheadTokens(
+  systemPrompt: string,
+  tools: readonly ToolDefinition[],
+): number {
+  return estimateTextTokens(systemPrompt) + estimateTextTokens(JSON.stringify(tools));
+}
+
+/** 本次会话的压缩阈值与固定开销 */
+function compactionBudget(options: ReplOptions): {
+  budget: number;
+  overhead: number;
+} {
+  const budget = resolveContextBudget(
+    options.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+  );
+  // 测试会传入只实现了部分方法的替身，这里做一次防御
+  const definitions =
+    typeof options.toolRegistry?.definitions === "function"
+      ? options.toolRegistry.definitions()
+      : [];
+  return {
+    budget,
+    overhead: contextOverheadTokens(options.systemPrompt, definitions),
+  };
+}
 
 export type ReplOptions = {
   prompt: string;
@@ -38,7 +98,17 @@ export type ReplOptions = {
   onSwitchSession?: (target: string) => JsonlSessionStore | null | undefined;
   /** 供 /status 展示的模型标签，例如 "minimax-cn/MiniMax-M2.7" */
   modelLabel?: string;
-  onReload?: () => Promise<{ model: LlmModel | null; systemPrompt: string }>;
+  /**
+   * 模型上下文窗口（token），用于推导压缩阈值。
+   * 缺省用 {@link DEFAULT_CONTEXT_WINDOW}；来源是 settings.json 的 contextWindow。
+   */
+  contextWindow?: number;
+  onReload?: () => Promise<{
+    model: LlmModel | null;
+    systemPrompt: string;
+    /** 重载后若配置了新的窗口，一并生效 */
+    contextWindow?: number;
+  }>;
   /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
   beforeToolCall?: BeforeToolCall;
 };
@@ -231,10 +301,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     if (input === "/reload") {
       if (options.onReload) {
         try {
-          const { model, systemPrompt } = await options.onReload();
+          const { model, systemPrompt, contextWindow } = await options.onReload();
           // 更新外部传入的 model 和 systemPrompt
           options.model = model;
           options.systemPrompt = systemPrompt;
+          if (contextWindow !== undefined) {
+            options.contextWindow = contextWindow;
+          }
           console.log(chalk.green("\n✅ 配置已重载\n"));
         } catch (error) {
           console.log(chalk.red("\n❌ 重载失败:"), error instanceof Error ? error.message : error);
@@ -284,10 +357,12 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       console.log("");
 
       // 压缩要调模型生成摘要，可能静默数秒：先给出可见状态
+      const { budget, overhead } = compactionBudget(options);
       const willCompact =
         options.sessionStore?.needsCompaction(
-          MAX_CONTEXT_TOKENS,
+          budget,
           KEEP_RECENT_MESSAGES,
+          overhead,
         ) ?? false;
       if (willCompact) {
         status.set({ kind: "compacting", startedAt: Date.now() });
@@ -373,7 +448,11 @@ export function sessionStatusEntries(
     [
       "上下文",
       store
-        ? `约 ${store.estimateContextTokens()} tokens（上限 ${MAX_CONTEXT_TOKENS}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`
+        ? (() => {
+            const { budget, overhead } = compactionBudget(options);
+            const used = store.estimateContextTokens() + overhead;
+            return `约 ${used} tokens（其中固定开销 ${overhead}，上限 ${budget}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`;
+          })()
         : "未启用",
     ],
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
@@ -461,18 +540,17 @@ export async function compactContext(
   status: StatusController,
 ): Promise<AgentMessage[] | undefined> {
   const store = options.sessionStore;
-  if (
-    !store ||
-    !store.needsCompaction(MAX_CONTEXT_TOKENS, KEEP_RECENT_MESSAGES)
-  ) {
+  const { budget, overhead } = compactionBudget(options);
+  if (!store || !store.needsCompaction(budget, KEEP_RECENT_MESSAGES, overhead)) {
     return undefined;
   }
 
   status.set({ kind: "compacting", startedAt: Date.now() });
   try {
     const entry = await store.compactIfNedded(
-      MAX_CONTEXT_TOKENS,
+      budget,
       KEEP_RECENT_MESSAGES,
+      overhead,
     );
     return entry ? store.buildContext() : undefined;
   } finally {
@@ -496,7 +574,8 @@ export async function appendUserMessage(
     return;
   }
   await store.appendMessage(message);
-  await store.compactIfNedded(MAX_CONTEXT_TOKENS, KEEP_RECENT_MESSAGES);
+  const { budget, overhead } = compactionBudget(options);
+  await store.compactIfNedded(budget, KEEP_RECENT_MESSAGES, overhead);
   store.syncContext(options.messages);
 }
 

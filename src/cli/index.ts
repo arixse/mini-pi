@@ -147,6 +147,10 @@ export async function main() {
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
+  // 上下文窗口（可选）：settings.json 的 contextWindow，用于推导压缩阈值；
+  // 未配置时由 REPL 使用保守默认值
+  const contextWindow = await settingsStore.getContextWindow();
+
   // 创建 sessionManager
   const sessionManager = new SessionManager(workspaceRoot);
   if(model) {
@@ -203,7 +207,11 @@ export async function main() {
   };
 
   // 重载配置的回调函数
-  const onReload = async (): Promise<{ model: LlmModel | null; systemPrompt: string }> => {
+  const onReload = async (): Promise<{
+    model: LlmModel | null;
+    systemPrompt: string;
+    contextWindow?: number;
+  }> => {
     // 重新从配置创建模型
     const { model: newModel, providerName: newProviderName, modelName: newModelName } =
       await createModelFromSettings(providerService, settingsStore);
@@ -222,7 +230,11 @@ export async function main() {
     printLogo();
     printWelcome(newProviderName, newModelName);
 
-    return { model: newModel, systemPrompt: newSystemPrompt };
+    return {
+      model: newModel,
+      systemPrompt: newSystemPrompt,
+      contextWindow: await settingsStore.getContextWindow(),
+    };
   };
 
   await startRepl({
@@ -236,6 +248,7 @@ export async function main() {
     settingsStore,
     sessionStore,
     sessionManager,
+    contextWindow,
     onNewSession,
     onSwitchSession,
     modelLabel:

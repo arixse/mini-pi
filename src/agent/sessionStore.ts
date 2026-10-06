@@ -299,8 +299,16 @@ export class JsonlSessionStore {
    *
    * UI 需要在真正压缩前给出"压缩中"提示（压缩要调模型，可能静默数秒），
    * 因此把判定单独暴露出来，与 compactIfNedded 共用同一份逻辑，避免两处条件分叉。
+   *
+   * @param overheadTokens 不随消息增长、但每次请求都会带上的固定开销
+   *   （系统提示与工具定义）。不传则只按消息历史估算——那会低估真实请求大小，
+   *   因为 AGENTS.md 固定上下文与 Skill 摘要都挂在系统提示里。
    */
-  needsCompaction(maxApproxTokens: number, keepRecentMessages: number): boolean {
+  needsCompaction(
+    maxApproxTokens: number,
+    keepRecentMessages: number,
+    overheadTokens = 0,
+  ): boolean {
     const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
     const messageEntries = this.pathToLeaf().filter(
       (entry): entry is MessageEntry => entry.type === "message",
@@ -308,7 +316,10 @@ export class JsonlSessionStore {
     if (messageEntries.length <= keepRecent) {
       return false;
     }
-    return estimateTokens(this.buildContext()) > maxApproxTokens;
+    return (
+      estimateTokens(this.buildContext()) + normalizeOverheadTokens(overheadTokens) >
+      maxApproxTokens
+    );
   }
 
   /**
@@ -317,15 +328,18 @@ export class JsonlSessionStore {
    * @param maxApproxTokens 近似 token 上限，未超过则不做任何事
    * @param keepRecentMessages 压缩后保留的最近消息条数，最小为 1
    *   （`slice(-0)` 等价于 `slice(0)`，即"全部保留"，因此 0 会被规范化为 1）
+   * @param overheadTokens 固定开销（系统提示 + 工具定义），见 {@link needsCompaction}
    */
   async compactIfNedded(
     maxApproxTokens: number,
     keepRecentMessages: number,
+    overheadTokens = 0,
   ): Promise<CompactionEntry | undefined> {
-    if (!this.needsCompaction(maxApproxTokens, keepRecentMessages)) {
+    if (!this.needsCompaction(maxApproxTokens, keepRecentMessages, overheadTokens)) {
       return undefined;
     }
 
+    const overhead = normalizeOverheadTokens(overheadTokens);
     const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
     const path = this.pathToLeaf();
     const messageEntries = path.filter(
@@ -343,7 +357,8 @@ export class JsonlSessionStore {
       return undefined;
     }
 
-    const tokensBefore = estimateTokens(this.buildContext());
+    // 压缩前真实的请求规模：消息历史 + 固定开销
+    const tokensBefore = estimateTokens(this.buildContext()) + overhead;
     const kept = messageEntries.slice(startIndex);
     const summarized = messageEntries.slice(0, startIndex);
 
@@ -463,6 +478,11 @@ function findLastIndex<T>(items:T[],predicate:(item:T)=>boolean):number {
 
 /** 单行会话条目的结构校验结果 */
 export type SessionEntryValidation = { entry: SessionEntry } | { reason: string };
+
+/** 固定开销规范化：非法值（NaN / 负数 / 非有限）按 0 处理，避免把阈值算歪 */
+function normalizeOverheadTokens(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -606,14 +626,45 @@ export function estimateTextTokens(text: string): number {
   return Math.ceil(ascii / 4 + wide);
 }
 
-/** 估算整个上下文的 token 数 */
-export function estimateTokens(messages: AgentMessage[]): number {
-  return messages.reduce((sum, message) => {
-    const content = extractText(message);
-    return sum + estimateTextTokens(content);
-  }, 0);
+/**
+ * 估算一条消息的 token 数。
+ *
+ * 除了 text block，还必须计入 **toolCall 的参数**：参数不写在 text 里，
+ * 但会原样发给模型（`write_file` 的 `content`、`edit_file` 的 `newText`
+ * 都可能上万字符）。漏算的后果不是"略有偏差"而是"恒为 0"——实测一条带
+ * 20 万字符参数的消息估算为 0 token，于是上下文早就爆了、压缩却永不触发，
+ * 直接把请求撑到 400。
+ *
+ * `toolResult` 的 `details` 不发给模型（只有 `content` 的正文会发），因此不计。
+ */
+export function estimateMessageTokens(message: AgentMessage): number {
+  let tokens = estimateTextTokens(extractText(message));
+
+  if (message.role === "assistant") {
+    for (const block of message.content) {
+      if (block.type === "toolCall") {
+        tokens += estimateTextTokens(block.name);
+        // JSON.stringify 会带上引号与括号，属于轻微高估（偏保守，安全方向）
+        tokens += estimateTextTokens(JSON.stringify(block.arguments ?? {}));
+      }
+    }
+  }
+
+  return tokens;
 }
 
+/** 估算整个上下文的 token 数 */
+export function estimateTokens(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+}
+
+/**
+ * 取一条消息里的**正文文本**，供生成摘要使用。
+ *
+ * 刻意不含 toolCall 的参数：摘要请求会把返回值拼进一条 user 消息，
+ * 若把上万字符的工具参数也算进去，摘要请求自己就会超窗。
+ * 估算 token 请用 {@link estimateMessageTokens}，它另外计入参数。
+ */
 function extractText(message:AgentMessage):string {
     const parts:string[] = []
     for(const block of message.content) {
