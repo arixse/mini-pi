@@ -1,11 +1,51 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { JsonlSessionStore, estimateTextTokens, estimateTokens } from "./sessionStore";
+import {
+  JsonlSessionStore,
+  alignCompactionStart,
+  estimateTextTokens,
+  estimateTokens,
+} from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { AgentMessage } from "../shared/protocol";
+
+/**
+ * 断言上下文满足工具的配对要求：每个 toolResult 都能对应到前面某个
+ * assistant 的 toolCall，且每个 toolCall 都有对应的 toolResult。
+ *
+ * 这是 OpenAI / Anthropic 的硬性协议要求，违反即 400；压缩一旦破坏它，
+ * 非法序列会落盘，之后每轮都会从会话文件重建出同样的非法上下文。
+ */
+function assertMessageSequenceValid(messages: AgentMessage[]): void {
+  const pending = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      for (const block of message.content) {
+        if (block.type === "toolCall") {
+          pending.add(block.id);
+        }
+      }
+      continue;
+    }
+    if (message.role === "toolResult") {
+      assert.ok(
+        pending.has(message.toolCallId),
+        `孤儿 toolResult：${message.toolCallId} 没有对应的 assistant toolCall`,
+      );
+      pending.delete(message.toolCallId);
+    }
+  }
+
+  assert.deepStrictEqual(
+    [...pending],
+    [],
+    "存在没有 toolResult 的 assistant toolCall",
+  );
+}
 
 describe("sessionStore", () => {
   const testDir = join(process.cwd(), ".test-session-store");
@@ -525,6 +565,85 @@ describe("JsonlSessionStore", () => {
       assert.ok(compaction, "低阈值下必须触发压缩");
       // 验证摘要来自模型
       assert.strictEqual(compaction.summary, "用户询问了排序算法，助手实现了快速排序");
+    });
+  });
+
+  describe("压缩窗口的消息配对（alignCompactionStart）", () => {
+    it("窗口落在 toolResult 上时向前回退到拥有它的 assistant 消息", () => {
+      // 一轮里 agent 批量调了多个只读工具：assistant 之后跟着一串 toolResult
+      const roles: AgentMessage["role"][] = [
+        "user",
+        "assistant",
+        "toolResult",
+        "toolResult",
+        "toolResult",
+      ];
+
+      // slice(-3) 会切在第 2 个 toolResult 上，必须回退到 assistant
+      assert.strictEqual(alignCompactionStart(roles, 3), 1);
+      assert.strictEqual(alignCompactionStart(roles, 4), 1);
+    });
+
+    it("起点本来就不是 toolResult 时保持不动", () => {
+      const roles: AgentMessage["role"][] = ["user", "assistant", "user", "assistant"];
+
+      assert.strictEqual(alignCompactionStart(roles, 2), 2);
+      assert.strictEqual(alignCompactionStart(roles, 1), 3);
+    });
+
+    it("整段历史都要保留时返回 0，调用方应放弃压缩", () => {
+      const roles: AgentMessage["role"][] = ["assistant", "toolResult", "toolResult"];
+
+      assert.strictEqual(alignCompactionStart(roles, 2), 0);
+    });
+
+    it("压缩后不得留下孤儿 toolResult（回归：真机上会让会话永久 400）", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("跑一批检索")],
+        timestamp: Date.now(),
+      });
+
+      // 一轮里并发跑了 12 个只读工具：assistant 之后连着 12 条 toolResult
+      const toolCalls = Array.from({ length: 12 }, (_, index) => ({
+        type: "toolCall" as const,
+        id: `call_${index}`,
+        name: "read_file",
+        arguments: { path: `f${index}.ts` },
+      }));
+      await store.appendMessage({
+        role: "assistant",
+        content: [createTextContent("开始"), ...toolCalls],
+        stopReason: "toolUse",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        timestamp: Date.now(),
+      });
+      for (let index = 0; index < 12; index += 1) {
+        await store.appendMessage({
+          role: "toolResult",
+          toolCallId: `call_${index}`,
+          toolName: "read_file",
+          content: [createTextContent(`结果 ${index}`)],
+          isError: false,
+          timestamp: Date.now(),
+        });
+      }
+
+      // 保留最近 10 条：旧实现直接 slice(-10)，会切在 toolResult 中间，
+      // 使前 2 条 toolResult 失去对应的 assistant toolCall
+      const compaction = await store.compactIfNedded(1, 10);
+
+      assert.ok(compaction, "低阈值下必须触发压缩");
+      const context = store.buildContext();
+      assert.strictEqual(context[0].role, "user", "首条应是压缩摘要");
+      assert.strictEqual(
+        context[1].role,
+        "assistant",
+        "摘要之后必须先是带 toolCall 的 assistant，不能是孤儿 toolResult",
+      );
+      assertMessageSequenceValid(context);
     });
   });
 });

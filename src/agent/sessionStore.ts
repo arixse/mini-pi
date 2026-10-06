@@ -331,9 +331,21 @@ export class JsonlSessionStore {
     const messageEntries = path.filter(
       (entry): entry is MessageEntry => entry.type === "message",
     );
+    // 窗口起点必须落在不与 toolResult 断链的位置：被摘要吞掉的
+    // assistant toolCall 会让留下的 toolResult 变成孤儿，协议层直接 400。
+    const startIndex = alignCompactionStart(
+      messageEntries.map((entry) => entry.message.role),
+      keepRecent,
+    );
+    if (startIndex <= 0) {
+      // 整段历史都要保留才能维持消息配对：此时压缩只会把上下文清空，
+      // 宁可不压（压缩是优化，不能反过来破坏可用的上下文）。
+      return undefined;
+    }
+
     const tokensBefore = estimateTokens(this.buildContext());
-    const kept = messageEntries.slice(-keepRecent);
-    const summarized = messageEntries.slice(0, -keepRecent);
+    const kept = messageEntries.slice(startIndex);
+    const summarized = messageEntries.slice(0, startIndex);
 
     // 优先用模型生成摘要；未配置模型时回退到简单摘要，
     // 不抛错中断当前对话（压缩只是优化，失败不应让整轮对话失败）。
@@ -447,6 +459,33 @@ function findLastIndex<T>(items:T[],predicate:(item:T)=>boolean):number {
         }
     }
     return -1
+}
+
+/**
+ * 计算压缩窗口的起点（在消息序列中的下标）。
+ *
+ * 压缩会把"窗口之前"的消息换成一条摘要，因此窗口的**第一条**消息不能是
+ * `toolResult`：它对应的 assistant `toolCall` 会被摘要吞掉，还原上下文时
+ * 就成了一条引用不存在 tool_call_id 的孤儿 toolResult，OpenAI 会直接 400，
+ * 而这条非法序列已经落盘——之后每轮都从会话文件重建出同样的非法上下文，
+ * 该会话再也发不出请求。
+ *
+ * 因此起点要向前回退到第一个非 toolResult 的消息（即拥有这批结果的
+ * assistant 消息），保证 `assistant(toolCalls) + 它的全部 toolResult`
+ * 同进同出。一条 assistant 可能带多个工具调用，所以必须循环回退。
+ *
+ * @returns 窗口起点下标；为 0 表示整段历史都要保留（调用方应放弃本次压缩）
+ */
+export function alignCompactionStart(
+  roles: ReadonlyArray<AgentMessage["role"]>,
+  keepRecentMessages: number,
+): number {
+  const keepRecent = Math.max(1, Math.floor(keepRecentMessages) || 1);
+  let start = Math.max(0, roles.length - keepRecent);
+  while (start > 0 && roles[start] === "toolResult") {
+    start -= 1;
+  }
+  return start;
 }
 
 
