@@ -22,7 +22,7 @@ Mini Pi 的上下文链路存在几处容易「看起来实现了、实际没生
 推论：任何「只改内存、不改会话文件」的操作（例如旧版 `/clear`）都会在下一轮 `syncContext()`
 时被回滚；任何「只写文件、不回灌内存」的操作（例如旧版压缩）对模型调用毫无影响。
 
-## 二、四个高危检查点
+## 二、六个高危检查点
 
 1. **parentId 回溯必须是循环**
    `while (current)` 而不是 `if (current)`。写成 `if` 时链路只剩 leaf 一条，
@@ -39,6 +39,34 @@ Mini Pi 的上下文链路存在几处容易「看起来实现了、实际没生
 4. **切换会话必须换掉 store 引用**
    `/new` 的回调要**返回**新的 store，由 REPL 赋值 `options.sessionStore` 并重建上下文。
    只在回调里创建文件、外层仍持有旧 store，会导致新会话只有一个文件头、消息继续写进旧文件。
+
+5. **压缩窗口不得切断 `assistant(toolCalls)` 与 `toolResult` 的配对**
+   直接 `slice(-keepRecent)` 取窗口，起点可能落在一个 `toolResult` 上：它对应的
+   assistant `toolCall` 被摘要吞掉，还原上下文时就成了一条引用不存在 `tool_call_id`
+   的孤儿 `toolResult`，OpenAI 直接 400（Anthropic 侧同样会拒绝）。
+
+   致命之处在于**非法序列会落盘**：之后每轮都从会话文件重建出同样的非法上下文，
+   这个会话再也发不出请求。而只读工具（`glob` / `grep` / `read_file`）是批量并发执行的，
+   一轮产生 10 条以上 `toolResult` 很常见，命中概率不低。
+
+   正确做法：窗口起点向前回退到第一个非 `toolResult` 的消息（`alignCompactionStart`），
+   保证 `assistant + 它的全部 toolResult` 同进同出；回退到 0（整段历史都得保留）时
+   **放弃本次压缩**，而不是写一条把上下文清空的空摘要。
+
+   回归用例不要只断言「几条第几条」，而要断言**配对不变式**：遍历上下文，
+   每个 `toolResult` 都能对应到前面某个 `toolCall`，且每个 `toolCall` 都有对应结果。
+
+6. **合法 JSON 但结构不合法的一行同样是「损坏行」**
+   只校验 `type` 是字符串就放行是不够的：`loadOrCreate` 随后会访问 `entry.id.replace(...)`，
+   一行 `{"type":"unknown_thing"}` 或 `{"type":"message"}`（缺 id）就会让**构造函数**抛
+   `TypeError: Cannot read properties of undefined`——不是跳过该行，而是整个 CLI 起不来，
+   与「坏行只跳过」的契约正好相反。
+
+   做法：按 type 逐类校验代码**真正依赖**的字段（`session` 需 version/id；
+   `message` 需 id/parentId/message.role；`compaction` 需 id/parentId/summary/firstKeptEntryId），
+   未知 type 一律拒绝并记 `loadWarnings`。`parentId` 缺失会让链路**静默**断掉，也要拦。
+
+   注意这类行能通过 `JSON.parse`，所以 `try/catch` 兜不住，必须单独校验并单测。
 
 ## 三、断言纪律
 

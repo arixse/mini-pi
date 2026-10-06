@@ -145,9 +145,16 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 | 事件 | 终端表现 |
 | ---- | -------- |
 | `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.6） |
-| `tool_execution_start` | 状态行切换为 `⠋ 执行 <工具摘要>… <耗时>` |
+| `tool_execution_start` | 更新状态行 `⠋ 执行 <工具摘要>… <耗时>`，**同时把事件交给 `printToolInfo` 写卡片缓存**（参数与起始时间只在这个事件里，见下） |
 | `tool_execution_end` | 清除状态行，打印完整工具调用卡片（见 4.2，含耗时） |
 | `tool_permission` | 打印 `✅ 已允许` / `❌ 已拒绝: <工具名>` |
+
+> **接线注意**：`tool_execution_end` 只携带 `result`，卡片的标题参数（路径 / 命令）来自
+> `tool_execution_start` 的 `args`，耗时来自两个事件的时间戳，`edit_file` 的 diff 也依赖
+> start 里的 `oldText`/`newText`。因此事件回调**必须把 start 事件也送进 `printToolInfo`**，
+> 否则卡片会退化成只有工具名、耗时恒为 `0ms`、diff 恒为 `+0 -0`。
+> 该接线由 `createAgentEventHandler`（`src/cli/repl.ts`）承担，并用 `runAgentLoop`
+> 的真实事件流做回归（`src/cli/repl.test.ts`）——手工拼接 start/end 的用例测不到它。
 
 每条对话开始与结束时都会打印一条 60 字符的分隔线 `────`。
 

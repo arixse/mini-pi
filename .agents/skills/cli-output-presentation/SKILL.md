@@ -88,15 +88,38 @@ lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled
   状态行只会显示最后一个。要给「N 个工具」这种展示，必须给事件带上批次信息。
 - 非 TTY（管道、CI）下不要原地刷新，改为每次状态变化打印一行静态文本。
 
-## 七、验证命令
+## 七、接线本身必须受测（真机上整块渲染失效的那类缺陷）
+
+渲染函数是纯函数、单测很全，但**把事件接到渲染函数上的那段接线**如果没被测到，
+真机上照样什么都对：这是本项目实际踩过的坑。
+
+- **症状**：工具卡片丢失关键参数（只剩工具名）、耗时恒为 `0ms`、`edit_file` 的 diff 恒为
+  `+0 -0`，而渲染层的单测全绿。
+- **根因**：卡片的 `args` 与**起始时间只存在于 `tool_execution_start`**（协议里
+  `tool_execution_end` 只带 `result`）。事件回调却只把 start 喂给了状态行、
+  只把 end 喂给了 `printToolInfo`，缓存永远是空的，于是 `args = {}`、
+  `startedAt = finishedAt`。
+- **为什么没被发现**：用例是「手工先喂 start 再喂 end」——恰好把生产环境里缺失的
+  那一步补上了。**手工拼接事件的测试测的是渲染函数，不是接线。**
+- **纪律**：
+  1. 涉及「事件 → 渲染」的功能，回归用例必须用 `runAgentLoop` 产出的**真实事件流**
+     驱动处理器，逐条喂进去，而不是自己拼 start/end；
+  2. 为此要把事件回调抽成可注入依赖的独立函数（如 `createAgentEventHandler`），
+     让接线本身可单测——回调内联在 `startRepl` 里就永远测不到；
+  3. 断言要覆盖**只有 start 才提供**的信息：标题里的路径/命令、diff 的增删行、
+     非零耗时。只断言「出现了某个图标」抓不住这类缺陷。
+
+## 八、验证命令
 
 ```bash
 pnpm typecheck
 pnpm test
 npx tsx --test src/cli/render.test.ts
 npx tsx --test src/cli/status.test.ts
+npx tsx --test src/cli/repl.test.ts
 ```
 
 验证「测试能抓住回归」的最短路径：把修好的那一处临时改回旧写法
-（例如让正文宽度函数直接 `return MAX_TEXT_WIDTH`），只跑渲染测试，
-确认它以「行宽 202 超出 40」这类**现象级信息**失败，再改回。
+（例如让正文宽度函数直接 `return MAX_TEXT_WIDTH`，或去掉 start 事件的卡片投喂），
+只跑对应测试文件，确认它以「行宽 202 超出 40」「卡片里没有路径」这类
+**现象级信息**失败，再改回。
