@@ -428,6 +428,131 @@ describe("loop", () => {
         "aborted",
       );
     });
+
+    /**
+     * 协议要求 assistant 的每个 toolCall 都有对应的 toolResult。
+     * 取消会让"已入账的 assistant 消息"缺结果，若直接落盘就是非法序列，
+     * 之后每轮都会从会话文件重建出它，请求被 API 直接拒绝（400）。
+     */
+    function callIdsOf(messages: AgentMessage[]): string[] {
+      const ids: string[] = [];
+      for (const message of messages) {
+        if (message.role !== "assistant") continue;
+        for (const block of message.content) {
+          if (block.type === "toolCall") ids.push(block.id);
+        }
+      }
+      return ids;
+    }
+
+    function resultIdsOf(messages: AgentMessage[]): string[] {
+      return messages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => message.toolCallId);
+    }
+
+    it("取消发生在两个工具之间时，未执行的调用必须补结果", async () => {
+      const controller = new AbortController();
+      const executed: string[] = [];
+
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "first_tool",
+        description: "t",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          executed.push("first_tool");
+          // 模拟用户在第一个工具执行期间按下 Ctrl+C
+          controller.abort();
+          return { content: [createTextContent("ran")] };
+        },
+      });
+      registry.register({
+        name: "second_tool",
+        description: "t",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          executed.push("second_tool");
+          return { content: [createTextContent("ran")] };
+        },
+      });
+
+      const model = createMockModel([
+        createAssistantMessage(
+          [
+            { type: "toolCall", id: "call_1", name: "first_tool", arguments: {} },
+            { type: "toolCall", id: "call_2", name: "second_tool", arguments: {} },
+          ],
+          "toolUse",
+        ),
+      ]);
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("go")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: registry,
+        signal: controller.signal,
+      });
+
+      assert.deepStrictEqual(executed, ["first_tool"], "取消后不应再执行后续工具");
+      assert.deepStrictEqual(
+        resultIdsOf(result.newMessages),
+        callIdsOf(result.newMessages),
+        "toolResult 必须与 toolCall 一一对应且顺序一致",
+      );
+
+      const skipped = result.newMessages.find(
+        (message) => message.role === "toolResult" && message.toolCallId === "call_2",
+      );
+      assert.ok(skipped && skipped.role === "toolResult", "第二个工具必须有占位结果");
+      assert.strictEqual(skipped.isError, true);
+      assert.deepStrictEqual(skipped.details, { notExecuted: true, cancelled: true });
+    });
+
+    it("模型返回工具调用后立刻取消，也必须补齐结果", async () => {
+      const controller = new AbortController();
+      let executed = 0;
+
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "test_tool",
+        description: "t",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          executed += 1;
+          return { content: [createTextContent("ran")] };
+        },
+      });
+
+      const model: LlmModel = {
+        async complete() {
+          // 模型正常返回了工具调用，但此刻用户已经取消（工具一个都不该执行）
+          controller.abort();
+          return createAssistantMessage(
+            [{ type: "toolCall", id: "call_1", name: "test_tool", arguments: {} }],
+            "toolUse",
+          );
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("go")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: registry,
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(executed, 0, "取消后工具不应执行");
+      assert.deepStrictEqual(
+        resultIdsOf(result.newMessages),
+        ["call_1"],
+        "带 toolCall 的 assistant 消息必须同时落一条结果",
+      );
+    });
   });
 
   describe("每轮回调（落盘 / 压缩）", () => {

@@ -54,6 +54,67 @@ function createBlockedToolResult(
   };
 }
 
+/**
+ * 未执行的工具调用的占位结果。
+ *
+ * 协议要求 assistant 消息里的每个 toolCall 都有对应的 toolResult、且顺序一致。
+ * 取消可能落在两个位置：模型刚返回工具调用时、以及一批工具执行到一半时。
+ * 若这时直接结束，带 toolCall 的 assistant 消息会以**缺结果**的形态落盘，
+ * 之后每轮都从会话文件重建出这条非法序列，请求会被 API 直接拒绝（400），
+ * 该会话就此不可用——与压缩切断 assistant/toolResult 配对是同一类问题。
+ */
+function createNotExecutedToolResult(
+  toolCall: ToolCallContent,
+  aborted: boolean,
+): ToolResultMessage {
+  return {
+    role: "toolResult",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    content: [
+      createTextContent(
+        aborted
+          ? "Tool call cancelled: 本轮已被取消，该工具没有执行"
+          : "Tool call skipped: 该工具没有执行",
+      ),
+    ],
+    details: { notExecuted: true, cancelled: aborted },
+    isError: true,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * 给还没有结果的工具调用补上占位结果（按原始顺序），返回本次补齐的部分。
+ *
+ * 不额外发 `tool_execution_start/end`：卡片缓存靠 start 事件填参数，
+ * 只发 end 会让卡片退化成"没有参数、耗时 0ms"的假记录（见 cli-output-presentation）。
+ */
+function appendNotExecutedToolResults(
+  toolCalls: ToolCallContent[],
+  slots: Array<ToolResultMessage | undefined>,
+  aborted: boolean,
+  context: AgentMessage[],
+  newMessages: AgentMessage[],
+  emit: (event: AgentEvent) => void,
+): ToolResultMessage[] {
+  const filled: ToolResultMessage[] = [];
+
+  toolCalls.forEach((toolCall, index) => {
+    if (slots[index] !== undefined) {
+      return;
+    }
+    const result = createNotExecutedToolResult(toolCall, aborted);
+    slots[index] = result;
+    context.push(result);
+    newMessages.push(result);
+    emitMessageLifeCycle(result, emit);
+    filled.push(result);
+  });
+
+  return filled;
+}
+
 function emitMessageLifeCycle(
   message: AgentMessage,
   emit: (event: AgentEvent) => void, 
@@ -242,39 +303,44 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         context.push(assistant)
         newMessages.push(assistant)
 
-        if(assistant.stopReason==="error" || assistant.stopReason==="aborted") {
-            emit({type:"turn_end",turn,message:assistant,toolResults:[]})
+        const toolCalls = assistant.content.filter((block):block is ToolCallContent=>block.type==="toolCall")
+        const slots:Array<ToolResultMessage | undefined> = new Array(toolCalls.length)
+
+        /**
+         * 提前收尾本轮。
+         *
+         * 必须先给没结果的 toolCall 补占位结果再落盘：assistant 消息已经进了
+         * context/newMessages，缺结果就会以非法序列写进会话文件
+         * （见 appendNotExecutedToolResults）。
+         */
+        const finishTurnEarly = async (): Promise<{
+            newMessages:AgentMessage[],
+            events:AgentEvent[]
+        }> => {
+            const filled = appendNotExecutedToolResults(
+                toolCalls, slots, signal.aborted, context, newMessages, emit,
+            )
+            emit({type:"turn_end",turn,message:assistant,toolResults:filled})
             await syncTurn()
             emit({type:"agent_end",messages:newMessages})
             return {
                 newMessages,
                 events
             }
+        }
+
+        if(assistant.stopReason==="error" || assistant.stopReason==="aborted") {
+            return await finishTurnEarly()
         }
 
         // 兜底：模型实现未响应取消信号时，这里不再继续执行工具
         if(signal.aborted) {
-            emit({type:"turn_end",turn,message:assistant,toolResults:[]})
-            await syncTurn()
-            emit({type:"agent_end",messages:newMessages})
-            return {
-                newMessages,
-                events
-            }
+            return await finishTurnEarly()
         }
 
-        const toolCalls = assistant.content.filter((block):block is ToolCallContent=>block.type==="toolCall")
         if(toolCalls.length===0) {
-            emit({type:"turn_end",turn,message:assistant,toolResults:[]})
-            await syncTurn()
-            emit({type:"agent_end",messages:newMessages})
-            return {
-                newMessages,
-                events
-            }
+            return await finishTurnEarly()
         }
-
-        const slots:Array<ToolResultMessage | undefined> = new Array(toolCalls.length)
 
         /**
          * 执行一批工具调用。
@@ -389,6 +455,12 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
             await runBatch([cursor])
             cursor += 1
         }
+
+        // 取消可能落在一批工具执行到一半：未执行的 toolCall 同样要补结果，
+        // 否则 slots 缺项，落盘后就是"缺结果"的非法序列
+        appendNotExecutedToolResults(
+            toolCalls, slots, signal.aborted, context, newMessages, emit,
+        )
 
         const toolResults = slots.filter(
             (result):result is ToolResultMessage => result !== undefined,
