@@ -19,12 +19,15 @@ import { ExitCoordinator } from "./exit";
 /**
  * 默认的模型上下文窗口（token）。
  *
- * 取默认模型清单里**最小**的一个（gpt-3.5-turbo 的 16k）：窗口估得比真实值大，
- * 会在压缩触发之前就把请求发过窗口上限，直接 400；估得小只是多压缩几次。
- * 因此未声明窗口时宁可保守。窗口更大的模型请在 settings.json 里设置
- * `contextWindow`（或用 `/model` 换模型后自行调整）。
+ * 取 128k：当前可选模型（gpt-4o / o1 / deepseek / minimax 等）主流都是这个量级，
+ * 按它推导出的阈值（76800）才不会在上下文远未用满时就反复压缩——每次压缩都要
+ * 调一次摘要模型，既花钱又把真实历史换成摘要。
+ *
+ * 注意窗口**配大了有真实代价**：真实窗口更小的模型（例如 gpt-3.5-turbo 的 16k）
+ * 可能在压缩触发之前就把请求发过窗口上限，直接被 API 拒绝（400）。
+ * 这类模型请在 settings.json 里显式设置 `contextWindow`。
  */
-export const DEFAULT_CONTEXT_WINDOW = 16_384;
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
 /** 压缩阈值占上下文窗口的比例：给输出与工具结果留余量 */
 export const CONTEXT_BUDGET_RATIO = 0.6;
 /** 压缩阈值下限：窗口配得过小时不要退化成"每轮都压缩" */

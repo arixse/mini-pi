@@ -631,6 +631,12 @@ describe("ReplOptions", () => {
 });
 
 describe("压缩阈值推导与固定开销", () => {
+  it("默认窗口是 128k，推导出的阈值是 76800", () => {
+    // 把默认值锁在用例里：改成别的量级时这里会失败，提醒同步文档与样本量
+    assert.strictEqual(DEFAULT_CONTEXT_WINDOW, 128_000);
+    assert.strictEqual(MAX_CONTEXT_TOKENS, 76_800);
+  });
+
   it("resolveContextBudget 按窗口比例推导并遵守下限", () => {
     assert.strictEqual(resolveContextBudget(100_000), 60_000);
     assert.strictEqual(
@@ -639,6 +645,8 @@ describe("压缩阈值推导与固定开销", () => {
     );
     // 窗口配得很小时不低于下限，避免退化成"每轮都压缩"
     assert.strictEqual(resolveContextBudget(1_000), MIN_CONTEXT_BUDGET);
+    // 小窗口模型（如 gpt-3.5-turbo 的 16k）可以显式配小，取到下限之上
+    assert.strictEqual(resolveContextBudget(16_384), 9_830);
   });
 
   it("resolveContextBudget 对非法窗口回退到默认窗口", () => {
@@ -766,13 +774,13 @@ describe("session context wiring", () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     // 先写入足以触发压缩的历史。
     // 注意：estimateTextTokens 对 ASCII 按 4 字符/token 估算，
-    // 因此 200 × 400 个 ASCII 字符 ≈ 20000 token，能稳定超过当前预算
-    // （默认窗口 16k × 0.6 = 9830）。样本必须真的超预算，否则这个用例
+    // 因此 250 × 1600 个 ASCII 字符 ≈ 100000 token，能稳定超过当前预算
+    // （默认窗口 128k × 0.6 = 76800）。样本必须真的超预算，否则这个用例
     // 证明不了"压缩生效"——阈值口径变了就要调样本，而不是只调断言。
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 250; i++) {
       await store.appendMessage({
         role: "user",
-        content: [createTextContent(`历史 ${i} ${"x".repeat(400)}`)],
+        content: [createTextContent(`历史 ${i} ${"x".repeat(1600)}`)],
         timestamp: Date.now(),
       });
     }
@@ -847,11 +855,11 @@ describe("session context wiring", () => {
   it("compactContext：超阈值时返回压缩后的上下文并驱动状态行", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     store.setModel(createMockModel("summarizer"));
-    // ASCII 按 4 字符/token 估算：200 × 400 字符 ≈ 20000 token，稳定超过当前预算 9830
-    for (let index = 0; index < 200; index += 1) {
+    // ASCII 按 4 字符/token 估算：250 × 1600 字符 ≈ 100000 token，稳定超过当前预算 76800
+    for (let index = 0; index < 250; index += 1) {
       await store.appendMessage({
         role: "user",
-        content: [createTextContent(`历史 ${index} ${"x".repeat(400)}`)],
+        content: [createTextContent(`历史 ${index} ${"x".repeat(1600)}`)],
         timestamp: Date.now(),
       });
     }
