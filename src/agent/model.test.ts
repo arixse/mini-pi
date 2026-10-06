@@ -21,9 +21,11 @@ import {
 import {
   STREAM_IDLE_TIMEOUT_MS,
   StreamIdleTimeoutError,
+  applyRetryJitter,
   assertStreamNotIdleTimedOut,
   createStreamIdleWatchdog,
   isStreamIdleTimeoutError,
+  retryAfterMsFromError,
 } from "./model";
 import type { ChatCompletionChunkLike } from "./model";
 import { createTextContent } from "./message";
@@ -226,6 +228,8 @@ describe("model", () => {
           wait: async (ms) => {
             delays.push(ms);
           },
+          // 注入确定性的抖动源：random=0.5 → 抖动系数 1.0，退避值保持整数
+          random: () => 0.5,
         },
       );
 
@@ -643,6 +647,148 @@ describe("model", () => {
         false,
       );
       assert.strictEqual(isUnsupportedStreamOptionsError(undefined), false);
+    });
+  });
+
+  describe("重试体系（SDK 叠加 / cause 下钻 / Retry-After）", () => {
+    it("SDK 内置重试必须关掉，否则与应用层叠加成最多 9 次请求", () => {
+      const openai = createOpenAIModel({ apiKey: "k", baseUrl: "http://127.0.0.1:1/v1" });
+      const anthropic = createAnthropicModel({ apiKey: "k", baseUrl: "http://127.0.0.1:1" });
+
+      assert.strictEqual(
+        (openai as unknown as { client: { maxRetries: number } }).client.maxRetries,
+        0,
+        "重试必须只由 withRetry 负责（它还会读 Retry-After）",
+      );
+      assert.strictEqual(
+        (anthropic as unknown as { client: { maxRetries: number } }).client.maxRetries,
+        0,
+      );
+    });
+
+    it("SDK 的网络错误类（status/code 都是 undefined）应判为可重试", () => {
+      // openai SDK 的形状：new APIConnectionError({ cause }) —— 原始 errno 只在 cause 上
+      const connectionError = Object.assign(new Error("Connection error."), {
+        name: "APIConnectionError",
+        cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      });
+      assert.strictEqual(isRetryableError(connectionError), true);
+
+      // 只有类名、没有 cause 时也要认（连接超时）
+      const timeoutError = Object.assign(new Error("timed out"), {
+        name: "APIConnectionTimeoutError",
+      });
+      assert.strictEqual(isRetryableError(timeoutError), true);
+    });
+
+    it("沿 cause 链下钻 status：5xx 可重试，4xx 不可重试", () => {
+      const wrapped = (status: number): Error =>
+        Object.assign(new Error("wrapped"), {
+          cause: Object.assign(new Error("inner"), { status }),
+        });
+
+      assert.strictEqual(isRetryableError(wrapped(503)), true);
+      assert.strictEqual(isRetryableError(wrapped(429)), true);
+      assert.strictEqual(
+        isRetryableError(wrapped(401)),
+        false,
+        "认证失败重试没有意义",
+      );
+      assert.strictEqual(isRetryableError(wrapped(400)), false);
+    });
+
+    it("retryAfterMsFromError 支持毫秒头、秒数与 HTTP-date", () => {
+      const withHeaders = (headers: Record<string, string>): Error =>
+        Object.assign(new Error("429"), { status: 429, headers });
+
+      assert.strictEqual(
+        retryAfterMsFromError(withHeaders({ "retry-after-ms": "1500" })),
+        1500,
+      );
+      assert.strictEqual(
+        retryAfterMsFromError(withHeaders({ "retry-after": "3" })),
+        3000,
+      );
+      // HTTP-date：距离该时刻还有多少毫秒
+      const now = Date.parse("2026-01-01T00:00:00.000Z");
+      assert.strictEqual(
+        retryAfterMsFromError(
+          withHeaders({ "retry-after": "Thu, 01 Jan 2026 00:00:07 GMT" }),
+          now,
+        ),
+        7000,
+      );
+      assert.strictEqual(retryAfterMsFromError(withHeaders({})), undefined);
+      assert.strictEqual(retryAfterMsFromError(new Error("no headers")), undefined);
+    });
+
+    it("retryAfterMsFromError 也认 Headers 实例（大小写不敏感）", () => {
+      const error = Object.assign(new Error("429"), {
+        status: 429,
+        headers: new Headers({ "Retry-After": "2" }),
+      });
+
+      assert.strictEqual(retryAfterMsFromError(error), 2000);
+    });
+
+    it("抖动落在 ±20% 内且 random 可注入", () => {
+      assert.strictEqual(applyRetryJitter(1000, () => 0), 800);
+      assert.strictEqual(applyRetryJitter(1000, () => 1), 1200);
+      assert.strictEqual(applyRetryJitter(1000, () => 0.5), 1000);
+    });
+
+    it("服务端给了 Retry-After 时按它等待（而不是仍然只等退避值）", async () => {
+      const delays: number[] = [];
+      let calls = 0;
+      const error = Object.assign(new Error("429"), {
+        status: 429,
+        headers: { "retry-after": "5" },
+      });
+
+      await withRetry(
+        async () => {
+          calls += 1;
+          if (calls === 1) throw error;
+          return "ok";
+        },
+        {
+          wait: async (ms) => {
+            delays.push(ms);
+          },
+          random: () => 0.5,
+        },
+      );
+
+      assert.deepStrictEqual(
+        delays,
+        [5000],
+        "服务端要求 5s，退避只有 1s，必须等更久的那个",
+      );
+    });
+
+    it("Retry-After 比退避短时仍保留退避下限", async () => {
+      const delays: number[] = [];
+      let calls = 0;
+      const error = Object.assign(new Error("429"), {
+        status: 429,
+        headers: { "retry-after": "0" },
+      });
+
+      await withRetry(
+        async () => {
+          calls += 1;
+          if (calls === 1) throw error;
+          return "ok";
+        },
+        {
+          wait: async (ms) => {
+            delays.push(ms);
+          },
+          random: () => 0.5,
+        },
+      );
+
+      assert.deepStrictEqual(delays, [1000]);
     });
   });
 

@@ -232,9 +232,48 @@ const RETRYABLE_ERROR_CODES = new Set([
 ]);
 
 /**
- * 判断错误是否值得重试：限流（429）、超时（408）、服务端错误（5xx）
- * 与上游静默（{@link StreamIdleTimeoutError}）重试，
+ * SDK 自己的网络错误类名。
+ *
+ * `APIConnectionError` / `APIConnectionTimeoutError` 的 `status` 与 `code`
+ * **都是 undefined**：原始 errno 只挂在 `cause` 上（openai SDK 把 fetch 失败
+ * 包成 `new APIConnectionError({ cause })`）。只看顶层字段的话，
+ * 最常见的"连不上/连接超时"反而永远不会重试。
+ */
+const RETRYABLE_ERROR_NAME_PATTERNS = [
+  /^APIConnectionError$/,
+  /^APIConnectionTimeoutError$/,
+  /^APIConnectionTimeoutError\d*$/,
+];
+
+/** 沿 cause 链下钻的层数上限（SDK 可能一层层包装） */
+const ERROR_CAUSE_MAX_DEPTH = 5;
+
+/** 从错误自身或它的 cause 链里取字段 */
+function findInErrorChain<T>(
+  error: unknown,
+  read: (candidate: Record<string, unknown>) => T | undefined,
+): T | undefined {
+  let current: unknown = error;
+
+  for (let depth = 0; current && typeof current === "object" && depth < ERROR_CAUSE_MAX_DEPTH; depth += 1) {
+    const candidate = current as Record<string, unknown>;
+    const value = read(candidate);
+    if (value !== undefined) {
+      return value;
+    }
+    current = candidate.cause;
+  }
+
+  return undefined;
+}
+
+/**
+ * 判断错误是否值得重试：限流（429）、超时（408）、服务端错误（5xx）、
+ * 网络类错误与上游静默（{@link StreamIdleTimeoutError}）重试，
  * 其余（401/400/404 等）重试没有意义，直接失败。
+ *
+ * 判定会**沿 cause 链下钻**：SDK 会把 fetch 的原始错误包在 `cause` 里，
+ * 只看顶层会让最常见的那类瞬时故障漏掉。
  */
 export function isRetryableError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -246,17 +285,122 @@ export function isRetryableError(error: unknown): boolean {
     return true;
   }
 
-  const status = (error as { status?: unknown }).status;
-  if (typeof status === "number") {
+  const name = findInErrorChain(error, (candidate) =>
+    typeof candidate.name === "string" ? candidate.name : undefined,
+  );
+  if (name && RETRYABLE_ERROR_NAME_PATTERNS.some((pattern) => pattern.test(name))) {
+    return true;
+  }
+
+  const status = findInErrorChain(error, (candidate) =>
+    typeof candidate.status === "number" ? candidate.status : undefined,
+  );
+  if (status !== undefined) {
     return status === 429 || status === 408 || status >= 500;
   }
 
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && RETRYABLE_ERROR_CODES.has(code)) {
+  const code = findInErrorChain(error, (candidate) =>
+    typeof candidate.code === "string" ? candidate.code : undefined,
+  );
+  if (code !== undefined && RETRYABLE_ERROR_CODES.has(code)) {
     return true;
   }
 
   return false;
+}
+
+/** 重试抖动比例：±20%，避免多个客户端同时重试形成尖峰 */
+export const RETRY_JITTER_RATIO = 0.2;
+
+/** 给退避时间加上 ±{@link RETRY_JITTER_RATIO} 的抖动 */
+export function applyRetryJitter(
+  delayMs: number,
+  random: () => number = Math.random,
+): number {
+  const factor = 1 - RETRY_JITTER_RATIO + random() * RETRY_JITTER_RATIO * 2;
+  return Math.max(0, Math.round(delayMs * factor));
+}
+
+/** 从响应头读一个值（兼容 `Headers` 实例与普通对象） */
+function readHeader(headers: unknown, name: string): string | null {
+  if (!headers || typeof headers !== "object") {
+    return null;
+  }
+
+  const getter = (headers as { get?: unknown }).get;
+  if (typeof getter === "function") {
+    const value = (getter as (key: string) => string | null).call(headers, name);
+    return typeof value === "string" ? value : null;
+  }
+
+  const record = headers as Record<string, unknown>;
+  for (const key of [name, name.toLowerCase(), name.toUpperCase()]) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return null;
+}
+
+/**
+ * 读出服务端要求的等待时间（毫秒）：`retry-after-ms`（毫秒）优先，
+ * 其次 `retry-after`（秒数或 HTTP-date）。取不到返回 undefined。
+ *
+ * 不读它的后果：服务端说"20 秒后再来"，我们 1 秒后就再打一次，
+ * 反而加剧限流（SDK 内置重试是读这个头的，换成自己重试后必须补上）。
+ */
+export function retryAfterMsFromError(
+  error: unknown,
+  now: number = Date.now(),
+): number | undefined {
+  const headers = findInErrorChain(error, (candidate) =>
+    candidate.headers && typeof candidate.headers === "object"
+      ? candidate.headers
+      : undefined,
+  );
+  if (!headers) {
+    return undefined;
+  }
+
+  const ms = readHeader(headers, "retry-after-ms");
+  if (ms !== null && ms.trim() !== "") {
+    const parsed = Number(ms);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  const raw = readHeader(headers, "retry-after");
+  if (raw !== null && raw.trim() !== "") {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+    const date = Date.parse(raw);
+    if (Number.isFinite(date)) {
+      return Math.max(0, date - now);
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * 本次重试实际等待多久：服务端要求的时长与指数退避取较大者，再加抖动。
+ *
+ * 取较大者而不是直接听服务端的：服务端偶尔给一个很小的值（或时钟偏差导致
+ * 已过期），退避下限仍应保留。
+ */
+export function resolveRetryDelayMs(
+  error: unknown,
+  backoffMs: number,
+  now: number = Date.now(),
+  random: () => number = Math.random,
+): number {
+  const serverMs = retryAfterMsFromError(error, now);
+  const base = serverMs === undefined ? backoffMs : Math.max(serverMs, backoffMs);
+  return applyRetryJitter(base, random);
 }
 
 /** 可中断的等待 */
@@ -291,10 +435,21 @@ export type RetryOptions = {
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** 每次重试前回调（用于日志） */
   onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
+  /** 抖动用的随机源，便于测试注入确定性 */
+  random?: () => number;
+  /** 当前时间来源，便于测试 Retry-After 的 HTTP-date 分支 */
+  now?: () => number;
 };
 
 /**
  * 带指数退避的重试。取消信号会立即中断（不重试，也不继续等待）。
+ *
+ * 退避时长会优先照顾服务端通过 `Retry-After` 给出的要求（见
+ * {@link resolveRetryDelayMs}），并叠加抖动避免同时重试。
+ *
+ * 注意：SDK 自己也会重试（openai / anthropic 默认 `maxRetries = 2`），
+ * 必须把它们关掉（构造客户端时 `maxRetries: 0`），否则两套重试叠加会变成
+ * `3 × 3 = 9` 次请求，prompt token 被反复计费。
  */
 export async function withRetry<T>(
   operation: () => Promise<T>,
@@ -303,6 +458,8 @@ export async function withRetry<T>(
   const attempts = Math.max(1, options.attempts ?? MAX_REQUEST_ATTEMPTS);
   const baseDelayMs = options.baseDelayMs ?? RETRY_BASE_DELAY_MS;
   const wait = options.wait ?? sleep;
+  const random = options.random ?? Math.random;
+  const now = options.now ?? Date.now;
 
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -313,7 +470,8 @@ export async function withRetry<T>(
         throw error;
       }
 
-      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      const backoffMs = baseDelayMs * 2 ** (attempt - 1);
+      const delayMs = resolveRetryDelayMs(error, backoffMs, now(), random);
       options.onRetry?.(attempt, error, delayMs);
       await wait(delayMs, options.signal);
     }
@@ -531,6 +689,9 @@ export class OpenAIModel implements LlmModel {
     this.client = new OpenAI({
       apiKey: config?.apiKey,
       baseURL: config?.baseUrl,
+      // SDK 默认 maxRetries=2，叠加应用层的 3 次尝试会变成最多 9 次请求
+      // （prompt token 反复计费）。重试统一由 withRetry 负责，它还会读 Retry-After。
+      maxRetries: 0,
     });
     this.model = config?.model || "gpt-3.5-turbo";
     this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
@@ -708,6 +869,8 @@ export class AnthropicModel implements LlmModel {
     this.client = new Anthropic({
       apiKey: config?.apiKey,
       baseURL: config?.baseUrl,
+      // 同 OpenAI：SDK 默认 maxRetries=2，必须关掉以免与应用层重试叠加
+      maxRetries: 0,
     });
     this.model = config?.model || "claude-3-sonnet-20240229";
     this.maxTokens = Math.max(1, Math.floor(config?.maxTokens ?? DEFAULT_MAX_TOKENS));
