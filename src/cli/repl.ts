@@ -710,6 +710,17 @@ export function createAgentEventHandler(
       const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
       deps.quiet(chalk.dim(`\n${label}: ${event.toolName}`));
     }
+    if (event.type === "turn_end" && event.message.stopReason === "length") {
+      // 输出被 max_tokens 截断：必须与"用户取消"区分开并给出可操作建议，
+      // 否则用户只看到回答莫名其妙地断在半句上
+      deps.status.stop();
+      deps.quiet(
+        chalk.yellow(
+          "\n⚠️  输出达到 max_tokens 上限被截断，可以继续对话让它接着写" +
+            "（Anthropic 路径可用 settings.json 的 maxTokens 放宽）\n",
+        ),
+      );
+    }
   };
 }
 

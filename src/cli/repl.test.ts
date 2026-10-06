@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
 import { estimateTextTokens } from "../agent/sessionStore";
-import { LlmModel } from "../agent/model";
+import { LlmModel, collectOpenAIStream } from "../agent/model";
 import { runAgentLoop } from "../agent/loop";
 import { ToolRegistry } from "../agent/tools";
 import { createAssistantMessage, createTextContent, createUserMessage } from "../agent/message";
@@ -597,6 +597,34 @@ describe("ReplOptions", () => {
         status.states.some((state) => state.kind === "tool"),
         "状态行应收到工具执行状态",
       );
+    });
+
+    it("输出被 max_tokens 截断时给出可操作提示，而不是说成用户取消", async () => {
+      const status = createFakeStatus();
+      const notices: string[] = [];
+      const handler = createAgentEventHandler({
+        status,
+        renderContext: context,
+        quiet: (...args: unknown[]) => {
+          notices.push(args.map(String).join(" "));
+        },
+        write: () => {},
+      });
+
+      // 喂 collectOpenAIStream 的真实产物，把「finish_reason 映射」与「提示」一起锁住：
+      // 若映射回 aborted，这条断言就会失败
+      const truncated = await collectOpenAIStream([
+        { choices: [{ delta: { content: "这句话断在半" }, finish_reason: "length" }] },
+      ]);
+      assert.strictEqual(truncated.stopReason, "length");
+
+      capture(() => {
+        handler({ type: "turn_end", turn: 1, message: truncated, toolResults: [] });
+      });
+
+      const text = notices.join("\n");
+      assert.ok(text.includes("max_tokens"), `应说明是输出上限截断，实际：${text}`);
+      assert.ok(!text.includes("取消"), "不能把截断说成用户取消");
     });
   });
 });

@@ -25,7 +25,16 @@ export type UserMessage = {
 export type AssistantMessage = {
     role:"assistant"
     content:Array<TextContent | ToolCallContent >
-    stopReason:"stop" | "toolUse" | "error" | "aborted"
+    /**
+     * 结束原因：
+     * - `stop`：正常结束；
+     * - `toolUse`：要调用工具；
+     * - `length`：达到输出上限被截断（**不是**用户取消，需要单独提示，
+     *   否则用户看到的是"模型调用已取消"，也拿不到"可调大 maxTokens"的提示）；
+     * - `error`：调用失败；
+     * - `aborted`：用户取消。
+     */
+    stopReason:"stop" | "toolUse" | "error" | "aborted" | "length"
     usage:Usage
     timestamp:number
     errorMessage?:string

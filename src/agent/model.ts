@@ -226,12 +226,19 @@ export function isUnsupportedStreamOptionsError(error: unknown): boolean {
   return /stream_options/i.test(message);
 }
 
+/**
+ * 把提供方的 finish_reason 映射成统一的 stopReason。
+ *
+ * `length` 必须映射成 `length`，不能映射成 `aborted`：后者表示"用户取消"，
+ * 而 [loop.ts] 把 `aborted` 当终止分支、REPL 也不会给任何提示，
+ * 结果是答案被输出上限截断时，用户看到的是"模型调用已取消"。
+ */
 function mapFinishReason(reason: string | null | undefined): AssistantMessage["stopReason"] {
   if (reason === "tool_calls" || reason === "function_call") {
     return "toolUse";
   }
   if (reason === "length") {
-    return "aborted";
+    return "length";
   }
   if (reason === "content_filter") {
     return "error";
@@ -655,7 +662,8 @@ export class AnthropicModel implements LlmModel {
     if (response.stop_reason === "tool_use") {
       stopReason = "toolUse";
     } else if (response.stop_reason === "max_tokens") {
-      stopReason = "aborted";
+      // 达到输出上限被截断：与"用户取消"区分开，REPL 才能给出可操作提示
+      stopReason = "length";
     } else if (response.stop_reason === "end_turn") {
       stopReason = "stop";
     } else {

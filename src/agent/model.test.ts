@@ -577,7 +577,9 @@ describe("model", () => {
       const length = await collectOpenAIStream([
         { choices: [{ delta: {}, finish_reason: "length" }] },
       ]);
-      assert.strictEqual(length.stopReason, "aborted");
+      // length 表示"被输出上限截断"，不是用户取消：映射成 aborted 会让
+      // UI 与日志显示"模型调用已取消"，掩盖真实原因
+      assert.strictEqual(length.stopReason, "length");
 
       const filtered = await collectOpenAIStream([
         { choices: [{ delta: {}, finish_reason: "content_filter" }] },
