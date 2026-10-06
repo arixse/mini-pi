@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "../provider";
 
 export function printLogo(): void {
   const logo = `
@@ -12,11 +13,24 @@ ${chalk.cyan("  ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═
   console.log(logo);
 }
 
-export function printWelcome(providerName: string | null, modelName: string | null): void {
+export function printWelcome(
+  providerName: string | null,
+  modelName: string | null,
+  contextWindow?: ResolvedContextWindow,
+): void {
   if(providerName && modelName) {
     console.log(chalk.dim("─".repeat(60)));
     console.log(chalk.dim("  Provider: ") + chalk.white(providerName));
     console.log(chalk.dim("  Model:    ") + chalk.white(modelName));
+    // 窗口与来源一起显示：用户一眼能看出该值是不是猜的，
+    // 猜错（真实窗口更小）时去 settings.json 配 contextWindow 即可
+    if (contextWindow) {
+      console.log(
+        chalk.dim("  Context:  ") +
+          chalk.white(String(contextWindow.window)) +
+          chalk.dim(`（${CONTEXT_WINDOW_SOURCE_LABEL[contextWindow.source]}）`),
+      );
+    }
     console.log(chalk.dim("─".repeat(60)));
   } else {
     console.log(chalk.dim("─".repeat(60)));

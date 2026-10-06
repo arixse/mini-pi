@@ -52,10 +52,14 @@ mini-pi/
 5. **命令执行** - 执行 bash 命令（单次输出 20000 字符上限，超出会标注并建议收窄；超时可配，默认 30s）
 6. **工具调用** - 通过 Function Calling 机制调用工具
 7. **会话管理** - `/sessions` 列表、`/switch` 切换并恢复历史、`/status` 查看用量；每个会话独立存储
-8. **模型切换** - 支持 OpenAI 和 Anthropic 模型；模型列表与请求都会走你配置的 Base URL
-9. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
-10. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
-11. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+8. **模型切换** - 支持 OpenAI 和 Anthropic 模型；模型列表与请求都会走你配置的 Base URL；
+   切换后立即按新模型重建实例与上下文窗口（不必等 `/reload`）
+9. **上下文窗口** - 默认 128k；启动时按**当前模型名自动推断**（如 `MiniMax-M2.7` → 204.8k、
+   `gpt-3.5-turbo` → 16k），推断不到才用默认值；`settings.json` 的 `contextWindow` 可显式覆盖；
+   `/status` 会显示窗口值与来源
+10. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
+11. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
+12. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -189,7 +193,7 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
-| `/status` | 查看模型、会话文件、上下文用量与确认模式 |
+| `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
 | `/sessions` | 列出所有会话 |
 | `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行） |
@@ -221,6 +225,7 @@ pnpm dev:cli
 ────────────────────────────────────────────────────────────
   Provider: minimax-cn
   Model:    MiniMax-M3
+  Context:  1000000（按模型名推断）
 ────────────────────────────────────────────────────────────
 
   输入 /help 查看所有命令

@@ -9,10 +9,30 @@ import { createModelFromProvider, LlmModel } from "../agent/model";
 import { createToolRegistry } from "../agent/tools";
 import { AgentMessage } from "../shared/protocol";
 import { startRepl } from "./repl";
-import { ModelProviderService, SettingsStore } from "../provider";
+import {
+  ContextWindowSource,
+  ModelProviderService,
+  ResolvedContextWindow,
+  SettingsStore,
+  resolveContextWindow,
+} from "../provider";
 import { SessionManager } from "../agent/sessionManager";
 import { printLogo, printWelcome } from "./ui";
 import chalk from "chalk";
+
+/**
+ * 解析本会话生效的上下文窗口：settings.json 的 contextWindow > 按模型名推断 > 128k。
+ *
+ * 启动时、/reload 与 /model 之后都要走它——换了模型却不换窗口，
+ * 小窗口模型（如 gpt-3.5-turbo 的 16k）会在压缩触发前就把请求发过上限（400）。
+ */
+export async function resolveContextWindowFromSettings(
+  settingsStore: SettingsStore,
+  modelName: string | null,
+): Promise<ResolvedContextWindow> {
+  const configured = await settingsStore.getContextWindow();
+  return resolveContextWindow({ configured, modelName });
+}
 
 
 export async function createModelFromSettings(
@@ -147,9 +167,10 @@ export async function main() {
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
   const toolRegistry = createToolRegistry(workspaceRoot);
 
-  // 上下文窗口（可选）：settings.json 的 contextWindow，用于推导压缩阈值；
-  // 未配置时由 REPL 使用保守默认值
-  const contextWindow = await settingsStore.getContextWindow();
+  // 上下文窗口：settings.json 的 contextWindow 优先，否则按当前模型名推断
+  // （认不出模型名时回退到 128k），用于推导压缩阈值
+  const { window: contextWindow, source: contextWindowSource } =
+    await resolveContextWindowFromSettings(settingsStore, modelName);
 
   // 创建 sessionManager
   const sessionManager = new SessionManager(workspaceRoot);
@@ -177,7 +198,7 @@ export async function main() {
 
   // 显示 logo 和欢迎信息
   printLogo();
-  printWelcome(providerName, modelName);
+  printWelcome(providerName, modelName, { window: contextWindow, source: contextWindowSource });
   if (messages.length > 0) {
     console.log(chalk.dim(`[Session] 已恢复 ${messages.length} 条历史消息`));
     console.log();
@@ -211,6 +232,7 @@ export async function main() {
     model: LlmModel | null;
     systemPrompt: string;
     contextWindow?: number;
+    contextWindowSource?: ContextWindowSource;
   }> => {
     // 重新从配置创建模型
     const { model: newModel, providerName: newProviderName, modelName: newModelName } =
@@ -226,14 +248,47 @@ export async function main() {
     const newSkillSummary = sessionManager.getSkillSummary();
     const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
 
+    // 换了模型就要换窗口：沿用旧窗口会让小窗口模型在压缩前超窗
+    const resolved = await resolveContextWindowFromSettings(
+      settingsStore,
+      newModelName,
+    );
+
     // 显示重载后的信息
     printLogo();
-    printWelcome(newProviderName, newModelName);
+    printWelcome(newProviderName, newModelName, resolved);
 
     return {
       model: newModel,
       systemPrompt: newSystemPrompt,
-      contextWindow: await settingsStore.getContextWindow(),
+      contextWindow: resolved.window,
+      contextWindowSource: resolved.source,
+    };
+  };
+
+  // /model 选中新模型后立刻重建模型与窗口（不必等 /reload）
+  const onModelChange = async (): Promise<{
+    model: LlmModel | null;
+    providerName: string | null;
+    modelName: string | null;
+    contextWindow: number;
+    contextWindowSource: ContextWindowSource;
+  }> => {
+    const { model: newModel, providerName: newProviderName, modelName: newModelName } =
+      await createModelFromSettings(providerService, settingsStore);
+    if (newModel) {
+      sessionManager.setModel(newModel);
+    }
+    const resolved = await resolveContextWindowFromSettings(
+      settingsStore,
+      newModelName,
+    );
+    return {
+      model: newModel,
+      providerName: newProviderName,
+      modelName: newModelName,
+      contextWindow: resolved.window,
+      contextWindowSource: resolved.source,
     };
   };
 
@@ -249,8 +304,10 @@ export async function main() {
     sessionStore,
     sessionManager,
     contextWindow,
+    contextWindowSource,
     onNewSession,
     onSwitchSession,
+    onModelChange,
     modelLabel:
       providerName && modelName ? `${providerName}/${modelName}` : undefined,
     onReload,

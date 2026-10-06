@@ -11,6 +11,7 @@ import {
   clearSession,
   compactContext,
   contextOverheadTokens,
+  contextWindowInfo,
   createAgentEventHandler,
   formatSessionList,
   printLastToolOutput,
@@ -678,6 +679,59 @@ describe("压缩阈值推导与固定开销", () => {
       contextOverheadTokens("abc", []),
       estimateTextTokens("abc") + estimateTextTokens("[]"),
     );
+  });
+});
+
+describe("上下文窗口的来源与展示", () => {
+  function makeOptions(overrides: Partial<ReplOptions> = {}): ReplOptions {
+    return {
+      prompt: "You: ",
+      systemPrompt: "test system prompt",
+      messages: [],
+      model: null,
+      toolRegistry: {} as any,
+      workspaceRoot: process.cwd(),
+      ...overrides,
+    };
+  }
+
+  it("显式写入的窗口与来源原样生效", () => {
+    const info = contextWindowInfo(
+      makeOptions({ contextWindow: 64_000, contextWindowSource: "configured" }),
+    );
+    assert.deepStrictEqual(info, { window: 64_000, source: "configured" });
+  });
+
+  it("未显式给窗口时按模型标签推断（换模型要换窗口）", () => {
+    const info = contextWindowInfo(
+      makeOptions({ modelLabel: "minimax-cn/MiniMax-M2.7" }),
+    );
+    assert.deepStrictEqual(info, { window: 204_800, source: "inferred" });
+  });
+
+  it("认不出模型名时回退到默认 128k", () => {
+    const info = contextWindowInfo(makeOptions({ modelLabel: "acme/私有模型" }));
+    assert.deepStrictEqual(info, {
+      window: DEFAULT_CONTEXT_WINDOW,
+      source: "default",
+    });
+  });
+
+  it("/status 要显示窗口值与来源，超窗时用户才知道该配什么", () => {
+    const entries = new Map(
+      sessionStatusEntries(
+        makeOptions({
+          modelLabel: "openai/gpt-3.5-turbo",
+          contextWindow: 16_384,
+          contextWindowSource: "inferred",
+        }),
+        false,
+      ),
+    );
+
+    const window = entries.get("上下文窗口") ?? "";
+    assert.ok(window.includes("16384"), `应显示窗口值，实际：${window}`);
+    assert.ok(window.includes("推断"), `应说明来源，实际：${window}`);
   });
 });
 

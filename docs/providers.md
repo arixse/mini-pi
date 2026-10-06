@@ -171,8 +171,11 @@ export interface Provider {
 1. 在 `src/provider/` 目录下创建新的 provider 文件
 2. 实现 `Provider` 接口
 3. 在 `src/provider/index.ts` 中注册新 provider
-4. 编写单元测试
-5. 更新本文档
+4. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
+   按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
+   会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
+5. 编写单元测试
+6. 更新本文档
 
 ---
 

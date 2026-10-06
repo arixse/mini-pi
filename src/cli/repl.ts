@@ -6,7 +6,15 @@ import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop, BeforeToolCall } from "../agent/loop";
-import { ModelProviderService, SettingsStore } from "../provider";
+import {
+  ContextWindowSource,
+  ModelProviderService,
+  ResolvedContextWindow,
+  SettingsStore,
+  CONTEXT_WINDOW_SOURCE_LABEL,
+  DEFAULT_CONTEXT_WINDOW,
+  resolveContextWindow,
+} from "../provider";
 import { JsonlSessionStore, estimateTextTokens } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
@@ -17,17 +25,18 @@ import { createRenderContext, renderLastToolOutput, renderToolCall, RenderContex
 import { ExitCoordinator } from "./exit";
 
 /**
- * 默认的模型上下文窗口（token）。
+ * 默认的模型上下文窗口（token）。定义在 `provider/context-window.ts`，
+ * 这里再导出是为了让 CLI 侧的调用点（与历史 import）保持同一来源。
  *
- * 取 128k：当前可选模型（gpt-4o / o1 / deepseek / minimax 等）主流都是这个量级，
- * 按它推导出的阈值（76800）才不会在上下文远未用满时就反复压缩——每次压缩都要
- * 调一次摘要模型，既花钱又把真实历史换成摘要。
+ * 取 128k：认不出模型名时的兜底量级（gpt-4o / o1 / deepseek / minimax 主流都是
+ * 这个量级）。启动时还会**按当前模型名再推断一次**（见 `resolveContextWindow`），
+ * 推断不到的才落到这里。
  *
  * 注意窗口**配大了有真实代价**：真实窗口更小的模型（例如 gpt-3.5-turbo 的 16k）
  * 可能在压缩触发之前就把请求发过窗口上限，直接被 API 拒绝（400）。
  * 这类模型请在 settings.json 里显式设置 `contextWindow`。
  */
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+export { DEFAULT_CONTEXT_WINDOW };
 /** 压缩阈值占上下文窗口的比例：给输出与工具结果留余量 */
 export const CONTEXT_BUDGET_RATIO = 0.6;
 /** 压缩阈值下限：窗口配得过小时不要退化成"每轮都压缩" */
@@ -65,14 +74,29 @@ export function contextOverheadTokens(
   return estimateTextTokens(systemPrompt) + estimateTextTokens(JSON.stringify(tools));
 }
 
+/**
+ * 本会话生效的上下文窗口及其来源。
+ *
+ * `options.contextWindow` 由启动时（或 `/reload`、`/model` 之后）写入；
+ * 直接构造 ReplOptions 的调用方可能没填，此时按模型标签再推断一次，
+ * 认不出就回退到 {@link DEFAULT_CONTEXT_WINDOW}。
+ */
+export function contextWindowInfo(options: ReplOptions): ResolvedContextWindow {
+  if (typeof options.contextWindow === "number") {
+    return {
+      window: options.contextWindow,
+      source: options.contextWindowSource ?? "configured",
+    };
+  }
+  return resolveContextWindow({ modelName: options.modelLabel });
+}
+
 /** 本次会话的压缩阈值与固定开销 */
 function compactionBudget(options: ReplOptions): {
   budget: number;
   overhead: number;
 } {
-  const budget = resolveContextBudget(
-    options.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-  );
+  const budget = resolveContextBudget(contextWindowInfo(options).window);
   // 测试会传入只实现了部分方法的替身，这里做一次防御
   const definitions =
     typeof options.toolRegistry?.definitions === "function"
@@ -103,14 +127,30 @@ export type ReplOptions = {
   modelLabel?: string;
   /**
    * 模型上下文窗口（token），用于推导压缩阈值。
-   * 缺省用 {@link DEFAULT_CONTEXT_WINDOW}；来源是 settings.json 的 contextWindow。
+   * 缺省时按 `modelLabel` 推断，认不出再用 {@link DEFAULT_CONTEXT_WINDOW}。
+   * 启动时由 settings.json 的 contextWindow 或模型名推断写入。
    */
   contextWindow?: number;
+  /** `contextWindow` 的来源，只用于 `/status` 展示 */
+  contextWindowSource?: ContextWindowSource;
+  /**
+   * `/model` 选中新模型后重建模型与上下文窗口。
+   * 不传时退化为旧行为：只写 settings.json，提示用户用 /reload 生效。
+   */
+  onModelChange?: () => Promise<{
+    model: LlmModel | null;
+    providerName: string | null;
+    modelName: string | null;
+    contextWindow: number;
+    contextWindowSource: ContextWindowSource;
+  }>;
   onReload?: () => Promise<{
     model: LlmModel | null;
     systemPrompt: string;
     /** 重载后若配置了新的窗口，一并生效 */
     contextWindow?: number;
+    /** 重载后的窗口来源 */
+    contextWindowSource?: ContextWindowSource;
   }>;
   /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
   beforeToolCall?: BeforeToolCall;
@@ -286,7 +326,35 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/model") {
-      await handleModel(options.providerService, options.settingsStore, rl);
+      // 选完模型要按新模型名重算上下文窗口，否则换到小窗口模型（如 gpt-3.5-turbo）
+      // 却沿用旧窗口，请求会在压缩触发前就超窗（400）
+      const selected = await handleModel(
+        options.providerService,
+        options.settingsStore,
+        rl,
+        { autoApply: Boolean(options.onModelChange) },
+      );
+      if (selected && options.onModelChange) {
+        try {
+          const next = await options.onModelChange();
+          options.model = next.model ?? options.model;
+          options.contextWindow = next.contextWindow;
+          options.contextWindowSource = next.contextWindowSource;
+          if (next.providerName && next.modelName) {
+            options.modelLabel = `${next.providerName}/${next.modelName}`;
+          }
+          quiet(
+            chalk.green(
+              `\n✅ 已切换到 ${options.modelLabel ?? "新模型"}：上下文窗口 ${next.contextWindow}（${CONTEXT_WINDOW_SOURCE_LABEL[next.contextWindowSource]}）\n`,
+            ),
+          );
+        } catch (error) {
+          console.log(
+            chalk.red("\n❌ 切换模型失败:"),
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
       rl.prompt();
       return;
     }
@@ -304,12 +372,15 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     if (input === "/reload") {
       if (options.onReload) {
         try {
-          const { model, systemPrompt, contextWindow } = await options.onReload();
+          const { model, systemPrompt, contextWindow, contextWindowSource } =
+            await options.onReload();
           // 更新外部传入的 model 和 systemPrompt
           options.model = model;
           options.systemPrompt = systemPrompt;
           if (contextWindow !== undefined) {
             options.contextWindow = contextWindow;
+            // 重载必然重算过窗口，来源缺省时按"已配置"展示
+            options.contextWindowSource = contextWindowSource ?? "configured";
           }
           console.log(chalk.green("\n✅ 配置已重载\n"));
         } catch (error) {
@@ -445,9 +516,12 @@ export function sessionStatusEntries(
   trusted: boolean,
 ): Array<[string, string]> {
   const store = options.sessionStore;
+  const { window, source } = contextWindowInfo(options);
   return [
     ["模型", options.modelLabel ?? (options.model ? "已配置" : "未配置")],
     ["会话文件", store ? store.getFilePath() : "(未启用会话存储)"],
+    // 窗口与阈值分开列：超窗时用户要先知道"窗口是按什么定的"，才能判断该不该配
+    ["上下文窗口", `${window} tokens（${CONTEXT_WINDOW_SOURCE_LABEL[source]}）`],
     [
       "上下文",
       store
@@ -964,21 +1038,29 @@ export function question(rl: readline.Interface, prompt: string): Promise<string
   });
 }
 
+/**
+ * 交互式切换模型。
+ *
+ * @param options.autoApply 为 true 表示调用方会立刻按新模型重建模型与上下文窗口
+ *   （此时不再提示 /reload）。
+ * @returns 选中的供应商与模型名；取消或失败返回 undefined
+ */
 export async function handleModel(
   providerService: ModelProviderService | undefined,
   settingsStore: SettingsStore | undefined,
   rl: readline.Interface,
-): Promise<void> {
+  options: { autoApply?: boolean } = {},
+): Promise<{ providerName: string; modelName: string } | undefined> {
   if (!providerService) {
     console.log(chalk.red("❌ Provider服务未初始化"));
-    return;
+    return undefined;
   }
 
   const providers = providerService.getRegisteredProviders();
 
   if (providers.length === 0) {
     console.log(chalk.red("❌ 没有可用的模型服务商"));
-    return;
+    return undefined;
   }
 
   // 显示当前默认模型
@@ -999,7 +1081,7 @@ export async function handleModel(
 
   if (index === null) {
     console.log(chalk.dim("\n已取消操作\n"));
-    return;
+    return undefined;
   }
 
   const selectedProvider = providers[index];
@@ -1009,7 +1091,7 @@ export async function handleModel(
   
   if (!config.apiKey) {
     console.log(chalk.red(`❌ 请先使用 /login 命令配置 ${selectedProvider} 的 API Key`));
-    return;
+    return undefined;
   }
 
   console.log(chalk.dim(`\n🔍 正在获取 ${selectedProvider} 的模型列表...`));
@@ -1023,7 +1105,7 @@ export async function handleModel(
     
     if (models.length === 0) {
       console.log(chalk.red("❌ 没有可用的模型"));
-      return;
+      return undefined;
     }
 
     const mIdx = await promptSelect(
@@ -1034,7 +1116,7 @@ export async function handleModel(
 
     if (mIdx === null) {
       console.log(chalk.dim("\n已取消操作\n"));
-      return;
+      return undefined;
     }
 
     const selectedModel = models[mIdx];
@@ -1044,7 +1126,13 @@ export async function handleModel(
     if (settingsStore) {
       await settingsStore.setDefaultModel(defaultModel);
       console.log(chalk.green(`\n✅ 已设置默认模型: ${defaultModel}`));
-      console.log(chalk.dim("💡 使用 /reload 命令重载配置使其生效\n"));
+      console.log(
+        chalk.dim(
+          options.autoApply
+            ? "💡 已按该模型重建模型与上下文窗口\n"
+            : "💡 使用 /reload 命令重载配置使其生效\n",
+        ),
+      );
     } else {
       // 如果没有 settingsStore，回退到保存到 provider 配置
       await providerService.saveProviderConfig(selectedProvider, {
@@ -1054,7 +1142,10 @@ export async function handleModel(
       console.log(chalk.green(`\n✅ 已选择模型: ${defaultModel}`));
       console.log(chalk.dim("💡 使用 /reload 命令重载配置使其生效\n"));
     }
+
+    return { providerName: selectedProvider, modelName: selectedModel };
   } catch (error) {
     console.log(chalk.red("❌ 获取模型列表失败:"), error instanceof Error ? error.message : error);
+    return undefined;
   }
 }

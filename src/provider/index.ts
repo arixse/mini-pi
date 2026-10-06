@@ -192,6 +192,17 @@ export class ModelProviderService {
 
 export { ProviderStore } from "./provider-store";
 export { SettingsStore } from "./settings-store";
+export {
+  CONTEXT_WINDOW_SOURCE_LABEL,
+  DEFAULT_CONTEXT_WINDOW,
+  type ContextWindowSource,
+  type ResolveContextWindowParams,
+  type ResolvedContextWindow,
+  inferContextWindow,
+  matchContextWindowRule,
+  normalizeModelName,
+  resolveContextWindow,
+} from "./context-window";
 export { MiniMaxCnProvider } from "./minimax-cn";
 export { DeepSeekProvider } from "./deepseek";
 export { OpenAIProvider } from "./openai";

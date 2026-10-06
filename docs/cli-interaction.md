@@ -385,12 +385,12 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `/help` | 显示所有可用命令与使用提示 |
 | `/new` | 创建一个新会话（清空当前对话历史并新建会话文件） |
 | `/login` | 登录模型服务商（方向键选择服务商，输入 API Key） |
-| `/model` | 选择模型供应商和模型，写入默认模型配置 |
+| `/model` | 选择模型供应商和模型，写入默认模型配置并立即生效（含上下文窗口重算） |
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
-| `/status` | 查看模型、会话文件、上下文用量与确认模式 |
+| `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
 | `/sessions` | 列出所有会话（标注当前会话与大小） |
 | `/switch <序号\|文件名>` | 切换到指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行，带行号） |
@@ -412,7 +412,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   /skills  - 列出所有可用的 skills
   /load <name> - 加载指定 skill 的完整内容
   /trust   - 切换信任模式（跳过写文件/执行命令的确认）
-  /status  - 查看模型、会话文件、上下文用量与确认模式
+  /status  - 查看模型、会话文件、上下文窗口与用量、确认模式
   /sessions - 列出所有会话
   /switch <n> - 切换到指定会话（恢复其历史上下文）
   /last [n] - 查看上一条工具输出的完整内容（默认 200 行）
@@ -467,8 +467,14 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 3. 读取该供应商配置，若无 `apiKey` 则提示先执行 `/login`；
 4. 拉取该供应商可用模型列表（`getModelList`），用键盘方向键进行选择；
 5. 将 `${providerName}/${modelName}` 写入 `~/.mini-pi/settings.json` 的 `defaultModel`；
-6. 提示使用 `/reload` 使其生效。
+6. **立即按新模型重建模型与上下文窗口**（`onModelChange`）：模型实例注入 `SessionManager`，
+   窗口按「显式配置 → 新模型名推断 → 128k」重算并打印
+   `✅ 已切换到 <provider/model>：上下文窗口 <N>（<来源>）`；
+   未接 `onModelChange` 时退化为提示使用 `/reload` 使其生效。
 7. 使用ESC键退出该命令，回到聊天交互窗口
+
+> 换模型必须同时换窗口：切到小窗口模型（如 gpt-3.5-turbo 的 16k）却沿用旧窗口，
+> 请求会在压缩触发前就发过窗口上限（400）。
 
 - 若没有 `settingsStore`，会退化为把所选模型写入供应商配置（`auth.json` 中的 `model` 字段）。
 - 异常处理：Provider 未初始化、无供应商、无 API Key、无可用模型、拉取模型列表失败等均有对应错误提示；用户在任一步按 Esc 取消时直接返回。
@@ -478,8 +484,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - 调用 `onReload()` 回调：
   - 重新通过 `createModelFromSettings()` 构建模型并注入 `SessionManager`；
   - 重新读取固定上下文与 Skill 摘要，重建 System Prompt；
-  - 重新打印 Logo 与欢迎信息；
-  - 将新的 `model` 与 `systemPrompt` 写回 REPL 的 `options`。
+  - 重新打印 Logo 与欢迎信息（含生效的上下文窗口与来源）；
+  - 将新的 `model`、`systemPrompt`、`contextWindow` 与其来源写回 REPL 的 `options`。
 - 成功输出 `✅ 配置已重载`。
 - 未配置回调输出 `❌ 重载功能未配置`；失败输出 `❌ 重载失败: <原因>`。
 
@@ -576,12 +582,31 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 `compactIfNedded(budget, 10, overhead)`：
 
 - **阈值 `budget` 由模型窗口推导**：`resolveContextBudget(window) = max(8000, window × 0.6)`。
-  窗口来自 `settings.json` 的 `contextWindow`；未配置时用默认值 **128000**，
-  此时阈值为 **76800**。取 128k 是因为当前可选模型（gpt-4o / o1 / deepseek / minimax）
-  主流都是这个量级——阈值配小了会在上下文远未用满时就反复压缩，
-  而每次压缩都要调一次摘要模型（花钱，还把真实历史换成摘要）。
-  **真实窗口更小的模型（如 gpt-3.5-turbo 的 16k）必须显式配置 `contextWindow`**，
-  否则可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）。
+  窗口按以下顺序取值（实现见 `src/provider/context-window.ts`）：
+
+  1. `settings.json` 的 `contextWindow`（显式配置，最优先）；
+  2. **按当前模型名推断**（启动时、`/reload`、`/model` 之后各算一次）；
+  3. 认不出模型名时回退到默认值 **128000**（阈值 **76800**）。
+
+  推断表按模型名**最长前缀**匹配，只登记有明确出处的模型，例如：
+
+  | 模型名（前缀） | 窗口 | 出处 |
+  | -------------- | ----- | ---- |
+  | `gpt-3.5-turbo` | 16384 | OpenAI 16k |
+  | `gpt-4`（裸） | 8192 | OpenAI 8k |
+  | `gpt-4-32k` | 32768 | OpenAI 32k |
+  | `gpt-4o` / `gpt-4o-mini` / `gpt-4-turbo` | 128000 | OpenAI |
+  | `o1` / `o3` / `o4-mini` | 200000 | OpenAI |
+  | `deepseek-*`（chat / reasoner / flash） | 128000 | DeepSeek V3.1 起同为 128K |
+  | `MiniMax-M2*` | 204800 | MiniMax M2 / M2.1 / M2.5 / M2.7 |
+  | `MiniMax-M2-her` | 65536 | MiniMax 对话模型 |
+  | `MiniMax-M3` | 1000000 | MiniMax M3 |
+
+  拿不准的模型一律落到 128k：估小了只是提前多压缩几次（每次都要调一次摘要模型，
+  花钱且加延迟），**估大了却可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）**。
+  因此使用私有网关/自建模型、或真实窗口小于推断值时，请在 `settings.json` 显式配置
+  `contextWindow`。启动时与 `/status` 都会显示窗口值与来源
+  （`settings.json 显式配置` / `按模型名推断` / `默认值 128000`），便于核对。
 - **阈值还包含固定开销 `overhead`**：系统提示（挂着 AGENTS.md 固定上下文与
   Skill 摘要）与工具定义都不在消息历史里，但每次请求都会带上，
   由 `contextOverheadTokens(systemPrompt, tools)` 计入。
@@ -682,13 +707,13 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | 字段 | 作用 | 缺省行为 |
 | ---- | ---- | -------- |
 | `defaultModel` | 默认模型，格式 `供应商/模型名` | 启动时按已配置的 provider 自动推导 |
-| `contextWindow` | 模型上下文窗口（token），用于推导压缩阈值 `max(8000, 窗口 × 0.6)` | 128000（阈值 76800） |
+| `contextWindow` | 模型上下文窗口（token），用于推导压缩阈值 `max(8000, 窗口 × 0.6)` | 按当前模型名推断，推断不到才用 128000（阈值 76800） |
 | `maxTokens` | 单次输出上限（Anthropic 路径使用） | 8192 |
 
 > `contextWindow` 请填**你所用模型的真实窗口**：填大了会在压缩触发前就把请求发过窗口上限（直接 400），
 > 填小了只是多压缩几次（每次压缩都要调一次摘要模型，花钱且加延迟）。
-> 默认值是 128k；**真实窗口小于 128k 的模型（如 gpt-3.5-turbo 的 16k）务必显式配小**。
-> 修改后执行 `/reload` 即可生效，`/status` 会显示当前的上限与固定开销。
+> 未配置时会先按模型名推断（见 6.2 的推断表）；**私有网关、自建模型或真实窗口小于推断值时务必显式配置**。
+> 修改后执行 `/reload` 即可生效，`/status` 会显示窗口值与来源、当前的上限与固定开销。
 
 ### 8.3 已注册的模型供应商
 
