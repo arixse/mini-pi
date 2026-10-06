@@ -1,5 +1,7 @@
 import * as readline from "node:readline";
 import { createInterface } from "node:readline";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import chalk from "chalk";
 import { AgentEvent, AgentMessage, ToolDefinition } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
@@ -58,6 +60,87 @@ export function resolveContextBudget(contextWindow: number): number {
 
 /** 默认窗口下的压缩阈值（导出以便展示与测试） */
 export const MAX_CONTEXT_TOKENS = resolveContextBudget(DEFAULT_CONTEXT_WINDOW);
+
+/**
+ * 判断相对路径是否指向工作区内**已存在**的文件。
+ *
+ * 只服务于审批提示的展示（决定写文件提示里要不要加"覆盖"），
+ * 因此逃逸出工作区或路径非法一律按"不存在"处理，不影响真正的写入校验
+ * （真正的校验在 `resolveInsideWorkspace`）。
+ */
+export function workspaceFileExists(
+  workspaceRoot: string,
+  relativePath: string,
+): boolean {
+  if (typeof relativePath !== "string" || relativePath.trim() === "") {
+    return false;
+  }
+  try {
+    const root = resolve(workspaceRoot);
+    const target = resolve(root, relativePath);
+    const rel = relative(root, target);
+    if (rel === ".." || rel.startsWith("..") || isAbsolute(rel)) {
+      return false;
+    }
+    return existsSync(target);
+  } catch {
+    return false;
+  }
+}
+/**
+ * 把用户输入串成一条队列，保证任意时刻只有一个回合在跑。
+ *
+ * readline 的 `line` 回调是 async 的，而 readline **不会**等它结束才收下一行：
+ * 模型思考期间再敲一行，就会并发跑第二个 `runAgentLoop`——`activeRun` 被覆盖
+ * （旧的那轮从此取消不掉），两轮交错往同一个会话文件追加消息，
+ * 落盘顺序与真实对话顺序不一致，之后每次恢复上下文都是乱的。
+ *
+ * 这里用一条 promise 链把它们串起来：后一条一定在前一条彻底收尾（含落盘）后才开始。
+ * 抽成纯函数是为了能脱离 readline 直接断言"串行"这个性质。
+ */
+export type InputScheduler = {
+  /** 提交一行输入；不会丢，最多是排到队尾 */
+  schedule: (line: string) => void;
+  /** 当前是否有输入正在处理（用于提示"已排队"） */
+  isBusy: () => boolean;
+};
+
+export function createInputScheduler(
+  handle: (line: string) => Promise<void>,
+  options: {
+    /** 输入被排队（而非立即执行）时回调 */
+    onQueued?: (line: string) => void;
+    /** 处理过程抛出未捕获异常时回调；不处理的话会吞掉后续输入 */
+    onError?: (error: unknown) => void;
+  } = {},
+): InputScheduler {
+  let queue: Promise<void> = Promise.resolve();
+  let running = false;
+
+  return {
+    schedule(line: string): void {
+      if (running) {
+        options.onQueued?.(line);
+      }
+      queue = queue
+        .then(async () => {
+          running = true;
+          try {
+            await handle(line);
+          } finally {
+            running = false;
+          }
+        })
+        .catch((error) => {
+          options.onError?.(error);
+        });
+    },
+    isBusy(): boolean {
+      return running;
+    },
+  };
+}
+
 /** 上下文压缩时保留的最近消息条数 */
 export const KEEP_RECENT_MESSAGES = 10;
 
@@ -163,6 +246,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     prompt: chalk.cyan("> "),
   });
 
+  // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行
+  const status = createStatusLine({
+    stream: process.stdout,
+    enabled: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
+    ascii: Boolean(process.env.MINI_PI_ASCII),
+  });
+  const quiet = (...args: unknown[]): void => {
+    status.stop();
+    console.log(...args);
+  };
+
   // 工具审批：只读工具自动放行，写文件 / 执行命令需用户逐次确认。
   // 非交互式终端（管道输入等）无法确认，按「拒绝」处理（fail closed）。
   let trusted = false;
@@ -172,6 +266,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   const approval: BeforeToolCall = createToolApproval({
     isTrusted: () => trusted,
     confirm: async (promptText) => {
+      // 必须先让出状态行：spinner 每 100ms 用 `\r` + 空格覆写当前行，
+      // 与确认提示抢的是同一行，不停掉的话提示会被反复擦掉。
+      status.stop();
       if (!canPrompt) {
         if (!warnedNonInteractive) {
           warnedNonInteractive = true;
@@ -189,20 +286,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     },
     // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
+    // 让审批提示能区分"新建"与"覆盖已存在的文件"
+    fileExists: (relativePath) => workspaceFileExists(options.workspaceRoot, relativePath),
   });
 
   const beforeToolCall = options.beforeToolCall ?? approval;
-
-  // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行
-  const status = createStatusLine({
-    stream: process.stdout,
-    enabled: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
-    ascii: Boolean(process.env.MINI_PI_ASCII),
-  });
-  const quiet = (...args: unknown[]): void => {
-    status.stop();
-    console.log(...args);
-  };
 
   // 卡片渲染上下文与事件处理：整个会话复用同一份（宽度探测只做一次）
   const onAgentEvent = createAgentEventHandler({
@@ -250,7 +338,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
   rl.prompt();
 
-  rl.on("line", async (line) => {
+  // 单条输入的处理逻辑；由下面的 line 回调串行调度
+  const handleLine = async (line: string): Promise<void> => {
     const input = line.trim();
 
     if (!input) {
@@ -486,6 +575,36 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     rl.prompt();
+  };
+
+  const scheduler = createInputScheduler(handleLine, {
+    onQueued: () =>
+      console.log(
+        chalk.dim("\n⏳ 上一条消息仍在处理，本条已排队，将在其结束后执行\n"),
+      ),
+    onError: (error) =>
+      console.error(
+        chalk.red("\n❌ 错误:"),
+        error instanceof Error ? error.message : error,
+      ),
+  });
+
+  rl.on("line", (line) => {
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      rl.prompt();
+      return;
+    }
+
+    // /exit 与 /quit 不排队：它们的语义就是"取消当前这一轮并退出"，
+    // 排到上一轮之后就永远等不到，Ctrl+C 之外没有任何退出手段。
+    if (trimmed === "/exit" || trimmed === "/quit") {
+      exitCoordinator.requestExit(0);
+      return;
+    }
+
+    scheduler.schedule(line);
   });
 
   rl.on("close", () => {
@@ -532,8 +651,23 @@ export function sessionStatusEntries(
           })()
         : "未启用",
     ],
+    ...compactionStatusRow(store),
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
     ["工作目录", options.workspaceRoot],
+  ];
+}
+
+/** 压缩失败时追加一行说明：否则用户只看到"一直没压缩"，无从判断原因 */
+function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[string, string]> {
+  const reason = store?.getLastCompactionError();
+  if (!reason) {
+    return [];
+  }
+  return [
+    [
+      "压缩状态",
+      `⚠️  上次压缩失败（${reason}），已保留完整历史未做删减`,
+    ],
   ];
 }
 
