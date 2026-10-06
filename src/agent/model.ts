@@ -25,6 +25,15 @@ export type CompleteInput = {
 export const REQUEST_TIMEOUT_MS = 120_000;
 
 /**
+ * 流式响应中两段数据之间的最大间隔（毫秒），超过即认为上游已经挂死。
+ *
+ * 刻意与 {@link REQUEST_TIMEOUT_MS} 取同一个值：SDK 的 `timeout` 只覆盖到
+ * "连接 + 响应头"（见 {@link createStreamIdleWatchdog}），取同一个值可以让
+ * 头阶段的时限保持原样，只把此前**完全没有上限**的正文读取阶段纳入约束。
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/**
  * Anthropic 默认 max_tokens。
  *
  * 原来的 4096 容易把长回答截断成 stop_reason=max_tokens；
@@ -61,6 +70,155 @@ export const MAX_REQUEST_ATTEMPTS = 3;
 /** 首次重试的等待时间（毫秒），之后按指数退避 */
 export const RETRY_BASE_DELAY_MS = 1_000;
 
+/** 上游静默（被看门狗掐断）错误的 name；用名字而不是类名比较，打包改名后仍可识别 */
+const STREAM_IDLE_TIMEOUT_ERROR_NAME = "StreamIdleTimeoutError";
+
+/**
+ * 上游静默导致的失败：连接还在，但久久不再发送任何数据。
+ *
+ * 必须与"用户取消"区分开。如果直接把 SDK 的 abort 错误抛出去，
+ * {@link isAbortError} 会把它当成用户取消——既不会重试，UI 还会显示
+ * "模型调用已取消"，把瞬时网络故障说成用户操作。
+ */
+export class StreamIdleTimeoutError extends Error {
+  constructor(idleMs: number) {
+    super(`流式响应 ${idleMs}ms 内没有收到任何数据，已中止本次请求`);
+    this.name = STREAM_IDLE_TIMEOUT_ERROR_NAME;
+  }
+}
+
+/** 是否是上游静默失败（沿 cause 链查找，兼容 SDK 的包装） */
+export function isStreamIdleTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+
+  for (let depth = 0; current && typeof current === "object" && depth < 5; depth += 1) {
+    const candidate = current as { name?: unknown; cause?: unknown };
+    if (candidate.name === STREAM_IDLE_TIMEOUT_ERROR_NAME) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
+export type StreamIdleWatchdog = {
+  /** 传给 SDK 的信号：父信号取消或静默超时都会中止请求 */
+  signal: AbortSignal;
+  /** 每收到一段数据就调用一次，重置静默计时 */
+  touch: () => void;
+  /** 是否因静默超时而中止（用于把失败原因如实分类） */
+  timedOut: () => boolean;
+  /** 收尾：清掉计时器与父信号监听 */
+  dispose: () => void;
+};
+
+/**
+ * 流式读取的"静默看门狗"。
+ *
+ * 背景：SDK 的 `timeout` 只覆盖到"连接 + 响应头"。openai 的 `fetchWithTimeout`
+ * 在 `fetch()` resolve 之后（`finally`）就 `clearTimeout` 了，Anthropic SDK 同样，
+ * 因此正文读取阶段**完全没有时限**——上游不再发送数据（滚动发布、LB 挂死、
+ * 网络半开）时本轮会永久卡住，重试也不会触发，用户只能 Ctrl+C。
+ *
+ * 这里按"两段数据之间的间隔"另设一条独立时限：每次收到数据就重新计时，
+ * 静默超过 `idleMs` 就中止请求并抛出可识别、可重试的
+ * {@link StreamIdleTimeoutError}。
+ */
+export function createStreamIdleWatchdog(
+  parent: AbortSignal | undefined,
+  idleMs: number = STREAM_IDLE_TIMEOUT_MS,
+): StreamIdleWatchdog {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: NodeJS.Timeout | null = null;
+  let disposed = false;
+
+  const clear = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const arm = (): void => {
+    clear();
+    if (disposed || controller.signal.aborted) {
+      return;
+    }
+    // 刻意不 unref：计时器的生命周期由请求本身界定（调用方在 finally 里
+    // dispose），不需要靠 unref 让进程退出；unref 反而会让"只剩这个计时器"
+    // 的场景下事件循环提前判定为空，静默超时永远不会触发。
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, idleMs);
+  };
+
+  const onParentAbort = (): void => {
+    clear();
+    controller.abort();
+  };
+
+  if (parent?.aborted) {
+    controller.abort();
+  } else {
+    parent?.addEventListener("abort", onParentAbort, { once: true });
+    arm();
+  }
+
+  return {
+    signal: controller.signal,
+    touch: arm,
+    timedOut: () => timedOut,
+    dispose: () => {
+      disposed = true;
+      clear();
+      parent?.removeEventListener("abort", onParentAbort);
+    },
+  };
+}
+
+/** 流式静默上限规范化：非法值回退到默认值 */
+function resolveStreamIdleTimeout(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : STREAM_IDLE_TIMEOUT_MS;
+}
+
+/**
+ * 把"看门狗掐断"的错误换成可识别、可重试的失败，其余错误原样返回。
+ *
+ * 用户主动取消时（`signal.aborted`）不替换：那种情况本来就该按取消处理。
+ */
+export function classifyStreamFailure(
+  error: unknown,
+  watchdog: StreamIdleWatchdog,
+  signal?: AbortSignal,
+): unknown {
+  if (watchdog.timedOut() && signal?.aborted !== true) {
+    return new StreamIdleTimeoutError(STREAM_IDLE_TIMEOUT_MS);
+  }
+  return error;
+}
+
+/**
+ * 收尾前判定：被看门狗掐断就必须报错。
+ *
+ * **只靠 catch 是不够的**：实测看门狗 abort 之后，openai SDK 的流迭代器会
+ * "干净地结束"（`for await` 正常退出）而不是抛错，于是会产出一个
+ * `stopReason: "stop"` 的截断回复——比挂死更隐蔽。因此返回前再显式判一次。
+ */
+export function assertStreamNotIdleTimedOut(
+  watchdog: StreamIdleWatchdog,
+  idleMs: number,
+  signal?: AbortSignal,
+): void {
+  if (watchdog.timedOut() && signal?.aborted !== true) {
+    throw new StreamIdleTimeoutError(idleMs);
+  }
+}
+
 /** 可重试的错误码（网络类） */
 const RETRYABLE_ERROR_CODES = new Set([
   "ETIMEDOUT",
@@ -74,12 +232,18 @@ const RETRYABLE_ERROR_CODES = new Set([
 ]);
 
 /**
- * 判断错误是否值得重试：限流（429）、超时（408）与服务端错误（5xx）重试，
+ * 判断错误是否值得重试：限流（429）、超时（408）、服务端错误（5xx）
+ * 与上游静默（{@link StreamIdleTimeoutError}）重试，
  * 其余（401/400/404 等）重试没有意义，直接失败。
  */
 export function isRetryableError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
+  }
+
+  // 上游静默是瞬时故障：不重试的话，"挂死"就只能变成"报错"
+  if (isStreamIdleTimeoutError(error)) {
+    return true;
   }
 
   const status = (error as { status?: unknown }).status;
@@ -250,10 +414,15 @@ function mapFinishReason(reason: string | null | undefined): AssistantMessage["s
  * 把 OpenAI 兼容的流式分片拼装成统一的 AssistantMessage。
  *
  * 纯函数：不依赖网络与 SDK，便于单测覆盖"增量文本 / 分片工具调用 / 用量 / finish_reason"。
+ *
+ * @param onChunk 每收到一个分片回调一次，供调用方重置静默看门狗
+ *   （见 createStreamIdleWatchdog）。注意是"有数据就重置"，而不是"有文本才重置"：
+ *   工具调用的分片同样证明上游活着。
  */
 export async function collectOpenAIStream(
   chunks: AsyncIterable<ChatCompletionChunkLike> | Iterable<ChatCompletionChunkLike>,
   onDelta?: (delta: string) => void,
+  onChunk?: () => void,
 ): Promise<AssistantMessage> {
   let text = "";
   let finishReason: string | null = null;
@@ -264,6 +433,9 @@ export async function collectOpenAIStream(
   >();
 
   for await (const chunk of chunks as AsyncIterable<ChatCompletionChunkLike>) {
+    // 收到数据即重置静默看门狗（见 createStreamIdleWatchdog）
+    onChunk?.();
+
     if (chunk.usage) {
       usage = chunk.usage;
     }
@@ -338,6 +510,11 @@ export type ModelConfig = {
   model?: string;
   /** Anthropic 路径的输出上限；默认 {@link DEFAULT_MAX_TOKENS} */
   maxTokens?: number;
+  /**
+   * 流式响应两段数据之间的最大间隔（毫秒）；默认 {@link STREAM_IDLE_TIMEOUT_MS}。
+   * 用于把"上游挂死、正文永远读不完"变成一次可重试的失败。
+   */
+  streamIdleTimeoutMs?: number;
 };
 export interface LlmModel {
   complete(input: CompleteInput): Promise<AssistantMessage>;
@@ -347,6 +524,8 @@ export class OpenAIModel implements LlmModel {
   private model: string;
   /** 提供方是否支持 stream_options.include_usage；不支持时自动关闭，避免每次请求都失败 */
   private includeStreamUsage = true;
+  /** 流式正文的静默上限 */
+  private streamIdleTimeoutMs: number;
 
   constructor(config?: ModelConfig) {
     this.client = new OpenAI({
@@ -354,6 +533,7 @@ export class OpenAIModel implements LlmModel {
       baseURL: config?.baseUrl,
     });
     this.model = config?.model || "gpt-3.5-turbo";
+    this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }
 
   async complete(input: CompleteInput): Promise<AssistantMessage> {
@@ -406,23 +586,35 @@ export class OpenAIModel implements LlmModel {
     messages: OpenAI.ChatCompletionMessageParam[],
     tools: OpenAI.ChatCompletionTool[],
   ): Promise<AssistantMessage> {
-    const stream = await this.client.chat.completions.create(
-      {
-        model: this.model,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? "auto" : undefined,
-        stream: true,
-        ...(this.includeStreamUsage
-          ? { stream_options: { include_usage: true } }
-          : {}),
-      },
-      { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
-    );
+    // SDK 的 timeout 只覆盖到响应头，正文读取另由看门狗兜底
+    const watchdog = createStreamIdleWatchdog(input.signal, this.streamIdleTimeoutMs);
 
-    return collectOpenAIStream(stream, input.onDelta);
-  }
-  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
+    try {
+      const stream = await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages,
+          tools: tools.length > 0 ? tools : undefined,
+          tool_choice: tools.length > 0 ? "auto" : undefined,
+          stream: true,
+          ...(this.includeStreamUsage
+            ? { stream_options: { include_usage: true } }
+            : {}),
+        },
+        { signal: watchdog.signal, timeout: REQUEST_TIMEOUT_MS },
+      );
+
+      const message = await collectOpenAIStream(stream, input.onDelta, watchdog.touch);
+      // 被掐断时迭代器可能"干净地结束"，会产出一个看起来正常的截断回复
+      assertStreamNotIdleTimedOut(watchdog, this.streamIdleTimeoutMs, input.signal);
+      return message;
+    } catch (error) {
+      // 上游静默要换成"可重试的失败"，不能被当成用户取消
+      throw classifyStreamFailure(error, watchdog, input.signal);
+    } finally {
+      watchdog.dispose();
+    }
+  }  private createErrorResponse(error: unknown, signal?: AbortSignal): AssistantMessage {
     if (signal?.aborted || isAbortError(error)) {
       return {
         role: "assistant",
@@ -509,6 +701,8 @@ export class AnthropicModel implements LlmModel {
   private client: Anthropic;
   private model: string;
   private maxTokens: number;
+  /** 流式正文的静默上限 */
+  private streamIdleTimeoutMs: number;
 
   constructor(config?: ModelConfig) {
     this.client = new Anthropic({
@@ -517,6 +711,7 @@ export class AnthropicModel implements LlmModel {
     });
     this.model = config?.model || "claude-3-sonnet-20240229";
     this.maxTokens = Math.max(1, Math.floor(config?.maxTokens ?? DEFAULT_MAX_TOKENS));
+    this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }
   async complete(input: CompleteInput): Promise<AssistantMessage> {
     try {
@@ -552,22 +747,38 @@ export class AnthropicModel implements LlmModel {
     messages: Anthropic.MessageParam[],
     tools: Anthropic.Tool[],
   ): Promise<Anthropic.Message> {
-    const stream = this.client.messages.stream(
-      buildAnthropicRequest({
-        model: this.model,
-        system,
-        messages,
-        tools,
-        maxTokens: this.maxTokens,
-      }),
-      { signal: input.signal, timeout: REQUEST_TIMEOUT_MS },
-    );
+    // SDK 的 timeout 只覆盖到响应头，正文读取另由看门狗兜底
+    const watchdog = createStreamIdleWatchdog(input.signal, this.streamIdleTimeoutMs);
 
-    if (input.onDelta) {
-      stream.on("text", (delta: string) => input.onDelta?.(delta));
+    try {
+      const stream = this.client.messages.stream(
+        buildAnthropicRequest({
+          model: this.model,
+          system,
+          messages,
+          tools,
+          maxTokens: this.maxTokens,
+        }),
+        { signal: watchdog.signal, timeout: REQUEST_TIMEOUT_MS },
+      );
+
+      if (input.onDelta) {
+        stream.on("text", (delta: string) => input.onDelta?.(delta));
+      }
+
+      // 每个 SSE 事件都重置静默计时：只盯 text 事件会漏掉工具调用等分片
+      stream.on("streamEvent", () => watchdog.touch());
+
+      const message = await stream.finalMessage();
+      // 被掐断时 finalMessage() 可能"干净地返回"一个截断消息
+      assertStreamNotIdleTimedOut(watchdog, this.streamIdleTimeoutMs, input.signal);
+      return message;
+    } catch (error) {
+      // 上游静默要换成"可重试的失败"，不能被当成用户取消
+      throw classifyStreamFailure(error, watchdog, input.signal);
+    } finally {
+      watchdog.dispose();
     }
-
-    return stream.finalMessage();
   }
 
   private convertMessages(
@@ -711,7 +922,7 @@ export function createAnthropicModel(config?:ModelConfig):AnthropicModel {
 }
 
 export async function createModelFromProvider(
-  config: { apiKey: string; baseUrl?: string; model?: string;sdkType:string;maxTokens?:number }): Promise<LlmModel> {
+  config: { apiKey: string; baseUrl?: string; model?: string;sdkType:string;maxTokens?:number;streamIdleTimeoutMs?:number }): Promise<LlmModel> {
   // 根据Provider的SDK类型创建对应的Model
   switch(config.sdkType) {
     case "OpenAI":
@@ -720,6 +931,7 @@ export async function createModelFromProvider(
         baseUrl: config.baseUrl,
         model: config.model,
         maxTokens: config.maxTokens,
+        streamIdleTimeoutMs: config.streamIdleTimeoutMs,
       });
     case "Anthropic":
       return createAnthropicModel({
@@ -727,6 +939,7 @@ export async function createModelFromProvider(
         baseUrl: config.baseUrl,
         model: config.model,
         maxTokens: config.maxTokens,
+        streamIdleTimeoutMs: config.streamIdleTimeoutMs,
       });
     default:
       // 默认使用 Anthropic SDK（因为 MiniMax-CN 使用的是 Anthropic 兼容接口）

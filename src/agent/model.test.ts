@@ -10,6 +10,7 @@ import {
 import { isRetryableError, withRetry } from "./model";
 import {
   DEFAULT_MAX_TOKENS,
+  REQUEST_TIMEOUT_MS,
   buildAnthropicRequest,
 } from "./model";
 import {
@@ -17,8 +18,29 @@ import {
   isAbortError,
   isUnsupportedStreamOptionsError,
 } from "./model";
+import {
+  STREAM_IDLE_TIMEOUT_MS,
+  StreamIdleTimeoutError,
+  assertStreamNotIdleTimedOut,
+  createStreamIdleWatchdog,
+  isStreamIdleTimeoutError,
+} from "./model";
+import type { ChatCompletionChunkLike } from "./model";
 import { createTextContent } from "./message";
 import { AgentMessage } from "../shared/protocol";
+
+/** 等到看门狗的静默超时真的触发（而不是靠 sleep 猜时间） */
+function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("model", () => {
   describe("createOpenAIModel", () => {
@@ -621,6 +643,152 @@ describe("model", () => {
         false,
       );
       assert.strictEqual(isUnsupportedStreamOptionsError(undefined), false);
+    });
+  });
+
+  describe("流式静默看门狗（createStreamIdleWatchdog）", () => {
+    it("静默超过上限就中止，并如实标记为超时", async () => {
+      const watchdog = createStreamIdleWatchdog(undefined, 30);
+
+      assert.strictEqual(watchdog.signal.aborted, false);
+      await waitForAbort(watchdog.signal);
+
+      assert.strictEqual(watchdog.signal.aborted, true);
+      assert.strictEqual(watchdog.timedOut(), true);
+      watchdog.dispose();
+    });
+
+    it("每收到一段数据就重新计时（touch 不会立刻超时）", async () => {
+      const watchdog = createStreamIdleWatchdog(undefined, 120);
+
+      await sleep(80);
+      watchdog.touch();
+      await sleep(80);
+
+      assert.strictEqual(
+        watchdog.signal.aborted,
+        false,
+        "touch 之后不应按原来的 120ms 超时",
+      );
+
+      // 不再 touch 之后仍然会超时
+      await waitForAbort(watchdog.signal);
+      assert.strictEqual(watchdog.timedOut(), true);
+      watchdog.dispose();
+    });
+
+    it("父信号取消应透传，且不算作静默超时", async () => {
+      const parent = new AbortController();
+      const watchdog = createStreamIdleWatchdog(parent.signal, 5_000);
+
+      parent.abort();
+      await waitForAbort(watchdog.signal);
+
+      assert.strictEqual(watchdog.signal.aborted, true);
+      assert.strictEqual(
+        watchdog.timedOut(),
+        false,
+        "用户取消不能被记成上游静默",
+      );
+      watchdog.dispose();
+    });
+
+    it("父信号已经取消时立即中止", () => {
+      const parent = new AbortController();
+      parent.abort();
+
+      const watchdog = createStreamIdleWatchdog(parent.signal, 5_000);
+
+      assert.strictEqual(watchdog.signal.aborted, true);
+      assert.strictEqual(watchdog.timedOut(), false);
+      watchdog.dispose();
+    });
+
+    it("dispose 之后不再超时，也不再跟随父信号", async () => {
+      const parent = new AbortController();
+      const watchdog = createStreamIdleWatchdog(parent.signal, 30);
+
+      watchdog.dispose();
+      await sleep(60);
+
+      assert.strictEqual(
+        watchdog.signal.aborted,
+        false,
+        "dispose 后计时器必须停下（否则会在请求正常结束后误报超时）",
+      );
+
+      parent.abort();
+      assert.strictEqual(
+        watchdog.signal.aborted,
+        false,
+        "dispose 后不应再监听父信号（否则监听器会泄漏）",
+      );
+    });
+
+    it("默认上限不低于请求超时，避免改掉「响应头都没到」阶段的等待时长", () => {
+      assert.ok(
+        STREAM_IDLE_TIMEOUT_MS >= REQUEST_TIMEOUT_MS,
+        "静默上限低于 REQUEST_TIMEOUT_MS 会把慢首包（长上下文 / 推理模型）误判成挂死",
+      );
+    });
+  });
+
+  describe("上游静默的失败分类", () => {
+    it("静默超时应可重试（否则挂死只能变成报错）", () => {
+      assert.strictEqual(isRetryableError(new StreamIdleTimeoutError(1_000)), true);
+    });
+
+    it("静默超时不能被当成用户取消", () => {
+      const error = new StreamIdleTimeoutError(1_000);
+
+      assert.strictEqual(isStreamIdleTimeoutError(error), true);
+      assert.strictEqual(
+        isAbortError(error),
+        false,
+        "被当成取消的话就不会重试，UI 还会显示「模型调用已取消」",
+      );
+    });
+
+    it("即使被包在 cause 里也能识别", () => {
+      const wrapped = new Error("wrapped");
+      (wrapped as { cause?: unknown }).cause = new StreamIdleTimeoutError(1_000);
+
+      assert.strictEqual(isStreamIdleTimeoutError(wrapped), true);
+    });
+
+    it("assertStreamNotIdleTimedOut：看门狗掐断即抛错，用户取消则不抛", async () => {
+      const timedOut = createStreamIdleWatchdog(undefined, 0);
+      await waitForAbort(timedOut.signal);
+
+      assert.throws(
+        () => assertStreamNotIdleTimedOut(timedOut, 60),
+        /没有收到任何数据/,
+      );
+      timedOut.dispose();
+
+      // 用户取消的场景交给取消逻辑处理，这里不能抛
+      const parent = new AbortController();
+      parent.abort();
+      const cancelled = createStreamIdleWatchdog(parent.signal, 0);
+
+      assert.doesNotThrow(() =>
+        assertStreamNotIdleTimedOut(cancelled, 60, parent.signal),
+      );
+      cancelled.dispose();
+    });
+
+    it("collectOpenAIStream 每个分片都会回调 onChunk（看门狗靠它续命）", async () => {
+      async function* chunks(): AsyncGenerator<ChatCompletionChunkLike> {
+        yield { choices: [{ delta: { content: "a" } }] };
+        yield { choices: [{ delta: {}, finish_reason: "stop" }] };
+      }
+
+      let touched = 0;
+      await collectOpenAIStream(chunks(), undefined, () => {
+        touched += 1;
+      });
+
+      assert.strictEqual(touched, 2, "每个分片都要 touch 一次");
     });
   });
 });
