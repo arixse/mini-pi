@@ -19,3 +19,4 @@ bin/mini-pi-cli.cjs
 
 # 本地提交信息临时文件
 .commit-msg*.tmp
+/notes
