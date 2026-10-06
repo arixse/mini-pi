@@ -39,6 +39,17 @@ mini-pi/
 - 支持流式响应和工具调用
 - 请求带 120 秒超时与取消信号；限流（429）/超时（408）/服务端（5xx）/
   网络类错误按指数退避重试（最多 3 次尝试，1s、2s）
+- 重试的三条细节：
+  - **SDK 内置重试关闭**（`maxRetries: 0`）——openai/anthropic 默认 2 次，
+    与应用层叠加会变成最多 9 次请求，prompt token 反复计费；
+  - 判定**沿 `cause` 链下钻**并识别 `APIConnectionError` 类名（SDK 把 fetch 失败
+    包起来后 `status`/`code` 都是 undefined，原始 errno 只在 `cause` 上）；
+  - 退避与 `Retry-After`（毫秒头／秒数／HTTP-date）取较大者，再加 ±20% 抖动。
+- **已外发正文后不再重试**：重试单元含"读完整个流"而 delta 已实时外发，
+  再打一次会重复输出正文并重复计费；此时抛不可重试的
+  `PartialStreamInterruptedError`。
+- **上下文压缩可取消**：摘要请求带同一个取消信号；被取消时不写压缩条目
+  （回退到简单摘要等于丢掉真实历史）。
 - SDK 的 `timeout` 只覆盖到"连接 + 响应头"，因此正文读取另有一条**静默看门狗**
   （`STREAM_IDLE_TIMEOUT_MS`）：两段数据之间静默超限即中止，并按可重试的
   `StreamIdleTimeoutError` 处理（与用户取消区分开，否则瞬时故障会被当成用户操作）。
