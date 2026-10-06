@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { PRIVATE_FILE_MODE, restrictFilePermissions } from "./private-file";
+import { join } from "node:path";
+import { loadPrivateJsonFile, writePrivateJsonFileAtomic } from "./private-json-file";
 
 type ProviderConfig = {
   apiKey?: string;
@@ -16,7 +14,10 @@ export class ProviderStore {
   private storePath: string;
   private data: ProviderStoreData = {};
   private initialized: boolean = false;
-  
+  /** 文件损坏时的原因与备份路径；非空表示进入"拒写"状态 */
+  private corruptReason: string | null = null;
+  private corruptBackupPath: string | null = null;
+
   constructor(storePath?: string) {
     this.storePath = storePath || join(homedir(), ".mini-pi", "auth.json");
   }
@@ -28,49 +29,64 @@ export class ProviderStore {
     if (this.initialized) {
       return;
     }
-    
+
     try {
-      const dir = dirname(this.storePath);
-      if (!existsSync(dir)) {
-        await mkdir(dir, { recursive: true });
-      }
-      
-      if (existsSync(this.storePath)) {
-        try {
-          const content = await readFile(this.storePath, "utf-8");
-          this.data = JSON.parse(content);
-        } catch (readError) {
-          console.error("Failed to read provider store file:", readError);
-          this.data = {};
-        }
-      } else {
+      const result = await loadPrivateJsonFile<ProviderStoreData>(this.storePath);
+
+      if (result.status === "ok") {
+        this.data = result.data;
+      } else if (result.status === "missing") {
         this.data = {};
+      } else {
+        // 损坏时**不能**当作空配置继续：下一次保存会把 auth.json 覆写成
+        // "只剩刚写进去的那一项"，其它服务商的密钥无声消失且无法恢复
+        this.data = {};
+        this.corruptReason = result.reason;
+        this.corruptBackupPath = result.backupPath ?? null;
+        console.error(
+          `auth.json 无法解析（${result.reason}）` +
+            (result.backupPath ? `，原文件已备份为 ${result.backupPath}` : "") +
+            "。为避免覆盖掉其它服务商的密钥，本次运行将拒绝写入；" +
+            "请修好该文件（或删除它）后重启 Mini Pi。",
+        );
       }
-      
-      this.initialized = true;
     } catch (error) {
       console.error("Failed to initialize provider store:", error);
       this.data = {};
-      this.initialized = true;
     }
+
+    this.initialized = true;
   }
-  
+
+  /** 是否因文件损坏而处于拒写状态（初始化后有效） */
+  async isCorrupt(): Promise<boolean> {
+    await this.initialize();
+    return this.corruptReason !== null;
+  }
+
+  /** 损坏文件被备份到哪里（未备份时为 null） */
+  async getCorruptBackupPath(): Promise<string | null> {
+    await this.initialize();
+    return this.corruptBackupPath;
+  }
+
   /**
    * 保存配置到文件
    */
   private async persist(): Promise<void> {
+    if (this.corruptReason !== null) {
+      throw new Error(
+        "auth.json 处于损坏状态，已拒绝写入以免覆盖其它服务商的密钥" +
+          (this.corruptBackupPath
+            ? `（原文件已备份为 ${this.corruptBackupPath}）`
+            : "") +
+          "。请修复或删除该文件后重启 Mini Pi。",
+      );
+    }
+
     try {
-      const dir = dirname(this.storePath);
-      if (!existsSync(dir)) {
-        await mkdir(dir, { recursive: true });
-      }
-      
-      // auth.json 含 API Key：创建时即用 0600，写入后再收紧一次（已存在的文件 mode 不会变）
-      await writeFile(this.storePath, JSON.stringify(this.data, null, 2), {
-        encoding: "utf-8",
-        mode: PRIVATE_FILE_MODE,
-      });
-      await restrictFilePermissions(this.storePath);
+      // 原子写：先写临时文件再 rename，避免半截 JSON，也避免并发覆盖
+      await writePrivateJsonFileAtomic(this.storePath, this.data);
     } catch (error) {
       console.error("Failed to persist provider store:", error);
       throw error;

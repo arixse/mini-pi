@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { PRIVATE_FILE_MODE, restrictFilePermissions } from "./private-file";
+import { join } from "node:path";
+import { loadPrivateJsonFile, writePrivateJsonFileAtomic } from "./private-json-file";
 
 type Settings = {
   defaultModel?: string; // 格式: [模型供应商]/[模型名称]
@@ -20,6 +18,9 @@ export class SettingsStore {
   private settingsPath: string;
   private settings: Settings = {};
   private initialized: boolean = false;
+  /** 文件损坏时的原因与备份路径；非空表示进入"拒写"状态 */
+  private corruptReason: string | null = null;
+  private corruptBackupPath: string | null = null;
 
   constructor(settingsPath?: string) {
     this.settingsPath = settingsPath || join(homedir(), ".mini-pi", "settings.json");
@@ -34,46 +35,62 @@ export class SettingsStore {
     }
 
     try {
-      const dir = dirname(this.settingsPath);
-      if (!existsSync(dir)) {
-        await mkdir(dir, { recursive: true });
-      }
+      const result = await loadPrivateJsonFile<Settings>(this.settingsPath);
 
-      if (existsSync(this.settingsPath)) {
-        try {
-          const content = await readFile(this.settingsPath, "utf-8");
-          this.settings = JSON.parse(content);
-        } catch (readError) {
-          console.error("Failed to read settings file:", readError);
-          this.settings = {};
-        }
-      } else {
+      if (result.status === "ok") {
+        this.settings = result.data;
+      } else if (result.status === "missing") {
         this.settings = {};
+      } else {
+        // 与 auth.json 同样的理由：损坏后继续用空对象保存，
+        // 会把文件覆写成"只剩刚写进去的那一项"
+        this.settings = {};
+        this.corruptReason = result.reason;
+        this.corruptBackupPath = result.backupPath ?? null;
+        console.error(
+          `settings.json 无法解析（${result.reason}）` +
+            (result.backupPath ? `，原文件已备份为 ${result.backupPath}` : "") +
+            "。为避免覆盖原有配置，本次运行将拒绝写入；" +
+            "请修好该文件（或删除它）后重启 Mini Pi。",
+        );
       }
-
-      this.initialized = true;
     } catch (error) {
       console.error("Failed to initialize settings store:", error);
       this.settings = {};
-      this.initialized = true;
     }
+
+    this.initialized = true;
+  }
+
+  /** 是否因文件损坏而处于拒写状态（初始化后有效） */
+  async isCorrupt(): Promise<boolean> {
+    await this.initialize();
+    return this.corruptReason !== null;
+  }
+
+  /** 损坏文件被备份到哪里（未备份时为 null） */
+  async getCorruptBackupPath(): Promise<string | null> {
+    await this.initialize();
+    return this.corruptBackupPath;
   }
 
   /**
    * 保存配置到文件
    */
   private async persist(): Promise<void> {
-    try {
-      const dir = dirname(this.settingsPath);
-      if (!existsSync(dir)) {
-        await mkdir(dir, { recursive: true });
-      }
+    if (this.corruptReason !== null) {
+      throw new Error(
+        "settings.json 处于损坏状态，已拒绝写入以免覆盖原有配置" +
+          (this.corruptBackupPath
+            ? `（原文件已备份为 ${this.corruptBackupPath}）`
+            : "") +
+          "。请修复或删除该文件后重启 Mini Pi。",
+      );
+    }
 
-      await writeFile(this.settingsPath, JSON.stringify(this.settings, null, 2), {
-        encoding: "utf-8",
-        mode: PRIVATE_FILE_MODE,
-      });
-      await restrictFilePermissions(this.settingsPath);
+    try {
+      // 原子写：先写临时文件再 rename，避免半截 JSON
+      await writePrivateJsonFileAtomic(this.settingsPath, this.settings);
     } catch (error) {
       console.error("Failed to persist settings:", error);
       throw error;
