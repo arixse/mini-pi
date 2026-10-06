@@ -23,6 +23,27 @@ type RegisteredTool = ToolDefinition & {
   readOnly?: boolean;
 };
 
+/**
+ * 只读工具名：**唯一事实来源**。
+ *
+ * 同一个集合要服务三件事，此前是各写一份，新增只读工具时必然遗漏：
+ * - 注册表上的 `readOnly` 标记（决定能否并发执行）；
+ * - 审批策略的免确认白名单（决定是否要用户确认）；
+ * - 并发批次的判定（`runAgentLoop` 里的只读收集）。
+ *
+ * 因此这里导出常量，注册表标记与审批白名单都引用它，
+ * 并由 `tools.test.ts` 断言 `readOnlyToolNames()` 与本常量一致，防止再次漂移。
+ */
+export const READ_ONLY_TOOL_NAMES: readonly string[] = [
+  "list_files",
+  "glob",
+  "grep",
+  "read_file",
+];
+
+/** {@link READ_ONLY_TOOL_NAMES} 的集合形式，供审批策略做 O(1) 判定 */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(READ_ONLY_TOOL_NAMES);
+
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
 
@@ -67,15 +88,29 @@ export class ToolRegistry {
   }
 }
 
+/**
+ * 创建内置工具注册表。
+ *
+ * `readOnly` 统一在这里按 {@link READ_ONLY_TOOL_NAMES} 标记，而不是写在每个工具里：
+ * 标记散落在各工具定义中时，新增只读工具很容易忘记同步，
+ * 结果"能并发"与"免确认"两套判断分叉。
+ */
 export function createToolRegistry(workspaceRoot: string): ToolRegistry {
   const registry = new ToolRegistry();
-  registry.register(listFilesTool(workspaceRoot));
-  registry.register(globTool(workspaceRoot));
-  registry.register(grepTool(workspaceRoot));
-  registry.register(readFileTool(workspaceRoot));
-  registry.register(writeFileTool(workspaceRoot));
-  registry.register(editFileTool(workspaceRoot));
-  registry.register(bashTool(workspaceRoot));
+  for (const tool of [
+    listFilesTool(workspaceRoot),
+    globTool(workspaceRoot),
+    grepTool(workspaceRoot),
+    readFileTool(workspaceRoot),
+    writeFileTool(workspaceRoot),
+    editFileTool(workspaceRoot),
+    bashTool(workspaceRoot),
+  ]) {
+    registry.register({
+      ...tool,
+      readOnly: READ_ONLY_TOOLS.has(tool.name),
+    });
+  }
   return registry;
 }
 
@@ -101,7 +136,6 @@ function listFilesTool(workspaceRoot: string): RegisteredTool {
         },
       },
     },
-    readOnly: true,
     async execute(args) {
       const dir = resolveInsideWorkspace(workspaceRoot, stringArg(args.path,"."));
       const ignore = createWorkspaceIgnore(workspaceRoot);
@@ -272,7 +306,6 @@ function globTool(workspaceRoot: string): RegisteredTool {
       },
       required: ["pattern"],
     },
-    readOnly: true,
     async execute(args) {
       const pattern = stringArg(args.pattern, "");
       if (!pattern.trim()) {
@@ -351,7 +384,6 @@ function grepTool(workspaceRoot: string): RegisteredTool {
       },
       required: ["pattern"],
     },
-    readOnly: true,
     async execute(args) {
       const source = stringArg(args.pattern, "");
       if (!source.trim()) {
@@ -547,7 +579,6 @@ function readFileTool(workspaceRoot: string): RegisteredTool {
       },
       required: ["path"],
     },
-    readOnly: true,
     async execute(args) {
       const filePath = resolveInsideWorkspace(
         workspaceRoot,
@@ -674,16 +705,39 @@ function writeFileTool(workspaceRoot: string): RegisteredTool {
       const { dirname } = await import("node:path");
       
       const created = !existsSync(filePath);
+      // 覆盖已有文件时要让"被覆盖"这件事可见：用户看到的是一条成功消息，
+      // 但原有内容已经没了，而工具层没有任何备份或撤销。
+      let previousLines: number | null = null;
+      if (!created) {
+        try {
+          previousLines = (await readFile(filePath, "utf8")).split("\n").length;
+        } catch {
+          previousLines = null;
+        }
+      }
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, "utf8");
-      
+
+      const lines = content === "" ? 0 : content.split("\n").length;
+      const changeLabel = created
+        ? `新建，${lines} 行`
+        : previousLines === null
+          ? `覆盖，${lines} 行`
+          : `覆盖，原 ${previousLines} 行 → 现 ${lines} 行`;
+
       return {
-        content: [createTextContent(`File written successfully: ${relative(workspaceRoot, filePath)}`)],
+        content: [
+          createTextContent(
+            `File written successfully: ${relative(workspaceRoot, filePath)}（${changeLabel}）`,
+          ),
+        ],
         details: {
           path: relative(workspaceRoot, filePath),
           bytesWritten: content.length,
-          lines: content === "" ? 0 : content.split("\n").length,
+          lines,
           created,
+          // 覆盖前的行数：卡片可以据此显示"被替换了多少"
+          previousLines,
         },
       };
     },

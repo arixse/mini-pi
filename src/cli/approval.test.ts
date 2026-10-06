@@ -8,7 +8,7 @@ import {
 } from "./approval";
 import { ToolCallContent } from "../shared/protocol";
 import { runAgentLoop } from "../agent/loop";
-import { ToolRegistry } from "../agent/tools";
+import { ToolRegistry, createToolRegistry } from "../agent/tools";
 import { createTextContent } from "../agent/message";
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCallContent {
@@ -185,6 +185,67 @@ describe("tool approval", () => {
     );
     assert.ok(blocked, "应产生一条被拒绝的 toolResult 交给模型");
     assert.ok(result.events.some((event) => event.type === "tool_permission"));
+  });
+
+  it("免确认白名单必须与注册表的只读集合完全一致", () => {
+    const registry = createToolRegistry(process.cwd());
+    const readOnly = new Set(registry.readOnlyToolNames());
+
+    assert.deepStrictEqual(
+      [...AUTO_APPROVED_TOOLS].sort(),
+      [...readOnly].sort(),
+      "两处判断不能分叉：注册表认为只读（可并发）而审批却要求确认，或反之",
+    );
+
+    for (const name of ["list_files", "glob", "grep", "read_file"]) {
+      assert.ok(
+        AUTO_APPROVED_TOOLS.has(name),
+        `${name} 是只读工具，必须免确认（曾因白名单另写一份而漏掉 glob/grep）`,
+      );
+    }
+  });
+
+  it("write_file 覆盖已存在的文件时，提示语必须写明是覆盖", () => {
+    const exists = (path: string): boolean => path === "a.txt";
+
+    const overwrite = describeToolCall(
+      call("write_file", { path: "a.txt", content: "x" }),
+      exists,
+    );
+    assert.ok(overwrite.includes("覆盖"), `覆盖应有明确标注：${overwrite}`);
+    assert.ok(overwrite.includes("原内容将被替换"));
+
+    const created = describeToolCall(
+      call("write_file", { path: "new.txt", content: "x" }),
+      exists,
+    );
+    assert.ok(created.includes("新建"), `新建应标注为新建：${created}`);
+
+    // 拿不到文件状态时退化为中性文案，不能谎报"新建"
+    const unknown = describeToolCall(
+      call("write_file", { path: "a.txt", content: "x" }),
+    );
+    assert.ok(!unknown.includes("新建"), "不知道是否存在时不能说新建");
+    assert.ok(!unknown.includes("覆盖"), "不知道是否存在时不能说覆盖");
+  });
+
+  it("确认提问应把覆盖信息带给用户（而不是只显示路径和字符数）", async () => {
+    let asked = "";
+    const approve = createToolApproval({
+      isTrusted: () => false,
+      confirm: async (question) => {
+        asked = question;
+        return false;
+      },
+      fileExists: () => true,
+    });
+
+    const decision = await approve(
+      call("write_file", { path: "a.txt", content: "x" }),
+    );
+
+    assert.strictEqual(decision.action, "block");
+    assert.ok(asked.includes("覆盖"), `提问里应写明是覆盖：${asked}`);
   });
 
   it("should let the tool run after approval", async () => {

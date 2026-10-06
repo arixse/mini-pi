@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -666,6 +666,46 @@ describe("tools", () => {
         "第二次写入应识别为覆盖",
       );
       assert.strictEqual((overwritten.details as Record<string, unknown>).lines, 1);
+      assert.strictEqual(
+        (overwritten.details as Record<string, unknown>).previousLines,
+        3,
+        "覆盖时应带出被替换掉的行数，否则用户无从判断损失",
+      );
+    });
+
+    it("write_file 的结果文本必须区分新建与覆盖", async () => {
+      const registry = createToolRegistry(testDir);
+      const text = (result: { content: Array<{ text: string }> }): string =>
+        result.content[0].text;
+
+      const created = await registry.execute("write_file", {
+        path: "cover.txt",
+        content: "a\nb",
+      });
+      assert.match(text(created), /新建/);
+
+      const overwritten = await registry.execute("write_file", {
+        path: "cover.txt",
+        content: "z",
+      });
+      assert.match(text(overwritten), /覆盖/);
+      assert.match(text(overwritten), /原 2 行/, "覆盖文案应写明原有规模");
+    });
+
+    it("注册表只读集合必须与 READ_ONLY_TOOL_NAMES 一致", () => {
+      const registry = createToolRegistry(testDir);
+
+      assert.deepStrictEqual(
+        [...registry.readOnlyToolNames()].sort(),
+        [...READ_ONLY_TOOL_NAMES].sort(),
+        "只读标记与常量分叉后，并发与免审批两套判断会不一致",
+      );
+      for (const name of ["list_files", "glob", "grep", "read_file"]) {
+        assert.strictEqual(registry.isReadOnly(name), true, `${name} 应为只读`);
+      }
+      for (const name of ["write_file", "edit_file", "bash"]) {
+        assert.strictEqual(registry.isReadOnly(name), false, `${name} 不应为只读`);
+      }
     });
 
     it("edit_file 应给出首个替换所在行号", async () => {
