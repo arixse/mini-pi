@@ -8,30 +8,36 @@ import { LlmModel } from "./model";
 type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
+/** 摘要输入的最小 token 预算：阈值配得很小时也不要把输入砍成空 */
+export const MIN_SUMMARY_INPUT_TOKENS = 4_000;
+
 /**
  * 让模型把一段历史压成摘要。
  *
  * @param signal 取消信号：压缩要调一次模型，可能静默数秒，必须能被 Ctrl+C 中断
  *   （否则"已请求取消"之后还要空等一整次请求，README 承诺的"立即中断"就不成立）。
+ * @param maxInputTokens 摘要输入的 token 预算。压缩的触发点就是"上下文超了"，
+ *   把整段历史原样塞进摘要请求会让它自己超窗（400），而超窗正是这里最常见的失败。
+ *   因此按预算只保留**最近**的条目，更早的明确标注被省略。
  *
- * 被取消时**抛出**而不是回退到简单摘要：简单摘要只有"共 N 条消息"这类统计，
- * 写进会话文件等于把真实历史换成一句废话。
+ * 被取消**或失败**时都抛出而不是回退到简单摘要：简单摘要只有"共 N 条消息"这类统计，
+ * 写进会话文件等于把真实历史换成一句废话，且已经落盘、不可恢复。
  */
 async function summarizeEntries(
   entries: MessageEntry[],
   model: LlmModel,
   signal?: AbortSignal,
+  maxInputTokens?: number,
 ): Promise<string> {
   if (entries.length === 0) {
     return "";
   }
 
-  // 构建对话历史文本
-  const conversationText = entries.map(entry => {
-    const role = entry.message.role === "user" ? "用户" : "助手";
-    const text = extractText(entry.message);
-    return `${role}: ${text}`;
-  }).join("\n\n");
+  const budget = Math.max(
+    MIN_SUMMARY_INPUT_TOKENS,
+    normalizeTokenBudget(maxInputTokens),
+  );
+  const { text: conversationText } = buildSummarizableText(entries, budget);
 
   // 使用模型生成摘要
   const systemPrompt = `你是一个对话摘要助手。请将以下对话历史压缩成一个简洁的摘要，保留关键信息和上下文。
@@ -71,15 +77,77 @@ async function summarizeEntries(
     if (summaryParts.length > 0) {
       return summaryParts.join("\n");
     }
+
+    // 空回复与失败同等对待：回退到简单摘要会把真实历史换成统计数字
+    throw new Error("摘要模型返回了空内容");
   } catch (error) {
     if (signal?.aborted) {
       throw error;
     }
     console.error("Failed to generate summary with model:", error);
+    throw error;
+  }
+}
+
+/**
+ * 组装摘要输入：从**最近**的条目往前累积，超出预算就停。
+ *
+ * 压缩只在这段历史已经很大时才触发，所以"整段塞进去"几乎必然让摘要请求自己超窗；
+ * 一旦超窗，摘要失败 → 压缩不写入 → 上下文继续涨，下一次仍然超窗，形成死锁。
+ * 这里主动按预算保留最近的条目，并在开头标注被省略的条数，
+ * 让模型知道它看到的是一段被截断的历史。
+ */
+function normalizeTokenBudget(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : MIN_SUMMARY_INPUT_TOKENS;
+}
+
+/**
+ * 组装摘要输入：从**最近**的条目往前累积，超出预算就停。
+ *
+ * 压缩只在这段历史已经很大时才触发，所以"整段塞进去"几乎必然让摘要请求自己超窗；
+ * 一旦超窗，摘要失败 → 压缩不写入 → 上下文继续涨，下一次仍然超窗，形成死锁。
+ * 这里主动按预算保留最近的条目，并在开头标注被省略的条数，
+ * 让模型知道它看到的是一段被截断的历史。
+ *
+ * 预算下限（{@link MIN_SUMMARY_INPUT_TOKENS}）由调用方施加：
+ * 本函数按传入的预算严格执行，便于直接断言截断行为。
+ */
+export function buildSummarizableText(
+  entries: MessageEntry[],
+  maxInputTokens: number,
+): { text: string; dropped: number } {
+  const budget =
+    Number.isFinite(maxInputTokens) && maxInputTokens > 0
+      ? Math.floor(maxInputTokens)
+      : 0;
+
+  const parts: string[] = [];
+  let used = 0;
+  let dropped = 0;
+
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const role = entry.message.role === "user" ? "用户" : "助手";
+    const line = `${role}: ${extractText(entry.message)}`;
+    const cost = estimateTextTokens(line);
+
+    // 至少保留一条：单条就超预算时也要让它进去，否则摘要输入会是空串
+    if (parts.length > 0 && used + cost > budget) {
+      dropped = index + 1;
+      break;
+    }
+
+    parts.unshift(line);
+    used += cost;
   }
 
-  // 如果模型调用失败，回退到简单摘要
-  return generateSimpleSummary(entries);
+  const body = parts.join("\n\n");
+  return {
+    text: dropped > 0 ? `（最早的 ${dropped} 条消息已省略）\n\n${body}` : body,
+    dropped,
+  };
 }
 
 function generateSimpleSummary(entries: MessageEntry[]): string {
@@ -145,6 +213,8 @@ export class JsonlSessionStore {
   private counter = 0;
   private model: LlmModel | null = null;
   private readonly loadWarnings: Array<{ line: number; reason: string }> = [];
+  /** 最近一次压缩失败的原因（成功后清空）；供 /status 展示 */
+  private lastCompactionError: string | null = null;
   
   constructor(
     private readonly filePath: string,
@@ -241,6 +311,16 @@ export class JsonlSessionStore {
   /** 加载时被跳过的损坏行（行号从 1 起） */
   getLoadWarnings(): Array<{ line: number; reason: string }> {
     return [...this.loadWarnings];
+  }
+
+  /**
+   * 最近一次压缩失败的原因；没有失败过则为 null。
+   *
+   * 压缩失败是静默的：不写条目、上下文继续涨，用户只看到"一直没压缩"。
+   * 暴露出来才能在 /status 里说明"为什么没压"。
+   */
+  getLastCompactionError(): string | null {
+    return this.lastCompactionError;
   }
 
   /** 会话文件路径（/status 展示用） */
@@ -385,16 +465,18 @@ export class JsonlSessionStore {
     const kept = messageEntries.slice(startIndex);
     const summarized = messageEntries.slice(0, startIndex);
 
-    // 优先用模型生成摘要；未配置模型时回退到简单摘要，
-    // 不抛错中断当前对话（压缩只是优化，失败不应让整轮对话失败）。
+    // 优先用模型生成摘要；未配置模型时才用简单摘要兜底（不能因为没有模型就压不了）。
+    // 配了模型却调用失败，则**放弃本次压缩**：写一条降级摘要等于把真实历史换成统计数字。
     let summary: string;
     try {
       summary = this.model
-        ? await summarizeEntries(summarized, this.model, signal)
+        ? await summarizeEntries(summarized, this.model, signal, maxApproxTokens)
         : generateSimpleSummary(summarized);
-    } catch {
-      // 只可能是"摘要期间被取消"（其它失败已在 summarizeEntries 内回退）。
-      // 此时保持原上下文、不写任何条目：写一条降级摘要等于丢掉真实历史。
+    } catch (error) {
+      // 取消与失败都走这里：保持原上下文、不写任何条目。
+      // 记下原因供 /status 展示——否则用户只会看到"一直没有压缩"，无从判断。
+      this.lastCompactionError =
+        error instanceof Error ? error.message : String(error);
       return undefined;
     }
 
@@ -418,6 +500,7 @@ export class JsonlSessionStore {
     };
     await this.appendEntry(entry);
     this.leafId = entry.id;
+    this.lastCompactionError = null;
     return entry;
   }
   /**

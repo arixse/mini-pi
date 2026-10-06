@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   JsonlSessionStore,
   alignCompactionStart,
+  buildSummarizableText,
   estimateMessageTokens,
   estimateTextTokens,
   estimateTokens,
@@ -881,6 +882,171 @@ describe("JsonlSessionStore", () => {
 
       assert.strictEqual(compaction, undefined);
       assert.strictEqual(calls, 0, "已取消就不该再发起摘要请求");
+    });
+  });
+
+  describe("压缩失败不应写入降级摘要（否则真实历史被换成统计数字）", () => {
+    /** 写入足够触发压缩的历史 */
+    async function seed(store: JsonlSessionStore): Promise<void> {
+      for (let i = 0; i < 4; i += 1) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    it("摘要模型报错时不写任何条目，并记录失败原因", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      const before = store.buildContext().length;
+      store.setModel({
+        async complete() {
+          throw new Error("context_length_exceeded");
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1);
+
+      assert.strictEqual(compaction, undefined, "失败时不应产生压缩条目");
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+        "一条 compaction 都不能写：降级摘要等于丢掉真实历史",
+      );
+      assert.strictEqual(store.buildContext().length, before, "上下文应保持原样");
+      assert.match(store.getLastCompactionError() ?? "", /context_length_exceeded/);
+    });
+
+    it("摘要模型返回空内容时同样不写入", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      store.setModel({
+        async complete() {
+          return {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1);
+
+      assert.strictEqual(compaction, undefined, "空摘要不能写进会话文件");
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+      );
+    });
+
+    it("压缩成功后应清空上一次的失败原因", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      let shouldFail = true;
+      store.setModel({
+        async complete() {
+          if (shouldFail) {
+            throw new Error("boom");
+          }
+          return {
+            role: "assistant",
+            content: [createTextContent("摘要")],
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      assert.strictEqual(await store.compactIfNedded(10, 1), undefined);
+      assert.ok(store.getLastCompactionError(), "失败后应有原因");
+
+      shouldFail = false;
+      assert.ok(await store.compactIfNedded(10, 1), "恢复后应能压缩");
+      assert.strictEqual(store.getLastCompactionError(), null, "成功后应清空");
+    });
+  });
+
+  describe("buildSummarizableText（摘要输入按预算截断）", () => {
+    it("超预算时只保留最近的条目，并标注被省略的条数", () => {
+      // 每条约 500 token（2000 个 ASCII 字符），预算 500 只能装下最后一条
+      const entries = [0, 1, 2, 3].map(
+        (index) =>
+          ({
+            type: "message",
+            id: `entry_${index}`,
+            parentId: null,
+            timestamp: "t",
+            message: {
+              role: "user",
+              content: [createTextContent(`第 ${index} 条 ${"x".repeat(2000)}`)],
+              timestamp: index,
+            },
+          }) as Extract<
+            Parameters<typeof buildSummarizableText>[0][number],
+            { type: "message" }
+          >,
+      );
+
+      const { text, dropped } = buildSummarizableText(entries, 500);
+
+      assert.strictEqual(dropped, 3, "应省略最早的三条");
+      assert.ok(text.includes("最早的 3 条消息已省略"));
+      assert.ok(text.includes("第 3 条"), "最近的条目必须保留");
+      assert.ok(!text.includes("第 0 条"), "最早的条目应被省略");
+    });
+
+    it("预算充足时不省略任何条目", () => {
+      const entries = [0, 1].map(
+        (index) =>
+          ({
+            type: "message",
+            id: `entry_${index}`,
+            parentId: null,
+            timestamp: "t",
+            message: {
+              role: "user",
+              content: [createTextContent(`第 ${index} 条`)],
+              timestamp: index,
+            },
+          }) as Extract<
+            Parameters<typeof buildSummarizableText>[0][number],
+            { type: "message" }
+          >,
+      );
+
+      const { text, dropped } = buildSummarizableText(entries, 100_000);
+
+      assert.strictEqual(dropped, 0);
+      assert.ok(!text.includes("已省略"));
+    });
+
+    it("单条就超预算时也要保留它，不能返回空输入", () => {
+      const entries = [
+        {
+          type: "message",
+          id: "entry_0",
+          parentId: null,
+          timestamp: "t",
+          message: {
+            role: "user",
+            content: [createTextContent("x".repeat(50_000))],
+            timestamp: 0,
+          },
+        },
+      ] as Parameters<typeof buildSummarizableText>[0];
+
+      const { text } = buildSummarizableText(entries, 100);
+
+      assert.strictEqual(text.includes("已省略"), false);
+      assert.ok(text.length > 0, "摘要输入不能是空串");
     });
   });
 
