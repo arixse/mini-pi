@@ -91,6 +91,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     console.log(...args);
   };
 
+  // 卡片渲染上下文与事件处理：整个会话复用同一份（宽度探测只做一次）
+  const onAgentEvent = createAgentEventHandler({
+    status,
+    renderContext: createRenderContext(),
+    quiet,
+  });
+
   // 本轮是否正在处理中。
   // 必须从 line 处理函数的第一行就为 true：/exit 或 Ctrl+C 可能在本轮
   // 尚未走到模型调用（例如还在写会话文件）时到达，若只看 activeRun
@@ -308,29 +315,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
           syncedMessages += turnMessages.length;
           return await compactContext(options, status);
         },
-        onEvent: (event) => {
-          if (event.type === "message_update" && event.delta) {
-            // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
-            status.stop();
-            process.stdout.write(event.delta);
-          }
-          if (event.type === "tool_execution_start") {
-            status.set({
-              kind: "tool",
-              toolName: event.toolName,
-              detail: summarizeToolCall(event.toolName, event.args),
-              startedAt: Date.now(),
-            });
-          }
-          if (event.type === "tool_execution_end") {
-            status.stop();
-            printToolInfo(event);
-          }
-          if (event.type === "tool_permission") {
-            const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
-            quiet(chalk.dim(`\n${label}: ${event.toolName}`));
-          }
-        },
+        onEvent: onAgentEvent,
       });
 
       status.stop();
@@ -591,6 +576,62 @@ export function summarizeToolCall(
     return toolName;
   }
   return oneLine.length > 40 ? `${oneLine.slice(0, 39)}…` : oneLine;
+}
+
+/** Agent 事件处理所需的依赖（抽出来是为了能脱离 readline 单测） */
+export type AgentEventHandlerDeps = {
+  status: StatusController;
+  /** 卡片渲染上下文（终端宽度与样式），整个会话复用同一份 */
+  renderContext: RenderContext;
+  /** 需要先让出状态行再打印的输出（例如审批结果） */
+  quiet: (...args: unknown[]) => void;
+  /** 流式正文的落点，默认写 stdout */
+  write?: (text: string) => void;
+};
+
+/**
+ * 把 agent 事件接到 CLI 的输出上：状态行、流式正文、工具卡片。
+ *
+ * 抽成独立函数是因为这里踩过坑：`tool_execution_start` 只喂给了状态行，
+ * 没有喂给 `printToolInfo`，而卡片的 args 与起始时间**只来自 start 事件**
+ * （见 `printToolInfo` 的注释），于是真机上卡片丢失路径、耗时恒为 `0ms`、
+ * `edit_file` 的 diff 恒为 `+0 -0`；而当时"手工先喂 start 再喂 end"的用例
+ * 恰好绕过了这条生产接线，所以一直是绿的。
+ */
+export function createAgentEventHandler(
+  deps: AgentEventHandlerDeps,
+): (event: AgentEvent) => void {
+  const write =
+    deps.write ??
+    ((text: string): void => {
+      process.stdout.write(text);
+    });
+
+  return (event: AgentEvent): void => {
+    if (event.type === "message_update" && event.delta) {
+      // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
+      deps.status.stop();
+      write(event.delta);
+    }
+    if (event.type === "tool_execution_start") {
+      // 必须先喂卡片缓存，再更新状态行
+      printToolInfo(event, deps.renderContext);
+      deps.status.set({
+        kind: "tool",
+        toolName: event.toolName,
+        detail: summarizeToolCall(event.toolName, event.args),
+        startedAt: Date.now(),
+      });
+    }
+    if (event.type === "tool_execution_end") {
+      deps.status.stop();
+      printToolInfo(event, deps.renderContext);
+    }
+    if (event.type === "tool_permission") {
+      const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
+      deps.quiet(chalk.dim(`\n${label}: ${event.toolName}`));
+    }
+  };
 }
 
 /**

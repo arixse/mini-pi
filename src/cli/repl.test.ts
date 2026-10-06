@@ -8,6 +8,7 @@ import {
   appendUserMessage,
   clearSession,
   compactContext,
+  createAgentEventHandler,
   formatSessionList,
   printLastToolOutput,
   printToolInfo,
@@ -24,7 +25,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
 import { LlmModel } from "../agent/model";
-import { createTextContent, createUserMessage } from "../agent/message";
+import { runAgentLoop } from "../agent/loop";
+import { ToolRegistry } from "../agent/tools";
+import { createAssistantMessage, createTextContent, createUserMessage } from "../agent/message";
 import { AgentMessage } from "../shared/protocol";
 import { PLAIN_CONTEXT, RenderContext } from "./render";
 import { RunState, StatusController } from "./status";
@@ -465,6 +468,130 @@ describe("ReplOptions", () => {
 
       assert.ok(text.includes("…"), "应出现截断标记");
       assert.ok(!text.includes(longContent), "完整内容不应出现");
+    });
+  });
+
+  describe("createAgentEventHandler（工具卡片的生产接线）", () => {
+    // 固定宽度 + 纯文本样式：断言不依赖测试终端的实际列数与色彩能力
+    const context = { ...PLAIN_CONTEXT, width: 100 } as RenderContext;
+
+    function capture(run: () => void): string {
+      const originalLog = console.log;
+      const output: string[] = [];
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
+      };
+      try {
+        run();
+      } finally {
+        console.log = originalLog;
+      }
+      return output.join("\n");
+    }
+
+    function createFakeStatus(): StatusController & { states: RunState[] } {
+      const states: RunState[] = [];
+      return {
+        states,
+        set(state: RunState): void {
+          states.push(state);
+        },
+        stop(): void {},
+        isActive(): boolean {
+          return false;
+        },
+      };
+    }
+
+    /**
+     * 回归用例：必须让 agent 循环产生的**真实事件流**驱动事件处理器。
+     *
+     * 旧实现只在 `tool_execution_end` 里调用 `printToolInfo`，而卡片的 args 与
+     * 起始时间只来自 `tool_execution_start`（协议里 end 只带 result），
+     * 于是真机上卡片丢失路径、耗时恒为 `0ms`、`edit_file` 的 diff 恒为 `+0 -0`。
+     * 当时的用例是"手工先喂 start 再喂 end"，恰好把缺失的那一步补上了，
+     * 所以缺陷一直没被发现——这里改为喂完整事件流，让接线本身受测。
+     */
+    it("从 runAgentLoop 的事件流驱动时，卡片应带上参数与真实 diff", async () => {
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "edit_file",
+        description: "test double",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          return {
+            content: [createTextContent("File edited successfully")],
+            details: { path: "src/a.ts", replacements: 1, lineNumber: 1 },
+          };
+        },
+      });
+
+      let calls = 0;
+      const model: LlmModel = {
+        async complete() {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-1",
+                  name: "edit_file",
+                  arguments: {
+                    path: "src/a.ts",
+                    oldText: "const a = 1;",
+                    newText: "const a = 2;",
+                  },
+                },
+              ],
+              stopReason: "toolUse",
+              usage: { input: 0, output: 0, totalTokens: 0 },
+              timestamp: Date.now(),
+            };
+          }
+          return createAssistantMessage([createTextContent("done")]);
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [createUserMessage("edit it")],
+        tools: [],
+        model,
+        toolRegistry: registry,
+      });
+
+      const status = createFakeStatus();
+      const handler = createAgentEventHandler({
+        status,
+        renderContext: context,
+        quiet: () => {},
+        write: () => {},
+      });
+
+      const text = capture(() => {
+        for (const event of result.events) {
+          handler(event);
+        }
+      });
+
+      assert.ok(
+        text.includes("src/a.ts"),
+        `卡片标题应显示文件路径（start 事件必须先喂进卡片缓存），实际：\n${text}`,
+      );
+      assert.ok(
+        text.includes("+ const a = 2;"),
+        `卡片应显示 diff 的新增行，实际：\n${text}`,
+      );
+      assert.ok(
+        text.includes("+1 -1"),
+        `页脚应给出真实的增删行数，实际：\n${text}`,
+      );
+      assert.ok(
+        status.states.some((state) => state.kind === "tool"),
+        "状态行应收到工具执行状态",
+      );
     });
   });
 });
