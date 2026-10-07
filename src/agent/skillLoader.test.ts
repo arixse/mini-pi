@@ -212,5 +212,54 @@ Use this skill when you need to test.`;
       // 应该返回自定义的测试目录
       assert.ok(dirs[0].includes("skills"));
     });
+
+    it("默认目录应同时包含项目级 .mini-pi/skills、.pi/skills 与 .agents/skills", () => {
+      const defaultLoader = new SkillLoader(testDir);
+      const dirs = defaultLoader
+        .getSkillDirectories()
+        .map((dir) => dir.replace(/\\/g, "/"));
+      const root = testDir.replace(/\\/g, "/");
+
+      assert.ok(dirs.includes(`${root}/.mini-pi/skills`));
+      assert.ok(dirs.includes(`${root}/.pi/skills`));
+      assert.ok(dirs.includes(`${root}/.agents/skills`));
+      // .agents/skills 最后加载，同名 skill 以它为准（AGENTS.md 约定的项目 skill 目录）
+      assert.strictEqual(dirs[dirs.length - 1], `${root}/.agents/skills`);
+    });
+
+    it("应能从 .agents/skills 加载 skill", () => {
+      const agentsSkillDir = join(testDir, ".agents", "skills", "agents-skill");
+      mkdirSync(agentsSkillDir, { recursive: true });
+      writeFileSync(
+        join(agentsSkillDir, "SKILL.md"),
+        "---\nname: agents-skill\ndescription: 项目规则约定的目录\n---\n\n# agents-skill\n",
+        "utf8",
+      );
+
+      const defaultLoader = new SkillLoader(testDir);
+      const found = defaultLoader
+        .loadAllMetadata()
+        .find((skill) => skill.name === "agents-skill");
+
+      assert.ok(found, "应能发现 .agents/skills 下的 skill");
+      assert.strictEqual(found!.source, "project");
+    });
+
+    it("应能从 .pi/skills 加载 skill", () => {
+      const piSkillDir = join(testDir, ".pi", "skills", "pi-skill");
+      mkdirSync(piSkillDir, { recursive: true });
+      writeFileSync(
+        join(piSkillDir, "SKILL.md"),
+        "---\nname: pi-skill\ndescription: 项目规则约定的目录\n---\n\n# pi-skill\n",
+        "utf8",
+      );
+
+      const defaultLoader = new SkillLoader(testDir);
+      const metadata = defaultLoader.loadAllMetadata();
+      const found = metadata.find((skill) => skill.name === "pi-skill");
+
+      assert.ok(found, "应能发现 .pi/skills 下的 skill");
+      assert.strictEqual(found!.source, "project");
+    });
   });
 });

@@ -48,7 +48,8 @@ describe("ModelProviderService", () => {
   let testFilePath: string;
   
   beforeEach(async () => {
-    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}`);
+    // 加随机后缀：各测试文件是独立进程，只用 Date.now() 时同一毫秒启动会撞同一个目录
+    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     testFilePath = join(testDir, "auth.json");
     
     if (!existsSync(testDir)) {

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 /**
@@ -77,16 +77,21 @@ export class SkillLoader {
    * @param customDirs 自定义 skill 目录列表（用于测试）
    */
   constructor(
-    private readonly workspaceRoot: string,
+    workspaceRoot: string,
     customDirs?: Array<{ path: string; source: SkillSource }>,
   ) {
     if (customDirs) {
       this.skillDirs = customDirs;
     } else {
+      // 同源目录按顺序加载，后加载者覆盖同名 skill。
+      // 项目级依次支持 .mini-pi/skills（历史约定）、.pi/skills 与 .agents/skills
+      // （项目规则 AGENTS.md 约定的目录），后面的优先级更高。
       this.skillDirs = [
         { path: join(homedir(), ".agents", "skills"), source: "global-agents" },
         { path: join(homedir(), ".mini-pi", "skills"), source: "global-mini-pi" },
         { path: join(workspaceRoot, ".mini-pi", "skills"), source: "project" },
+        { path: join(workspaceRoot, ".pi", "skills"), source: "project" },
+        { path: join(workspaceRoot, ".agents", "skills"), source: "project" },
       ];
     }
   }
@@ -152,8 +157,6 @@ export class SkillLoader {
     if (this.metadataCache) {
       return [...this.metadataCache];
     }
-
-    const allSkills: SkillWithSource[] = [];
 
     // 按优先级加载：后面的目录优先级更高
     // 后加载的会覆盖先加载的同名 skill

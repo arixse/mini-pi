@@ -14,7 +14,9 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 - 快捷键支持
 
 
-### 2.2 页面交互（第二阶段）
+### 2.2 页面交互（第二阶段，尚未实现）
+
+> 当前仓库只包含第一阶段的 CLI 实现，尚无 `src/server` 与 `src/client`。
 
 - Web 图形界面
 - 可视化文件操作
@@ -67,11 +69,16 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 ## 6. 配置要求
 
 - Node.js 18+
-- API 密钥（OpenAI 或 Anthropic）
-- 环境变量配置
+- API 密钥（OpenAI 或 Anthropic，通过 `/login` 命令配置）
+- 模型选择（通过 `/model` 命令配置）
 
 ## 7. 安全考虑
 
-- API 密钥安全存储
-- 命令执行权限控制
-- 输入验证和 sanitization
+- **API 密钥存储**：`auth.json` / `settings.json` 以 0600（仅属主可读写）落盘；
+  Windows 需用户自行限制 `%USERPROFILE%\.mini-pi` 的访问权限
+- **命令执行权限控制**：`write_file` / `edit_file` / `bash` 执行前必须由用户逐次确认
+  （`/trust` 可在当前会话内跳过），非交互式终端按拒绝处理
+- **文件访问边界**：所有文件操作限制在工作区内，并做真实路径校验，
+  工作区内的软链接指向外部同样会被拒绝
+- **凭据保护**：`.env*`、SSH 私钥、`*.pem`、`.git-credentials` 默认禁止读写
+- **可中断**：Ctrl+C 取消当前任务，模型请求 120 秒超时

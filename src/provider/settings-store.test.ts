@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { SettingsStore } from "./settings-store";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,7 +12,8 @@ describe("SettingsStore", () => {
   let testFilePath: string;
 
   beforeEach(async () => {
-    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}`);
+    // 加随机后缀：各测试文件是独立进程，只用 Date.now() 时同一毫秒启动会撞同一个目录
+    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     testFilePath = join(testDir, "settings.json");
 
     if (!existsSync(testDir)) {
@@ -20,6 +21,68 @@ describe("SettingsStore", () => {
     }
 
     store = new SettingsStore(testFilePath);
+  });
+
+  describe("getMaxTokens", () => {
+    it("未配置时返回 undefined", async () => {
+      assert.strictEqual(await store.getMaxTokens(), undefined);
+    });
+
+    it("返回配置的正整数", async () => {
+      writeFileSync(testFilePath, JSON.stringify({ maxTokens: 12345 }), "utf-8");
+      const fresh = new SettingsStore(testFilePath);
+
+      assert.strictEqual(await fresh.getMaxTokens(), 12345);
+    });
+
+    it("非法值一律忽略", async () => {
+      for (const value of [0, -5, "abc", null]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ maxTokens: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getMaxTokens(),
+          undefined,
+          `maxTokens=${JSON.stringify(value)} 应被忽略`,
+        );
+      }
+    });
+  });
+
+  describe("getContextWindow", () => {
+    it("未配置时返回 undefined（由调用方使用保守默认值）", async () => {
+      assert.strictEqual(await store.getContextWindow(), undefined);
+    });
+
+    it("返回配置的正整数", async () => {
+      writeFileSync(
+        testFilePath,
+        JSON.stringify({ contextWindow: 128000 }),
+        "utf-8",
+      );
+      const fresh = new SettingsStore(testFilePath);
+
+      assert.strictEqual(await fresh.getContextWindow(), 128000);
+    });
+
+    it("非法值一律忽略", async () => {
+      for (const value of [0, -5, "abc", null, Number.POSITIVE_INFINITY]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ contextWindow: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getContextWindow(),
+          undefined,
+          `contextWindow=${JSON.stringify(value)} 应被忽略`,
+        );
+      }
+    });
   });
 
   afterEach(async () => {

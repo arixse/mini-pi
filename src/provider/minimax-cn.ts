@@ -1,5 +1,4 @@
 import { Provider } from "./index";
-
 export class MiniMaxCnProvider implements Provider {
   private baseUrl: string = "https://api.minimax.cn/anthropic";
   private sdkType: string = "Anthropic";
@@ -18,17 +17,26 @@ export class MiniMaxCnProvider implements Provider {
   }
 
   /**
+   * MiniMax-CN 的 Base URL 指向 Anthropic 兼容端点（/anthropic），
+   * 但模型列表在 /v1/models，不能直接拼 "/models"。
+   */
+  getModelsUrl(baseUrl: string): string {
+    const base = baseUrl.replace(/\/+$/, "").replace(/\/anthropic$/, "");
+    return `${base}/v1/models`;
+  }
+
+  /**
    * 根据 curl --request GET \
    * --url https://api.minimax.cn/v1/models \
    * --header 'Authorization: Bearer <token>' 动态获取modellist
    */
-  async getModelList(apiKey: string): Promise<string[]> {
+  async getModelList(apiKey: string, baseUrl?: string): Promise<string[]> {
     if (!apiKey) {
       throw new Error("API key is required");
     }
 
     try {
-      const response = await fetch("https://api.minimax.cn/v1/models", {
+      const response = await fetch(this.getModelsUrl(baseUrl ?? this.baseUrl), {
         method: "GET",
         headers: {
           Authorization: `Bearer ${apiKey}`,

@@ -1,45 +1,13 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { createModelFromSettings } from "./index";
-import { ModelProviderService, Provider } from "../provider";
+import { createModelFromSettings, resolveContextWindowFromSettings } from "./index";
+import { ModelProviderService } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { SettingsStore } from "../provider/settings-store";
 import { existsSync } from "node:fs";
-import { unlink, mkdir, readFile } from "node:fs/promises";
+import { unlink, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-// Mock Provider for testing
-class MockProvider implements Provider {
-  private name: string;
-  private sdkType: string;
-  private baseUrl: string;
-
-  constructor(name: string, sdkType: string, baseUrl: string) {
-    this.name = name;
-    this.sdkType = sdkType;
-    this.baseUrl = baseUrl;
-  }
-
-  getProviderName(): string {
-    return this.name;
-  }
-
-  getSdkType(): string {
-    return this.sdkType;
-  }
-
-  getBaseUrl(): string {
-    return this.baseUrl;
-  }
-
-  async getModelList(apiKey: string): Promise<string[]> {
-    if (!apiKey) {
-      throw new Error("API key is required");
-    }
-    return ["model1", "model2"];
-  }
-}
 
 describe("createModelFromSettings", () => {
   let testDir: string;
@@ -131,33 +99,45 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(settings.defaultModel, "deepseek/deepseek-flash");
   });
 
-  it("should fallback to env model when no provider has apiKey", async () => {
+  it("resolveContextWindowFromSettings：未配置时按当前模型名推断窗口", async () => {
+    const resolved = await resolveContextWindowFromSettings(
+      settingsStore,
+      "MiniMax-M2.7",
+    );
+
+    assert.deepStrictEqual(resolved, { window: 204_800, source: "inferred" });
+
+    const unknown = await resolveContextWindowFromSettings(
+      settingsStore,
+      "某个私有模型",
+    );
+    assert.deepStrictEqual(unknown, { window: 128_000, source: "default" });
+
+    const noModel = await resolveContextWindowFromSettings(settingsStore, null);
+    assert.deepStrictEqual(noModel, { window: 128_000, source: "default" });
+  });
+
+  it("resolveContextWindowFromSettings：显式配置优先于推断", async () => {
+    const settingsPath = settingsFilePath;
+    await writeFile(settingsPath, JSON.stringify({ contextWindow: 64_000 }));
+    // 重新构造以绕开内存缓存，等价于下次启动重新读取
+    const reloaded = new SettingsStore(settingsPath);
+
+    const resolved = await resolveContextWindowFromSettings(
+      reloaded,
+      "MiniMax-M2.7",
+    );
+
+    assert.deepStrictEqual(resolved, { window: 64_000, source: "configured" });
+  });
+
+  it("should return null model when no provider has apiKey", async () => {
     // 没有设置 defaultModel，也没有任何 provider 配置
-    // 应该回退到环境变量
-    const originalEnv = process.env.MODEL_PROVIDER;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    
-    try {
-      process.env.MODEL_PROVIDER = "openai";
-      process.env.OPENAI_API_KEY = "test-key";
-      
-      const result = await createModelFromSettings(providerService, settingsStore);
-      
-      assert.ok(result.model);
-      assert.strictEqual(result.providerName, "env");
-      assert.strictEqual(result.modelName, "default");
-    } finally {
-      // 恢复环境变量
-      if (originalEnv !== undefined) {
-        process.env.MODEL_PROVIDER = originalEnv;
-      } else {
-        delete process.env.MODEL_PROVIDER;
-      }
-      if (originalApiKey !== undefined) {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      } else {
-        delete process.env.OPENAI_API_KEY;
-      }
-    }
+    // 不应从环境变量读取配置，应返回 null，由调用方提示用户使用 /login 和 /model 配置
+    const result = await createModelFromSettings(providerService, settingsStore);
+
+    assert.strictEqual(result.model, null);
+    assert.strictEqual(result.providerName, null);
+    assert.strictEqual(result.modelName, null);
   });
 });

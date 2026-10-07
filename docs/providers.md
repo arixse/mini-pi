@@ -7,7 +7,7 @@
 | 供应商 | SDK类型 | 默认Base URL | 状态 |
 |--------|---------|--------------|------|
 | DeepSeek | OpenAI | https://api.deepseek.com | ✅ 已对接 |
-| MiniMax-CN | Anthropic | https://api.minimax.chat/anthropic | ✅ 已对接 |
+| MiniMax-CN | Anthropic | https://api.minimax.cn/anthropic | ✅ 已对接 |
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
 
 ---
@@ -78,11 +78,17 @@ MiniMax-CN 使用 Anthropic 兼容接口：
 
 ```typescript
 // Base URL
-https://api.minimax.chat/anthropic
+https://api.minimax.cn/anthropic
 
 // SDK类型
 Anthropic
+
+// 模型列表（注意：路径与 Base URL 不同源）
+https://api.minimax.cn/v1/models
 ```
+
+> Base URL 与模型列表路径不一致，因此 Provider 覆写了 `getModelsUrl()`；
+> 若配置了自定义 Base URL（代理/私有网关），模型列表也会跟着走同一网关。
 
 ### 配置示例
 
@@ -165,8 +171,11 @@ export interface Provider {
 1. 在 `src/provider/` 目录下创建新的 provider 文件
 2. 实现 `Provider` 接口
 3. 在 `src/provider/index.ts` 中注册新 provider
-4. 编写单元测试
-5. 更新本文档
+4. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
+   按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
+   会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
+5. 编写单元测试
+6. 更新本文档
 
 ---
 
@@ -179,20 +188,10 @@ export interface Provider {
 
 ---
 
-## 环境变量配置
+## 配置方式
 
-除了通过 `/login` 命令配置，也可以通过环境变量设置：
-
-```bash
-# DeepSeek
-DEEPSEEK_API_KEY=sk-xxxxxxxx
-
-# MiniMax-CN
-MINIMAX_CN_API_KEY=xxxxxxxx
-
-# OpenAI
-OPENAI_API_KEY=sk-xxxxxxxx
-```
+使用 `/login` 命令配置 API Key，使用 `/model` 命令选择模型供应商和模型。
+配置会保存到 `~/.mini-pi/` 目录（`auth.json` 与 `settings.json`），不再从环境变量读取。
 
 ---
 

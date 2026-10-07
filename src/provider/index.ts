@@ -14,7 +14,28 @@ export interface Provider {
   getBaseUrl(): string;
   
   /** 获取模型列表 */
-  getModelList(apiKey: string): Promise<string[]>;
+  /**
+   * 获取模型列表
+   * @param apiKey API Key
+   * @param baseUrl 自定义 Base URL（用户可能配置代理或私有网关）；不传则用提供方默认值
+   */
+  getModelList(apiKey: string, baseUrl?: string): Promise<string[]>;
+
+  /**
+   * 模型列表接口地址（可选；默认 `baseUrl + "/models"`）。
+   *
+   * 只有接口路径与 Base URL 不一致的提供方需要实现它，
+   * 例如 MiniMax-CN 的 Base URL 是 Anthropic 兼容端点，模型列表在 /v1/models。
+   */
+  getModelsUrl?(baseUrl: string): string;
+
+  /** 获取默认模型列表（可选，用于自动生成默认配置） */
+  getDefaultModels?(): string[];
+}
+
+/** 默认的模型列表地址：去掉结尾斜杠后拼 /models */
+export function buildModelsUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/models`;
 }
 
 /**
@@ -33,8 +54,8 @@ export class ModelProviderService {
     this.registerDefaultProviders();
   }
   
-  /** 注册默认的Provider */
-  private registerDefaultProviders(): void {
+  /** 注册默认的Provider（子类可覆写以控制默认注册行为） */
+  protected registerDefaultProviders(): void {
     this.registerProvider(new MiniMaxCnProvider());
     this.registerProvider(new DeepSeekProvider());
     this.registerProvider(new OpenAIProvider());
@@ -72,7 +93,11 @@ export class ModelProviderService {
    * @param apiKey API密钥
    * @returns 模型列表
    */
-  async getModelList(providerName: string, apiKey: string): Promise<string[]> {
+  async getModelList(
+    providerName: string,
+    apiKey: string,
+    baseUrl?: string,
+  ): Promise<string[]> {
     const provider = this.providers.get(providerName);
     if (!provider) {
       throw new Error(`Provider '${providerName}' not found`);
@@ -82,7 +107,7 @@ export class ModelProviderService {
       throw new Error("API key is required");
     }
     
-    return provider.getModelList(apiKey);
+    return provider.getModelList(apiKey, baseUrl);
   }
   
   /**
@@ -167,6 +192,17 @@ export class ModelProviderService {
 
 export { ProviderStore } from "./provider-store";
 export { SettingsStore } from "./settings-store";
+export {
+  CONTEXT_WINDOW_SOURCE_LABEL,
+  DEFAULT_CONTEXT_WINDOW,
+  type ContextWindowSource,
+  type ResolveContextWindowParams,
+  type ResolvedContextWindow,
+  inferContextWindow,
+  matchContextWindowRule,
+  normalizeModelName,
+  resolveContextWindow,
+} from "./context-window";
 export { MiniMaxCnProvider } from "./minimax-cn";
 export { DeepSeekProvider } from "./deepseek";
 export { OpenAIProvider } from "./openai";

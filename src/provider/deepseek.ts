@@ -1,4 +1,4 @@
-import { Provider } from "./index";
+import { Provider, buildModelsUrl } from "./index";
 
 export class DeepSeekProvider implements Provider {
   private baseUrl: string = "https://api.deepseek.com";
@@ -17,19 +17,24 @@ export class DeepSeekProvider implements Provider {
     return this.name;
   }
 
+  /** DeepSeek 的模型列表与 Base URL 同源 */
+  getModelsUrl(baseUrl: string): string {
+    return buildModelsUrl(baseUrl);
+  }
+
   /**
    * 获取 DeepSeek 模型列表
    * 根据 curl --request GET \
    * --url https://api.deepseek.com/models \
    * --header 'Authorization: Bearer <token>' 动态获取模型列表
    */
-  async getModelList(apiKey: string): Promise<string[]> {
+  async getModelList(apiKey: string, baseUrl?: string): Promise<string[]> {
     if (!apiKey) {
       throw new Error("API key is required");
     }
 
     try {
-      const response = await fetch("https://api.deepseek.com/models", {
+      const response = await fetch(this.getModelsUrl(baseUrl ?? this.baseUrl), {
         method: "GET",
         headers: {
           Authorization: `Bearer ${apiKey}`,

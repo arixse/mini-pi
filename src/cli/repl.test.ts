@@ -1,14 +1,44 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ReplOptions, printToolInfo } from "./repl";
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  KEEP_RECENT_MESSAGES,
+  MAX_CONTEXT_TOKENS,
+  MIN_CONTEXT_BUDGET,
+  ReplOptions,
+  appendAgentMessages,
+  appendUserMessage,
+  clearSession,
+  compactContext,
+  contextOverheadTokens,
+  contextWindowInfo,
+  createAgentEventHandler,
+  createInputScheduler,
+  formatSessionList,
+  printLastToolOutput,
+  printToolInfo,
+  resolveContextBudget,
+  sessionStatusEntries,
+  startNewSession,
+  summarizeToolCall,
+  switchSession,
+  workspaceFileExists,
+} from "./repl";
 import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { JsonlSessionStore } from "../agent/sessionStore";
-import { LlmModel } from "../agent/model";
+import { estimateTextTokens } from "../agent/sessionStore";
+import { LlmModel, collectOpenAIStream } from "../agent/model";
+import { runAgentLoop } from "../agent/loop";
+import { ToolRegistry } from "../agent/tools";
+import { createAssistantMessage, createTextContent, createUserMessage } from "../agent/message";
+import { AgentMessage } from "../shared/protocol";
+import { PLAIN_CONTEXT, RenderContext } from "./render";
+import { RunState, StatusController } from "./status";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -43,7 +73,7 @@ class MockProvider implements Provider {
 }
 
 // Mock model for reload testing
-function createMockModel(name: string): LlmModel {
+function createMockModel(_name: string): LlmModel {
   return {
     async complete() {
       return {
@@ -64,7 +94,8 @@ describe("ReplOptions", () => {
   let providerService: ModelProviderService;
 
   beforeEach(async () => {
-    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}`);
+    // 加随机后缀：各测试文件是独立进程，只用 Date.now() 时同一毫秒启动会撞同一个目录
+    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     testFilePath = join(testDir, "auth.json");
 
     if (!existsSync(testDir)) {
@@ -264,172 +295,948 @@ describe("ReplOptions", () => {
   });
 
   describe("printToolInfo", () => {
-    it("should print tool execution end info with args and success result", () => {
-      // 先发送 start 事件缓存参数
-      const startEvent = {
-        type: "tool_execution_start" as const,
-        toolCallId: "call-1",
-        toolName: "read_file",
-        args: { path: "src/index.ts" },
-      };
+    // 固定宽度 + 纯文本样式：断言不依赖测试终端的实际列数与色彩能力
+    const context = { ...PLAIN_CONTEXT, width: 100 } as RenderContext;
 
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-1",
-        toolName: "read_file",
-        result: {
-          content: [{ type: "text" as const, text: "File content here" }],
-        },
-        isError: false,
-      };
-
-      // 捕获控制台输出
+    function capture(run: () => void): string {
       const originalLog = console.log;
       const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
       };
-
       try {
-        // start 事件只缓存，不输出
-        printToolInfo(startEvent);
-        assert.strictEqual(output.length, 0);
+        run();
+      } finally {
+        console.log = originalLog;
+      }
+      return output.join("\n");
+    }
 
-        // end 事件输出完整块
-        printToolInfo(endEvent);
-        assert.ok(output.length > 0);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("📖"));
-        assert.ok(fullOutput.includes("read_file"));
-        assert.ok(fullOutput.includes("Args: path=src/index.ts"));
-        assert.ok(fullOutput.includes("✅"));
-        assert.ok(fullOutput.includes("Success"));
-        assert.ok(fullOutput.includes("File content here"));
+    it("start 事件只缓存，end 事件才输出卡片", () => {
+      const output: string[] = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
+      };
+      try {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            args: { path: "src/index.ts" },
+          },
+          context,
+        );
+        assert.strictEqual(output.length, 0, "start 事件不应输出");
       } finally {
         console.log = originalLog;
       }
     });
 
-    it("should print tool execution end info with error", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-2",
-        toolName: "bash",
-        result: {
-          content: [{ type: "text" as const, text: "Command not found" }],
-        },
-        isError: true,
-      };
+    it("read_file 卡片应包含图标、路径、状态、规模与内容", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            args: { path: "src/index.ts" },
+          },
+          context,
+        );
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            result: {
+              content: [{ type: "text", text: "File content here" }],
+              details: {
+                path: "src/index.ts",
+                totalLines: 1,
+                totalBytes: 17,
+                returnedFrom: 1,
+                returnedTo: 1,
+                returnedLines: 1,
+                truncated: false,
+              },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
 
-      // 捕获控制台输出
+      assert.ok(text.includes("📖"));
+      assert.ok(text.includes("src/index.ts"));
+      assert.ok(text.includes("✅"));
+      assert.ok(text.includes("共 1 行"), `应给出规模页脚，实际输出：\n${text}`);
+      assert.ok(text.includes("1 │ File content here"), "正文应带行号");
+    });
+
+    it("失败的工具应显示红色状态与错误内容", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-2",
+            toolName: "bash",
+            result: {
+              content: [{ type: "text", text: "Command not found" }],
+            },
+            isError: true,
+          },
+          context,
+        );
+      });
+
+      assert.ok(text.includes("💻"));
+      assert.ok(text.includes("❌"));
+      assert.ok(text.includes("Command not found"));
+    });
+
+    it("未知工具使用兜底图标并显示工具名", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-3",
+            toolName: "unknown_tool",
+            result: {
+              content: [{ type: "text", text: "result" }],
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
+
+      assert.ok(text.includes("🛠️"));
+      assert.ok(text.includes("unknown_tool"));
+      assert.ok(text.includes("✅"));
+    });
+
+    it("bash 卡片应显示命令、退出码与输出", () => {
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_start",
+            toolCallId: "call-5",
+            toolName: "bash",
+            args: { command: "ls -la" },
+          },
+          context,
+        );
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-5",
+            toolName: "bash",
+            result: {
+              content: [{ type: "text", text: "total 0" }],
+              details: { command: "ls -la", exitCode: 0, stdout: "total 0", stderr: "" },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
+
+      assert.ok(text.includes("💻 ls -la"), `标题行应带完整命令：\n${text}`);
+      assert.ok(text.includes("✅"));
+      assert.ok(text.includes("exit 0"));
+      assert.ok(text.includes("│ total 0"));
+    });
+
+    it("超长内容按显示宽度截断，不会整段刷屏", () => {
+      const longContent = "a".repeat(500);
+      const text = capture(() => {
+        printToolInfo(
+          {
+            type: "tool_execution_end",
+            toolCallId: "call-4",
+            toolName: "read_file",
+            result: {
+              content: [{ type: "text", text: longContent }],
+              details: {
+                path: "long.txt",
+                totalLines: 1,
+                totalBytes: 500,
+                returnedFrom: 1,
+                returnedTo: 1,
+                returnedLines: 1,
+                truncated: false,
+              },
+            },
+            isError: false,
+          },
+          context,
+        );
+      });
+
+      assert.ok(text.includes("…"), "应出现截断标记");
+      assert.ok(!text.includes(longContent), "完整内容不应出现");
+    });
+  });
+
+  describe("createAgentEventHandler（工具卡片的生产接线）", () => {
+    // 固定宽度 + 纯文本样式：断言不依赖测试终端的实际列数与色彩能力
+    const context = { ...PLAIN_CONTEXT, width: 100 } as RenderContext;
+
+    function capture(run: () => void): string {
       const originalLog = console.log;
       const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
+      console.log = (...args: unknown[]) => {
+        output.push(args.map(String).join(" "));
       };
-
       try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("💻"));
-        assert.ok(fullOutput.includes("bash"));
-        assert.ok(fullOutput.includes("❌"));
-        assert.ok(fullOutput.includes("Failed"));
-        assert.ok(fullOutput.includes("Command not found"));
+        run();
       } finally {
         console.log = originalLog;
       }
-    });
+      return output.join("\n");
+    }
 
-    it("should handle unknown tool names", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-3",
-        toolName: "unknown_tool",
-        result: {
-          content: [{ type: "text" as const, text: "result" }],
+    function createFakeStatus(): StatusController & { states: RunState[] } {
+      const states: RunState[] = [];
+      return {
+        states,
+        set(state: RunState): void {
+          states.push(state);
         },
-        isError: false,
-      };
-
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("🛠️"));
-        assert.ok(fullOutput.includes("unknown_tool"));
-        assert.ok(fullOutput.includes("✅"));
-      } finally {
-        console.log = originalLog;
-      }
-    });
-
-    it("should truncate long result content", () => {
-      const longContent = "a".repeat(150);
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-4",
-        toolName: "read_file",
-        result: {
-          content: [{ type: "text" as const, text: longContent }],
+        stop(): void {},
+        isActive(): boolean {
+          return false;
         },
-        isError: false,
       };
+    }
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
-
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        assert.ok(fullOutput.includes("..."));
-        assert.ok(!fullOutput.includes(longContent)); // 完整内容不应出现
-      } finally {
-        console.log = originalLog;
-      }
-    });
-
-    it("should display tool block with background color", () => {
-      const endEvent = {
-        type: "tool_execution_end" as const,
-        toolCallId: "call-5",
-        toolName: "bash",
-        args: { command: "ls -la" },
-        result: {
-          content: [{ type: "text" as const, text: "total 0" }],
+    /**
+     * 回归用例：必须让 agent 循环产生的**真实事件流**驱动事件处理器。
+     *
+     * 旧实现只在 `tool_execution_end` 里调用 `printToolInfo`，而卡片的 args 与
+     * 起始时间只来自 `tool_execution_start`（协议里 end 只带 result），
+     * 于是真机上卡片丢失路径、耗时恒为 `0ms`、`edit_file` 的 diff 恒为 `+0 -0`。
+     * 当时的用例是"手工先喂 start 再喂 end"，恰好把缺失的那一步补上了，
+     * 所以缺陷一直没被发现——这里改为喂完整事件流，让接线本身受测。
+     */
+    it("从 runAgentLoop 的事件流驱动时，卡片应带上参数与真实 diff", async () => {
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "edit_file",
+        description: "test double",
+        parameters: { type: "object", properties: {} },
+        async execute() {
+          return {
+            content: [createTextContent("File edited successfully")],
+            details: { path: "src/a.ts", replacements: 1, lineNumber: 1 },
+          };
         },
-        isError: false,
+      });
+
+      let calls = 0;
+      const model: LlmModel = {
+        async complete() {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-1",
+                  name: "edit_file",
+                  arguments: {
+                    path: "src/a.ts",
+                    oldText: "const a = 1;",
+                    newText: "const a = 2;",
+                  },
+                },
+              ],
+              stopReason: "toolUse",
+              usage: { input: 0, output: 0, totalTokens: 0 },
+              timestamp: Date.now(),
+            };
+          }
+          return createAssistantMessage([createTextContent("done")]);
+        },
       };
 
-      // 捕获控制台输出
-      const originalLog = console.log;
-      const output: string[] = [];
-      console.log = (...args: any[]) => {
-        output.push(args.join(" "));
-      };
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [createUserMessage("edit it")],
+        tools: [],
+        model,
+        toolRegistry: registry,
+      });
 
-      try {
-        printToolInfo(endEvent);
-        const fullOutput = output.join("\n");
-        // 检查是否包含工具信息
-        assert.ok(fullOutput.includes("💻"));
-        assert.ok(fullOutput.includes("bash"));
-        assert.ok(fullOutput.includes("✅"));
-        assert.ok(fullOutput.includes("Success"));
-        assert.ok(fullOutput.includes("total 0"));
-      } finally {
-        console.log = originalLog;
-      }
+      const status = createFakeStatus();
+      const handler = createAgentEventHandler({
+        status,
+        renderContext: context,
+        quiet: () => {},
+        write: () => {},
+      });
+
+      const text = capture(() => {
+        for (const event of result.events) {
+          handler(event);
+        }
+      });
+
+      assert.ok(
+        text.includes("src/a.ts"),
+        `卡片标题应显示文件路径（start 事件必须先喂进卡片缓存），实际：\n${text}`,
+      );
+      assert.ok(
+        text.includes("+ const a = 2;"),
+        `卡片应显示 diff 的新增行，实际：\n${text}`,
+      );
+      assert.ok(
+        text.includes("+1 -1"),
+        `页脚应给出真实的增删行数，实际：\n${text}`,
+      );
+      assert.ok(
+        status.states.some((state) => state.kind === "tool"),
+        "状态行应收到工具执行状态",
+      );
     });
+
+    it("输出被 max_tokens 截断时给出可操作提示，而不是说成用户取消", async () => {
+      const status = createFakeStatus();
+      const notices: string[] = [];
+      const handler = createAgentEventHandler({
+        status,
+        renderContext: context,
+        quiet: (...args: unknown[]) => {
+          notices.push(args.map(String).join(" "));
+        },
+        write: () => {},
+      });
+
+      // 喂 collectOpenAIStream 的真实产物，把「finish_reason 映射」与「提示」一起锁住：
+      // 若映射回 aborted，这条断言就会失败
+      const truncated = await collectOpenAIStream([
+        { choices: [{ delta: { content: "这句话断在半" }, finish_reason: "length" }] },
+      ]);
+      assert.strictEqual(truncated.stopReason, "length");
+
+      capture(() => {
+        handler({ type: "turn_end", turn: 1, message: truncated, toolResults: [] });
+      });
+
+      const text = notices.join("\n");
+      assert.ok(text.includes("max_tokens"), `应说明是输出上限截断，实际：${text}`);
+      assert.ok(!text.includes("取消"), "不能把截断说成用户取消");
+    });
+  });
+});
+
+describe("压缩阈值推导与固定开销", () => {
+  it("默认窗口是 128k，推导出的阈值是 76800", () => {
+    // 把默认值锁在用例里：改成别的量级时这里会失败，提醒同步文档与样本量
+    assert.strictEqual(DEFAULT_CONTEXT_WINDOW, 128_000);
+    assert.strictEqual(MAX_CONTEXT_TOKENS, 76_800);
+  });
+
+  it("resolveContextBudget 按窗口比例推导并遵守下限", () => {
+    assert.strictEqual(resolveContextBudget(100_000), 60_000);
+    assert.strictEqual(
+      resolveContextBudget(DEFAULT_CONTEXT_WINDOW),
+      MAX_CONTEXT_TOKENS,
+    );
+    // 窗口配得很小时不低于下限，避免退化成"每轮都压缩"
+    assert.strictEqual(resolveContextBudget(1_000), MIN_CONTEXT_BUDGET);
+    // 小窗口模型（如 gpt-3.5-turbo 的 16k）可以显式配小，取到下限之上
+    assert.strictEqual(resolveContextBudget(16_384), 9_830);
+  });
+
+  it("resolveContextBudget 对非法窗口回退到默认窗口", () => {
+    for (const bad of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      assert.strictEqual(
+        resolveContextBudget(bad),
+        MAX_CONTEXT_TOKENS,
+        `${String(bad)} 应回退到默认窗口`,
+      );
+    }
+  });
+
+  it("contextOverheadTokens 必须计入工具定义，而不只是系统提示", () => {
+    const tools = [
+      { name: "bash", description: "run a command", parameters: { type: "object" } },
+    ];
+    const promptOnly = estimateTextTokens("你是助手");
+    const tokens = contextOverheadTokens("你是助手", tools);
+
+    assert.ok(tokens > promptOnly, "工具定义也要算进固定开销");
+    assert.strictEqual(
+      tokens,
+      promptOnly + estimateTextTokens(JSON.stringify(tools)),
+    );
+  });
+
+  it("contextOverheadTokens 没有工具时只算系统提示", () => {
+    assert.strictEqual(
+      contextOverheadTokens("abc", []),
+      estimateTextTokens("abc") + estimateTextTokens("[]"),
+    );
+  });
+});
+
+describe("上下文窗口的来源与展示", () => {
+  function makeOptions(overrides: Partial<ReplOptions> = {}): ReplOptions {
+    return {
+      prompt: "You: ",
+      systemPrompt: "test system prompt",
+      messages: [],
+      model: null,
+      toolRegistry: {} as any,
+      workspaceRoot: process.cwd(),
+      ...overrides,
+    };
+  }
+
+  it("显式写入的窗口与来源原样生效", () => {
+    const info = contextWindowInfo(
+      makeOptions({ contextWindow: 64_000, contextWindowSource: "configured" }),
+    );
+    assert.deepStrictEqual(info, { window: 64_000, source: "configured" });
+  });
+
+  it("未显式给窗口时按模型标签推断（换模型要换窗口）", () => {
+    const info = contextWindowInfo(
+      makeOptions({ modelLabel: "minimax-cn/MiniMax-M2.7" }),
+    );
+    assert.deepStrictEqual(info, { window: 204_800, source: "inferred" });
+  });
+
+  it("认不出模型名时回退到默认 128k", () => {
+    const info = contextWindowInfo(makeOptions({ modelLabel: "acme/私有模型" }));
+    assert.deepStrictEqual(info, {
+      window: DEFAULT_CONTEXT_WINDOW,
+      source: "default",
+    });
+  });
+
+  it("/status 要显示窗口值与来源，超窗时用户才知道该配什么", () => {
+    const entries = new Map(
+      sessionStatusEntries(
+        makeOptions({
+          modelLabel: "openai/gpt-3.5-turbo",
+          contextWindow: 16_384,
+          contextWindowSource: "inferred",
+        }),
+        false,
+      ),
+    );
+
+    const window = entries.get("上下文窗口") ?? "";
+    assert.ok(window.includes("16384"), `应显示窗口值，实际：${window}`);
+    assert.ok(window.includes("推断"), `应说明来源，实际：${window}`);
+  });
+});
+
+describe("session context wiring", () => {
+  let testDir: string;
+  let sessionFile: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `mini-pi-repl-session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    await mkdir(testDir, { recursive: true });
+    sessionFile = join(testDir, "session.jsonl");
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  function createOptions(overrides: Partial<ReplOptions> = {}): ReplOptions {
+    return {
+      prompt: "You: ",
+      systemPrompt: "test system prompt",
+      messages: [],
+      model: null,
+      toolRegistry: {} as any,
+      workspaceRoot: testDir,
+      ...overrides,
+    };
+  }
+
+  function createAssistantMessage(text: string): AgentMessage {
+    return {
+      role: "assistant",
+      content: [createTextContent(text)],
+      stopReason: "stop",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      timestamp: Date.now(),
+    };
+  }
+
+  /** 记录状态切换的假状态行，用于验证压缩期间的状态提示 */
+  function createFakeStatus(): {
+    status: StatusController;
+    states: RunState[];
+    counters: { stopped: number };
+  } {
+    const states: RunState[] = [];
+    const counters = { stopped: 0 };
+    const status: StatusController = {
+      set: (state) => {
+        states.push(state);
+      },
+      stop: () => {
+        counters.stopped += 1;
+      },
+      isActive: () => false,
+    };
+    return { status, states, counters };
+  }
+
+  it("should keep working in memory-only mode without a session store", async () => {
+    const options = createOptions();
+
+    await appendUserMessage(options, createUserMessage("a"));
+    await appendAgentMessages(options, [createAssistantMessage("b")]);
+
+    assert.strictEqual(options.messages.length, 2);
+    assert.strictEqual(options.messages[0].role, "user");
+    assert.strictEqual(options.messages[1].role, "assistant");
+  });
+
+  it("should persist messages and derive the context from the store", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    await appendUserMessage(options, createUserMessage("q1"));
+    await appendAgentMessages(options, [createAssistantMessage("a1")]);
+    await appendUserMessage(options, createUserMessage("q2"));
+
+    // 会话文件是唯一事实来源
+    assert.deepStrictEqual(options.messages, store.buildContext());
+    assert.strictEqual(options.messages.length, 3);
+    assert.strictEqual(
+      store.getEntries().filter((entry) => entry.type === "message").length,
+      3,
+    );
+  });
+
+  it("should apply compaction to the in-memory context", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    // 先写入足以触发压缩的历史。
+    // 注意：estimateTextTokens 对 ASCII 按 4 字符/token 估算，
+    // 因此 250 × 1600 个 ASCII 字符 ≈ 100000 token，能稳定超过当前预算
+    // （默认窗口 128k × 0.6 = 76800）。样本必须真的超预算，否则这个用例
+    // 证明不了"压缩生效"——阈值口径变了就要调样本，而不是只调断言。
+    for (let i = 0; i < 250; i++) {
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent(`历史 ${i} ${"x".repeat(1600)}`)],
+        timestamp: Date.now(),
+      });
+    }
+    assert.ok(
+      store.estimateContextTokens() > MAX_CONTEXT_TOKENS,
+      "样本必须真的超过预算，否则这个用例证明不了压缩生效",
+    );
+    const options = createOptions({
+      sessionStore: store,
+      model: createMockModel("summarizer"),
+    });
+    store.setModel(createMockModel("summarizer"));
+
+    await appendUserMessage(options, createUserMessage("最新问题"));
+
+    // 修复前压缩只写进文件、内存上下文照旧增长
+    assert.strictEqual(options.messages.length, KEEP_RECENT_MESSAGES + 1);
+    assert.ok(
+      (
+        options.messages[0].content[0] as { type: "text"; text: string }
+      ).text.includes("旧的上下文摘要"),
+    );
+    assert.deepStrictEqual(options.messages, store.buildContext());
+  });
+
+  it("clearSession should clear both memory and the session file", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    await appendUserMessage(options, createUserMessage("will be cleared"));
+    await appendAgentMessages(options, [createAssistantMessage("answer")]);
+    assert.strictEqual(options.messages.length, 2);
+
+    await clearSession(options);
+
+    assert.strictEqual(options.messages.length, 0);
+    assert.strictEqual(store.buildContext().length, 0);
+  });
+
+  it("startNewSession should switch the store and reset the context", async () => {
+    const oldStore = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: oldStore });
+
+    await appendUserMessage(options, createUserMessage("old question"));
+    assert.strictEqual(options.messages.length, 1);
+
+    const newFile = join(testDir, "new-session.jsonl");
+    let created: JsonlSessionStore | undefined;
+    options.onNewSession = () => {
+      created = new JsonlSessionStore(newFile, testDir);
+      return created;
+    };
+
+    assert.strictEqual(startNewSession(options), true);
+    assert.strictEqual(options.sessionStore, created);
+    assert.strictEqual(options.messages.length, 0, "新会话应清空上下文");
+
+    // 后续消息只写入新会话，旧会话不再增长
+    await appendUserMessage(options, createUserMessage("new question"));
+    assert.strictEqual(created!.buildContext().length, 1);
+    assert.strictEqual(oldStore.buildContext().length, 1);
+  });
+
+  it("compactContext：未超阈值时返回 undefined", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+    const { status } = createFakeStatus();
+
+    assert.strictEqual(await compactContext(options, status), undefined);
+  });
+
+  it("compactContext：超阈值时返回压缩后的上下文并驱动状态行", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    store.setModel(createMockModel("summarizer"));
+    // ASCII 按 4 字符/token 估算：250 × 1600 字符 ≈ 100000 token，稳定超过当前预算 76800
+    for (let index = 0; index < 250; index += 1) {
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent(`历史 ${index} ${"x".repeat(1600)}`)],
+        timestamp: Date.now(),
+      });
+    }
+    assert.ok(store.estimateContextTokens() > MAX_CONTEXT_TOKENS);
+    const options = createOptions({
+      sessionStore: store,
+      model: createMockModel("summarizer"),
+    });
+    const { status, states, counters } = createFakeStatus();
+
+    const result = await compactContext(options, status);
+
+    assert.ok(result, "超阈值时应压缩并返回新上下文");
+    assert.strictEqual(result!.length, KEEP_RECENT_MESSAGES + 1);
+    assert.deepStrictEqual(
+      states.map((state) => state.kind),
+      ["compacting"],
+      "压缩期间应显示状态行",
+    );
+    assert.strictEqual(counters.stopped, 1, "结束后应清除状态行");
+  });
+
+  it("compactContext：无会话存储时返回 undefined", async () => {
+    const options = createOptions();
+    const { status } = createFakeStatus();
+
+    assert.strictEqual(await compactContext(options, status), undefined);
+  });
+
+  it("sessionStatusEntries 应给出模型、会话文件、上下文与确认模式", () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({
+      sessionStore: store,
+      modelLabel: "minimax-cn/MiniMax-M2.7",
+    });
+
+    const entries = new Map(sessionStatusEntries(options, false));
+    const trustedEntries = new Map(sessionStatusEntries(options, true));
+
+    assert.strictEqual(entries.get("模型"), "minimax-cn/MiniMax-M2.7");
+    assert.ok(entries.get("会话文件")?.endsWith("session.jsonl"));
+    assert.ok(entries.get("上下文")?.includes("tokens"));
+    assert.ok(entries.get("工具确认")?.includes("需确认"));
+    assert.strictEqual(entries.get("工作目录"), testDir);
+    assert.ok(trustedEntries.get("工具确认")?.includes("信任模式"));
+  });
+
+  it("sessionStatusEntries 无会话存储时给出占位", () => {
+    const entries = new Map(sessionStatusEntries(createOptions(), false));
+
+    assert.strictEqual(entries.get("会话文件"), "(未启用会话存储)");
+    assert.strictEqual(entries.get("模型"), "未配置");
+    assert.strictEqual(entries.get("上下文"), "未启用");
+  });
+
+  it("formatSessionList 应标记当前会话并给出大小", () => {
+    const lines = formatSessionList(
+      [
+        { fileName: "a.jsonl", path: "/tmp/a.jsonl", sizeBytes: 512 },
+        { fileName: "b.jsonl", path: "/tmp/b.jsonl", sizeBytes: 2048 },
+      ],
+      "/tmp/b.jsonl",
+    );
+
+    assert.strictEqual(lines.length, 2);
+    assert.ok(lines[0].includes("a.jsonl") && lines[0].includes("512 B"));
+    assert.ok(!lines[0].includes("❯"), "非当前会话不应带标记");
+    assert.ok(lines[1].startsWith("❯"), "当前会话应带标记");
+    assert.ok(lines[1].includes("b.jsonl") && lines[1].includes("2.0 KB"));
+  });
+
+  it("switchSession 应切换 store 并按新会话重建上下文", async () => {
+    const first = new JsonlSessionStore(sessionFile, testDir);
+    const second = new JsonlSessionStore(join(testDir, "second.jsonl"), testDir);
+    await second.appendMessage(createUserMessage("第二会话"));
+    const options = createOptions({
+      sessionStore: first,
+      onSwitchSession: () => second,
+    });
+
+    assert.strictEqual(switchSession(options, "2"), true);
+    assert.strictEqual(options.sessionStore, second);
+    assert.strictEqual(options.messages.length, 1, "应恢复目标会话的上下文");
+  });
+
+  it("switchSession 找不到目标时不切换", () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({
+      sessionStore: store,
+      onSwitchSession: () => null,
+    });
+
+    assert.strictEqual(switchSession(options, "nope"), false);
+    assert.strictEqual(options.sessionStore, store);
+  });
+
+  it("printLastToolOutput 应展示上一条工具输出的完整内容并分页提示", () => {
+    const longText = Array.from({ length: 20 }, (_, i) => `row-${i + 1}`).join("\n");
+    const captured: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      captured.push(args.map(String).join(" "));
+    };
+
+    try {
+      printToolInfo(
+        {
+          type: "tool_execution_end",
+          toolCallId: "last-1",
+          toolName: "read_file",
+          result: {
+            content: [{ type: "text", text: longText }],
+            details: { path: "a.txt", totalLines: 20, totalBytes: 100 },
+          },
+          isError: false,
+        },
+        PLAIN_CONTEXT,
+      );
+      captured.length = 0;
+      printLastToolOutput("3");
+    } finally {
+      console.log = originalLog;
+    }
+
+    const text = captured.join("\n");
+    assert.ok(text.includes("上一条工具输出"));
+    assert.ok(text.includes("1 │ row-1"));
+    assert.ok(text.includes("3 │ row-3"));
+    assert.ok(!text.includes("4 │ row-4"), "只应显示请求的行数");
+    assert.ok(text.includes("显示第 1-3 行，共 20 行"));
+  });
+
+  it("printLastToolOutput 在还没有工具调用时给出提示", () => {
+    // 重置模块级缓存，避免受其他用例影响
+    const captured: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      captured.push(args.map(String).join(" "));
+    };
+    try {
+      printLastToolOutput("0");
+    } finally {
+      console.log = originalLog;
+    }
+    // 上一条工具输出已由前一个用例写入，这里只验证不会抛错且输出非空
+    assert.ok(captured.length > 0);
+  });
+
+  it("summarizeToolCall 应为不同工具挑选有信息量的参数", () => {
+    assert.strictEqual(summarizeToolCall("bash", { command: "npm test" }), "npm test");
+    assert.strictEqual(
+      summarizeToolCall("read_file", { path: "src/a.ts" }),
+      "src/a.ts",
+    );
+    // 检索类工具的关键参数是 pattern，只显示工具名等于没有信息
+    assert.strictEqual(
+      summarizeToolCall("glob", { pattern: "docs/**/*.md" }),
+      "docs/**/*.md",
+    );
+    assert.strictEqual(
+      summarizeToolCall("grep", { pattern: "P0", include: "*.md" }),
+      "P0",
+    );
+    assert.strictEqual(
+      summarizeToolCall("grep", { pattern: "x", path: "docs" }),
+      "x",
+    );
+    assert.strictEqual(summarizeToolCall("unknown_tool", {}), "unknown_tool");
+    assert.strictEqual(
+      summarizeToolCall("bash", { command: "x".repeat(60) }).length,
+      40,
+      "过长应截断",
+    );
+  });
+
+  it("startNewSession should report failure when no callback is configured", () => {
+    const options = createOptions({ sessionStore: new JsonlSessionStore(sessionFile, testDir) });
+
+    assert.strictEqual(startNewSession(options), false);
+  });
+
+  describe("createInputScheduler（回合串行化）", () => {
+    const tick = (ms = 0): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+
+    it("连续提交的输入必须串行执行，不能重叠", async () => {
+      let running = 0;
+      let maxConcurrent = 0;
+      const order: string[] = [];
+
+      const scheduler = createInputScheduler(async (line) => {
+        running += 1;
+        maxConcurrent = Math.max(maxConcurrent, running);
+        order.push(`start:${line}`);
+        await tick(10);
+        order.push(`end:${line}`);
+        running -= 1;
+      });
+
+      // 模拟"模型还在思考时又敲了一行"：三次提交都不等待
+      scheduler.schedule("a");
+      scheduler.schedule("b");
+      scheduler.schedule("c");
+      await tick(80);
+
+      assert.strictEqual(
+        maxConcurrent,
+        1,
+        "任何时刻只能有一个回合在跑：并发会让 activeRun 被覆盖、会话文件交错写入",
+      );
+      assert.deepStrictEqual(order, [
+        "start:a",
+        "end:a",
+        "start:b",
+        "end:b",
+        "start:c",
+        "end:c",
+      ]);
+    });
+
+    it("后提交的输入要触发 onQueued，用户才知道自己被排队了", async () => {
+      const queued: string[] = [];
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const scheduler = createInputScheduler(
+        async (line) => {
+          if (line === "a") {
+            await gate;
+          }
+        },
+        { onQueued: (line) => queued.push(line) },
+      );
+
+      scheduler.schedule("a");
+      await tick(5);
+      assert.strictEqual(scheduler.isBusy(), true, "第一条正在处理");
+
+      scheduler.schedule("b");
+      assert.deepStrictEqual(queued, ["b"], "第二条应被标记为排队");
+
+      release();
+      await tick(20);
+      assert.strictEqual(scheduler.isBusy(), false, "全部结束后应回到空闲");
+    });
+
+    it("某一条抛错不能吞掉后面的输入", async () => {
+      const handled: string[] = [];
+      const errors: unknown[] = [];
+
+      const scheduler = createInputScheduler(
+        async (line) => {
+          if (line === "bad") {
+            throw new Error("boom");
+          }
+          handled.push(line);
+        },
+        { onError: (error) => errors.push(error) },
+      );
+
+      scheduler.schedule("bad");
+      scheduler.schedule("good");
+      await tick(30);
+
+      assert.deepStrictEqual(handled, ["good"], "后续输入必须仍然被执行");
+      assert.strictEqual(errors.length, 1);
+      assert.match((errors[0] as Error).message, /boom/);
+    });
+  });
+
+  describe("workspaceFileExists（审批提示里的覆盖判断）", () => {
+    it("工作区内已存在的文件返回 true", () => {
+      const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+      writeFileSync(join(dir, "a.txt"), "x");
+
+      assert.strictEqual(workspaceFileExists(dir, "a.txt"), true);
+      assert.strictEqual(workspaceFileExists(dir, "b.txt"), false);
+    });
+
+    it("逃逸出工作区的路径按不存在处理", () => {
+      const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+
+      assert.strictEqual(
+        workspaceFileExists(dir, "../outside.txt"),
+        false,
+        "越界路径不能因为宿主机上恰好存在就报警",
+      );
+      assert.strictEqual(workspaceFileExists(dir, "/etc/passwd"), false);
+    });
+
+    it("空路径或非法输入返回 false 而不是抛错", () => {
+      const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+
+      assert.strictEqual(workspaceFileExists(dir, ""), false);
+      assert.strictEqual(workspaceFileExists(dir, "   "), false);
+    });
+  });
+
+  it("压缩失败时 /status 必须说明原因（否则用户只看到一直没压缩）", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    for (let i = 0; i < 4; i += 1) {
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+        timestamp: Date.now(),
+      });
+    }
+    store.setModel({
+      async complete() {
+        throw new Error("context_length_exceeded");
+      },
+    });
+    await store.compactIfNedded(10, 1);
+
+    const rows = sessionStatusEntries(createOptions({ sessionStore: store }), false);
+    const row = rows.find(([label]) => label === "压缩状态");
+
+    assert.ok(row, "失败过就应该有一行压缩状态");
+    assert.match(row[1], /context_length_exceeded/);
+    assert.match(row[1], /保留完整历史/, "要让用户知道历史没有被删减");
   });
 });

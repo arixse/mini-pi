@@ -42,6 +42,43 @@ describe("DeepSeekProvider", () => {
     });
   });
 
+  describe("getModelsUrl", () => {
+    it("默认与自定义 Base URL 都应拼出 /models", () => {
+      assert.strictEqual(
+        provider.getModelsUrl(provider.getBaseUrl()),
+        "https://api.deepseek.com/models",
+      );
+      assert.strictEqual(
+        provider.getModelsUrl("https://gateway.example.com/deepseek/"),
+        "https://gateway.example.com/deepseek/models",
+      );
+    });
+  });
+
+  describe("getModelList 与自定义 baseUrl", () => {
+    it("应请求自定义 Base URL 而不是官方地址", async () => {
+      const requested: string[] = [];
+      global.fetch = async (url: string | URL | Request) => {
+        const target = url instanceof Request ? url.url : String(url);
+        requested.push(target);
+        return new Response(JSON.stringify({ data: [{ id: "proxied-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const models = await provider.getModelList(
+        "test-api-key",
+        "https://gateway.example.com/deepseek",
+      );
+
+      assert.deepStrictEqual(models, ["proxied-model"]);
+      assert.deepStrictEqual(requested, [
+        "https://gateway.example.com/deepseek/models",
+      ]);
+    });
+  });
+
   describe("getModelList", () => {
     it("should throw error when API key is missing", async () => {
       await assert.rejects(
@@ -63,8 +100,9 @@ describe("DeepSeekProvider", () => {
         { id: "deepseek-v4-pro", object: "model", created: 1234567890, owned_by: "deepseek" },
       ];
 
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.deepseek.com/models") {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ data: mockModels }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -78,8 +116,9 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle API error response", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.deepseek.com/models") {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
             status: 401,
             headers: { "Content-Type": "application/json" },
@@ -95,8 +134,9 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle empty response", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.deepseek.com/models") {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({ data: [] }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -110,8 +150,9 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle response without data array", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.deepseek.com/models") {
+      global.fetch = async (url: string | URL | Request, _options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.deepseek.com/models") {
           return new Response(JSON.stringify({}), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -125,7 +166,7 @@ describe("DeepSeekProvider", () => {
     });
 
     it("should handle network error", async () => {
-      global.fetch = async (url: string, options?: RequestInit) => {
+      global.fetch = async () => {
         throw new Error("Network error");
       };
 
@@ -137,8 +178,9 @@ describe("DeepSeekProvider", () => {
 
     it("should send correct authorization header", async () => {
       let capturedHeaders: Headers | undefined;
-      global.fetch = async (url: string, options?: RequestInit) => {
-        if (url === "https://api.deepseek.com/models") {
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+      const target = url instanceof Request ? url.url : String(url);
+        if (target === "https://api.deepseek.com/models") {
           capturedHeaders = new Headers(options?.headers);
           return new Response(JSON.stringify({ data: [] }), {
             status: 200,
