@@ -626,6 +626,9 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   | `mimo-7b*` | 32768 | MiMo-7B 系列 |
   | `kimi-k3` | 1000000 | Kimi K3（1M） |
   | `kimi-k2.6` / `kimi-k2.7-code*` | 262144 | Kimi K2.6 / K2.7 Code（256K） |
+  | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 世代（1M） |
+  | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5；4.x 世代的 1M 需 beta 头，登记为 200K |
+  | `claude-3*` / 其它 `claude*` | 200000 | Claude 3 世代与兜底值 |
 
   拿不准的模型一律落到 128k：估小了只是提前多压缩几次（每次都要调一次摘要模型，
   花钱且加延迟），**估大了却可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）**。
@@ -749,6 +752,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | `openai` | OpenAI | `https://api.openai.com/v1` |
 | `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
 | `kimi` | OpenAI | `https://api.moonshot.cn/v1` |
+| `anthropic` | Anthropic | `https://api.anthropic.com` |
 
 ### 8.4 凭据文件权限
 

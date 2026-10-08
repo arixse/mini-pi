@@ -4,6 +4,7 @@ import { DeepSeekProvider } from "./deepseek";
 import { OpenAIProvider } from "./openai";
 import { MiMoProvider } from "./mimo";
 import { KimiProvider } from "./kimi";
+import { AnthropicProvider } from "./anthropic";
 
 export interface Provider {
   /** 获取Provider名称 */
@@ -63,6 +64,7 @@ export class ModelProviderService {
     this.registerProvider(new OpenAIProvider());
     this.registerProvider(new MiMoProvider());
     this.registerProvider(new KimiProvider());
+    this.registerProvider(new AnthropicProvider());
   }
   
   /**
@@ -212,3 +214,4 @@ export { DeepSeekProvider } from "./deepseek";
 export { OpenAIProvider } from "./openai";
 export { MiMoProvider } from "./mimo";
 export { KimiProvider } from "./kimi";
+export { AnthropicProvider } from "./anthropic";

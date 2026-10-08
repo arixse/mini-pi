@@ -11,6 +11,66 @@
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
 | MiMo（小米） | OpenAI | https://api.xiaomimimo.com/v1 | ✅ 已对接 |
 | Kimi（月之暗面） | OpenAI | https://api.moonshot.cn/v1 | ✅ 已对接 |
+| Anthropic | Anthropic | https://api.anthropic.com | ✅ 已对接 |
+
+---
+
+## 0. Anthropic
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 开放平台 | https://platform.claude.com |
+| 模型总览 | https://platform.claude.com/docs/en/about-claude/models/overview |
+| Messages API | https://platform.claude.com/docs/en/api/messages |
+| 模型列表接口 | `GET https://api.anthropic.com/v1/models` |
+| API Key 管理 | https://console.anthropic.com/settings/keys |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `claude-opus-5-5` | 长程 Agent 编码与知识工作，1M 上下文 / 128K 输出，官方推荐的默认选择 |
+| `claude-sonnet-5-5` | 速度与智能最均衡，1M 上下文 / 128K 输出 |
+| `claude-haiku-4-5` | 最快、成本最低，200K 上下文 / 64K 输出 |
+| `claude-fable-5-1` | 最强推理与超长程 Agent，1M 上下文 / 128K 输出 |
+
+### 接入方式
+
+官方 Messages API 与其它两家"Anthropic 兼容"服务商有两个差异，实现里都做了处理：
+
+1. **鉴权头是 `x-api-key`**，不是 `Authorization: Bearer`，且必须带
+   `anthropic-version: 2023-06-01`；
+2. **Base URL 不含 `/v1`**（SDK 请求 messages 时自行拼接），但模型列表接口在
+   **`/v1/models`**，因此 Provider 覆写了 `getModelsUrl()`
+   ——直接拼 `/models` 会 404。
+
+```typescript
+// Base URL（SDK 会拼成 https://api.anthropic.com/v1/messages）
+https://api.anthropic.com
+
+// 模型列表
+https://api.anthropic.com/v1/models
+
+// SDK类型
+Anthropic
+```
+
+> **上下文窗口**：Fable 5.1 / Opus 5.5 / Sonnet 5.5 官方标 1M；Haiku 4.5 为 200K。
+> Claude Opus 4.x / Sonnet 4.x 的 1M 需要额外的 beta 头（`context-1m-*`）才生效，
+> 未开启时窗口是 200K——推断表按 200K 登记（估大会超窗 400），
+> 若确已开启请在 `settings.json` 显式配置 `contextWindow`。
+
+### 配置示例
+
+```json
+{
+  "anthropic": {
+    "apiKey": "sk-ant-xxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
 
 ---
 
@@ -279,6 +339,12 @@ export interface Provider {
 1. 在 `src/provider/` 目录下创建新的 provider 文件
 2. 实现 `Provider` 接口
 3. 在 `src/provider/index.ts` 中注册新 provider
+4. **核对鉴权头与列表路径**：默认是 `Authorization: Bearer` + `baseUrl + /models`
+   （`buildModelsUrl`）。两者任一不符就要在 provider 里自己处理，例如：
+   - MiniMax-CN：Base URL 是 `/anthropic`，列表在 `/v1/models` → 覆写 `getModelsUrl()`；
+   - Anthropic 官方：鉴权用 `x-api-key` 且要带 `anthropic-version`，列表在 `/v1/models`
+     → 自定义 `fetch` 头 + 覆写 `getModelsUrl()`。
+   注意 Anthropic SDK 会自己拼 `/v1`，所以 Base URL 里**不要**写 `/v1`。
 4. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
    按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
    会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
@@ -295,7 +361,7 @@ export interface Provider {
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
 | OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、其他兼容服务商） |
-| Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic、MiniMax-CN） |
+| Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic 官方、MiniMax-CN） |
 
 ---
 
@@ -315,6 +381,7 @@ export interface Provider {
 - **OpenAI**: 访问 https://platform.openai.com/api-keys
 - **MiMo**: 访问 https://platform.xiaomimimo.com/console（API Keys 页面创建，按量付费为 `sk-` 前缀；Token Plan 为 `tp-` / `ttp-` 前缀，两者不通用）
 - **Kimi**: 访问 https://platform.kimi.com/console/api-keys
+- **Anthropic**: 访问 https://console.anthropic.com/settings/keys
 
 ### Q: 连接超时怎么办？
 

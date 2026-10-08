@@ -103,6 +103,23 @@ describe("inferContextWindow（按模型名推断）", () => {
     // K3 是 1M，不能被任何 k2 条目命中
     assert.strictEqual(matchContextWindowRule("kimi-k3")?.prefix, "kimi-k3");
   });
+
+  it("Anthropic Claude 当前一代", () => {
+    assert.strictEqual(inferContextWindow("claude-opus-5-5"), 1_000_000);
+    assert.strictEqual(inferContextWindow("claude-sonnet-5-5"), 1_000_000);
+    assert.strictEqual(inferContextWindow("claude-fable-5-1"), 1_000_000);
+    // Haiku 4.5 只有 200K，不能被 1M 的通用条目盖住
+    assert.strictEqual(inferContextWindow("claude-haiku-4-5"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-haiku-4-5-20251001"), 200_000);
+  });
+
+  it("Claude 4.x 按 200K 登记（1M 需 beta 头，估大会超窗 400）", () => {
+    assert.strictEqual(inferContextWindow("claude-opus-4-8"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-sonnet-4-5"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-3-5-sonnet-20241022"), 200_000);
+    // 认不出具体型号的 Claude 兜底到 200K，而不是全局默认的 128K
+    assert.strictEqual(inferContextWindow("claude-some-future-model"), 200_000);
+  });
 });
 
 describe("matchContextWindowRule（最长前缀优先）", () => {

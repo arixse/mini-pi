@@ -22,7 +22,7 @@ mini-pi/
 │   │   ├── model.ts     # 模型封装
 │   │   ├── tools.ts     # 工具定义
 │   │   └── sessionStore.ts # 会话存储
-│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi）
+│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / anthropic）
 │   ├── cli/             # 命令行交互
 │   └── shared/          # 共享模块
 │       └── protocol.ts  # 通信协议
@@ -72,9 +72,11 @@ mini-pi/
 | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
 | `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
+| `anthropic`  | Anthropic | `https://api.anthropic.com`        |
 
 > 新增供应商时除了实现 `Provider` 接口，还要同步 `src/provider/context-window.ts`
 > 的推断表：窗口小于 128k 的模型若不登记，会在压缩触发前就超窗（400）。
+> 另外 Anthropic 官方的鉴权头是 `x-api-key`（不是 Bearer），且 Base URL 不带 `/v1`。
 
 ### 3.2 工具层 (Tools)
 

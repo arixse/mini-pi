@@ -114,6 +114,58 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   },
   { prefix: "kimi-k2.7", window: 262_144, note: "Kimi K2.7 Code（256K）" },
   { prefix: "kimi-k2.6", window: 262_144, note: "Kimi K2.6（256K）" },
+  // ---- Anthropic ----
+  // 当前一代（官方 Models overview，2026-10）：Fable / Opus 5.5 / Sonnet 5.5 都是 1M，
+  // Haiku 4.5 是 200K。
+  {
+    prefix: "claude-fable-5-1",
+    window: 1_000_000,
+    note: "Claude Fable 5.1（1M / 128K 输出）",
+  },
+  {
+    prefix: "claude-opus-5-5",
+    window: 1_000_000,
+    note: "Claude Opus 5.5（1M，官方推荐的默认模型）",
+  },
+  {
+    prefix: "claude-sonnet-5-5",
+    window: 1_000_000,
+    note: "Claude Sonnet 5.5（1M）",
+  },
+  {
+    prefix: "claude-opus-5",
+    window: 1_000_000,
+    note: "Claude Opus 5 / 4.8（1M）",
+  },
+  {
+    prefix: "claude-sonnet-5",
+    window: 1_000_000,
+    note: "Claude Sonnet 5（1M）",
+  },
+  {
+    prefix: "claude-haiku-4-5",
+    window: 200_000,
+    note: "Claude Haiku 4.5（200K / 64K 输出）",
+  },
+  // 4.x 世代的 1M 需要额外的 beta 头（context-1m-*）才可用，默认只有 200K，
+  // 因此这里登记 200K——估大会让请求在压缩触发前超窗（400）。
+  {
+    prefix: "claude-opus-4",
+    window: 200_000,
+    note: "Claude Opus 4.x（200K；1M 需 beta 头，不登记）",
+  },
+  {
+    prefix: "claude-sonnet-4",
+    window: 200_000,
+    note: "Claude Sonnet 4.x（200K；1M 需 beta 头）",
+  },
+  { prefix: "claude-haiku-4", window: 200_000, note: "Claude Haiku 4.x（200K）" },
+  { prefix: "claude-3", window: 200_000, note: "Claude 3 / 3.5 系列（200K）" },
+  {
+    prefix: "claude",
+    window: 200_000,
+    note: "其它 Claude 模型按 200K 取；窗口更小的型号需单独登记",
+  },
 ];
 
 /**

@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi）
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / anthropic）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -61,7 +61,8 @@ mini-pi/
 11. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
 12. **MiMo 支持** - 支持小米 MiMo 的 OpenAI 兼容接口（`mimo-v2.6-pro` 等 V2.6 系列）
 13. **Kimi 支持** - 支持月之暗面 Kimi 的 OpenAI 兼容接口（`kimi-k3` 等，1M 上下文）
-14. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+14. **Anthropic 支持** - 支持 Anthropic 官方 Messages API（`claude-opus-5-5` 等）
+15. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -145,6 +146,7 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | MiMo       | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
 | Kimi       | `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
+| Anthropic  | `anthropic`  | Anthropic | `https://api.anthropic.com`        |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
 
@@ -181,6 +183,28 @@ DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `h
 3. 选择要使用的模型
 
 DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
+
+### Anthropic
+
+Anthropic 提供商使用官方 Messages API，base_url 为 `https://api.anthropic.com`
+（SDK 请求时自行拼 `/v1`，模型列表接口是 `/v1/models`）。
+鉴权与其它提供商不同：官方用 `x-api-key` 头而不是 `Authorization: Bearer`。
+
+支持的模型（默认列表）：
+
+| 模型 | 说明 |
+| ---- | ---- |
+| `claude-opus-5-5` | 长程 Agent 编码与知识工作（1M 上下文），官方推荐的默认选择 |
+| `claude-sonnet-5-5` | 速度与智能最均衡（1M 上下文） |
+| `claude-haiku-4-5` | 最快、成本最低（200K 上下文） |
+| `claude-fable-5-1` | 最强推理与超长程 Agent（1M 上下文） |
+
+> Claude Opus 4.x / Sonnet 4.x 的 1M 上下文需要额外的 beta 头才能启用，
+> 未开启时窗口是 200K，因此上下文窗口推断表把它们登记为 200K
+> （估大会让请求在压缩触发前超窗 400）。若确已开启，可在 `settings.json`
+> 显式配置 `contextWindow`。
+
+Anthropic 文档：https://platform.claude.com/docs
 
 ### Kimi（月之暗面）
 
