@@ -620,6 +620,10 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   | `MiniMax-M2*` | 204800 | MiniMax M2 / M2.1 / M2.5 / M2.7 |
   | `MiniMax-M2-her` | 65536 | MiniMax 对话模型 |
   | `MiniMax-M3` | 1000000 | MiniMax M3 |
+  | `mimo-v2.6-*`（pro / flash / ultraspeed） | 1000000 | 小米 MiMo V2.6 系列 |
+  | `mimo-v2.5-omni` | 131072 | MiMo 全模态（接入文档标 128K） |
+  | `mimo-v2-flash` | 131072 | 官方博客标 256K、接入指南标 56K，取小值 |
+  | `mimo-7b*` | 32768 | MiMo-7B 系列 |
 
   拿不准的模型一律落到 128k：估小了只是提前多压缩几次（每次都要调一次摘要模型，
   花钱且加延迟），**估大了却可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）**。
@@ -741,6 +745,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | `deepseek` | OpenAI | `https://api.deepseek.com` |
 | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | `openai` | OpenAI | `https://api.openai.com/v1` |
+| `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
 
 ### 8.4 凭据文件权限
 

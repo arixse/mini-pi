@@ -67,6 +67,42 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     note: "MiniMax-M2 / M2.1 / M2.5 / M2.7（204.8K）",
   },
   { prefix: "minimax", window: 204_800, note: "MiniMax 其它模型，按 M2 量级取" },
+  // ---- Xiaomi MiMo ----
+  {
+    prefix: "mimo-v2.6-pro-ultraspeed",
+    window: 1_000_000,
+    note: "MiMo-V2.6-Pro-Ultraspeed（1M）",
+  },
+  {
+    prefix: "mimo-v2.6",
+    window: 1_000_000,
+    note: "MiMo-V2.6-Pro / V2.6-Flash（官方：1M 上下文）",
+  },
+  {
+    prefix: "mimo-v2.5-pro",
+    window: 1_000_000,
+    note: "MiMo-V2.5-Pro（1M，官方公告 2026.10.21 下线）",
+  },
+  {
+    prefix: "mimo-v2.5-omni",
+    window: 131_072,
+    note: "MiMo-V2.5-Omni（全模态，接入文档标 128K）",
+  },
+  {
+    prefix: "mimo-v2.5",
+    window: 1_000_000,
+    note: "MiMo-V2.5（1M，官方公告 2026.10.21 下线）",
+  },
+  {
+    prefix: "mimo-v2-flash",
+    window: 131_072,
+    note: "MiMo-V2-Flash：官方博客标 256K、接入指南标 56K，取小值避免超窗（400）",
+  },
+  {
+    prefix: "mimo-7b",
+    window: 32_768,
+    note: "MiMo-7B 系列（32K，小于 128k 必须登记）",
+  },
 ];
 
 /**

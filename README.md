@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn）
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -59,7 +59,8 @@ mini-pi/
    `/status` 会显示窗口值与来源
 10. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
 11. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
-12. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+12. **MiMo 支持** - 支持小米 MiMo 的 OpenAI 兼容接口（`mimo-v2.6-pro` 等 V2.6 系列）
+13. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -141,6 +142,7 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | OpenAI     | `openai`     | OpenAI    | `https://api.openai.com/v1`        |
 | DeepSeek   | `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
 | MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
+| MiMo       | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
 
@@ -177,6 +179,22 @@ DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `h
 3. 选择要使用的模型
 
 DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
+
+### MiMo（小米）
+
+MiMo 使用 OpenAI 兼容接口，base_url 为 `https://api.xiaomimimo.com/v1`
+（Token Plan 订阅用户请改用控制台给出的专属 Base URL，同为 OpenAI 兼容协议）。
+
+支持的模型（默认列表，均为 V2.6 系列）：
+- `mimo-v2.6-pro` - 旗舰推理模型
+- `mimo-v2.6-flash` - 高效推理模型
+- `mimo-v2.6-pro-ultraspeed` - Pro 的超高速版本
+
+> MiMo 也提供 Anthropic 兼容端点，但其文档指出：Anthropic 协议下含工具调用的
+> 多轮会话缺 `reasoning_content` 会被判 400，因此这里统一走 OpenAI 兼容端点。
+> `mimo-v2.5-pro` / `mimo-v2.5` 官方公告 2026.10.21 下线，已不再列入默认列表。
+
+MiMo 文档：https://platform.xiaomimimo.com/docs
 
 ### MiniMax-CN
 

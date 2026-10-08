@@ -61,9 +61,29 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("MiniMax-M3"), 1_000_000);
   });
 
+  it("小米 MiMo 系列", () => {
+    assert.strictEqual(inferContextWindow("mimo-v2.6-pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.6-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.6-pro-ultraspeed"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.5-pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.5"), 1_000_000);
+    // 小窗口模型必须被认出来，否则会在压缩触发前超窗（400）
+    assert.strictEqual(inferContextWindow("mimo-7b-instruct"), 32_768);
+  });
+
+  it("MiMo 的窗口不能被同前缀的更通用条目盖掉", () => {
+    // 最长前缀优先：omni（128K）不能落到 mimo-v2.5 的 1M 上
+    assert.strictEqual(inferContextWindow("mimo-v2.5-omni"), 131_072);
+    assert.strictEqual(
+      matchContextWindowRule("mimo-v2.6-pro-ultraspeed")?.prefix,
+      "mimo-v2.6-pro-ultraspeed",
+    );
+  });
+
   it("带供应商前缀与大小写混写同样命中", () => {
     assert.strictEqual(inferContextWindow("minimax-cn/MiniMax-M2.7"), 204_800);
     assert.strictEqual(inferContextWindow("openai/GPT-3.5-Turbo"), 16_384);
+    assert.strictEqual(inferContextWindow("mimo/MiMo-V2.6-Pro"), 1_000_000);
   });
 });
 

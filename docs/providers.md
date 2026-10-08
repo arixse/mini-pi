@@ -9,6 +9,59 @@
 | DeepSeek | OpenAI | https://api.deepseek.com | ✅ 已对接 |
 | MiniMax-CN | Anthropic | https://api.minimax.cn/anthropic | ✅ 已对接 |
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
+| MiMo（小米） | OpenAI | https://api.xiaomimimo.com/v1 | ✅ 已对接 |
+
+---
+
+## 0. MiMo（小米）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 开放平台 | https://platform.xiaomimimo.com |
+| API 文档 | https://mimo.mi.com/docs/zh-CN |
+| 定价与模型 | https://mimo.mi.com/docs/zh-CN/pricing |
+| 模型下线公告 | https://mimo.mi.com/docs/zh-CN/updates/deprecate |
+| API Key 管理 | https://platform.xiaomimimo.com/console |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `mimo-v2.6-pro` | 旗舰推理模型（全模态，1M 上下文） |
+| `mimo-v2.6-flash` | 高效推理模型（全模态，1M 上下文） |
+| `mimo-v2.6-pro-ultraspeed` | Pro 的超高速版本（最高 20 倍输出速度） |
+
+> `mimo-v2.5-pro` 与 `mimo-v2.5` 官方公告将于 **2026.10.21 10:00 下线**，
+> 因此不再放进默认模型列表；旧配置请尽快切到 V2.6 系列。
+
+### 接入方式
+
+MiMo 同时提供 OpenAI 兼容与 Anthropic 兼容两种端点，这里**走 OpenAI 兼容端点**：
+官方接入文档明确指出，Anthropic 协议下"含工具调用的多轮会话若缺 `reasoning_content`"会被判 400，
+而 Mini Pi 的 Agent 循环重度依赖工具调用。
+
+```typescript
+// Base URL（按量付费）
+https://api.xiaomimimo.com/v1
+
+// SDK类型
+OpenAI
+```
+
+Token Plan（订阅制）使用专属端点，例如 `https://token-plan-cn.xiaomimimo.com/v1`；
+同样是 OpenAI 兼容协议，在 `/login` 之后用自定义 Base URL 覆盖即可（模型列表会跟着走同一网关）。
+
+### 配置示例
+
+```json
+{
+  "mimo": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
 
 ---
 
@@ -175,7 +228,10 @@ export interface Provider {
    按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
    会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
 5. 编写单元测试
-6. 更新本文档
+6. 更新本文档（含 README 的提供商表格）
+7. **检查"注册顺序"假设**：新 provider 会插进 `/login`、`/model` 的选择列表，
+   任何按序号模拟按键的测试（如 `src/cli/login-model.test.ts`）都会因此错位。
+   测试里不要写死"第 N 个服务商"，改用 `getRegisteredProviders().indexOf(...)` 定位。
 
 ---
 
@@ -183,7 +239,7 @@ export interface Provider {
 
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
-| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、其他兼容服务商） |
+| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、其他兼容服务商） |
 | Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic、MiniMax-CN） |
 
 ---
@@ -202,6 +258,7 @@ export interface Provider {
 - **DeepSeek**: 访问 https://platform.deepseek.com/api_keys
 - **MiniMax-CN**: 访问 https://platform.minimaxi.com/document/guides/api-key
 - **OpenAI**: 访问 https://platform.openai.com/api-keys
+- **MiMo**: 访问 https://platform.xiaomimimo.com/console（API Keys 页面创建，按量付费为 `sk-` 前缀；Token Plan 为 `tp-` / `ttp-` 前缀，两者不通用）
 
 ### Q: 连接超时怎么办？
 
@@ -216,4 +273,4 @@ export interface Provider {
 
 ---
 
-*最后更新: 2026-09-21*
+*最后更新: 2026-10-08*

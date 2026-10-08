@@ -22,7 +22,7 @@ mini-pi/
 │   │   ├── model.ts     # 模型封装
 │   │   ├── tools.ts     # 工具定义
 │   │   └── sessionStore.ts # 会话存储
-│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn）
+│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo）
 │   ├── cli/             # 命令行交互
 │   └── shared/          # 共享模块
 │       └── protocol.ts  # 通信协议
@@ -70,6 +70,10 @@ mini-pi/
 | `openai`     | OpenAI    | `https://api.openai.com/v1`        |
 | `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
 | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
+| `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
+
+> 新增供应商时除了实现 `Provider` 接口，还要同步 `src/provider/context-window.ts`
+> 的推断表：窗口小于 128k 的模型若不登记，会在压缩触发前就超窗（400）。
 
 ### 3.2 工具层 (Tools)
 

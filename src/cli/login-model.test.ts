@@ -219,12 +219,18 @@ describe("handleLogin / handleModel 交互", () => {
     await providerService.saveProviderConfig("test-provider", { apiKey: "k" });
 
     const rl = createFakeRl();
+    // 位置由注册顺序决定，不要写死"第 4 个"：新增默认 provider 会把它挤走
+    const providerIndex = providerService
+      .getRegisteredProviders()
+      .indexOf("test-provider");
+    assert.ok(providerIndex >= 0, "test-provider 应已注册");
+
     await captureLog(async () => {
       const p = handleModel(providerService, settingsStore, rl as any);
-      // 依次选择第 4 个服务商（test-provider）：3 次向下 + 回车
-      rl.input.send("\u001b[B");
-      rl.input.send("\u001b[B");
-      rl.input.send("\u001b[B");
+      // 向下移到 test-provider 再回车
+      for (let i = 0; i < providerIndex; i += 1) {
+        rl.input.send("\u001b[B");
+      }
       rl.input.send("\r");
       // 然后选择第一个模型
       rl.input.send("\r");
@@ -247,6 +253,7 @@ describe("handleLogin / handleModel 交互", () => {
     assert.ok(text.includes("minimax-cn"));
     assert.ok(text.includes("deepseek"));
     assert.ok(text.includes("openai"));
+    assert.ok(text.includes("mimo"));
     assert.ok(text.includes("❯"));
   });
 });
