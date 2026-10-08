@@ -1,25 +1,40 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, taskkillSucceeded, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("tools", () => {
-  const testDir = join(process.cwd(), ".test-workspace");
+  /**
+   * 临时工作区放在系统临时目录，而不是仓库根。
+   *
+   * 旧实现建在 `process.cwd()/.test-workspace`：既污染工作区（靠 .gitignore 兜底），
+   * 又会被本机安全策略当成"工作区内的大批量删除"而拦截，导致整批用例连锁失败。
+   * 这里改用 tmpdir 并带 pid + 随机后缀，避免并发 / 重复运行的目录互相覆盖。
+   */
+  const testDir = join(
+    tmpdir(),
+    `mini-pi-tools-test-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  );
 
   /**
    * 清理临时工作区。
    *
    * Windows 上如果刚被 kill 的子进程（bash 超时用例）还持有该目录作为 cwd，
    * 删除会短暂失败并抛 EPERM，进而让后续所有用例的 setup 连锁失败；
-   * 因此这里带重试。
+   * 因此这里带重试，并在最终仍失败时静默放弃——把清理失败升级成用例失败是本末倒置，
+   * 残留目录位于系统临时目录，交给系统回收即可。
    */
   function removeTestDir(): void {
     if (!existsSync(testDir)) {
       return;
     }
-    rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch {
+      // 孤儿进程仍占用该目录；忽略，避免污染后续用例的结果
+    }
   }
 
   beforeEach(() => {
@@ -1059,7 +1074,7 @@ describe("tools", () => {
     it("真实超时应被终止并标注 timedOut", async () => {
       // 用独立临时工作区：Windows 上 exec 超时只杀掉 shell，
       // 孙进程可能继续存活并锁住自己作为 cwd 的目录，
-      // 若用共享的 .test-workspace 会让后续所有用例的清理连锁失败。
+      // 若用共享的 testDir 会让后续所有用例的清理连锁失败。
       const timeoutDir = join(
         tmpdir(),
         `mini-pi-timeout-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -1117,6 +1132,31 @@ describe("tools", () => {
       assert.strictEqual(nonZero.isError, true, "非零退出应标记为错误");
       assert.strictEqual(details.exitCode, 3);
       assert.strictEqual(details.timedOut, false, "非零退出不是超时");
+    });
+  });
+
+  describe("taskkillSucceeded（超时终止的成败判定）", () => {
+    /**
+     * 回归：旧实现调用 `spawnSync("taskkill", ...)` 后无条件 `return`。
+     * `spawnSync` 在可执行文件起不来时（受限沙箱报 EBUSY、PATH 缺失等）
+     * **不会抛异常**，只把错误塞进返回值，于是终止逻辑被静默跳过、超时失效。
+     */
+    it("仅在 status === 0 且无 error 时判定为成功", () => {
+      assert.strictEqual(taskkillSucceeded({ status: 0 }), true);
+      assert.strictEqual(taskkillSucceeded({ status: 0, error: null }), true);
+    });
+
+    it("spawn 失败（error 存在 / status 为 null）不得判为成功", () => {
+      assert.strictEqual(
+        taskkillSucceeded({ error: new Error("spawnSync taskkill EBUSY"), status: null }),
+        false,
+      );
+      assert.strictEqual(taskkillSucceeded({ status: null }), false);
+      assert.strictEqual(taskkillSucceeded({}), false, "status 缺省也不应误判");
+    });
+
+    it("taskkill 返回非零（进程已不存在等）不得判为成功", () => {
+      assert.strictEqual(taskkillSucceeded({ status: 128 }), false);
     });
   });
 

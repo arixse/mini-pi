@@ -13,7 +13,7 @@ Mini Pi CLI 是一个基于终端的交互式 AI 编程助手。用户启动后�
 - **多轮对话**：上下文自动保持，历史消息持久化到会话文件。
 - **流式输出**：模型回复按 token 增量实时打印。
 - **工具调用可视化**：文件读写、命令执行等工具调用以带图标/颜色的卡片形式展示。
-- **供应商与模型可切换**：支持 DeepSeek、MiniMax-CN、OpenAI。
+- **供应商与模型可切换**：内置 `minimax-cn` / `deepseek` / `openai` / `mimo` / `kimi` / `zhipu` / `anthropic` 七个供应商（见 8.3）。
 - **Skill 渐进式披露**：启动时仅注入 Skill 元数据，按需加载完整内容。
 - **会话管理**：每个会话独立存储为 JSONL 文件，超出上下文阈值时自动压缩。
 
@@ -63,7 +63,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 1. **确定工作目录**：`workspaceRoot = process.cwd()`，后续所有工具操作都被限制在该目录内。
 2. **初始化服务**：
-   - `ModelProviderService`：注册模型供应商（MiniMax-CN / DeepSeek / OpenAI）。
+   - `ModelProviderService`：注册模型供应商（`minimax-cn` / `deepseek` / `openai` / `mimo` / `kimi` / `zhipu` / `anthropic`）。
    - `SettingsStore`：读取 `~/.mini-pi/settings.json` 中的 `defaultModel`。
 3. **创建模型**：调用 `createModelFromSettings()`
    - 解析 `defaultModel`（格式：`供应商/模型名`）；
@@ -71,7 +71,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    - 存在 `apiKey` 时用 `createModelFromProvider()` 生成 `LlmModel`；否则 `model = null`。
 4. **创建工具注册表**：`createToolRegistry(workspaceRoot)`。
 5. **创建会话管理器**：`SessionManager`，并把模型注入其中（`setModel`）。
-6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载最近一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。
+6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载**当前工作目录**最近的一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。会话按工作目录隔离，换目录就是另一串会话（见第 6 节）。
 7. **加载固定上下文**：`getFixedContext()` 读取全局与项目的 `AGENTS.md`。
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览，并在控制台打印已发现的 Skill 名称。
 9. **构建 System Prompt**：基础提示词 + 固定上下文 + Skill 摘要。
@@ -135,14 +135,14 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    不串行的话 `activeRun` 会被覆盖（旧的那轮从此取消不掉），
    两轮还会交错往同一个会话文件追加消息，落盘顺序与真实对话顺序不一致。
 5. **匹配斜杠命令**：按顺序判断并执行（见第 5 节）。
-4. **普通对话输入**：
+6. **普通对话输入**：
    - 调用 `checkSkillMatch()` 进行 Skill 匹配提示（见第 7 节）；
    - 若 `model` 为空，打印 `⚠️ 尚未配置模型，请使用 /login 和 /model 命令进行配置` 并返回（这条消息不会写入会话）；
    - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(budget, 10, overhead)` 判断是否需要压缩（阈值推导见 6.2）；
    - 用 `sessionStore.syncContext()` 依据会话文件重建内存上下文 —— **会话文件是上下文的唯一事实来源**，压缩结果因此立即生效；
-   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.4 节）与取消信号（4.5 节）；
+   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.5 节）与取消信号（4.6 节）；
    - 将本轮新增消息逐条写入会话文件，并再次 `syncContext()` 同步内存上下文。
-6. 重新显示提示符，等待下一次输入（执行期间按 Ctrl+C 取消当前任务）。
+7. 重新显示提示符，等待下一次输入（执行期间按 Ctrl+C 取消当前任务）。
 
 ### 4.1 对话过程的事件与输出
 
@@ -150,7 +150,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 | 事件 | 终端表现 |
 | ---- | -------- |
-| `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.6） |
+| `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.3） |
 | `tool_execution_start` | 更新状态行 `⠋ 执行 <工具摘要>… <耗时>`，**同时把事件交给 `printToolInfo` 写卡片缓存**（参数与起始时间只在这个事件里，见下） |
 | `tool_execution_end` | 清除状态行，打印完整工具调用卡片（见 4.2，含耗时） |
 | `tool_permission` | 打印 `✅ 已允许` / `❌ 已拒绝: <工具名>` |
@@ -231,7 +231,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 - **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`，
   竖线改用 `|`、页脚改用 `+`；`NO_COLOR` 或非 TTY 时不输出 ANSI。
 
-### 4.6 工作状态行
+### 4.3 工作状态行
 
 任何超过一瞬的等待都会给出可见反馈（`src/cli/status.ts`）：
 
@@ -247,7 +247,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
   `… 思考中…`，便于 CI 日志回溯；
 - `NO_COLOR` 环境变量会关闭原地刷新；`MINI_PI_ASCII=1` 把 Braille 帧换成 `|/-\`。
 
-### 4.3 可用工具
+### 4.4 可用工具
 
 CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `workspaceRoot` 内：
 
@@ -296,7 +296,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   报错并建议改用 `bash`（`file` / `xxd` / `head -c`）；
 - **超过 5MB 的文件**：报错并建议改用 `grep` 定位，或用 `bash` 抽取需要的片段。
 
-### 4.3.1 `bash` 的超时与输出上限
+### 4.4.1 `bash` 的超时与输出上限
 
 | 参数 | 说明 |
 | ---- | ---- |
@@ -321,7 +321,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 凭据类文件（`.env*`、SSH 私钥、`*.pem`、`.git-credentials`，模板文件
 `.env.example` / `.sample` / `.template` 除外）。
 
-### 4.4 工具调用审批
+### 4.5 工具调用审批
 
 写文件与执行命令都属于危险动作，执行前必须由用户逐次确认：
 
@@ -348,7 +348,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 > 安全边界：`bash` 没有真正的沙箱，路径守卫只是尽力而为的静态检查
 > （它挡不住 `node -e "..."` 这类构造），**审批才是真正的防线**。
 
-### 4.5 取消、超时与重试
+### 4.6 取消、超时与重试
 
 - 任务执行期间按 **Ctrl+C** 会取消当前任务：模型请求被中止、正在执行的命令被杀掉，
   终端显示 `⏹️  已请求取消当前任务`；空闲时按 Ctrl+C 则退出程序。
@@ -410,8 +410,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
-| `/sessions` | 列出所有会话（标注当前会话与大小） |
-| `/switch <序号\|文件名>` | 切换到指定会话并恢复其历史上下文 |
+| `/sessions` | 列出**当前工作目录**的会话（标注当前会话与大小，标题下打印工作目录） |
+| `/switch <序号\|文件名>` | 切换到当前工作目录的指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行，带行号） |
 | `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit` | 退出程序 |
@@ -432,7 +432,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   /load <name> - 加载指定 skill 的完整内容
   /trust   - 切换信任模式（跳过写文件/执行命令的确认）
   /status  - 查看模型、会话文件、上下文窗口与用量、确认模式
-  /sessions - 列出所有会话
+  /sessions - 列出当前工作目录的会话
   /switch <n> - 切换到指定会话（恢复其历史上下文）
   /last [n] - 查看上一条工具输出的完整内容（默认 200 行）
   /help    - 显示帮助信息
@@ -584,10 +584,12 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ## 6. 会话存储与上下文压缩
 
-- **存储目录**：`~/.mini-pi/sessions/`
+- **存储目录**：`~/.mini-pi/sessions/--<工作目录路径铺平>/`，每个工作目录一个子目录
+  （`D:/workspace/mini-pi` → `--D--workspace-mini-pi--`，便于按目录查找）
 - **文件格式**：JSONL（每行一个条目）
-- **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序）
-- **启动行为**：加载最近一个会话，并把它的历史消息（含压缩摘要）恢复进内存上下文；无会话则新建。
+- **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序；同一秒创建的多个会话追加 `-2`、`-3` 后缀）
+- **工作目录隔离**：`listSessions()` / `loadSession()` / `loadLatestSession()` 只认当前工作目录的会话；目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
+- **启动行为**：加载当前工作目录最近的一个会话，并把它的历史消息（含压缩摘要）恢复进内存上下文；无会话则新建。
 
 ### 6.1 会话条目类型
 
@@ -620,6 +622,22 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   | `MiniMax-M2*` | 204800 | MiniMax M2 / M2.1 / M2.5 / M2.7 |
   | `MiniMax-M2-her` | 65536 | MiniMax 对话模型 |
   | `MiniMax-M3` | 1000000 | MiniMax M3 |
+  | `mimo-v2.6-*`（pro / flash / ultraspeed） | 1000000 | 小米 MiMo V2.6 系列 |
+  | `mimo-v2.5-omni` | 131072 | MiMo 全模态（接入文档标 128K） |
+  | `mimo-v2-flash` | 131072 | 官方博客标 256K、接入指南标 56K，取小值 |
+  | `mimo-7b*` | 32768 | MiMo-7B 系列 |
+  | `kimi-k3` | 1000000 | Kimi K3（1M） |
+  | `kimi-k2.6` / `kimi-k2.7-code*` | 262144 | Kimi K2.6 / K2.7 Code（256K） |
+  | `glm-5.3` / `glm-5.2` | 1000000 | GLM-5.3 / 5.2（1M） |
+  | `glm-5.1` / `glm-5` / `glm-4.7` / `glm-4.6` | 200000 | GLM 5.x / 4.7 / 4.6 |
+  | `glm-4.5-air*` / `glm-4*` | 128000 | GLM-4.5-Air 与 GLM-4 Flash 系列 |
+  | `glm-4-long` | 1000000 | GLM-4-Long（1M 上下文，输出仅 4K） |
+  | `glm-4.6v` | 128000 | GLM-4.6V 视觉模型 |
+  | `glm-4.1v-thinking*` | 65536 | GLM-4.1V-Thinking（64K） |
+  | `glm-4v-flash` | 16384 | GLM-4V-Flash（16K，小于 128k 必须登记） |
+  | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 世代（1M） |
+  | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5；4.x 世代的 1M 需 beta 头，登记为 200K |
+  | `claude-3*` / 其它 `claude*` | 200000 | Claude 3 世代与兜底值 |
 
   拿不准的模型一律落到 128k：估小了只是提前多压缩几次（每次都要调一次摘要模型，
   花钱且加延迟），**估大了却可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）**。
@@ -632,7 +650,9 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - 当「消息历史 + 固定开销」超过 `budget` 且消息数超过保留数 10 时触发；
 - **每轮 Agent 循环结束也会检查一次**（`runAgentLoop` 的 `onTurnEnd` 钩子）：
   单轮内可能跑上百次工具调用，只靠"用户回合开始时压一次"兜不住上下文增长；
-- 保留最近 10 条消息，较早的消息用模型生成摘要（未配置模型或摘要调用失败时回退到简单摘要，不会中断对话）；
+- 保留最近 10 条消息，较早的消息优先用模型生成摘要；
+  **未配置模型**时才退回「共 N 条消息」的简单摘要兜底，配了模型却**调用失败或被取消**
+  则放弃本次压缩、不写任何条目（原因与展示见 4.6），不会用降级摘要替换真实历史；
 - 压缩窗口的起点会**向前回退到不与工具结果断链的位置**：直接切在 `toolResult` 上会让它
   对应的 assistant `toolCall` 被摘要吞掉，还原上下文时就成了引用不存在 `tool_call_id`
   的孤儿结果（协议层直接 400，且非法序列已落盘）；
@@ -699,7 +719,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | ---- | ---- | ---- |
 | 供应商凭据 | `~/.mini-pi/auth.json` | 各供应商的 `apiKey` / `baseUrl` / `model` |
 | 默认模型 | `~/.mini-pi/settings.json` | `{ "defaultModel": "供应商/模型名" }` |
-| 会话记录 | `~/.mini-pi/sessions/*.jsonl` | 每个会话一个文件 |
+| 会话记录 | `~/.mini-pi/sessions/--<工作目录路径铺平>/*.jsonl` | 每个工作目录一个子目录（如 `--D--workspace-mini-pi--`），每个会话一个文件 |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/`、`<workspaceRoot>/.agents/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
@@ -741,6 +761,10 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | `deepseek` | OpenAI | `https://api.deepseek.com` |
 | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | `openai` | OpenAI | `https://api.openai.com/v1` |
+| `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
+| `kimi` | OpenAI | `https://api.moonshot.cn/v1` |
+| `zhipu` | OpenAI | `https://open.bigmodel.cn/api/paas/v4` |
+| `anthropic` | Anthropic | `https://api.anthropic.com` |
 
 ### 8.4 凭据文件权限
 

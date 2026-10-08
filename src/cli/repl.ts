@@ -710,7 +710,11 @@ export function handleSessions(options: ReplOptions): void {
   }
 
   console.log("");
-  console.log(chalk.cyan(`📚 会话列表（共 ${sessions.length} 个，越靠下越新）`));
+  // 会话按工作目录隔离：列表里只有当前目录的会话，因此标题要写清范围
+  console.log(
+    chalk.cyan(`📚 会话列表（当前工作目录共 ${sessions.length} 个，越靠下越新）`),
+  );
+  console.log(`${chalk.dim("│")} ${chalk.dim(options.workspaceRoot)}`);
   for (const line of formatSessionList(
     sessions,
     options.sessionStore?.getFilePath(),
@@ -995,7 +999,7 @@ function printHelp() {
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
   console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
   console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文用量与确认模式"));
-  console.log(chalk.white("  /sessions") + chalk.dim(" - 列出所有会话"));
+  console.log(chalk.white("  /sessions") + chalk.dim(" - 列出当前工作目录的会话"));
   console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));
   console.log(chalk.white("  /last [n]") + chalk.dim(" - 查看上一条工具输出的完整内容（默认 200 行）"));
   console.log(chalk.white("  /help") + chalk.dim("    - 显示帮助信息"));

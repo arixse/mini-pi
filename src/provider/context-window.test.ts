@@ -61,9 +61,90 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("MiniMax-M3"), 1_000_000);
   });
 
+  it("小米 MiMo 系列", () => {
+    assert.strictEqual(inferContextWindow("mimo-v2.6-pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.6-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.6-pro-ultraspeed"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.5-pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("mimo-v2.5"), 1_000_000);
+    // 小窗口模型必须被认出来，否则会在压缩触发前超窗（400）
+    assert.strictEqual(inferContextWindow("mimo-7b-instruct"), 32_768);
+  });
+
+  it("MiMo 的窗口不能被同前缀的更通用条目盖掉", () => {
+    // 最长前缀优先：omni（128K）不能落到 mimo-v2.5 的 1M 上
+    assert.strictEqual(inferContextWindow("mimo-v2.5-omni"), 131_072);
+    assert.strictEqual(
+      matchContextWindowRule("mimo-v2.6-pro-ultraspeed")?.prefix,
+      "mimo-v2.6-pro-ultraspeed",
+    );
+  });
+
   it("带供应商前缀与大小写混写同样命中", () => {
     assert.strictEqual(inferContextWindow("minimax-cn/MiniMax-M2.7"), 204_800);
     assert.strictEqual(inferContextWindow("openai/GPT-3.5-Turbo"), 16_384);
+    assert.strictEqual(inferContextWindow("mimo/MiMo-V2.6-Pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("kimi/Kimi-K3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("zhipu/GLM-5.3"), 1_000_000);
+  });
+
+  it("Kimi（Moonshot）系列", () => {
+    assert.strictEqual(inferContextWindow("kimi-k3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("kimi-k2.6"), 262_144);
+    assert.strictEqual(inferContextWindow("kimi-k2.7-code"), 262_144);
+    assert.strictEqual(inferContextWindow("kimi-k2.7-code-highspeed"), 262_144);
+  });
+
+  it("Kimi 的高速版不能被 kimi-k2.7 的通用条目盖掉", () => {
+    // 两者同为 256K，这里断言的是"最长前缀优先"没被破坏
+    assert.strictEqual(
+      matchContextWindowRule("kimi-k2.7-code-highspeed")?.prefix,
+      "kimi-k2.7-code-highspeed",
+    );
+    // K3 是 1M，不能被任何 k2 条目命中
+    assert.strictEqual(matchContextWindowRule("kimi-k3")?.prefix, "kimi-k3");
+  });
+
+  it("智谱 GLM 系列", () => {
+    assert.strictEqual(inferContextWindow("glm-5.3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("glm-5.2"), 1_000_000);
+    assert.strictEqual(inferContextWindow("glm-5.1"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-5"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-5-turbo"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.7"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.6"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.5-air"), 128_000);
+    // 小窗口的视觉模型必须被认出来，否则会在压缩触发前超窗（400）
+    assert.strictEqual(inferContextWindow("glm-4.1v-thinking-flashx"), 65_536);
+    assert.strictEqual(inferContextWindow("glm-4v-flash"), 16_384);
+  });
+
+  it("GLM 的同前缀模型不能被更通用的条目盖掉", () => {
+    // GLM-4-Long 是 1M，不能被 glm-4 的 128K 盖住
+    assert.strictEqual(inferContextWindow("glm-4-long"), 1_000_000);
+    assert.strictEqual(matchContextWindowRule("glm-4-long")?.prefix, "glm-4-long");
+    // GLM-4.6V 是 128K 的视觉模型，不能被 GLM-4.6 的 200K 盖住
+    assert.strictEqual(inferContextWindow("glm-4.6v"), 128_000);
+    assert.strictEqual(matchContextWindowRule("glm-4.6v")?.prefix, "glm-4.6v");
+    // GLM-4-FlashX 落到 glm-4 的 128K
+    assert.strictEqual(inferContextWindow("glm-4-flashx-250414"), 128_000);
+  });
+
+  it("Anthropic Claude 当前一代", () => {
+    assert.strictEqual(inferContextWindow("claude-opus-5-5"), 1_000_000);
+    assert.strictEqual(inferContextWindow("claude-sonnet-5-5"), 1_000_000);
+    assert.strictEqual(inferContextWindow("claude-fable-5-1"), 1_000_000);
+    // Haiku 4.5 只有 200K，不能被 1M 的通用条目盖住
+    assert.strictEqual(inferContextWindow("claude-haiku-4-5"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-haiku-4-5-20251001"), 200_000);
+  });
+
+  it("Claude 4.x 按 200K 登记（1M 需 beta 头，估大会超窗 400）", () => {
+    assert.strictEqual(inferContextWindow("claude-opus-4-8"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-sonnet-4-5"), 200_000);
+    assert.strictEqual(inferContextWindow("claude-3-5-sonnet-20241022"), 200_000);
+    // 认不出具体型号的 Claude 兜底到 200K，而不是全局默认的 128K
+    assert.strictEqual(inferContextWindow("claude-some-future-model"), 200_000);
   });
 });
 

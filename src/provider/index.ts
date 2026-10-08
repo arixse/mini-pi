@@ -2,6 +2,10 @@ import { ProviderStore } from "./provider-store";
 import { MiniMaxCnProvider } from "./minimax-cn";
 import { DeepSeekProvider } from "./deepseek";
 import { OpenAIProvider } from "./openai";
+import { MiMoProvider } from "./mimo";
+import { KimiProvider } from "./kimi";
+import { ZhipuProvider } from "./zhipu";
+import { AnthropicProvider } from "./anthropic";
 
 export interface Provider {
   /** 获取Provider名称 */
@@ -59,6 +63,10 @@ export class ModelProviderService {
     this.registerProvider(new MiniMaxCnProvider());
     this.registerProvider(new DeepSeekProvider());
     this.registerProvider(new OpenAIProvider());
+    this.registerProvider(new MiMoProvider());
+    this.registerProvider(new KimiProvider());
+    this.registerProvider(new ZhipuProvider());
+    this.registerProvider(new AnthropicProvider());
   }
   
   /**
@@ -206,3 +214,7 @@ export {
 export { MiniMaxCnProvider } from "./minimax-cn";
 export { DeepSeekProvider } from "./deepseek";
 export { OpenAIProvider } from "./openai";
+export { MiMoProvider } from "./mimo";
+export { KimiProvider } from "./kimi";
+export { ZhipuProvider } from "./zhipu";
+export { AnthropicProvider } from "./anthropic";

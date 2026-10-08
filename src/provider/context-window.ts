@@ -67,6 +67,139 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     note: "MiniMax-M2 / M2.1 / M2.5 / M2.7（204.8K）",
   },
   { prefix: "minimax", window: 204_800, note: "MiniMax 其它模型，按 M2 量级取" },
+  // ---- Xiaomi MiMo ----
+  {
+    prefix: "mimo-v2.6-pro-ultraspeed",
+    window: 1_000_000,
+    note: "MiMo-V2.6-Pro-Ultraspeed（1M）",
+  },
+  {
+    prefix: "mimo-v2.6",
+    window: 1_000_000,
+    note: "MiMo-V2.6-Pro / V2.6-Flash（官方：1M 上下文）",
+  },
+  {
+    prefix: "mimo-v2.5-pro",
+    window: 1_000_000,
+    note: "MiMo-V2.5-Pro（1M，官方公告 2026.10.21 下线）",
+  },
+  {
+    prefix: "mimo-v2.5-omni",
+    window: 131_072,
+    note: "MiMo-V2.5-Omni（全模态，接入文档标 128K）",
+  },
+  {
+    prefix: "mimo-v2.5",
+    window: 1_000_000,
+    note: "MiMo-V2.5（1M，官方公告 2026.10.21 下线）",
+  },
+  {
+    prefix: "mimo-v2-flash",
+    window: 131_072,
+    note: "MiMo-V2-Flash：官方博客标 256K、接入指南标 56K，取小值避免超窗（400）",
+  },
+  {
+    prefix: "mimo-7b",
+    window: 32_768,
+    note: "MiMo-7B 系列（32K，小于 128k 必须登记）",
+  },
+  // ---- Moonshot AI / Kimi ----
+  // 只登记官方模型列表里的在售模型：kimi-k2.5 / moonshot-v1 / kimi-k2 系列
+  // 均已下线（调用即 404），不登记也不会比"请求本身失败"更糟。
+  { prefix: "kimi-k3", window: 1_000_000, note: "Kimi K3（1M，官方模型列表）" },
+  {
+    prefix: "kimi-k2.7-code-highspeed",
+    window: 262_144,
+    note: "Kimi K2.7 Code 高速版（256K）",
+  },
+  { prefix: "kimi-k2.7", window: 262_144, note: "Kimi K2.7 Code（256K）" },
+  { prefix: "kimi-k2.6", window: 262_144, note: "Kimi K2.6（256K）" },
+  // ---- 智谱 Zhipu / GLM ----
+  { prefix: "glm-5.3", window: 1_000_000, note: "GLM-5.3 / 5.3-Flash / 5.3-FlashX（1M）" },
+  { prefix: "glm-5.2", window: 1_000_000, note: "GLM-5.2（1M）" },
+  { prefix: "glm-5.1", window: 200_000, note: "GLM-5.1（200K）" },
+  { prefix: "glm-5", window: 200_000, note: "GLM-5 / GLM-5-Turbo / GLM-5V-Turbo（200K）" },
+  { prefix: "glm-4.7", window: 200_000, note: "GLM-4.7 / 4.7-Flash / 4.7-FlashX（200K）" },
+  { prefix: "glm-4.6v", window: 128_000, note: "GLM-4.6V 视觉模型（128K）" },
+  { prefix: "glm-4.6", window: 200_000, note: "GLM-4.6（200K）" },
+  {
+    prefix: "glm-4.5-air",
+    window: 128_000,
+    note: "GLM-4.5-Air / 4.5-AirX（128K）",
+  },
+  { prefix: "glm-4.5", window: 128_000, note: "GLM-4.5 其它型号（含 Flash，128K）" },
+  {
+    prefix: "glm-4.1v-thinking",
+    window: 65_536,
+    note: "GLM-4.1V-Thinking 系列（64K，小于 128k 必须登记）",
+  },
+  {
+    prefix: "glm-4v-flash",
+    window: 16_384,
+    note: "GLM-4V-Flash（16K，小于 128k 必须登记）",
+  },
+  {
+    prefix: "glm-4-long",
+    window: 1_000_000,
+    note: "GLM-4-Long（1M 上下文，但最大输出只有 4K）",
+  },
+  {
+    prefix: "glm-4",
+    window: 128_000,
+    note: "GLM-4 及 Flash 系列（128K）",
+  },
+  // ---- Anthropic ----
+  // 当前一代（官方 Models overview，2026-10）：Fable / Opus 5.5 / Sonnet 5.5 都是 1M，
+  // Haiku 4.5 是 200K。
+  {
+    prefix: "claude-fable-5-1",
+    window: 1_000_000,
+    note: "Claude Fable 5.1（1M / 128K 输出）",
+  },
+  {
+    prefix: "claude-opus-5-5",
+    window: 1_000_000,
+    note: "Claude Opus 5.5（1M，官方推荐的默认模型）",
+  },
+  {
+    prefix: "claude-sonnet-5-5",
+    window: 1_000_000,
+    note: "Claude Sonnet 5.5（1M）",
+  },
+  {
+    prefix: "claude-opus-5",
+    window: 1_000_000,
+    note: "Claude Opus 5 / 4.8（1M）",
+  },
+  {
+    prefix: "claude-sonnet-5",
+    window: 1_000_000,
+    note: "Claude Sonnet 5（1M）",
+  },
+  {
+    prefix: "claude-haiku-4-5",
+    window: 200_000,
+    note: "Claude Haiku 4.5（200K / 64K 输出）",
+  },
+  // 4.x 世代的 1M 需要额外的 beta 头（context-1m-*）才可用，默认只有 200K，
+  // 因此这里登记 200K——估大会让请求在压缩触发前超窗（400）。
+  {
+    prefix: "claude-opus-4",
+    window: 200_000,
+    note: "Claude Opus 4.x（200K；1M 需 beta 头，不登记）",
+  },
+  {
+    prefix: "claude-sonnet-4",
+    window: 200_000,
+    note: "Claude Sonnet 4.x（200K；1M 需 beta 头）",
+  },
+  { prefix: "claude-haiku-4", window: 200_000, note: "Claude Haiku 4.x（200K）" },
+  { prefix: "claude-3", window: 200_000, note: "Claude 3 / 3.5 系列（200K）" },
+  {
+    prefix: "claude",
+    window: 200_000,
+    note: "其它 Claude 模型按 200K 取；窗口更小的型号需单独登记",
+  },
 ];
 
 /**

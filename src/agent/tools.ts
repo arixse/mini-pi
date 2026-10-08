@@ -935,7 +935,19 @@ export function classifyBashFailure(
  * 所以 Windows 上必须用 `taskkill /T` 按父链一起结束。
  *
  * POSIX 下这里只结束 shell（未做进程组隔离），子进程仍可能存活。
+ *
+ * `taskkill` 不可用时（受限沙箱、PATH 缺失等）必须回退到 `child.kill`：
+ * `spawnSync` 在可执行文件无法启动时**不会抛异常**，而是把错误放进返回值的
+ * `error` 并把 `status` 置为 null（例如受限沙箱里 spawn taskkill 报 EBUSY），
+ * 所以只靠 try/catch 判断成功与否会静默地"什么都不杀"，超时形同虚设。
  */
+export function taskkillSucceeded(result: {
+  error?: Error | null;
+  status?: number | null;
+}): boolean {
+  return !result.error && result.status === 0;
+}
+
 async function killProcessTree(child: ChildProcess): Promise<void> {
   if (child.pid === undefined || child.exitCode !== null) {
     return;
@@ -943,10 +955,12 @@ async function killProcessTree(child: ChildProcess): Promise<void> {
   if (process.platform === "win32") {
     try {
       const { spawnSync } = await import("node:child_process");
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
         windowsHide: true,
       });
-      return;
+      if (taskkillSucceeded(result)) {
+        return;
+      }
     } catch {
       // 落到 child.kill
     }

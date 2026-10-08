@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn）
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -51,7 +51,7 @@ mini-pi/
 4. **文件操作** - 读取（`offset`/`limit` 分页，单次上限 2000 行 / 20000 字符并显式标注；拒绝二进制与超大文件）、编辑文件
 5. **命令执行** - 执行 bash 命令（单次输出 20000 字符上限，超出会标注并建议收窄；超时可配，默认 30s）
 6. **工具调用** - 通过 Function Calling 机制调用工具
-7. **会话管理** - `/sessions` 列表、`/switch` 切换并恢复历史、`/status` 查看用量；每个会话独立存储
+7. **会话管理** - `/sessions` 列表、`/switch` 切换并恢复历史、`/status` 查看用量；每个会话独立存储，且**按工作目录隔离**（换目录即换会话串）
 8. **模型切换** - 支持 OpenAI 和 Anthropic 模型；模型列表与请求都会走你配置的 Base URL；
    切换后立即按新模型重建实例与上下文窗口（不必等 `/reload`）
 9. **上下文窗口** - 默认 128k；启动时按**当前模型名自动推断**（如 `MiniMax-M2.7` → 204.8k、
@@ -59,7 +59,11 @@ mini-pi/
    `/status` 会显示窗口值与来源
 10. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
 11. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
-12. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+12. **MiMo 支持** - 支持小米 MiMo 的 OpenAI 兼容接口（`mimo-v2.6-pro` 等 V2.6 系列）
+13. **Kimi 支持** - 支持月之暗面 Kimi 的 OpenAI 兼容接口（`kimi-k3` 等，1M 上下文）
+14. **Anthropic 支持** - 支持 Anthropic 官方 Messages API（`claude-opus-5-5` 等）
+15. **智谱支持** - 支持智谱开放平台的 OpenAI 兼容接口（`glm-5.3` 等 GLM 系列）
+16. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -141,6 +145,10 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | OpenAI     | `openai`     | OpenAI    | `https://api.openai.com/v1`        |
 | DeepSeek   | `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
 | MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
+| MiMo       | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
+| Kimi       | `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
+| 智谱       | `zhipu`      | OpenAI    | `https://open.bigmodel.cn/api/paas/v4` |
+| Anthropic  | `anthropic`  | Anthropic | `https://api.anthropic.com`        |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
 
@@ -178,6 +186,83 @@ DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `h
 
 DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
 
+### Anthropic
+
+Anthropic 提供商使用官方 Messages API，base_url 为 `https://api.anthropic.com`
+（SDK 请求时自行拼 `/v1`，模型列表接口是 `/v1/models`）。
+鉴权与其它提供商不同：官方用 `x-api-key` 头而不是 `Authorization: Bearer`。
+
+支持的模型（默认列表）：
+
+| 模型 | 说明 |
+| ---- | ---- |
+| `claude-opus-5-5` | 长程 Agent 编码与知识工作（1M 上下文），官方推荐的默认选择 |
+| `claude-sonnet-5-5` | 速度与智能最均衡（1M 上下文） |
+| `claude-haiku-4-5` | 最快、成本最低（200K 上下文） |
+| `claude-fable-5-1` | 最强推理与超长程 Agent（1M 上下文） |
+
+> Claude Opus 4.x / Sonnet 4.x 的 1M 上下文需要额外的 beta 头才能启用，
+> 未开启时窗口是 200K，因此上下文窗口推断表把它们登记为 200K
+> （估大会让请求在压缩触发前超窗 400）。若确已开启，可在 `settings.json`
+> 显式配置 `contextWindow`。
+
+Anthropic 文档：https://platform.claude.com/docs
+
+### Kimi（月之暗面）
+
+Kimi 使用 OpenAI 兼容接口，base_url 为 `https://api.moonshot.cn/v1`
+（国际站为 `https://api.moonshot.ai/v1`，两端账号与余额不互通，可在配置里覆盖 Base URL）。
+
+支持的模型（默认列表，均为官方在售模型）：
+- `kimi-k3` - 旗舰模型（2.8T 参数，1M 上下文，原生视觉理解）
+- `kimi-k2.7-code` - Coding 模型（256K 上下文）
+- `kimi-k2.7-code-highspeed` - Coding 高速版（约 180 Tokens/s）
+- `kimi-k2.6` - 通用模型（256K 上下文，支持思考/非思考模式）
+
+> `kimi-k2.5`、`moonshot-v1` 系列与 `kimi-k2` 系列官方已分别于 2026.08.31 / 2026.05.25 下线
+> （调用返回 404），已不再列入默认列表。Kimi API 同时兼容 Anthropic 格式，
+> 这里统一走 OpenAI 兼容端点。
+
+Kimi 文档：https://platform.kimi.com/docs
+
+### 智谱（Zhipu）
+
+智谱开放平台提供三种协议端点，这里走 **OpenAI 兼容（Chat Completion）** 端点
+`https://open.bigmodel.cn/api/paas/v4`（官方 GLM-5.3 文档注明：订阅过 GLM Coding Plan
+的用户暂时只能走这一协议，覆盖面最广）。鉴权是标准的 `Authorization: Bearer`
+（API Key 形如 `id.secret`），模型列表与请求同源（`{baseUrl}/models`）。
+
+支持的模型（默认列表，只列文本/编码类在售模型）：
+
+| 模型 | 说明 |
+| ---- | ---- |
+| `glm-5.3` | 旗舰模型，编程与智能体能力对标 Claude Fable 5（1M 上下文） |
+| `glm-5.2` | 复杂长程任务，Coding 能力强（1M 上下文） |
+| `glm-5.1` | Coding 能力对齐 Claude Opus 4.6（200K 上下文） |
+| `glm-4.7` | 通用对话、推理与智能体（200K 上下文） |
+| `glm-4.6` | 擅长高级编码、复杂推理与工具调用（200K 上下文） |
+
+> 平台的视觉/图像/音视频/向量模型（GLM-5V、CogView、CogVideoX、Embedding 等）
+> 走各自专属接口，因此不在对话模型的默认列表里。
+
+智谱文档：https://docs.bigmodel.cn/cn/guide/start/model-overview
+
+### MiMo（小米）
+
+MiMo 使用 OpenAI 兼容接口，base_url 为 `https://api.xiaomimimo.com/v1`
+（Token Plan 订阅用户请改用控制台给出的专属 Base URL，同为 OpenAI 兼容协议）。
+
+支持的模型（默认列表，均为 V2.6 系列）：
+- `mimo-v2.6-pro` - 旗舰推理模型
+- `mimo-v2.6-flash` - 高效推理模型
+- `mimo-v2.6-pro-ultraspeed` - Pro 的超高速版本
+
+> MiMo 也提供 Anthropic 兼容端点，但其文档指出：Anthropic 协议下含工具调用的
+> 多轮会话缺 `reasoning_content` 会被判 400，因此这里统一走 OpenAI 兼容端点。
+> `mimo-v2.5-pro` / `mimo-v2.5` 官方公告 2026.10.21 下线，已不再列入默认列表。
+
+MiMo 文档：https://platform.xiaomimimo.com/docs
+
 ### MiniMax-CN
 
 MiniMax-CN 提供商使用 Anthropic 兼容接口。
@@ -186,9 +271,12 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 
 ### 存储位置
 
-- **会话存储目录**: `~/.mini-pi/sessions/`
+- **会话存储目录**: `~/.mini-pi/sessions/--<工作目录路径铺平>/`
+  （每个工作目录一个子目录，例如 `D:/workspace/mini-pi` → `--D--workspace-mini-pi--`，便于查找）
 - **文件格式**: `.jsonl` (JSON Lines)
-- **文件命名**: 使用时间戳，格式为 `YYYY-MM-DDTHH-mm-ss.jsonl`
+- **文件命名**: 使用时间戳，格式为 `YYYY-MM-DDTHH-mm-ss.jsonl`（同一秒创建多个会话时追加 `-2`、`-3`）
+- **工作目录隔离**: `/sessions`、`/switch`、启动恢复都只认当前工作目录的会话；
+  目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
 
 ### 命令
 
@@ -202,7 +290,7 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
-| `/sessions` | 列出所有会话 |
+| `/sessions` | 列出当前工作目录的会话 |
 | `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行） |
 | `/help`  | 显示帮助信息                  |
@@ -220,15 +308,12 @@ pnpm dev:cli
 启动后会显示：
 
 ```
-  ███╗   ███╗██╗███╗   ██╗██╗
-  ████╗ ████║██║████╗  ██║██║
-  ██╔████╔██║██║██╔██╗ ██║██║
-  ██║╚██╔╝██║██║██║╚██╗██║██║
-  ██║ ╚═╝ ██║██║██║ ╚████║██║
-  ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝
-  ═══════════════════════════════
-  Code Agent
-  ═══════════════════════════════
+  ███╗   ███╗██╗███╗   ██╗██╗    ██████╗ ██╗
+  ████╗ ████║██║████╗  ██║██║    ██╔══██╗██║
+  ██╔████╔██║██║██╔██╗ ██║██║    ██████╔╝██║
+  ██║╚██╔╝██║██║██║╚██╗██║██║    ██╔═══╝ ██║
+  ██║ ╚═╝ ██║██║██║ ╚████║██║    ██║     ██║
+  ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝    ╚═╝     ╚═╝
 
 ────────────────────────────────────────────────────────────
   Provider: minimax-cn
@@ -244,6 +329,9 @@ pnpm dev:cli
 
 > 
 ```
+
+> 未配置模型时（`~/.mini-pi/settings.json` 里没有可用的 `defaultModel`），
+> `Provider / Model / Context` 区块不显示，改为提示先执行 `/login` 与 `/model`。
 
 然后可以开始对话：
 

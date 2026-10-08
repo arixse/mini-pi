@@ -1,9 +1,15 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { SessionManager, SessionManagerOptions } from "./sessionManager";
+import {
+  SessionManager,
+  SessionManagerOptions,
+  normalizeWorkspaceKey,
+  workspaceKeyHash,
+  workspaceSessionDirName,
+} from "./sessionManager";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
+import { platform, tmpdir } from "node:os";
 import { SkillLoader } from "./skillLoader";
 
 describe("SessionManager", () => {
@@ -58,12 +64,24 @@ describe("SessionManager", () => {
     assert.strictEqual(session.getSessionId(), "mini-pi-session");
   });
 
-  it("should write session files into the injected sessionsDir", () => {
+  it("should write session files into the workspace session dir", () => {
     sessionManager.createNewSession();
 
-    const files = readdirSync(sessionsDir).filter((file) => file.endsWith(".jsonl"));
-    assert.strictEqual(files.length, 1, "会话文件必须落在注入的目录里");
-    assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.jsonl$/.test(files[0]));
+    // 会话按工作目录隔离：文件落在"注入目录/本目录子目录"里，而不是平铺在根目录
+    const files = readdirSync(sessionManager.getSessionDir()).filter((file) =>
+      file.endsWith(".jsonl"),
+    );
+    assert.strictEqual(files.length, 1);
+    assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(-\d+)?\.jsonl$/.test(files[0]));
+    assert.ok(
+      sessionManager.getSessionDir().startsWith(sessionsDir),
+      "本工作目录的会话目录必须挂在注入的 sessionsDir 下",
+    );
+    assert.strictEqual(
+      readdirSync(sessionsDir).filter((file) => file.endsWith(".jsonl")).length,
+      0,
+      "根目录不再平铺会话文件",
+    );
   });
 
   it("should list sessions", () => {
@@ -94,7 +112,7 @@ describe("SessionManager", () => {
   /** 直接写一个只有会话头的文件，便于构造多个不同会话 */
   function writeSessionFile(fileName: string): void {
     writeFileSync(
-      join(sessionsDir, fileName),
+      join(sessionManager.getSessionDir(), fileName),
       `${JSON.stringify({
         type: "session",
         version: 1,
@@ -195,6 +213,234 @@ describe("SessionManager", () => {
     assert.ok(fixedContext.includes("全局代理规则"));
     assert.ok(fixedContext.includes("全局规则"));
     assert.ok(!fixedContext.includes("项目代理规则"));
+  });
+
+  // 会话按工作目录隔离
+  describe("工作目录隔离", () => {
+    let otherWorkspace: string;
+    let otherManager: SessionManager;
+
+    /** 往指定工作目录的会话目录里写一个只有会话头的文件 */
+    function writeSessionFileIn(dir: string, fileName: string, cwd: string): void {
+      writeFileSync(
+        join(dir, fileName),
+        `${JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "mini-pi-session",
+          timestamp: new Date().toISOString(),
+          cwd,
+        })}\n`,
+        "utf8",
+      );
+    }
+
+    beforeEach(() => {
+      otherWorkspace = join(testRoot, "other-workspace");
+      mkdirSync(otherWorkspace, { recursive: true });
+      otherManager = new SessionManager(otherWorkspace, {
+        sessionsDir,
+        globalAgentsPath,
+      });
+    });
+
+    it("会话目录按工作目录分开且自动创建", () => {
+      assert.notStrictEqual(
+        sessionManager.getSessionDir(),
+        otherManager.getSessionDir(),
+      );
+      assert.ok(existsSync(sessionManager.getSessionDir()));
+      assert.ok(existsSync(otherManager.getSessionDir()));
+    });
+
+    it("不同工作目录的会话不出现在对方的列表里", () => {
+      sessionManager.createNewSession();
+      otherManager.createNewSession();
+      otherManager.createNewSession();
+
+      const mine = sessionManager.listSessions();
+      const others = otherManager.listSessions();
+
+      assert.strictEqual(mine.length, 1, "只看得到本工作目录的会话");
+      assert.strictEqual(others.length, 2);
+      const otherPaths = new Set(others.map((session) => session.path));
+      assert.ok(
+        !otherPaths.has(mine[0].path),
+        "别的目录的会话不能混进本目录的列表",
+      );
+    });
+
+    it("loadLatestSession 只恢复本工作目录最近的会话", () => {
+      writeSessionFileIn(
+        sessionManager.getSessionDir(),
+        "2026-01-01T00-00-01.jsonl",
+        testWorkspace,
+      );
+      writeSessionFileIn(
+        sessionManager.getSessionDir(),
+        "2026-01-01T00-00-02.jsonl",
+        testWorkspace,
+      );
+      writeSessionFileIn(
+        otherManager.getSessionDir(),
+        "2026-12-31T23-59-59.jsonl",
+        otherWorkspace,
+      );
+
+      const loaded = sessionManager.loadLatestSession();
+
+      assert.ok(loaded.getFilePath().endsWith("2026-01-01T00-00-02.jsonl"));
+      assert.ok(
+        otherManager
+          .loadLatestSession()
+          .getFilePath()
+          .endsWith("2026-12-31T23-59-59.jsonl"),
+      );
+    });
+
+    it("切不到别的目录的会话", () => {
+      writeSessionFileIn(
+        otherManager.getSessionDir(),
+        "2026-05-05T10-00-00.jsonl",
+        otherWorkspace,
+      );
+
+      // 序号按各自列表编号，文件名也只在自己目录里找
+      assert.strictEqual(sessionManager.loadSession("1"), null);
+      assert.strictEqual(
+        sessionManager.loadSession("2026-05-05T10-00-00"),
+        null,
+        "别的目录的会话不能被切过去",
+      );
+      assert.ok(otherManager.loadSession("2026-05-05T10-00-00"));
+    });
+
+    it("子目录名对同一目录稳定、对不同目录不同", () => {
+      assert.strictEqual(
+        workspaceSessionDirName(testWorkspace),
+        workspaceSessionDirName(testWorkspace),
+      );
+      assert.notStrictEqual(
+        workspaceSessionDirName(testWorkspace),
+        workspaceSessionDirName(otherWorkspace),
+      );
+    });
+
+    it("子目录名是完整路径铺平的形式，便于查找", () => {
+      const name = workspaceSessionDirName(testWorkspace);
+
+      // D:/workspace/mini-pi -> --D--workspace-mini-pi--（Windows 上整体小写，
+      // 大小写不归一的话同一目录的不同写法会变成两个会话目录）
+      assert.ok(name.startsWith("--") && name.endsWith("--"), name);
+      const flattened = normalizeWorkspaceKey(testWorkspace)
+        .replace(/^[\\/:]+/, "")
+        .replace(/[\\/:*?"<>|\s]/g, "-");
+      assert.ok(
+        name.includes(flattened),
+        `目录名里应能直接看出工作目录：${name}`,
+      );
+      assert.ok(!name.includes("/") && !name.includes("\\"), "不能残留分隔符");
+
+      assert.strictEqual(
+        workspaceSessionDirName(
+          platform() === "win32" ? "D:/workspace/mini-pi" : "/workspace/mini-pi",
+        ),
+        platform() === "win32"
+          ? "--d--workspace-mini-pi--"
+          : "--workspace-mini-pi--",
+      );
+    });
+
+    it("目录名碰撞时追加哈希消歧，不会共用一串会话", () => {
+      // 手工造一个同名目录，并标记为"属于别的工作目录"
+      const name = workspaceSessionDirName(otherWorkspace);
+      const taken = join(sessionsDir, name);
+      mkdirSync(taken, { recursive: true });
+      writeFileSync(
+        join(taken, ".workspace-key"),
+        `${normalizeWorkspaceKey(platform() === "win32" ? "C:\\somewhere-else" : "/somewhere-else")}\n`,
+        "utf8",
+      );
+
+      // 必须在占位目录就位之后才构造：目录归属是在构造时解析的
+      const manager = new SessionManager(otherWorkspace, {
+        sessionsDir,
+        globalAgentsPath,
+      });
+
+      assert.strictEqual(
+        manager.getSessionDir(),
+        join(sessionsDir, `${name}-${workspaceKeyHash(otherWorkspace)}`),
+        "被别的工作目录占用的名字要加哈希后缀",
+      );
+      assert.ok(existsSync(manager.getSessionDir()));
+      // 消歧后的目录同样要能正常建会话
+      assert.ok(manager.createNewSession());
+      assert.strictEqual(manager.listSessions().length, 1);
+    });
+
+    it("无标记的已存在目录会被认领，而不是被当成碰撞", () => {
+      const name = workspaceSessionDirName(otherWorkspace);
+      mkdirSync(join(sessionsDir, name), { recursive: true });
+
+      const manager = new SessionManager(otherWorkspace, {
+        sessionsDir,
+        globalAgentsPath,
+      });
+
+      assert.strictEqual(manager.getSessionDir(), join(sessionsDir, name));
+      assert.ok(
+        existsSync(join(manager.getSessionDir(), ".workspace-key")),
+        "认领后补写归属标记",
+      );
+    });
+
+    it("同名不同父目录的项目不会共用一个会话目录", () => {
+      const demoA = join(testRoot, "a", "demo");
+      const demoB = join(testRoot, "b", "demo");
+      mkdirSync(demoA, { recursive: true });
+      mkdirSync(demoB, { recursive: true });
+
+      assert.notStrictEqual(
+        workspaceSessionDirName(demoA),
+        workspaceSessionDirName(demoB),
+        "只按目录基名分会撞车，必须用完整路径哈希",
+      );
+    });
+
+    it("同一目录的不同写法算同一个会话目录", () => {
+      assert.strictEqual(
+        workspaceSessionDirName(testWorkspace),
+        workspaceSessionDirName(`${testWorkspace}${sep}`),
+        "尾斜杠不影响归属",
+      );
+      assert.strictEqual(
+        workspaceSessionDirName(testWorkspace),
+        workspaceSessionDirName(join(testWorkspace, "sub", "..")),
+        "相对写法不影响归属",
+      );
+      if (platform() === "win32") {
+        assert.strictEqual(
+          workspaceSessionDirName(testWorkspace),
+          workspaceSessionDirName(testWorkspace.toUpperCase()),
+          "Windows 大小写不敏感，必须归一",
+        );
+      }
+    });
+
+    it("同一秒内创建的多个会话不会写进同一个文件", () => {
+      const first = sessionManager.createNewSession();
+      const second = sessionManager.createNewSession();
+
+      assert.notStrictEqual(
+        first.getFilePath(),
+        second.getFilePath(),
+        "时间戳只到秒，撞名会让两次启动共享一份历史",
+      );
+      assert.ok(existsSync(first.getFilePath()));
+      assert.ok(existsSync(second.getFilePath()));
+      assert.strictEqual(sessionManager.listSessions().length, 2);
+    });
   });
 
   // Skill 相关测试
