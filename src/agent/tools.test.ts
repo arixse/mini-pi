@@ -3,7 +3,19 @@ import assert from "node:assert";
 import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, taskkillSucceeded, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
+
+const IS_WIN32 = platform() === "win32";
+
+/**
+ * 工作区之外的绝对路径：**必须按当前平台给出**。
+ *
+ * `D:\outside.txt` 只在 Windows 上是绝对路径；在 POSIX 上反斜杠不是分隔符，
+ * 它只是「一个名字里带反斜杠的文件」，resolve 后仍落在工作区内——
+ * 于是"应当拒绝越界"的用例在 Linux CI（ubuntu runner）上会稳定失败。
+ * 反过来 `/outside.txt` 在 Windows 上会解析成 `C:\outside.txt`，同样逃逸，因此可用。
+ */
+const OUTSIDE_ABSOLUTE_FILE = IS_WIN32 ? "C:\\outside.txt" : "/outside.txt";
 
 describe("tools", () => {
   /**
@@ -126,7 +138,7 @@ describe("tools", () => {
     it("should reject path outside workspace", async () => {
       const registry = createToolRegistry(testDir);
       await assert.rejects(
-        () => registry.execute("list_files", { path: "D:\\" }),
+        () => registry.execute("list_files", { path: OUTSIDE_ABSOLUTE_FILE }),
         {
           message: /Path escapes workspace/,
         },
@@ -243,7 +255,7 @@ describe("tools", () => {
     it("should reject absolute path outside workspace", async () => {
       const registry = createToolRegistry(testDir);
       await assert.rejects(
-        () => registry.execute("read_file", { path: "E:\\test.txt" }),
+        () => registry.execute("read_file", { path: OUTSIDE_ABSOLUTE_FILE }),
         {
           message: /Path escapes workspace/,
         },
@@ -300,7 +312,7 @@ describe("tools", () => {
       await assert.rejects(
         () =>
           registry.execute("write_file", {
-            path: "D:\\outside.txt",
+            path: OUTSIDE_ABSOLUTE_FILE,
             content: "escape attempt",
           }),
         {
@@ -474,7 +486,7 @@ describe("tools", () => {
     it("should reject command with absolute path outside workspace", async () => {
       const registry = createToolRegistry(testDir);
       await assert.rejects(
-        () => registry.execute("bash", { command: "cat D:\\secret.txt" }),
+        () => registry.execute("bash", { command: `cat ${OUTSIDE_ABSOLUTE_FILE}` }),
         {
           message: /Bash command contains a path outside the workspace/,
         },
@@ -1162,8 +1174,10 @@ describe("tools", () => {
 
   describe("bash 路径守卫（checkBashCommand）", () => {
     it("should reject quoted absolute paths（旧实现可用引号绕过）", () => {
+      // 用平台对应的越界绝对路径：POSIX 根路径在 Windows 上会解析成盘符根，
+      // 因此两平台都能命中；盘符路径则只有 Windows 认（见下一条）。
       assert.throws(
-        () => checkBashCommand('cat "D:\\secret.txt"', testDir),
+        () => checkBashCommand(`cat "${OUTSIDE_ABSOLUTE_FILE}"`, testDir),
         /path outside the workspace/,
       );
       assert.throws(
@@ -1176,7 +1190,7 @@ describe("tools", () => {
       assert.throws(
         () =>
           checkBashCommand(
-            'node -e "require(\'fs\').readFileSync(\'D:/secret.txt\')"',
+            `node -e "require('fs').readFileSync('${OUTSIDE_ABSOLUTE_FILE}')"`,
             testDir,
           ),
         /path outside the workspace/,
@@ -1185,11 +1199,39 @@ describe("tools", () => {
 
     it("should reject quoted relative escapes", () => {
       assert.throws(
-        () => checkBashCommand('cat "..\\..\\secret.txt"', testDir),
+        () => checkBashCommand('cat "../outside.txt"', testDir),
         /path outside the workspace/,
       );
       assert.throws(
         () => checkBashCommand("cat '../etc/passwd'", testDir),
+        /path outside the workspace/,
+      );
+    });
+
+    /**
+     * 盘符与反斜杠是 Windows 独有的路径语法：在 POSIX 上 `D:\secret.txt`
+     * 与 `..\..\secret.txt` 都只是「名字里含反斜杠的普通文件」，位于工作区内，
+     * 守卫放行是**正确**的（Linux 允许反斜杠作为文件名字符）。
+     * 因此这些形态只在 Windows 上断言，CI（ubuntu）跳过。
+     */
+    it("should reject Windows drive paths", { skip: !IS_WIN32 }, () => {
+      assert.throws(
+        () => checkBashCommand('cat "D:\\secret.txt"', testDir),
+        /path outside the workspace/,
+      );
+      assert.throws(
+        () =>
+          checkBashCommand(
+            'node -e "require(\'fs\').readFileSync(\'D:/secret.txt\')"',
+            testDir,
+          ),
+        /path outside the workspace/,
+      );
+    });
+
+    it("should reject Windows backslash traversals", { skip: !IS_WIN32 }, () => {
+      assert.throws(
+        () => checkBashCommand('cat "..\\..\\secret.txt"', testDir),
         /path outside the workspace/,
       );
     });
