@@ -11,6 +11,7 @@
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
 | MiMo（小米） | OpenAI | https://api.xiaomimimo.com/v1 | ✅ 已对接 |
 | Kimi（月之暗面） | OpenAI | https://api.moonshot.cn/v1 | ✅ 已对接 |
+| 智谱（Zhipu） | OpenAI | https://open.bigmodel.cn/api/paas/v4 | ✅ 已对接 |
 | Anthropic | Anthropic | https://api.anthropic.com | ✅ 已对接 |
 
 ---
@@ -122,6 +123,71 @@ OpenAI
 {
   "kimi": {
     "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
+
+---
+
+## 0. 智谱（Zhipu / BigModel 开放平台）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 开放平台 | https://open.bigmodel.cn |
+| 模型概览 | https://docs.bigmodel.cn/cn/guide/start/model-overview |
+| 对话补全接口 | https://docs.bigmodel.cn/api-reference/模型-api/对话补全 |
+| 定价 | https://docs.bigmodel.cn/cn/guide/start/pricing |
+| API Key 管理 | https://open.bigmodel.cn/usercenter/apikeys |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `glm-5.3` | 旗舰模型，编程与智能体能力对标 Claude Fable 5（1M 上下文 / 128K 输出） |
+| `glm-5.2` | 复杂长程任务稳定执行，Coding 能力大幅提升（1M / 128K） |
+| `glm-5.1` | Coding 能力对齐 Claude Opus 4.6（200K / 128K） |
+| `glm-4.7` | 通用对话、推理与智能体能力升级（200K / 128K） |
+| `glm-4.6` | 擅长高级编码、复杂推理与工具调用（200K / 128K） |
+
+> 视觉/图像/音视频/向量模型（GLM-5V / GLM-Image / CogView / CogVideoX /
+> Embedding 等）走各自专属接口，不在对话模型的默认列表里。
+
+### 接入方式
+
+智谱同时提供三种协议端点（官方 GLM-5.3 文档）：
+
+| 协议 | Base URL |
+|------|----------|
+| OpenAI Chat Completion | `https://open.bigmodel.cn/api/paas/v4` |
+| OpenAI Response | `https://open.bigmodel.cn/api/v1` |
+| Anthropic Message | `https://open.bigmodel.cn/api/anthropic` |
+
+这里**走 OpenAI Chat Completion 端点**：Mini Pi 的 OpenAI 路径（流式 + 工具调用 +
+`stream_options` 降级）走得更久，模型列表与请求同源（`{baseUrl}/models`），
+且官方注明"订阅过 GLM Coding Plan（含已过期）的用户暂时只能走这一协议"。
+
+```typescript
+// Base URL
+https://open.bigmodel.cn/api/paas/v4
+
+// 模型列表
+https://open.bigmodel.cn/api/paas/v4/models
+
+// SDK类型
+OpenAI
+```
+
+鉴权是标准的 `Authorization: Bearer <API Key>`，智谱的 Key 形如 `id.secret`
+（由用户 ID 与密钥两段组成，中间的 `.` 不是分隔符误输入）。
+
+### 配置示例
+
+```json
+{
+  "zhipu": {
+    "apiKey": "xxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxx"
   }
 }
 ```
@@ -360,7 +426,7 @@ export interface Provider {
 
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
-| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、其他兼容服务商） |
+| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、智谱、其他兼容服务商） |
 | Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic 官方、MiniMax-CN） |
 
 ---
@@ -381,6 +447,7 @@ export interface Provider {
 - **OpenAI**: 访问 https://platform.openai.com/api-keys
 - **MiMo**: 访问 https://platform.xiaomimimo.com/console（API Keys 页面创建，按量付费为 `sk-` 前缀；Token Plan 为 `tp-` / `ttp-` 前缀，两者不通用）
 - **Kimi**: 访问 https://platform.kimi.com/console/api-keys
+- **智谱**: 访问 https://open.bigmodel.cn/usercenter/apikeys
 - **Anthropic**: 访问 https://console.anthropic.com/settings/keys
 
 ### Q: 连接超时怎么办？

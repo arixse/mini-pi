@@ -626,6 +626,13 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   | `mimo-7b*` | 32768 | MiMo-7B 系列 |
   | `kimi-k3` | 1000000 | Kimi K3（1M） |
   | `kimi-k2.6` / `kimi-k2.7-code*` | 262144 | Kimi K2.6 / K2.7 Code（256K） |
+  | `glm-5.3` / `glm-5.2` | 1000000 | GLM-5.3 / 5.2（1M） |
+  | `glm-5.1` / `glm-5` / `glm-4.7` / `glm-4.6` | 200000 | GLM 5.x / 4.7 / 4.6 |
+  | `glm-4.5-air*` / `glm-4*` | 128000 | GLM-4.5-Air 与 GLM-4 Flash 系列 |
+  | `glm-4-long` | 1000000 | GLM-4-Long（1M 上下文，输出仅 4K） |
+  | `glm-4.6v` | 128000 | GLM-4.6V 视觉模型 |
+  | `glm-4.1v-thinking*` | 65536 | GLM-4.1V-Thinking（64K） |
+  | `glm-4v-flash` | 16384 | GLM-4V-Flash（16K，小于 128k 必须登记） |
   | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 世代（1M） |
   | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5；4.x 世代的 1M 需 beta 头，登记为 200K |
   | `claude-3*` / 其它 `claude*` | 200000 | Claude 3 世代与兜底值 |
@@ -752,6 +759,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | `openai` | OpenAI | `https://api.openai.com/v1` |
 | `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
 | `kimi` | OpenAI | `https://api.moonshot.cn/v1` |
+| `zhipu` | OpenAI | `https://open.bigmodel.cn/api/paas/v4` |
 | `anthropic` | Anthropic | `https://api.anthropic.com` |
 
 ### 8.4 凭据文件权限

@@ -105,6 +105,7 @@ describe("ModelProviderService", () => {
       assert.ok(providers.includes("openai")); // Default provider
       assert.ok(providers.includes("mimo")); // Default provider
       assert.ok(providers.includes("kimi")); // Default provider
+      assert.ok(providers.includes("zhipu")); // Default provider
       assert.ok(providers.includes("anthropic")); // Default provider
     });
     

@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / anthropic）
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -62,7 +62,8 @@ mini-pi/
 12. **MiMo 支持** - 支持小米 MiMo 的 OpenAI 兼容接口（`mimo-v2.6-pro` 等 V2.6 系列）
 13. **Kimi 支持** - 支持月之暗面 Kimi 的 OpenAI 兼容接口（`kimi-k3` 等，1M 上下文）
 14. **Anthropic 支持** - 支持 Anthropic 官方 Messages API（`claude-opus-5-5` 等）
-15. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+15. **智谱支持** - 支持智谱开放平台的 OpenAI 兼容接口（`glm-5.3` 等 GLM 系列）
+16. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -146,6 +147,7 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | MiMo       | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
 | Kimi       | `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
+| 智谱       | `zhipu`      | OpenAI    | `https://open.bigmodel.cn/api/paas/v4` |
 | Anthropic  | `anthropic`  | Anthropic | `https://api.anthropic.com`        |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
@@ -222,6 +224,28 @@ Kimi 使用 OpenAI 兼容接口，base_url 为 `https://api.moonshot.cn/v1`
 > 这里统一走 OpenAI 兼容端点。
 
 Kimi 文档：https://platform.kimi.com/docs
+
+### 智谱（Zhipu）
+
+智谱开放平台提供三种协议端点，这里走 **OpenAI 兼容（Chat Completion）** 端点
+`https://open.bigmodel.cn/api/paas/v4`（官方 GLM-5.3 文档注明：订阅过 GLM Coding Plan
+的用户暂时只能走这一协议，覆盖面最广）。鉴权是标准的 `Authorization: Bearer`
+（API Key 形如 `id.secret`），模型列表与请求同源（`{baseUrl}/models`）。
+
+支持的模型（默认列表，只列文本/编码类在售模型）：
+
+| 模型 | 说明 |
+| ---- | ---- |
+| `glm-5.3` | 旗舰模型，编程与智能体能力对标 Claude Fable 5（1M 上下文） |
+| `glm-5.2` | 复杂长程任务，Coding 能力强（1M 上下文） |
+| `glm-5.1` | Coding 能力对齐 Claude Opus 4.6（200K 上下文） |
+| `glm-4.7` | 通用对话、推理与智能体（200K 上下文） |
+| `glm-4.6` | 擅长高级编码、复杂推理与工具调用（200K 上下文） |
+
+> 平台的视觉/图像/音视频/向量模型（GLM-5V、CogView、CogVideoX、Embedding 等）
+> 走各自专属接口，因此不在对话模型的默认列表里。
+
+智谱文档：https://docs.bigmodel.cn/cn/guide/start/model-overview
 
 ### MiMo（小米）
 

@@ -85,6 +85,7 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("openai/GPT-3.5-Turbo"), 16_384);
     assert.strictEqual(inferContextWindow("mimo/MiMo-V2.6-Pro"), 1_000_000);
     assert.strictEqual(inferContextWindow("kimi/Kimi-K3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("zhipu/GLM-5.3"), 1_000_000);
   });
 
   it("Kimi（Moonshot）系列", () => {
@@ -102,6 +103,31 @@ describe("inferContextWindow（按模型名推断）", () => {
     );
     // K3 是 1M，不能被任何 k2 条目命中
     assert.strictEqual(matchContextWindowRule("kimi-k3")?.prefix, "kimi-k3");
+  });
+
+  it("智谱 GLM 系列", () => {
+    assert.strictEqual(inferContextWindow("glm-5.3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("glm-5.2"), 1_000_000);
+    assert.strictEqual(inferContextWindow("glm-5.1"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-5"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-5-turbo"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.7"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.6"), 200_000);
+    assert.strictEqual(inferContextWindow("glm-4.5-air"), 128_000);
+    // 小窗口的视觉模型必须被认出来，否则会在压缩触发前超窗（400）
+    assert.strictEqual(inferContextWindow("glm-4.1v-thinking-flashx"), 65_536);
+    assert.strictEqual(inferContextWindow("glm-4v-flash"), 16_384);
+  });
+
+  it("GLM 的同前缀模型不能被更通用的条目盖掉", () => {
+    // GLM-4-Long 是 1M，不能被 glm-4 的 128K 盖住
+    assert.strictEqual(inferContextWindow("glm-4-long"), 1_000_000);
+    assert.strictEqual(matchContextWindowRule("glm-4-long")?.prefix, "glm-4-long");
+    // GLM-4.6V 是 128K 的视觉模型，不能被 GLM-4.6 的 200K 盖住
+    assert.strictEqual(inferContextWindow("glm-4.6v"), 128_000);
+    assert.strictEqual(matchContextWindowRule("glm-4.6v")?.prefix, "glm-4.6v");
+    // GLM-4-FlashX 落到 glm-4 的 128K
+    assert.strictEqual(inferContextWindow("glm-4-flashx-250414"), 128_000);
   });
 
   it("Anthropic Claude 当前一代", () => {

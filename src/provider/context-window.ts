@@ -114,6 +114,40 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   },
   { prefix: "kimi-k2.7", window: 262_144, note: "Kimi K2.7 Code（256K）" },
   { prefix: "kimi-k2.6", window: 262_144, note: "Kimi K2.6（256K）" },
+  // ---- 智谱 Zhipu / GLM ----
+  { prefix: "glm-5.3", window: 1_000_000, note: "GLM-5.3 / 5.3-Flash / 5.3-FlashX（1M）" },
+  { prefix: "glm-5.2", window: 1_000_000, note: "GLM-5.2（1M）" },
+  { prefix: "glm-5.1", window: 200_000, note: "GLM-5.1（200K）" },
+  { prefix: "glm-5", window: 200_000, note: "GLM-5 / GLM-5-Turbo / GLM-5V-Turbo（200K）" },
+  { prefix: "glm-4.7", window: 200_000, note: "GLM-4.7 / 4.7-Flash / 4.7-FlashX（200K）" },
+  { prefix: "glm-4.6v", window: 128_000, note: "GLM-4.6V 视觉模型（128K）" },
+  { prefix: "glm-4.6", window: 200_000, note: "GLM-4.6（200K）" },
+  {
+    prefix: "glm-4.5-air",
+    window: 128_000,
+    note: "GLM-4.5-Air / 4.5-AirX（128K）",
+  },
+  { prefix: "glm-4.5", window: 128_000, note: "GLM-4.5 其它型号（含 Flash，128K）" },
+  {
+    prefix: "glm-4.1v-thinking",
+    window: 65_536,
+    note: "GLM-4.1V-Thinking 系列（64K，小于 128k 必须登记）",
+  },
+  {
+    prefix: "glm-4v-flash",
+    window: 16_384,
+    note: "GLM-4V-Flash（16K，小于 128k 必须登记）",
+  },
+  {
+    prefix: "glm-4-long",
+    window: 1_000_000,
+    note: "GLM-4-Long（1M 上下文，但最大输出只有 4K）",
+  },
+  {
+    prefix: "glm-4",
+    window: 128_000,
+    note: "GLM-4 及 Flash 系列（128K）",
+  },
   // ---- Anthropic ----
   // 当前一代（官方 Models overview，2026-10）：Fable / Opus 5.5 / Sonnet 5.5 都是 1M，
   // Haiku 4.5 是 200K。
