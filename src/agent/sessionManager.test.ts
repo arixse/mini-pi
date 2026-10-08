@@ -3,6 +3,8 @@ import assert from "node:assert";
 import {
   SessionManager,
   SessionManagerOptions,
+  normalizeWorkspaceKey,
+  workspaceKeyHash,
   workspaceSessionDirName,
 } from "./sessionManager";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -321,6 +323,75 @@ describe("SessionManager", () => {
       assert.notStrictEqual(
         workspaceSessionDirName(testWorkspace),
         workspaceSessionDirName(otherWorkspace),
+      );
+    });
+
+    it("子目录名是完整路径铺平的形式，便于查找", () => {
+      const name = workspaceSessionDirName(testWorkspace);
+
+      // D:/workspace/mini-pi -> --D--workspace-mini-pi--（Windows 上整体小写，
+      // 大小写不归一的话同一目录的不同写法会变成两个会话目录）
+      assert.ok(name.startsWith("--") && name.endsWith("--"), name);
+      const flattened = normalizeWorkspaceKey(testWorkspace)
+        .replace(/^[\\/:]+/, "")
+        .replace(/[\\/:*?"<>|\s]/g, "-");
+      assert.ok(
+        name.includes(flattened),
+        `目录名里应能直接看出工作目录：${name}`,
+      );
+      assert.ok(!name.includes("/") && !name.includes("\\"), "不能残留分隔符");
+
+      assert.strictEqual(
+        workspaceSessionDirName(
+          platform() === "win32" ? "D:/workspace/mini-pi" : "/workspace/mini-pi",
+        ),
+        platform() === "win32"
+          ? "--d--workspace-mini-pi--"
+          : "--workspace-mini-pi--",
+      );
+    });
+
+    it("目录名碰撞时追加哈希消歧，不会共用一串会话", () => {
+      // 手工造一个同名目录，并标记为"属于别的工作目录"
+      const name = workspaceSessionDirName(otherWorkspace);
+      const taken = join(sessionsDir, name);
+      mkdirSync(taken, { recursive: true });
+      writeFileSync(
+        join(taken, ".workspace-key"),
+        `${normalizeWorkspaceKey(platform() === "win32" ? "C:\\somewhere-else" : "/somewhere-else")}\n`,
+        "utf8",
+      );
+
+      // 必须在占位目录就位之后才构造：目录归属是在构造时解析的
+      const manager = new SessionManager(otherWorkspace, {
+        sessionsDir,
+        globalAgentsPath,
+      });
+
+      assert.strictEqual(
+        manager.getSessionDir(),
+        join(sessionsDir, `${name}-${workspaceKeyHash(otherWorkspace)}`),
+        "被别的工作目录占用的名字要加哈希后缀",
+      );
+      assert.ok(existsSync(manager.getSessionDir()));
+      // 消歧后的目录同样要能正常建会话
+      assert.ok(manager.createNewSession());
+      assert.strictEqual(manager.listSessions().length, 1);
+    });
+
+    it("无标记的已存在目录会被认领，而不是被当成碰撞", () => {
+      const name = workspaceSessionDirName(otherWorkspace);
+      mkdirSync(join(sessionsDir, name), { recursive: true });
+
+      const manager = new SessionManager(otherWorkspace, {
+        sessionsDir,
+        globalAgentsPath,
+      });
+
+      assert.strictEqual(manager.getSessionDir(), join(sessionsDir, name));
+      assert.ok(
+        existsSync(join(manager.getSessionDir(), ".workspace-key")),
+        "认领后补写归属标记",
       );
     });
 

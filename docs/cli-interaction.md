@@ -584,7 +584,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ## 6. 会话存储与上下文压缩
 
-- **存储目录**：`~/.mini-pi/sessions/<基名>-<路径哈希8位>/`，每个工作目录一个子目录
+- **存储目录**：`~/.mini-pi/sessions/--<工作目录路径铺平>/`，每个工作目录一个子目录
+  （`D:/workspace/mini-pi` → `--D--workspace-mini-pi--`，便于按目录查找）
 - **文件格式**：JSONL（每行一个条目）
 - **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序；同一秒创建的多个会话追加 `-2`、`-3` 后缀）
 - **工作目录隔离**：`listSessions()` / `loadSession()` / `loadLatestSession()` 只认当前工作目录的会话；目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
@@ -718,7 +719,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | ---- | ---- | ---- |
 | 供应商凭据 | `~/.mini-pi/auth.json` | 各供应商的 `apiKey` / `baseUrl` / `model` |
 | 默认模型 | `~/.mini-pi/settings.json` | `{ "defaultModel": "供应商/模型名" }` |
-| 会话记录 | `~/.mini-pi/sessions/<工作目录子目录>/*.jsonl` | 每个工作目录一个子目录，每个会话一个文件 |
+| 会话记录 | `~/.mini-pi/sessions/--<工作目录路径铺平>/*.jsonl` | 每个工作目录一个子目录（如 `--D--workspace-mini-pi--`），每个会话一个文件 |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/`、`<workspaceRoot>/.agents/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |

@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
 import { homedir, platform } from "node:os";
 import { JsonlSessionStore } from "./sessionStore";
 import { LlmModel } from "./model";
@@ -24,6 +32,25 @@ export interface SessionInfo {
   sizeBytes: number;
 }
 
+/** 会话子目录里记录归属的文件名；用于消解"两个路径映射到同一个目录名"的碰撞 */
+const WORKSPACE_MARKER = ".workspace-key";
+/** 目录名的最大长度：Windows 的 MAX_PATH 有限，超长时保留尾部（项目名那一截更有区分度） */
+const MAX_DIR_NAME_LENGTH = 120;
+
+/**
+ * 工作目录的绝对真实路径（不做大小写归一）。
+ *
+ * `realpathSync` 解开软链接（macOS 的 `/var` → `/private/var` 同理）；
+ * 目录不存在时它会抛错，退回 `resolve` 的结果（首次启动的新目录走这条路）。
+ */
+function absolutePath(workspaceRoot: string): string {
+  try {
+    return realpathSync(resolve(workspaceRoot));
+  } catch {
+    return resolve(workspaceRoot);
+  }
+}
+
 /**
  * 归一化工作目录，作为"这个会话属于哪个目录"的判定键。
  *
@@ -31,56 +58,56 @@ export interface SessionInfo {
  * 而进程拿到的是 `chdir` 时的原始字符串）。不归一化的话，换个写法 `cd` 进同一个
  * 项目就会另起一串会话，看起来像"历史凭空丢了"。
  *
- * - `realpathSync` 解开软链接（macOS 的 `/var` → `/private/var` 同理）；
- * - Windows 大小写不敏感，统一转小写，否则 `d:\work` 与 `D:\WORK` 会被算成两个目录；
- * - 目录不存在时 realpath 抛错，退回 `resolve` 的结果（首次启动的新目录走这条路）。
+ * Windows 大小写不敏感，统一转小写，否则 `d:\work` 与 `D:\WORK` 会被算成两个目录。
  */
 export function normalizeWorkspaceKey(workspaceRoot: string): string {
-  let absolute: string;
-  try {
-    absolute = realpathSync(resolve(workspaceRoot));
-  } catch {
-    absolute = resolve(workspaceRoot);
-  }
+  const absolute = absolutePath(workspaceRoot);
   return platform() === "win32" ? absolute.toLowerCase() : absolute;
 }
 
-/**
- * 子目录名的可读部分：只保留 ASCII 字母数字与 `.` `_` `-`，超长截断。
- *
- * 入参必须是**归一化后**的路径：基名同样要区分大小写地归一，否则 Windows 上
- * `D:\work` 与 `d:\WORK` 会得到哈希相同、可读前缀却不同的两个目录名——
- * 于是同一个项目出现两个会话目录，历史看起来又"分家"了。
- *
- * 中文等目录名直接丢掉（只影响这一小段可读前缀，不影响唯一性）：作为路径落盘
- * 在多平台上更稳，也避免不同区域设置下的编码问题。
- */
-function safeBaseName(normalizedPath: string): string {
-  const raw = basename(normalizedPath);
-  const ascii = raw
-    .replace(/[^\x20-\x7E]/g, "")
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-  return ascii || "workspace";
+/** 判定键的短哈希，仅在目录名碰撞时用来消歧 */
+export function workspaceKeyHash(workspaceRoot: string): string {
+  return createHash("sha256")
+    .update(normalizeWorkspaceKey(workspaceRoot))
+    .digest("hex")
+    .slice(0, 8);
 }
 
 /**
- * 工作目录对应的会话子目录名：`可读基名-路径哈希8位`。
+ * 工作目录对应的会话子目录名：把**完整路径**铺平，`D:/workspace/mini-pi`
+ * → `--D--workspace-mini-pi--`。
  *
- * 只按基名分目录不够：两个同名项目（`~/a/demo` 与 `~/b/demo`）会撞进同一个子目录，
- * 于是它们共享同一串会话——正是要避免的问题。因此再拼一段**完整路径**的哈希做
- * 唯一性保证，基名只用来让人一眼看出这是哪个项目。
+ * 这么命名是为了查找：`ls ~/.mini-pi/sessions/` 就能直接看出哪个目录属于哪个项目，
+ * 不需要哈希对照表。规则：
+ * - 首尾包裹 `--` 作边界，让"路径分隔符变来的 `-`"与"路径里本来的 `-`"可区分；
+ * - 路径分隔符、盘符冒号与空格等（Windows 文件名非法字符）逐个替换为 `-`，
+ *   于是 `D:` + `\` 会变成 `--`，与示例一致；
+ * - 中文等合法字符**保留**（落盘没问题，且查找时更直观）；
+ * - 超长时只保留尾部若干字符（末尾是项目名，区分度更高）。
+ *
+ * 铺的是**归一化后**的路径（Windows 上已小写）：大小写不归一的话，`D:\work` 与
+ * `d:\WORK` 会算出两个名字，同一个项目出现两个会话目录，历史又"分家"了。
+ *
+ * 注意这种映射不是单射：路径里含空格、`*` 等在 Windows 上非法的字符时，
+ * `a b/c` 与 `a-b/c` 会映射到同一个名字。因此调用方还要用 {@link WORKSPACE_MARKER}
+ * 做一次碰撞消歧，不能只靠名字判定归属。
  */
 export function workspaceSessionDirName(workspaceRoot: string): string {
-  const key = normalizeWorkspaceKey(workspaceRoot);
-  const hash = createHash("sha256").update(key).digest("hex").slice(0, 8);
-  return `${safeBaseName(key)}-${hash}`;
+  const label = normalizeWorkspaceKey(workspaceRoot)
+    .replace(/^[\\/:]+/, "")
+    .replace(/[\\/:]+$/, "")
+    .replace(/[\\/:*?"<>|\s]/g, "-");
+  const kept =
+    label.length > MAX_DIR_NAME_LENGTH
+      ? label.slice(-MAX_DIR_NAME_LENGTH)
+      : label;
+  return `--${kept}--`;
 }
 
 export class SessionManager {
   private readonly sessionsDir: string;
+  /** 归一化后的工作目录，判定会话归属与写标记用 */
+  private readonly workspaceKey: string;
   /** 本工作目录专属的会话子目录：会话隔离的唯一依据 */
   private readonly projectSessionsDir: string;
   private readonly globalAgentsPath: string;
@@ -93,15 +120,44 @@ export class SessionManager {
     // 可注入：单元测试必须能完全避开真实的 ~/.mini-pi，
     // 否则测试会读写甚至删除用户的真实配置与历史会话。
     this.sessionsDir = options?.sessionsDir ?? join(homedir(), ".mini-pi", "sessions");
-    this.projectSessionsDir = join(
-      this.sessionsDir,
-      workspaceSessionDirName(workspaceRoot),
-    );
+    this.workspaceKey = normalizeWorkspaceKey(workspaceRoot);
+    this.projectSessionsDir = this.resolveProjectSessionsDir();
     this.globalAgentsPath =
       options?.globalAgentsPath ?? join(homedir(), ".mini-pi", "AGENTS.md");
     this.projectAgentsPath = join(workspaceRoot, "AGENTS.md");
     this.skillLoader = new SkillLoader(workspaceRoot, options?.customSkillDirs);
     this.ensureSessionsDir();
+  }
+
+  /**
+   * 解析本工作目录的会话子目录。
+   *
+   * 目录名由路径铺平而来，而这条映射**不是单射**（见 `workspaceSessionDirName`）：
+   * 两个不同的工作目录可能算出同一个名字，共用它就等于让两个项目共享一串会话。
+   * 因此目录里放一个标记文件记录归属 key：名字撞车且标记属于别的目录时，
+   * 追加一段哈希消歧。标记缺失（用户手建、旧版本遗留）则认领并补写。
+   */
+  private resolveProjectSessionsDir(): string {
+    const name = workspaceSessionDirName(this.workspaceRoot);
+    const candidate = join(this.sessionsDir, name);
+    const owner = this.readWorkspaceMarker(candidate);
+    if (owner !== null && owner !== this.workspaceKey) {
+      return join(
+        this.sessionsDir,
+        `${name}-${workspaceKeyHash(this.workspaceRoot)}`,
+      );
+    }
+    return candidate;
+  }
+
+  /** 读目录下的归属标记；不存在或读不出时返回 null（视为"无人认领"） */
+  private readWorkspaceMarker(dir: string): string | null {
+    try {
+      const raw = readFileSync(join(dir, WORKSPACE_MARKER), "utf8").trim();
+      return raw.length > 0 ? raw : null;
+    } catch {
+      return null;
+    }
   }
 
   /** 当前工作目录 */
@@ -122,15 +178,25 @@ export class SessionManager {
   }
 
   /**
-   * 确保**本工作目录**的会话子目录存在。
+   * 确保**本工作目录**的会话子目录存在，并写下归属标记。
    *
    * 建的是子目录而不是 `sessionsDir` 根：`recursive` 会顺带把根目录建出来，
    * 而只建根目录的话，第一次写会话文件时才会补建子目录——中间任何一次列举
    * 都会看到"目录不存在"的空结果。
+   *
+   * 标记文件写失败不用管：它只用于碰撞消歧，会话本身照常存。
    */
   private ensureSessionsDir(): void {
     if (!existsSync(this.projectSessionsDir)) {
       mkdirSync(this.projectSessionsDir, { recursive: true });
+    }
+    const marker = join(this.projectSessionsDir, WORKSPACE_MARKER);
+    if (!existsSync(marker)) {
+      try {
+        writeFileSync(marker, `${this.workspaceKey}\n`, "utf8");
+      } catch {
+        // 只读也能用，只是下次可能要重新认领
+      }
     }
   }
 

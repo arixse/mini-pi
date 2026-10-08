@@ -271,7 +271,8 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 
 ### 存储位置
 
-- **会话存储目录**: `~/.mini-pi/sessions/<基名>-<路径哈希8位>/`（每个工作目录一个子目录）
+- **会话存储目录**: `~/.mini-pi/sessions/--<工作目录路径铺平>/`
+  （每个工作目录一个子目录，例如 `D:/workspace/mini-pi` → `--D--workspace-mini-pi--`，便于查找）
 - **文件格式**: `.jsonl` (JSON Lines)
 - **文件命名**: 使用时间戳，格式为 `YYYY-MM-DDTHH-mm-ss.jsonl`（同一秒创建多个会话时追加 `-2`、`-3`）
 - **工作目录隔离**: `/sessions`、`/switch`、启动恢复都只认当前工作目录的会话；
