@@ -120,25 +120,47 @@ async function writeFileWithOverwriteHint(
 解决"摘要失败时写入不完整的降级摘要，导致原始历史丢失"：
 
 ```typescript
-async function compressContext(
-  entries: ChatEntry[],
-  signal?: AbortSignal
-): Promise<{ summary: string; compressed: ChatEntry[] }> {
+async compactIfNedded(
+  budget: number,
+  keepRecent: number,
+  overhead: number,
+): Promise<CompactionEntry | undefined> {
+  // … 省略阈值判定与压缩起点计算：不满足条件时直接返回 undefined
+
+  const kept = messageEntries.slice(startIndex);
+  const summarized = messageEntries.slice(0, startIndex);
+
+  // 优先用模型生成摘要；未配置模型时才用简单摘要兜底（不能因为没有模型就压不了）
+  let summary: string;
   try {
-    const summary = await summarizeEntries(entries, signal);
-    return { summary, compressed: entries };
+    summary = this.model
+      ? await summarizeEntries(summarized, this.model, signal, maxApproxTokens)
+      : generateSimpleSummary(summarized);
   } catch (error) {
-    // 摘要失败时不写入降级摘要，保留原始历史
-    if (signal?.aborted) {
-      throw new Error('Compression cancelled');
-    }
-    // 静默失败：保留全部原始记录
-    return { 
-      summary: '', 
-      compressed: entries.slice(-MAX_RECENT_ENTRIES) 
-    };
+    // 失败与取消都走这里：保持原上下文、**不写任何条目**，
+    // 只记下原因供 /status 展示，否则用户只看到"一直没有压缩"却不知为何
+    this.lastCompactionError = error instanceof Error ? error.message : String(error);
+    return undefined;
   }
+
+  // 摘要期间被取消：同样不写入
+  if (signal?.aborted) {
+    return undefined;
+  }
+
+  // 到这里才写入 compaction 条目（summary / firstKeptEntryId / tokensBefore），
+  // 并通过 syncContext() 让摘要立即替代旧消息
+  // …（写入逻辑）
 }
+```
+
+要点：**只有"未配置模型"这一种情况才回退简单摘要**（那属于配置缺失，不是失败）；
+配了模型却调用失败或被取消，则整次压缩作废、一条记录都不写——原历史照旧留在会话文件里。
+
+```typescript
+// ❌ 反例（Day 4 之前的行为）：失败时仍写入"降级摘要"，
+//    并且顺手把较早的条目裁掉 —— 真实历史被换成统计数字，且已落盘不可恢复
+return { summary: '', compressed: entries.slice(-MAX_RECENT_ENTRIES) };
 ```
 
 ### 5. 摘要输入 token 预算
@@ -148,7 +170,7 @@ async function compressContext(
 解决"摘要请求本身可能超出模型限制"：
 
 ```typescript
-function buildSummaryPrompt(entries: ChatEntry[]): { prompt: string; estimatedTokens: number } {
+function buildSummaryPrompt(entries: ChatEntry[]): { prompt: string; tokenBudget: number } {
   // 计算输入 token
   let estimatedTokens = estimateTokens(systemPrompt);
   
@@ -227,7 +249,9 @@ e0502a4  fix(tools): 只读白名单收敛为单一来源，write_file 覆盖可
 - 降级摘要可能被误认为是完整摘要
 - 用户无法判断哪些信息丢失了
 
-**做法**：摘要失败时保留原始历史，或静默丢弃最旧的部分。
+**做法**：摘要失败（含被取消）时放弃本次压缩、**不写任何条目**，原历史完整保留；
+把失败原因记下来供 `/status` 展示，别让用户只看到"一直没有压缩"。
+只有"未配置模型"才回退到简单摘要——那是配置缺失，不是失败。
 
 ### 5. Token 预算必须预留输出空间
 

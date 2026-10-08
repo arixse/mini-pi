@@ -13,7 +13,7 @@ Mini Pi CLI 是一个基于终端的交互式 AI 编程助手。用户启动后�
 - **多轮对话**：上下文自动保持，历史消息持久化到会话文件。
 - **流式输出**：模型回复按 token 增量实时打印。
 - **工具调用可视化**：文件读写、命令执行等工具调用以带图标/颜色的卡片形式展示。
-- **供应商与模型可切换**：支持 DeepSeek、MiniMax-CN、OpenAI。
+- **供应商与模型可切换**：内置 `minimax-cn` / `deepseek` / `openai` / `mimo` / `kimi` / `zhipu` / `anthropic` 七个供应商（见 8.3）。
 - **Skill 渐进式披露**：启动时仅注入 Skill 元数据，按需加载完整内容。
 - **会话管理**：每个会话独立存储为 JSONL 文件，超出上下文阈值时自动压缩。
 
@@ -63,7 +63,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 1. **确定工作目录**：`workspaceRoot = process.cwd()`，后续所有工具操作都被限制在该目录内。
 2. **初始化服务**：
-   - `ModelProviderService`：注册模型供应商（MiniMax-CN / DeepSeek / OpenAI）。
+   - `ModelProviderService`：注册模型供应商（`minimax-cn` / `deepseek` / `openai` / `mimo` / `kimi` / `zhipu` / `anthropic`）。
    - `SettingsStore`：读取 `~/.mini-pi/settings.json` 中的 `defaultModel`。
 3. **创建模型**：调用 `createModelFromSettings()`
    - 解析 `defaultModel`（格式：`供应商/模型名`）；
@@ -135,14 +135,14 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    不串行的话 `activeRun` 会被覆盖（旧的那轮从此取消不掉），
    两轮还会交错往同一个会话文件追加消息，落盘顺序与真实对话顺序不一致。
 5. **匹配斜杠命令**：按顺序判断并执行（见第 5 节）。
-4. **普通对话输入**：
+6. **普通对话输入**：
    - 调用 `checkSkillMatch()` 进行 Skill 匹配提示（见第 7 节）；
    - 若 `model` 为空，打印 `⚠️ 尚未配置模型，请使用 /login 和 /model 命令进行配置` 并返回（这条消息不会写入会话）；
    - 将输入封装为 `userMessage`，先 `await` 写入会话文件，再调用 `sessionStore.compactIfNedded(budget, 10, overhead)` 判断是否需要压缩（阈值推导见 6.2）；
    - 用 `sessionStore.syncContext()` 依据会话文件重建内存上下文 —— **会话文件是上下文的唯一事实来源**，压缩结果因此立即生效；
-   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.4 节）与取消信号（4.5 节）；
+   - 调用 `runAgentLoop()` 执行 Agent 循环，`maxTurns = 100`，并接入工具审批（4.5 节）与取消信号（4.6 节）；
    - 将本轮新增消息逐条写入会话文件，并再次 `syncContext()` 同步内存上下文。
-6. 重新显示提示符，等待下一次输入（执行期间按 Ctrl+C 取消当前任务）。
+7. 重新显示提示符，等待下一次输入（执行期间按 Ctrl+C 取消当前任务）。
 
 ### 4.1 对话过程的事件与输出
 
@@ -150,7 +150,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 | 事件 | 终端表现 |
 | ---- | -------- |
-| `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.6） |
+| `message_update`（含 `delta`） | 先清除状态行，再 `process.stdout.write(delta)` 逐段打印模型文本（真流式，见 4.3） |
 | `tool_execution_start` | 更新状态行 `⠋ 执行 <工具摘要>… <耗时>`，**同时把事件交给 `printToolInfo` 写卡片缓存**（参数与起始时间只在这个事件里，见下） |
 | `tool_execution_end` | 清除状态行，打印完整工具调用卡片（见 4.2，含耗时） |
 | `tool_permission` | 打印 `✅ 已允许` / `❌ 已拒绝: <工具名>` |
@@ -231,7 +231,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 - **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`，
   竖线改用 `|`、页脚改用 `+`；`NO_COLOR` 或非 TTY 时不输出 ANSI。
 
-### 4.6 工作状态行
+### 4.3 工作状态行
 
 任何超过一瞬的等待都会给出可见反馈（`src/cli/status.ts`）：
 
@@ -247,7 +247,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
   `… 思考中…`，便于 CI 日志回溯；
 - `NO_COLOR` 环境变量会关闭原地刷新；`MINI_PI_ASCII=1` 把 Braille 帧换成 `|/-\`。
 
-### 4.3 可用工具
+### 4.4 可用工具
 
 CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `workspaceRoot` 内：
 
@@ -296,7 +296,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   报错并建议改用 `bash`（`file` / `xxd` / `head -c`）；
 - **超过 5MB 的文件**：报错并建议改用 `grep` 定位，或用 `bash` 抽取需要的片段。
 
-### 4.3.1 `bash` 的超时与输出上限
+### 4.4.1 `bash` 的超时与输出上限
 
 | 参数 | 说明 |
 | ---- | ---- |
@@ -321,7 +321,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 凭据类文件（`.env*`、SSH 私钥、`*.pem`、`.git-credentials`，模板文件
 `.env.example` / `.sample` / `.template` 除外）。
 
-### 4.4 工具调用审批
+### 4.5 工具调用审批
 
 写文件与执行命令都属于危险动作，执行前必须由用户逐次确认：
 
@@ -348,7 +348,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 > 安全边界：`bash` 没有真正的沙箱，路径守卫只是尽力而为的静态检查
 > （它挡不住 `node -e "..."` 这类构造），**审批才是真正的防线**。
 
-### 4.5 取消、超时与重试
+### 4.6 取消、超时与重试
 
 - 任务执行期间按 **Ctrl+C** 会取消当前任务：模型请求被中止、正在执行的命令被杀掉，
   终端显示 `⏹️  已请求取消当前任务`；空闲时按 Ctrl+C 则退出程序。
@@ -648,7 +648,9 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 - 当「消息历史 + 固定开销」超过 `budget` 且消息数超过保留数 10 时触发；
 - **每轮 Agent 循环结束也会检查一次**（`runAgentLoop` 的 `onTurnEnd` 钩子）：
   单轮内可能跑上百次工具调用，只靠"用户回合开始时压一次"兜不住上下文增长；
-- 保留最近 10 条消息，较早的消息用模型生成摘要（未配置模型或摘要调用失败时回退到简单摘要，不会中断对话）；
+- 保留最近 10 条消息，较早的消息优先用模型生成摘要；
+  **未配置模型**时才退回「共 N 条消息」的简单摘要兜底，配了模型却**调用失败或被取消**
+  则放弃本次压缩、不写任何条目（原因与展示见 4.6），不会用降级摘要替换真实历史；
 - 压缩窗口的起点会**向前回退到不与工具结果断链的位置**：直接切在 `toolResult` 上会让它
   对应的 assistant `toolCall` 被摘要吞掉，还原上下文时就成了引用不存在 `tool_call_id`
   的孤儿结果（协议层直接 400，且非法序列已落盘）；

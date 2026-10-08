@@ -90,9 +90,12 @@ const fixedContext = sessionManager.getFixedContext();
 
 ## 测试结果
 
-所有 126 个测试通过，包括：
+本次改动提交时全量 **126 个**测试通过，包括：
 - SessionManager 相关测试（8 个，新增 3 个）
 - 其他现有测试（118 个）
+
+> 126 是当时的快照。此后测试持续增补，请以 `pnpm test` 的实测输出为准，
+> 本文不再维护具体条数。
 
 ## Git 提交记录
 
@@ -101,9 +104,13 @@ const fixedContext = sessionManager.getFixedContext();
 
 ## 后续改进建议
 
-1. 添加 `/sessions` 命令列出所有会话
-2. 添加 `/switch <timestamp>` 命令切换到指定会话
-3. 添加 `/delete <timestamp>` 命令删除会话
-4. 支持会话导出和导入功能
-5. 添加会话搜索功能
-6. 支持动态重新加载 AGENTS.md 文件
+> 已按当前实现逐条核对状态，避免把已经做完的事继续列成"待办"。
+
+| 建议 | 状态 |
+| ---- | ---- |
+| 添加 `/sessions` 命令列出所有会话 | ✅ 已实现（`handleSessions`） |
+| 添加 `/switch` 命令切换到指定会话 | ✅ 已实现（`/switch <序号 / 文件名>`，原建议写的 `<timestamp>` 与实际不符） |
+| 添加 `/delete` 命令删除会话 | ⬜ 未实现 |
+| 支持会话导出和导入功能 | ⬜ 未实现 |
+| 添加会话搜索功能 | ⬜ 未实现 |
+| 支持动态重新加载 AGENTS.md 文件 | ✅ 已实现（`/reload` 会重新执行 `getFixedContext()` 重建 System Prompt） |

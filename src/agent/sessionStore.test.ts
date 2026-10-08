@@ -11,6 +11,7 @@ import {
 } from "./sessionStore";
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { AgentMessage } from "../shared/protocol";
@@ -51,20 +52,28 @@ function assertMessageSequenceValid(messages: AgentMessage[]): void {
 }
 
 describe("sessionStore", () => {
-  const testDir = join(process.cwd(), ".test-session-store");
+  // 临时工作区放在系统临时目录并带 pid + 随机后缀：
+  // 旧实现建在仓库根（.test-session-store），既污染工作区又可能被安全策略拦截删除。
+  const testDir = join(
+    tmpdir(),
+    `mini-pi-session-store-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   const sessionFile = join(testDir, "session.jsonl");
 
-  beforeEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true });
+  function removeTestDir(): void {
+    if (!existsSync(testDir)) {
+      return;
     }
+    rmSync(testDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+
+  beforeEach(() => {
+    removeTestDir();
     mkdirSync(testDir, { recursive: true });
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true });
-    }
+    removeTestDir();
   });
 
   describe("estimateTextTokens（token 估算）", () => {
