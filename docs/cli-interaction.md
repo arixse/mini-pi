@@ -624,6 +624,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   | `mimo-v2.5-omni` | 131072 | MiMo 全模态（接入文档标 128K） |
   | `mimo-v2-flash` | 131072 | 官方博客标 256K、接入指南标 56K，取小值 |
   | `mimo-7b*` | 32768 | MiMo-7B 系列 |
+  | `kimi-k3` | 1000000 | Kimi K3（1M） |
+  | `kimi-k2.6` / `kimi-k2.7-code*` | 262144 | Kimi K2.6 / K2.7 Code（256K） |
 
   拿不准的模型一律落到 128k：估小了只是提前多压缩几次（每次都要调一次摘要模型，
   花钱且加延迟），**估大了却可能在压缩触发前就把请求发过窗口上限，被 API 直接拒绝（400）**。
@@ -746,6 +748,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | `openai` | OpenAI | `https://api.openai.com/v1` |
 | `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
+| `kimi` | OpenAI | `https://api.moonshot.cn/v1` |
 
 ### 8.4 凭据文件权限
 

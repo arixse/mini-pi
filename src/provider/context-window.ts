@@ -103,6 +103,17 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     window: 32_768,
     note: "MiMo-7B 系列（32K，小于 128k 必须登记）",
   },
+  // ---- Moonshot AI / Kimi ----
+  // 只登记官方模型列表里的在售模型：kimi-k2.5 / moonshot-v1 / kimi-k2 系列
+  // 均已下线（调用即 404），不登记也不会比"请求本身失败"更糟。
+  { prefix: "kimi-k3", window: 1_000_000, note: "Kimi K3（1M，官方模型列表）" },
+  {
+    prefix: "kimi-k2.7-code-highspeed",
+    window: 262_144,
+    note: "Kimi K2.7 Code 高速版（256K）",
+  },
+  { prefix: "kimi-k2.7", window: 262_144, note: "Kimi K2.7 Code（256K）" },
+  { prefix: "kimi-k2.6", window: 262_144, note: "Kimi K2.6（256K）" },
 ];
 
 /**

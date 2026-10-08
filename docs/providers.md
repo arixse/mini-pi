@@ -10,6 +10,61 @@
 | MiniMax-CN | Anthropic | https://api.minimax.cn/anthropic | ✅ 已对接 |
 | OpenAI | OpenAI | https://api.openai.com/v1 | ✅ 已对接 |
 | MiMo（小米） | OpenAI | https://api.xiaomimimo.com/v1 | ✅ 已对接 |
+| Kimi（月之暗面） | OpenAI | https://api.moonshot.cn/v1 | ✅ 已对接 |
+
+---
+
+## 0. Kimi（月之暗面 Moonshot AI）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 开放平台 | https://platform.kimi.com |
+| 快速开始 | https://platform.kimi.com/docs/guide/quickstart |
+| 模型列表 | https://platform.kimi.com/docs/models |
+| 产品定价 | https://platform.kimi.com/docs/pricing/chat |
+| API Key 管理 | https://platform.kimi.com/console/api-keys |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `kimi-k3` | 旗舰模型（2.8T 参数，1M 上下文，原生视觉理解） |
+| `kimi-k2.7-code` | Coding 模型，长上下文下更可靠（256K） |
+| `kimi-k2.7-code-highspeed` | Coding 高速版（256K，约 180 Tokens/s） |
+| `kimi-k2.6` | 通用模型（256K，支持视觉/文本与思考模式） |
+
+> `kimi-k2.5` 与 `moonshot-v1` 全系列已于 **2026.08.31 下线**，`kimi-k2` 系列
+> 已于 **2026.05.25 下线**（调用返回 404），因此都不在默认模型列表里。
+
+### 接入方式
+
+Kimi API 同时兼容 OpenAI 与 Anthropic 格式，这里**走 OpenAI 兼容端点**：
+
+```typescript
+// Base URL（国内站）
+https://api.moonshot.cn/v1
+
+// 国际站（账号与余额与国内站不互通）
+https://api.moonshot.ai/v1
+
+// SDK类型
+OpenAI
+```
+
+模型列表与 Base URL 同源（`{baseUrl}/models`）。国际站用户请在 `/login`
+之后用自定义 Base URL 覆盖，模型列表会跟着走同一端点。
+
+### 配置示例
+
+```json
+{
+  "kimi": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
 
 ---
 
@@ -239,7 +294,7 @@ export interface Provider {
 
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
-| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、其他兼容服务商） |
+| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、其他兼容服务商） |
 | Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic、MiniMax-CN） |
 
 ---
@@ -259,6 +314,7 @@ export interface Provider {
 - **MiniMax-CN**: 访问 https://platform.minimaxi.com/document/guides/api-key
 - **OpenAI**: 访问 https://platform.openai.com/api-keys
 - **MiMo**: 访问 https://platform.xiaomimimo.com/console（API Keys 页面创建，按量付费为 `sk-` 前缀；Token Plan 为 `tp-` / `ttp-` 前缀，两者不通用）
+- **Kimi**: 访问 https://platform.kimi.com/console/api-keys
 
 ### Q: 连接超时怎么办？
 

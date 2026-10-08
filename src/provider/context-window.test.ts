@@ -84,6 +84,24 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("minimax-cn/MiniMax-M2.7"), 204_800);
     assert.strictEqual(inferContextWindow("openai/GPT-3.5-Turbo"), 16_384);
     assert.strictEqual(inferContextWindow("mimo/MiMo-V2.6-Pro"), 1_000_000);
+    assert.strictEqual(inferContextWindow("kimi/Kimi-K3"), 1_000_000);
+  });
+
+  it("Kimi（Moonshot）系列", () => {
+    assert.strictEqual(inferContextWindow("kimi-k3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("kimi-k2.6"), 262_144);
+    assert.strictEqual(inferContextWindow("kimi-k2.7-code"), 262_144);
+    assert.strictEqual(inferContextWindow("kimi-k2.7-code-highspeed"), 262_144);
+  });
+
+  it("Kimi 的高速版不能被 kimi-k2.7 的通用条目盖掉", () => {
+    // 两者同为 256K，这里断言的是"最长前缀优先"没被破坏
+    assert.strictEqual(
+      matchContextWindowRule("kimi-k2.7-code-highspeed")?.prefix,
+      "kimi-k2.7-code-highspeed",
+    );
+    // K3 是 1M，不能被任何 k2 条目命中
+    assert.strictEqual(matchContextWindowRule("kimi-k3")?.prefix, "kimi-k3");
   });
 });
 

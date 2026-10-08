@@ -104,6 +104,7 @@ describe("ModelProviderService", () => {
       assert.ok(providers.includes("deepseek")); // Default provider
       assert.ok(providers.includes("openai")); // Default provider
       assert.ok(providers.includes("mimo")); // Default provider
+      assert.ok(providers.includes("kimi")); // Default provider
     });
     
     it("should return empty array when no providers registered", () => {

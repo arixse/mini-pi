@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
-│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo）
+│   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档
 ├── bin/                # 可执行文件
@@ -60,7 +60,8 @@ mini-pi/
 10. **DeepSeek 支持** - 支持 DeepSeek 的 OpenAI 兼容 Responses API
 11. **OpenAI 支持** - 支持 OpenAI 官方接口（gpt-4o、o1 系列等）
 12. **MiMo 支持** - 支持小米 MiMo 的 OpenAI 兼容接口（`mimo-v2.6-pro` 等 V2.6 系列）
-13. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+13. **Kimi 支持** - 支持月之暗面 Kimi 的 OpenAI 兼容接口（`kimi-k3` 等，1M 上下文）
+14. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
 
 ## 运行方式
 
@@ -143,6 +144,7 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | DeepSeek   | `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
 | MiniMax-CN | `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
 | MiMo       | `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
+| Kimi       | `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
 
@@ -179,6 +181,23 @@ DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `h
 3. 选择要使用的模型
 
 DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
+
+### Kimi（月之暗面）
+
+Kimi 使用 OpenAI 兼容接口，base_url 为 `https://api.moonshot.cn/v1`
+（国际站为 `https://api.moonshot.ai/v1`，两端账号与余额不互通，可在配置里覆盖 Base URL）。
+
+支持的模型（默认列表，均为官方在售模型）：
+- `kimi-k3` - 旗舰模型（2.8T 参数，1M 上下文，原生视觉理解）
+- `kimi-k2.7-code` - Coding 模型（256K 上下文）
+- `kimi-k2.7-code-highspeed` - Coding 高速版（约 180 Tokens/s）
+- `kimi-k2.6` - 通用模型（256K 上下文，支持思考/非思考模式）
+
+> `kimi-k2.5`、`moonshot-v1` 系列与 `kimi-k2` 系列官方已分别于 2026.08.31 / 2026.05.25 下线
+> （调用返回 404），已不再列入默认列表。Kimi API 同时兼容 Anthropic 格式，
+> 这里统一走 OpenAI 兼容端点。
+
+Kimi 文档：https://platform.kimi.com/docs
 
 ### MiMo（小米）
 
