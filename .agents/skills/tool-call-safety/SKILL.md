@@ -145,6 +145,22 @@ timer = setTimeout(() => {
   用共享的 `.test-workspace` 会让后续所有用例的清理连锁失败（EPERM）。
   给这类用例单独建临时目录，并给清理加 `maxRetries` / `retryDelay`。
 
+## 七之二、路径用例绝不能写死某一平台的路径形态
+
+本地（Windows）全绿、CI（ubuntu）挂掉 7 条，全是这个原因：用例把
+`D:\secret.txt` / `E:\test.txt` / `..\..\secret.txt` 当成"工作区之外的绝对路径"。
+POSIX 上反斜杠**不是**路径分隔符，`D:\x` 只是"名字里含反斜杠的普通文件"，
+resolve 后仍在工作区内——守卫放行才是正确行为，断言越界必然失败。
+
+- **越界路径按平台取值**：`const OUTSIDE = IS_WIN32 ? "C:\\outside.txt" : "/outside.txt"`。
+  POSIX 根路径在 Windows 上也会解析成盘符根，所以同一个常量两平台都能命中。
+- **只在 Windows 成立的形态（盘符、反斜杠 `..`）单独成用例 + `{ skip: !IS_WIN32 }`**，
+  并同时保留 POSIX 等价断言（`/etc/passwd`、`../outside.txt`），
+  否则 CI 上守卫覆盖率会凭空少一块。
+- 反过来 `%USERPROFILE%` / `$HOME` 是**正则文本匹配**，与平台无关，不需要跳过。
+- 判断依据：`resolveInsideWorkspace` 走 `node:path`，语义随宿主平台变；
+  `HOME_REFERENCE_PATTERN` 那类纯文本匹配不随平台变。
+
 ## 八、验证命令
 
 ```bash
