@@ -2,13 +2,28 @@
 
 ## 概述
 
-Mini Pi 现在支持多会话管理功能，每个会话都独立存储在 `~/.mini-pi/sessions/` 目录中。
+Mini Pi 现在支持多会话管理功能，每个会话都独立存储，且**按工作目录隔离**：
+在 A 目录看不到、也切不到 B 目录的会话。
 
 ## 存储位置
 
-- **会话存储目录**: `~/.mini-pi/sessions/`
+- **会话存储根目录**: `~/.mini-pi/sessions/`
+- **工作目录子目录**: `~/.mini-pi/sessions/<基名>-<路径哈希8位>/`
+  （例如 `mini-pi-a1b2c3d4/`，哈希取自归一化后的完整路径）
 - **文件格式**: `.jsonl` (JSON Lines)
 - **文件命名**: 使用创建会话时的时间戳，格式为 `YYYY-MM-DDTHH-mm-ss.jsonl`
+  （同一秒创建多个会话时追加 `-2`、`-3` 等后缀，避免写进同一个文件）
+
+## 工作目录隔离
+
+| 行为 | 说明 |
+| ---- | ---- |
+| 归属判定 | 以 `process.cwd()` 为准，经 `resolve` + `realpath` 归一化（Windows 另统一小写） |
+| 启动恢复 | 只加载**当前目录**最近的一个会话；换目录即换会话串 |
+| `/sessions` | 只列出当前目录的会话 |
+| `/switch` | 只能切到当前目录的会话，别的目录一律"未找到" |
+| 同一个目录的不同写法 | 相对路径、尾斜杠、软链接、Windows 大小写都算同一个目录，不会另起一串 |
+| 目录改名/移动 | 视为不同的工作目录，旧路径下的会话不再列出（不会自动跟随/删除） |
 
 ## 命令
 
@@ -98,14 +113,20 @@ import { SessionManager } from "./agent/sessionManager";
 const sessionManager = new SessionManager(workspaceRoot);
 sessionManager.setModel(model);
 
-// 创建新会话
+// 本工作目录的会话存放目录（~/.mini-pi/sessions/<基名>-<哈希>/）
+const sessionDir = sessionManager.getSessionDir();
+
+// 创建新会话（落在本工作目录的子目录里）
 const newSession = sessionManager.createNewSession();
 
-// 加载最近的会话
+// 加载本工作目录最近的会话
 const latestSession = sessionManager.loadLatestSession();
 
-// 列出所有会话
+// 列出本工作目录的所有会话（含 path / sizeBytes）
 const sessions = sessionManager.listSessions();
+
+// 会话目录名的推导规则（纯函数，可单测）
+workspaceSessionDirName(workspaceRoot); // "mini-pi-a1b2c3d4"
 ```
 
 ### JsonlSessionStore
@@ -220,6 +241,11 @@ pnpm test
 - 会话列表获取
 - 加载最近会话
 - 时间戳文件名格式验证
+- 工作目录隔离：两个目录共用 sessionsDir 时列表互不包含、`/switch` 切不到对方、
+  `loadLatestSession` 各取各的
+- 目录名推导：同一目录稳定、不同目录不同、同名不同父目录（`a/demo` 与 `b/demo`）不同
+- 路径归一化：尾斜杠、相对写法、（Windows）大小写都映射到同一个目录
+- 同一秒创建的多个会话不会写进同一个文件
 - 固定上下文读取
 - 压缩窗口的消息配对：窗口起点不落在 `toolResult` 上，
   且压缩后上下文满足「每个工具结果都能对应到某个工具调用」的配对不变式

@@ -71,7 +71,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    - 存在 `apiKey` 时用 `createModelFromProvider()` 生成 `LlmModel`；否则 `model = null`。
 4. **创建工具注册表**：`createToolRegistry(workspaceRoot)`。
 5. **创建会话管理器**：`SessionManager`，并把模型注入其中（`setModel`）。
-6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载最近一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。
+6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载**当前工作目录**最近的一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。会话按工作目录隔离，换目录就是另一串会话（见第 6 节）。
 7. **加载固定上下文**：`getFixedContext()` 读取全局与项目的 `AGENTS.md`。
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览，并在控制台打印已发现的 Skill 名称。
 9. **构建 System Prompt**：基础提示词 + 固定上下文 + Skill 摘要。
@@ -410,8 +410,8 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
-| `/sessions` | 列出所有会话（标注当前会话与大小） |
-| `/switch <序号\|文件名>` | 切换到指定会话并恢复其历史上下文 |
+| `/sessions` | 列出**当前工作目录**的会话（标注当前会话与大小，标题下打印工作目录） |
+| `/switch <序号\|文件名>` | 切换到当前工作目录的指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行，带行号） |
 | `/clear` | 清除当前对话历史（内存与会话文件） |
 | `/exit` | 退出程序 |
@@ -432,7 +432,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   /load <name> - 加载指定 skill 的完整内容
   /trust   - 切换信任模式（跳过写文件/执行命令的确认）
   /status  - 查看模型、会话文件、上下文窗口与用量、确认模式
-  /sessions - 列出所有会话
+  /sessions - 列出当前工作目录的会话
   /switch <n> - 切换到指定会话（恢复其历史上下文）
   /last [n] - 查看上一条工具输出的完整内容（默认 200 行）
   /help    - 显示帮助信息
@@ -584,10 +584,11 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
 
 ## 6. 会话存储与上下文压缩
 
-- **存储目录**：`~/.mini-pi/sessions/`
+- **存储目录**：`~/.mini-pi/sessions/<基名>-<路径哈希8位>/`，每个工作目录一个子目录
 - **文件格式**：JSONL（每行一个条目）
-- **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序）
-- **启动行为**：加载最近一个会话，并把它的历史消息（含压缩摘要）恢复进内存上下文；无会话则新建。
+- **文件命名**：`YYYY-MM-DDTHH-mm-ss.jsonl`（按时间戳，排序即为时间顺序；同一秒创建的多个会话追加 `-2`、`-3` 后缀）
+- **工作目录隔离**：`listSessions()` / `loadSession()` / `loadLatestSession()` 只认当前工作目录的会话；目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
+- **启动行为**：加载当前工作目录最近的一个会话，并把它的历史消息（含压缩摘要）恢复进内存上下文；无会话则新建。
 
 ### 6.1 会话条目类型
 
@@ -717,7 +718,7 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 | ---- | ---- | ---- |
 | 供应商凭据 | `~/.mini-pi/auth.json` | 各供应商的 `apiKey` / `baseUrl` / `model` |
 | 默认模型 | `~/.mini-pi/settings.json` | `{ "defaultModel": "供应商/模型名" }` |
-| 会话记录 | `~/.mini-pi/sessions/*.jsonl` | 每个会话一个文件 |
+| 会话记录 | `~/.mini-pi/sessions/<工作目录子目录>/*.jsonl` | 每个工作目录一个子目录，每个会话一个文件 |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/`、`<workspaceRoot>/.agents/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
