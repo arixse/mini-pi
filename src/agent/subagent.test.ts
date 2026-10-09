@@ -577,6 +577,47 @@ describe("subagent", () => {
       assert.ok(!toolNames.includes("bash"));
     });
 
+    it("role=explore 只有只读四项", async () => {
+      const { registry, model } = setup();
+      await registry.execute("task", { goal: "g", role: "explore" });
+
+      const toolNames = model.calls[0].tools.map((t) => t.name).sort();
+      assert.deepStrictEqual(toolNames, [...READ_ONLY_TOOL_NAMES].sort());
+    });
+
+    it("role=review 即使 allowWrite:true 也只读（冲突取更严格者）", async () => {
+      const { registry, model } = setup();
+      await registry.execute("task", {
+        goal: "评审一下",
+        role: "review",
+        allowWrite: true,
+        allowBash: true,
+      });
+
+      const toolNames = model.calls[0].tools.map((t) => t.name);
+      for (const name of ["write_file", "edit_file", "bash"]) {
+        assert.ok(!toolNames.includes(name), `review 不应拿到 ${name}`);
+      }
+    });
+
+    it("role=implement 自带写工具，allowBash 才能再加 bash", async () => {
+      const { registry, model } = setup();
+      await registry.execute("task", { goal: "改代码", role: "implement" });
+      const base = model.calls[0].tools.map((t) => t.name);
+      assert.ok(base.includes("write_file"));
+      assert.ok(!base.includes("bash"));
+    });
+
+    it("角色指令进入 system prompt：输出契约随委派一起下发", async () => {
+      const { registry, model } = setup();
+      await registry.execute("task", { goal: "g", role: "review" });
+
+      const prompt = model.calls[0].systemPrompt;
+      assert.ok(prompt.includes("本次委派的角色：review"));
+      // review 的输出契约：严重级别 + 位置
+      assert.ok(prompt.includes("严重级别"));
+    });
+
     it("预算耗尽时给出明确错误，而不是静默什么都不做", async () => {
       const { registry } = setup(1);
       await registry.execute("task", { goal: "first" });

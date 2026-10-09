@@ -18,8 +18,13 @@ import {
   resolveSubAgentMaxTurns,
   runSubAgent,
   subAgentResultDetails,
-  subAgentToolNames,
 } from "./subagent";
+import {
+  SUBAGENT_ROLE_NAMES,
+  resolveRole,
+  resolveSubAgentTools,
+  rolePreset,
+} from "./roles";
 
 /**
  * 委派工具 `task`：把一件相对独立的事交给子 Agent 去做。
@@ -103,6 +108,11 @@ export function createSubAgentTool(
       "(reading many files, searching for symbols, reviewing a large diff). " +
       "It gets read-only tools by default; writing files or running commands requires " +
       "`allowWrite` / `allowBash`, which the user still has to approve. " +
+      "Pick `role` to get a preset toolset and output contract instead of tuning knobs: " +
+      "`explore` = read-only reconnaissance (paths + symbols + findings), " +
+      "`implement` = may write and must report how it verified, " +
+      "`review` = read-only critique (issues + severity + location). " +
+      "A role's limits are never loosened by allowWrite/allowBash. " +
       "Requires confirmation before it starts.",
     parameters: {
       type: "object",
@@ -120,21 +130,29 @@ export function createSubAgentTool(
             "Optional file paths or code snippets to hand over explicitly. " +
             "Prefer passing the relevant excerpt instead of asking it to search blindly.",
         },
+        role: {
+          type: "string",
+          enum: SUBAGENT_ROLE_NAMES,
+          description:
+            "Preset that fixes the toolset, turn budget and output shape. " +
+            "Defaults to `general`. pick `explore`/`review` when you only need answers, " +
+            "`implement` when something has to change on disk.",
+        },
         allowWrite: {
           type: "boolean",
           description:
-            "Grant write_file / edit_file. Defaults to false (read-only). " +
-            "Every write still asks the user first.",
+            "Grant write_file / edit_file. Ignored by roles that are read-only by contract " +
+            "(explore / review stay read-only). Every write still asks the user first.",
         },
         allowBash: {
           type: "boolean",
           description:
-            "Grant bash. Defaults to false. Heavier than writing files; only ask for it when needed.",
+            "Grant bash. Only honoured for roles allowed to escalate (implement / general).",
         },
         maxTurns: {
           type: "number",
           description:
-            "Turn budget for the sub-agent. Defaults to 30, capped at 100.",
+            "Turn budget for the sub-agent. Defaults to the role's budget, capped at 100.",
         },
       },
       required: ["goal"],
@@ -181,10 +199,24 @@ export function createSubAgentTool(
       };
       const allowWrite = boolArg(args.allowWrite);
       const allowBash = boolArg(args.allowBash);
+      const role = resolveRole(args.role);
+      const preset = rolePreset(role);
 
       try {
+        /**
+         * 工具集由角色 + 显式开关决定，再与父注册表取交集。
+         *
+         * 冲突取更严格者：`review` + `allowWrite:true` 仍然只读。
+         * 角色的输出契约（"我只评审、不改代码"）依赖于它的工具边界，
+         * 放宽工具等于允许模型的临时起意推翻这个承诺。
+         */
         const childRegistry = parentRegistry.filter(
-          subAgentToolNames({ allowWrite, allowBash }),
+          resolveSubAgentTools({
+            role,
+            allowWrite,
+            allowBash,
+            parentRegistry,
+          }),
         );
 
         /**
@@ -203,18 +235,30 @@ export function createSubAgentTool(
           );
         }
 
+        const instructedPrompt = buildSubAgentSystemPrompt({
+          workspaceRoot: options.workspaceRoot,
+          // 以最终工具集为准，而不是入参：角色自带写权限时也要如实告诉它"能写"，
+          // 否则 prompt 与工具列表互相矛盾，模型会犹豫不动手
+          canWrite: childRegistry.has("write_file"),
+          instructions: [
+            `本次委派的角色：${preset.label}`,
+            preset.instructions,
+            options.instructions,
+          ]
+            .filter((part): part is string => Boolean(part))
+            .join("\n\n"),
+        });
+
         const result: SubAgentResult = await runSubAgent({
           agentId,
           identity,
           goal,
-          role: options.role,
+          role: preset.label,
           context: stringListArg(args.context),
-          systemPrompt: buildSubAgentSystemPrompt({
-            workspaceRoot: options.workspaceRoot,
-            canWrite: allowWrite,
-            instructions: options.instructions,
-          }),
-          maxTurns: resolveSubAgentMaxTurns(args.maxTurns),
+          systemPrompt: instructedPrompt,
+          maxTurns: resolveSubAgentMaxTurns(
+            args.maxTurns ?? preset.maxTurns,
+          ),
           model: runtime.model,
           toolRegistry: childRegistry,
           beforeToolCall: runtime.beforeToolCall,
