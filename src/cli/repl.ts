@@ -3,11 +3,19 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage, ToolDefinition } from "../shared/protocol";
+import { AgentEvent, AgentMessage, ToolDefinition, Usage } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
 import { runAgentLoop, BeforeToolCall } from "../agent/loop";
+import {
+  SubAgentRuntimeProvider,
+} from "../agent/subagentTool";
+import {
+  SubAgentSupervisor,
+  addUsage,
+  emptyUsage,
+} from "../agent/subagent";
 import {
   ContextWindowSource,
   ModelProviderService,
@@ -23,7 +31,7 @@ import { SkillWithSource } from "../agent/skillLoader";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
 import { createStatusLine, StatusController } from "./status";
-import { createRenderContext, renderLastToolOutput, renderToolCall, RenderContext, ToolCallView } from "./render";
+import { createRenderContext, renderLastToolOutput, renderToolCall, renderSubAgentHeader, renderSubAgentFooter, RenderContext, ToolCallView } from "./render";
 import { ExitCoordinator } from "./exit";
 
 /**
@@ -237,6 +245,13 @@ export type ReplOptions = {
   }>;
   /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
   beforeToolCall?: BeforeToolCall;
+  /**
+   * `task` 工具的运行时容器。REPL 每轮把当轮的监督者注入进去，回合结束清空。
+   * 不传则模型看不到 `task`，委派不可用——这是"没有子 Agent 支持"的默认安全态。
+   */
+  subAgentRuntime?: SubAgentRuntimeProvider;
+  /** 会话级子 Agent 用量查询，供 `/status` 展示（避免委派成本隐形） */
+  subAgentStats?: () => { delegations: number; usage: Usage };
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
@@ -298,6 +313,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     renderContext: createRenderContext(),
     quiet,
   });
+
+  /**
+   * 会话级的子 Agent 累计用量。
+   *
+   * 委派会真实烧 token，而这些 token 不在主会话的消息里
+   * （子 Agent 只回传裁剪后的结论），不单独统计的话 `/status` 会显著低报成本。
+   */
+  const subAgentTotals = { delegations: 0, usage: emptyUsage() };
+  if (!options.subAgentStats) {
+    options.subAgentStats = () => ({
+      delegations: subAgentTotals.delegations,
+      usage: { ...subAgentTotals.usage },
+    });
+  }
 
   // 本轮是否正在处理中。
   // 必须从 line 处理函数的第一行就为 true：/exit 或 Ctrl+C 可能在本轮
@@ -514,6 +543,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     const run = new AbortController();
     activeRun = run;
 
+    /**
+     * 本回合的委派监督者：管预算、并行配额，也是取消树的根。
+     *
+     * 每轮一个实例，因为预算是按回合计的；而取消树的根连到本轮的 signal，
+     * 所以 Ctrl+C 一次就能中断整棵子树（父信号 → slot.signal → 子 Agent 循环）。
+     */
+    let supervisor: SubAgentSupervisor | null = null;
+
     try {
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
@@ -535,6 +572,21 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       await appendUserMessage(options, createUserMessage(input), run.signal);
 
       status.set({ kind: "thinking", startedAt: Date.now() });
+
+      // 把本轮运行时交给 task 工具：没有这一步委派无法拿到模型、取消信号与审批钩子
+      if (options.subAgentRuntime) {
+        supervisor = new SubAgentSupervisor({
+          parentSignal: run.signal,
+          onEvent: onAgentEvent,
+        });
+        options.subAgentRuntime.set({
+          supervisor,
+          model: options.model,
+          parentId: null,
+          beforeToolCall,
+          onEvent: onAgentEvent,
+        });
+      }
 
       // 循环每轮都会回调：先把本轮消息落盘，再检查是否需要压缩
       // （单轮内可能跑很多次工具调用，只在用户回合开始时压一次兜不住）
@@ -569,6 +621,14 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     } finally {
       status.stop();
       activeRun = null;
+      // 回合结束后必须清空运行时：残留的运行时会让下一轮之外（例如工具被误调用）
+      // 的委派连到一个已经作废的取消信号上
+      options.subAgentRuntime?.set(null);
+      if (supervisor) {
+        const stats = supervisor.stats;
+        subAgentTotals.delegations += stats.delegations;
+        addUsage(subAgentTotals.usage, stats.usage);
+      }
       turnInFlight = false;
       // 若此前收到 /exit 或 EOF，则在本轮收尾（含落盘）之后退出
       exitCoordinator.notifyRunFinished();
@@ -652,8 +712,32 @@ export function sessionStatusEntries(
         : "未启用",
     ],
     ...compactionStatusRow(store),
+    ...subAgentStatusRow(options),
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
     ["工作目录", options.workspaceRoot],
+  ];
+}
+
+/**
+ * 子 Agent 用量单独一行。
+ *
+ * 委派烧掉的 token 不在主会话的消息里（子 Agent 只回传裁剪后的结论），
+ * 不单列的话用户看到的只有"好像也没多贵"，等账单出来才发现量级不对。
+ */
+function subAgentStatusRow(options: ReplOptions): Array<[string, string]> {
+  const stats = options.subAgentStats?.();
+  if (!stats) {
+    return [];
+  }
+  if (stats.delegations === 0) {
+    return [["子 Agent", "本会话未委派"]];
+  }
+  return [
+    [
+      "子 Agent",
+      `已委派 ${stats.delegations} 次 · 累计 ${stats.usage.totalTokens} tokens` +
+        `（入 ${stats.usage.input} / 出 ${stats.usage.output}）`,
+    ],
   ];
 }
 
@@ -929,6 +1013,22 @@ export function createAgentEventHandler(
     if (event.type === "tool_permission") {
       const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
       deps.quiet(chalk.dim(`\n${label}: ${event.toolName}`));
+    }
+    if (event.type === "subagent_start") {
+      // 委派期间不能留着上一轮的 spinner：子 Agent 的工具事件会另起状态行，
+      // 两者叠在同一行会互相覆盖
+      deps.status.stop();
+      for (const line of renderSubAgentHeader(event, deps.renderContext)) {
+        deps.quiet(line);
+      }
+      return;
+    }
+    if (event.type === "subagent_end") {
+      deps.status.stop();
+      for (const line of renderSubAgentFooter(event, deps.renderContext)) {
+        deps.quiet(line);
+      }
+      return;
     }
     if (event.type === "turn_end" && event.message.stopReason === "length") {
       // 输出被 max_tokens 截断：必须与"用户取消"区分开并给出可操作建议，

@@ -8,6 +8,10 @@
 import { createModelFromProvider, LlmModel } from "../agent/model";
 import { createToolRegistry } from "../agent/tools";
 import { AgentMessage } from "../shared/protocol";
+import {
+  SubAgentRuntimeProvider,
+  createSubAgentTool,
+} from "../agent/subagentTool";
 import { startRepl } from "./repl";
 import {
   ContextWindowSource,
@@ -165,7 +169,26 @@ export async function main() {
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
-  const toolRegistry = createToolRegistry(workspaceRoot);
+
+  /**
+   * 委派工具 `task` 的运行时容器。
+   *
+   * 注册表是一次性构建的，而运行时每轮都新建（预算按回合计、取消信号连本轮），
+   * 所以工具不能持有运行时，只能每轮从这里取——REPL 与这里共享同一个容器。
+   * 委派期间容器为空即意味着"当前没有活跃回合"，工具会直接报错而不是静默失败。
+   */
+  const subAgentRuntime = new SubAgentRuntimeProvider();
+  const toolRegistry = createToolRegistry(workspaceRoot, {
+    extraTools: [
+      createSubAgentTool({
+        workspaceRoot,
+        depth: 0,
+        runtime: () => subAgentRuntime.get(),
+        // 子 Agent 的工具集必须从父注册表派生：派生保证它拿不到父级没有的能力
+        parentRegistry: () => toolRegistry,
+      }),
+    ],
+  });
 
   // 上下文窗口：settings.json 的 contextWindow 优先，否则按当前模型名推断
   // （认不出模型名时回退到 128k），用于推导压缩阈值
@@ -298,6 +321,7 @@ export async function main() {
     messages,
     model,
     toolRegistry,
+    subAgentRuntime,
     workspaceRoot,
     providerService,
     settingsStore,

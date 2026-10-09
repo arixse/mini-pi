@@ -148,11 +148,11 @@ export function capSubAgentResult(
   };
 }
 
-function emptyUsage(): Usage {
+export function emptyUsage(): Usage {
   return { input: 0, output: 0, totalTokens: 0 };
 }
 
-function addUsage(target: Usage, addition: Usage): void {
+export function addUsage(target: Usage, addition: Usage): void {
   target.input += addition.input;
   target.output += addition.output;
   target.totalTokens += addition.totalTokens;
@@ -368,6 +368,9 @@ export async function runSubAgent(
     toolRegistry: input.toolRegistry,
     maxTurns: input.maxTurns,
     beforeToolCall: input.beforeToolCall,
+    // 身份随循环下传：子 Agent 的工具调用带着自己的 depth 去审批，
+    // 用户看到的不再是"某个 Agent 要写文件"，而是"第几层 Agent 要写文件"
+    identity: input.identity,
     signal: input.signal,
     onEvent: emit,
   });

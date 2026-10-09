@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { formatDuration } from "./status";
+import { AgentEvent } from "../shared/protocol";
 
 /**
  * 工具调用卡片的渲染。
@@ -805,4 +806,67 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   }
 
   return lines;
+}
+
+/**
+ * 委派卡片的头：`🤖 委派 <role> #<短 id>` + 缩进后的目标。
+ *
+ * 用缩进而不是只靠文案表达层级：终端里一眼能看出哪些输出属于子 Agent，
+ * depth 藏在纯数字里没人会在被打断时去数。
+ *
+ * 目标只显示一行且按显示宽度截断——goal 是模型写的，可以很长，
+ * 而这里的信息密度上限就是"用户扫一眼知道派出去干嘛了"。
+ */
+export function renderSubAgentHeader(
+  event: Extract<AgentEvent, { type: "subagent_start" }>,
+  ctx: RenderContext = createRenderContext(),
+): string[] {
+  const indent = "  ".repeat(Math.max(0, event.depth - 1));
+  const label = event.role ?? "agent";
+  const icon = ctx.ascii ? "[sub]" : "\u{1F916}";
+  const heading = ctx.style.cyan(
+    `${indent}${icon} 委派 ${label} #${event.agentId.slice(0, 8)}`,
+  );
+  const goal = inlineText(event.goal);
+  const width = Math.max(10, ctx.width - displayWidth(indent) - 2);
+  return [
+    "",
+    heading,
+    `  ${indent}${ctx.style.dim(truncateToWidth(goal, width))}`,
+    "",
+  ];
+}
+
+/**
+ * 委派卡片的尾：结果 + 轮次 / token / 耗时。
+ *
+ * 失败（`ok === false`）必须比成功更显眼：
+ * 子 Agent 没做完时父 Agent 拿到的是"半截结论"，用户得知道接下来看到的话
+ * 建立在不完整的信息上。
+ */
+export function renderSubAgentFooter(
+  event: Extract<AgentEvent, { type: "subagent_end" }>,
+  ctx: RenderContext = createRenderContext(),
+): string[] {
+  const indent = "  ".repeat(Math.max(0, event.depth - 1));
+  const okMark = ctx.ascii ? "[ok]" : "✅";
+  const failMark = ctx.ascii ? "[fail]" : "❌";
+  const prefix = `${indent}${event.ok ? okMark : failMark}`;
+  const tag = event.role ?? "agent";
+  const stats = `${event.turns} 轮 · ${event.usage.totalTokens} tokens · ${formatDuration(event.elapsedMs)}`;
+  const heading = event.ok
+    ? `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 完成`
+    : `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 未完成`;
+
+  return [
+    "",
+    event.ok ? ctx.style.green(heading) : ctx.style.red(heading),
+    `  ${indent}${ctx.style.dim(stats)}`,
+    "",
+  ];
+}
+
+/** 把多行文本压成单行，便于塞进标题 */
+function inlineText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }

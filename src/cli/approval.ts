@@ -1,4 +1,4 @@
-import { BeforeToolCall, ToolDecision } from "../agent/loop";
+import { BeforeToolCall, ToolCallContext, ToolDecision } from "../agent/loop";
 import { ToolCallContent } from "../shared/protocol";
 import { READ_ONLY_TOOLS } from "../agent/tools";
 
@@ -93,17 +93,38 @@ export function describeToolCall(
   }
 }
 
+/**
+ * 调用来源前缀。
+ *
+ * 只给子 Agent 加，主 Agent 保持原样：用户自己发起的调用不需要这个前缀，
+ * 加了反而把每次确认都刷成两行噪音。
+ */
+export function agentTag(context?: ToolCallContext): string {
+  if (!context || context.depth <= 0) {
+    return "";
+  }
+  return `[子 Agent depth=${context.depth} ${context.agentId.slice(0, 8)}]`;
+}
+
 /** 确认提示语 */
 export function buildApprovalQuestion(
   call: ToolCallContent,
   fileExists?: (relativePath: string) => boolean,
+  context?: ToolCallContext,
 ): string {
+  const tag = agentTag(context);
   return [
     "",
-    `⚠️  工具调用待确认: ${call.name}`,
+    tag
+      ? `⚠️  工具调用待确认 ${tag}: ${call.name}`
+      : `⚠️  工具调用待确认: ${call.name}`,
     `   ${describeToolCall(call, fileExists)}`,
+    // 子 Agent 的调用用户没法预览上下文，必须能一眼拒绝整条委派链
+    tag ? "   （这是被委派出去的子 Agent 发起的调用，拒绝不会中断它的其他步骤）" : "",
     "   允许执行? [y/N] ",
-  ].join("\n");
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
 /**
@@ -113,7 +134,7 @@ export function buildApprovalQuestion(
 export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
   const autoApproved = policy.autoApproved ?? AUTO_APPROVED_TOOLS;
 
-  return async (call: ToolCallContent): Promise<ToolDecision> => {
+  return async (call: ToolCallContent, context?: ToolCallContext): Promise<ToolDecision> => {
     if (autoApproved.has(call.name)) {
       policy.onDecision?.(call, true, "auto");
       return { action: "allow", reason: "只读工具，免确认" };
@@ -126,7 +147,9 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
 
     let allowed = false;
     try {
-      allowed = await policy.confirm(buildApprovalQuestion(call, policy.fileExists));
+      allowed = await policy.confirm(
+        buildApprovalQuestion(call, policy.fileExists, context),
+      );
     } catch {
       allowed = false;
     }

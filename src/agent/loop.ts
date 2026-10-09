@@ -1,4 +1,4 @@
-import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
+import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools";
@@ -8,7 +8,20 @@ export type ToolDecision =
     | {action:"allow";reason?:string}
     | {action:"block";reason?:string}
     | {action:"rewrite",args:Record<string,unknown>;reason?:string}
-export type BeforeToolCall = (call:ToolCallContent)=>Promise<ToolDecision>
+/**
+ * 工具调用来自哪一层 Agent。
+ *
+ * 主 Agent 的调用不携带身份（保持既有行为），子 Agent 的调用会带上 depth，
+ * 于是审批提示能写出「[子 Agent depth=1] 写入 xxx」——
+ * 没有它，用户在终端看到一次写文件时无法判断是自己的 Agent 还是它派出去的那个，
+ * 而"要不要放行"这件事在两种情形下完全不同。
+ */
+export type ToolCallContext = AgentIdentity;
+
+export type BeforeToolCall = (
+  call: ToolCallContent,
+  context?: ToolCallContext,
+) => Promise<ToolDecision>;
 
 export type RunAgentLoopOptions = {
     systemPrompt:string
@@ -19,6 +32,11 @@ export type RunAgentLoopOptions = {
     /** 最大循环轮次，默认值为 100 */
     maxTurns?:number
     beforeToolCall?:BeforeToolCall
+    /**
+     * 本次循环属于哪个 Agent。子 Agent 循环传入自己的身份，
+     * 这样 `beforeToolCall` 收到的 context 能区分调用来自哪一层。
+     */
+    identity?:AgentIdentity
     /** 外部取消信号（例如 Ctrl+C）：中止模型请求与正在执行的工具 */
     signal?:AbortSignal
     /**
@@ -34,9 +52,10 @@ export type RunAgentLoopOptions = {
 
 async function decideToolCall(
   toolCall: ToolCallContent,
-  beforeToolCall:BeforeToolCall | undefined
+  beforeToolCall:BeforeToolCall | undefined,
+  context?: ToolCallContext,
 ): Promise<ToolDecision> {
-    return beforeToolCall ? await beforeToolCall(toolCall):{action:"allow"}
+    return beforeToolCall ? await beforeToolCall(toolCall, context):{action:"allow"}
 }
 
 function createBlockedToolResult(
@@ -354,7 +373,7 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
          */
         const runBatch = async (indices:number[]):Promise<void> => {
             const decisions = await Promise.all(
-                indices.map((index) => decideToolCall(toolCalls[index], options.beforeToolCall)),
+                indices.map((index) => decideToolCall(toolCalls[index], options.beforeToolCall, options.identity)),
             )
 
             const executables = new Map<number,ToolCallContent>()

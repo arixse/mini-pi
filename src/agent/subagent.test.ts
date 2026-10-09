@@ -13,6 +13,7 @@ import {
 import { createTextContent } from "./message";
 import { CompleteInput, LlmModel } from "./model";
 import { READ_ONLY_TOOL_NAMES, ToolRegistry, createToolRegistry } from "./tools";
+import { BeforeToolCall, runAgentLoop } from "./loop";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   MAX_DELEGATIONS_PER_TURN,
@@ -643,6 +644,190 @@ describe("subagent", () => {
       assert.deepStrictEqual(names, ["glob", "read_file"]);
       // 只读标记沿用父表，"能并发"与"免确认"两套判断不会分叉
       assert.strictEqual(subset.isReadOnly("read_file"), true);
+    });
+  });
+
+  describe("审批贯穿（权限的下沉）", () => {
+    const workspace = makeWorkspace();
+
+    it("子 Agent 发起的工具调用带着它的 depth 与 agentId 去审批", async () => {
+      const registry = createToolRegistry(workspace);
+      const provider = new SubAgentRuntimeProvider();
+      const supervisor = new SubAgentSupervisor();
+
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "call_1",
+        name: "read_file",
+        arguments: { path: "a.ts" },
+      };
+      const model = createSpyModel([
+        assistant([toolCall], "toolUse"),
+        assistant([createTextContent("子 Agent 结论")]),
+      ]);
+
+      // 记录子 Agent 的调用到底带着什么身份去过审批
+      const decisions: Array<{ name: string; depth: number; agentId: string }> = [];
+      const beforeToolCall: BeforeToolCall = async (call, context) => {
+        decisions.push({
+          name: call.name,
+          depth: context?.depth ?? -1,
+          agentId: context?.agentId ?? "",
+        });
+        return { action: "allow" };
+      };
+
+      provider.set({ supervisor, model, parentId: null, beforeToolCall });
+      registry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => registry,
+          depth: 0,
+        }),
+      );
+
+      const result = await registry.execute("task", { goal: "读一下 a.ts" });
+      assert.strictEqual(result.isError, false);
+      assert.deepStrictEqual(decisions, [
+        { name: "read_file", depth: 1, agentId: decisions[0]?.agentId ?? "" },
+      ]);
+      // agentId 必须与事件里的一致，否则排查时无法把审批记录对到具体那次委派
+      assert.ok(decisions[0].agentId.length > 0);
+    });
+
+    it("父循环自己的工具调用不带身份：只有委派出去的那一层才需要区分", async () => {
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "call_1",
+        name: "echo",
+        arguments: {},
+      };
+      const seen: Array<unknown> = [];
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "echo",
+        description: "d",
+        parameters: { type: "object" },
+        async execute() {
+          return { content: [createTextContent("ok")] };
+        },
+      });
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [
+          { role: "user", content: [createTextContent("hi")], timestamp: Date.now() },
+        ],
+        tools: registry.definitions(),
+        model: createSpyModel([
+          assistant([toolCall], "toolUse"),
+          assistant([createTextContent("done")]),
+        ]),
+        toolRegistry: registry,
+        beforeToolCall: async (_call: ToolCallContent, context) => {
+          seen.push(context);
+          return { action: "allow" };
+        },
+      });
+
+      assert.strictEqual(seen.length, 1);
+      assert.strictEqual(seen[0], undefined);
+    });
+  });
+
+  describe("端到端：父循环 -> task -> 结论回传", () => {
+    const workspace = makeWorkspace();
+
+    it("委派在父会话里只是一条 toolCall/toolResult，父上下文不包含子 Agent 的来回", async () => {
+      const parentRegistry = createToolRegistry(workspace);
+      const provider = new SubAgentRuntimeProvider();
+      const supervisor = new SubAgentSupervisor();
+
+      // 子 Agent 的模型：先读文件，再给结论（两次请求，第二轮带 toolResult）
+      const readCall: ToolCallContent = {
+        type: "toolCall",
+        id: "sub_call_1",
+        name: "read_file",
+        arguments: { path: "a.ts" },
+      };
+      const subModel = createSpyModel([
+        assistant([readCall], "toolUse"),
+        assistant([createTextContent("结论：a.ts 导出 foo")]),
+      ]);
+      const events: AgentEvent[] = [];
+      provider.set({
+        supervisor,
+        model: subModel,
+        parentId: null,
+        onEvent: (e) => events.push(e),
+      });
+      parentRegistry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => parentRegistry,
+          depth: 0,
+        }),
+      );
+
+      // 父模型：先委派，再据结论作答
+      const delegateCall: ToolCallContent = {
+        type: "toolCall",
+        id: "call_1",
+        name: "task",
+        arguments: { goal: "总结 a.ts 的导出项" },
+      };
+      const parentModel = createSpyModel([
+        assistant([delegateCall], "toolUse"),
+        assistant([createTextContent("最终答复")]),
+      ]);
+
+      const result = await runAgentLoop({
+        systemPrompt: "父 prompt",
+        messages: [
+          { role: "user", content: [createTextContent("帮我看下 a.ts")], timestamp: Date.now() },
+        ],
+        tools: parentRegistry.definitions(),
+        model: parentModel,
+        toolRegistry: parentRegistry,
+        maxTurns: 5,
+        onEvent: (e) => events.push(e),
+      });
+
+      // 父这侧第二次请求里：user + assistant(toolCall) + toolResult + assistant(text)
+      const lastCall = parentModel.calls[parentModel.calls.length - 1];
+      const toolResultCount = lastCall.messages.filter(
+        (m) => m.role === "toolResult",
+      ).length;
+      assert.strictEqual(toolResultCount, 1, "委派在父看来就是一个工具结果");
+      assert.ok(
+        result.newMessages.some((m) => m.role === "toolResult" && m.toolName === "task"),
+      );
+
+      // 子 Agent 的两轮来回不会出现在父上下文里（否则委派就白做了）
+      for (const message of lastCall.messages) {
+        if (message.role === "toolResult" && message.toolName === "read_file") {
+          assert.fail("子 Agent 的内部工具结果不应进入父上下文");
+        }
+      }
+
+      // 起止事件成对，且带上同一 agentId
+      const start = events.find((e) => e.type === "subagent_start");
+      const end = events.find((e) => e.type === "subagent_end");
+      assert.ok(start && start.type === "subagent_start");
+      assert.ok(end && end.type === "subagent_end");
+      const startTyped = events.find(
+        (e): e is Extract<AgentEvent, { type: "subagent_start" }> =>
+          e.type === "subagent_start",
+      );
+      const endTyped = events.find(
+        (e): e is Extract<AgentEvent, { type: "subagent_end" }> =>
+          e.type === "subagent_end",
+      );
+      assert.strictEqual(startTyped?.agentId, endTyped?.agentId);
+      assert.strictEqual(startTyped?.depth, 1);
+      assert.strictEqual(endTyped?.ok, true);
     });
   });
 });

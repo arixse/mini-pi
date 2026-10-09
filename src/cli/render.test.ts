@@ -14,6 +14,8 @@ import {
   layoutHeader,
   packItems,
   renderLastToolOutput,
+  renderSubAgentFooter,
+  renderSubAgentHeader,
   renderToolCall,
   toLines,
   truncateToWidth,
@@ -703,5 +705,117 @@ describe("renderToolCall", () => {
     assert.strictEqual(createRenderContext({ color: false }).style, PLAIN_STYLE);
     assert.notStrictEqual(createRenderContext({ color: true }).style, PLAIN_STYLE);
     assert.strictEqual(createRenderContext({ width: 42 }).width, 42);
+  });
+});
+
+describe("子 Agent 委派卡片", () => {
+  const identity = { agentId: "12345678abcd", parentId: null, depth: 1 };
+
+  it("头部一行说清派了谁去干嘛：编号 + 目标", () => {
+    const lines = renderSubAgentHeader(
+      { type: "subagent_start", goal: "总结 src/a.ts 的导出项", ...identity },
+      ctx,
+    );
+    const joined = lines.join("\n");
+    assert.ok(joined.includes("#12345678"), joined);
+    assert.ok(joined.includes("总结 src/a.ts 的导出项"));
+    // 纯文本上下文下不该泄漏 ANSI 转义，否则管道输出的日志会带乱码
+    assert.ok(!joined.includes("undefined"));
+    assert.ok(!joined.includes("\u001b["));
+  });
+
+  it("depth 用缩进表达，而不是让用户去数数字", () => {
+    const deep = renderSubAgentHeader(
+      { type: "subagent_start", goal: "g", ...identity, depth: 3 },
+      ctx,
+    );
+    assert.ok(
+      deep.some((line) => line.startsWith("    ")),
+      `第三层应当有缩进：${JSON.stringify(deep)}`,
+    );
+  });
+
+  it("多行 goal 压成一行：模型写的目标可以很长", () => {
+    const lines = renderSubAgentHeader(
+      { type: "subagent_start", goal: "第一行\n第二行\n第三行", ...identity },
+      ctx,
+    );
+    const goalLine = lines.find((line) => line.includes("第一行")) ?? "";
+    assert.strictEqual(goalLine.split("\n").length, 1);
+  });
+
+  it("结束卡片带轮次 / token / 耗时", () => {
+    const lines = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: true,
+        goal: "g",
+        turns: 4,
+        usage: { input: 100, output: 20, totalTokens: 120 },
+        elapsedMs: 2345,
+        ...identity,
+      },
+      ctx,
+    );
+    const joined = lines.join("\n");
+    assert.ok(joined.includes("4 轮"));
+    assert.ok(joined.includes("120 tokens"));
+    assert.ok(joined.includes("2.3s"));
+  });
+
+  it("未完成与完成是两种文案：父 Agent 拿到半截结论时必须看得出来", () => {
+    const failed = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: false,
+        goal: "g",
+        turns: 30,
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        elapsedMs: 100,
+        ...identity,
+      },
+      ctx,
+    ).join("\n");
+    assert.ok(failed.includes("未完成"));
+
+    const ok = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: true,
+        goal: "g",
+        turns: 1,
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        elapsedMs: 100,
+        ...identity,
+      },
+      ctx,
+    ).join("\n");
+    assert.ok(ok.includes("完成"));
+    assert.ok(!ok.includes("未完成"));
+  });
+
+  it("ascii 模式不出现 emoji", () => {
+    const asciiCtx: RenderContext = { ...PLAIN_CONTEXT, ascii: true, width: 80 };
+    const start = renderSubAgentHeader(
+      { type: "subagent_start", goal: "g", ...identity },
+      asciiCtx,
+    ).join("\n");
+    const end = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: true,
+        goal: "g",
+        turns: 1,
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        elapsedMs: 10,
+        ...identity,
+      },
+      asciiCtx,
+    ).join("\n");
+    for (const text of [start, end]) {
+      assert.ok(!/\p{Extended_Pictographic}/u.test(text), text);
+    }
+    assert.ok(start.includes("[sub]"));
+    assert.ok(end.includes("[ok]"));
   });
 });
