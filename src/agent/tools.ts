@@ -17,7 +17,7 @@ type ToolExecutor = (
   signal?: AbortSignal,
 ) => Promise<ToolResult>;
 
-type RegisteredTool = ToolDefinition & {
+export type RegisteredTool = ToolDefinition & {
   execute: ToolExecutor;
   /** 只读工具：可并发执行，且无需用户确认 */
   readOnly?: boolean;
@@ -68,6 +68,26 @@ export class ToolRegistry {
     return this.tools.get(name)?.readOnly === true;
   }
 
+  /**
+   * 由本注册表派生一个只含指定工具的注册表。
+   *
+   * 子 Agent 的工具集必须是父集的**子集**：派生而不是重建，
+   * 才不会出现"子 Agent 拿到了父级没注册的工具"这种越权。
+   * 只读标记沿用原值，因此 convexity 与审批白名单仍然一致。
+   *
+   * @param names 允许出现在子集里的工具名；本注册表没有的名字会被忽略
+   */
+  filter(names: readonly string[]): ToolRegistry {
+    const subset = new ToolRegistry();
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool) {
+        subset.register(tool);
+      }
+    }
+    return subset;
+  }
+
   /** 所有只读工具名，供审批策略复用，避免两处各写一份白名单 */
   readOnlyToolNames(): string[] {
     return Array.from(this.tools.values())
@@ -89,13 +109,29 @@ export class ToolRegistry {
 }
 
 /**
+ * 注册表构建选项。
+ *
+ * `extraTools` 是给上层扩展的口子（例如子 Agent 的委派工具 `task`）：
+ * 之所以不带默认值也不内置，是为了避免 `tools.ts` 反过来依赖上层模块形成循环引用。
+ */
+export type CreateToolRegistryOptions = {
+  extraTools?: ReadonlyArray<RegisteredTool>;
+};
+
+/**
  * 创建内置工具注册表。
  *
  * `readOnly` 统一在这里按 {@link READ_ONLY_TOOL_NAMES} 标记，而不是写在每个工具里：
  * 标记散落在各工具定义中时，新增只读工具很容易忘记同步，
  * 结果"能并发"与"免确认"两套判断分叉。
+ *
+ * 通过 `options.extraTools` 传入的工具不参与只读判定（一律非只读），
+ * 因此委派这类有副作用的工具默认必须走审批。
  */
-export function createToolRegistry(workspaceRoot: string): ToolRegistry {
+export function createToolRegistry(
+  workspaceRoot: string,
+  options?: CreateToolRegistryOptions,
+): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of [
     listFilesTool(workspaceRoot),
@@ -110,6 +146,9 @@ export function createToolRegistry(workspaceRoot: string): ToolRegistry {
       ...tool,
       readOnly: READ_ONLY_TOOLS.has(tool.name),
     });
+  }
+  for (const tool of options?.extraTools ?? []) {
+    registry.register(tool);
   }
   return registry;
 }
