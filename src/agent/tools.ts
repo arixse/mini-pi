@@ -1,7 +1,7 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import type { ChildProcess } from "node:child_process";
-import { ToolDefinition, ToolResult } from "../shared/protocol";
+import { ToolCallContent, ToolDefinition, ToolResult } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { readdir, readFile, stat } from "node:fs/promises";
 import {
@@ -17,10 +17,27 @@ type ToolExecutor = (
   signal?: AbortSignal,
 ) => Promise<ToolResult>;
 
+/**
+ * 一次调用能否与同批其他调用并发执行。
+ *
+ * 用函数而不是布尔值：委派能否并发取决于这次传了什么参数
+ * （只读委派可以并发，`allowWrite` 的不行），只看工具名判不出来。
+ */
+export type ConcurrencyRule = boolean | ((args: Record<string, unknown>) => boolean);
+
 export type RegisteredTool = ToolDefinition & {
   execute: ToolExecutor;
   /** 只读工具：可并发执行，且无需用户确认 */
   readOnly?: boolean;
+  /**
+   * 并发安全性。缺省 false（保守）。
+   *
+   * 与 `readOnly` 是**两个维度**，不要互相代替：
+   * `readOnly` 表达"不修改 + 免确认"，`concurrent` 表达"和别的调用同时跑会不会互相干扰"。
+   * 混用会造出两种分叉——把 `task` 塞进只读白名单，得到"能并发却要审批"；
+   * 反过来把读工具当非并发，白白丢掉并行收益。
+   */
+  concurrent?: ConcurrencyRule;
 };
 
 /**
@@ -97,6 +114,24 @@ export class ToolRegistry {
       }
     }
     return subset;
+  }
+
+  /**
+   * 这次调用能不能和同批其他调用一起跑。
+   *
+   * 只读工具恒 true：既不改状态，也不需要用户在同一个问题上做两次决定。
+   * 未注册的工具恒 false：不知道的东西不让并发，是最安全的默认。
+   * 其余看工具自己声明的 {@link RegisteredTool.concurrent}。
+   */
+  canRunConcurrently(call: ToolCallContent): boolean {
+    if (this.isReadOnly(call.name)) {
+      return true;
+    }
+    const rule = this.tools.get(call.name)?.concurrent;
+    if (typeof rule === "function") {
+      return rule(call.arguments ?? {});
+    }
+    return rule === true;
   }
 
   /** 所有只读工具名，供审批策略复用，避免两处各写一份白名单 */

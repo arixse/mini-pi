@@ -24,6 +24,7 @@ import {
   resolveRole,
   resolveSubAgentTools,
   rolePreset,
+  subAgentMutates,
 } from "./roles";
 
 /**
@@ -100,6 +101,14 @@ export function createSubAgentTool(
 ): RegisteredTool {
   return {
     name: SUBAGENT_TOOL_NAME,
+    /**
+     * 并发安全性：只读委派可以和别的调用一起跑，会改磁盘的不行。
+     *
+     * 这不是 `readOnly` 能代替的信息——`task` 永远不敢只因为"能并发"
+     * 就免确认（它要花 token、要花时间，还可能写文件），
+     * 把委派塞进只读白名单会得到"能并发却要确认"的分叉。
+     */
+    concurrent: (args) => !subAgentMutates(resolveRole(args.role), boolArg(args.allowWrite), boolArg(args.allowBash)),
     description:
       "Delegate a self-contained task to a sub-agent. The sub-agent runs in its own " +
       "isolated context: it only sees the goal and the snippets you pass in `context`, " +

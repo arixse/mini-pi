@@ -457,12 +457,12 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
                 break
             }
 
-            if(options.toolRegistry.isReadOnly(toolCalls[cursor].name)) {
-                // 收集连续的只读调用，一起并发
+            if(options.toolRegistry.canRunConcurrently(toolCalls[cursor])) {
+                // 收集连续的可并发调用，一起并发
                 const batch:number[] = []
                 while(
                     cursor + batch.length < toolCalls.length &&
-                    options.toolRegistry.isReadOnly(toolCalls[cursor + batch.length].name)
+                    options.toolRegistry.canRunConcurrently(toolCalls[cursor + batch.length])
                 ) {
                     batch.push(cursor + batch.length)
                 }

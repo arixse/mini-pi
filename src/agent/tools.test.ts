@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
+import { createTextContent } from "./message";
 import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, taskkillSucceeded, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -965,6 +966,87 @@ describe("tools", () => {
       const result = await registry.execute("grep", { pattern: "zzz" });
 
       assert.strictEqual(result.content[0].text, "(no match)");
+    });
+  });
+
+  describe("并发安全性（与只读是两个维度）", () => {
+    it("只读工具恒可并发", () => {
+      const registry = createToolRegistry(testDir);
+      for (const name of READ_ONLY_TOOL_NAMES) {
+        assert.strictEqual(
+          registry.canRunConcurrently({
+            type: "toolCall",
+            id: "c1",
+            name,
+            arguments: {},
+          }),
+          true,
+          `${name} 应可并发`,
+        );
+      }
+    });
+
+    it("会改状态的工具默认不可并发；未注册的工具同样保守处理", () => {
+      const registry = createToolRegistry(testDir);
+      for (const name of ["write_file", "edit_file", "bash", "没这个工具"]) {
+        assert.strictEqual(
+          registry.canRunConcurrently({
+            type: "toolCall",
+            id: "c1",
+            name,
+            arguments: {},
+          }),
+          false,
+          `${name} 不应默认并发`,
+        );
+      }
+    });
+
+    it("并发规则可以按参数判定：同一次委派，传不传 allowWrite 结论不同", () => {
+      const registry = createToolRegistry(testDir);
+      registry.register({
+        name: "task_like",
+        description: "d",
+        parameters: { type: "object" },
+        async execute() {
+          return { content: [createTextContent("")] };
+        },
+        concurrent: (args) => args.allowWrite !== true,
+      });
+
+      const call = (allowWrite: boolean) => ({
+        type: "toolCall" as const,
+        id: "c1",
+        name: "task_like",
+        arguments: { allowWrite },
+      });
+
+      assert.strictEqual(registry.canRunConcurrently(call(false)), true);
+      assert.strictEqual(registry.canRunConcurrently(call(true)), false);
+      // 它既不只读也不免确认：并发安全性不等于只读
+      assert.strictEqual(registry.isReadOnly("task_like"), false);
+    });
+
+    it("布尔形式的并发规则同样生效", () => {
+      const registry = createToolRegistry(testDir);
+      registry.register({
+        name: "always_parallel",
+        description: "d",
+        parameters: { type: "object" },
+        async execute() {
+          return { content: [createTextContent("")] };
+        },
+        concurrent: true,
+      });
+      assert.strictEqual(
+        registry.canRunConcurrently({
+          type: "toolCall",
+          id: "c1",
+          name: "always_parallel",
+          arguments: {},
+        }),
+        true,
+      );
     });
   });
 

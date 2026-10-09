@@ -145,6 +145,38 @@ export function resolveSubAgentTools(input: {
   return [...wanted].filter((name) => input.parentRegistry.has(name));
 }
 
+/** 会改动工作区或起进程的工具 */
+export const MUTATING_TOOL_NAMES: readonly string[] = [
+  "write_file",
+  "edit_file",
+  "bash",
+];
+
+const MUTATING_TOOLS: ReadonlySet<string> = new Set(MUTATING_TOOL_NAMES);
+
+/**
+ * 这次委派的子 Agent 会不会动磁盘或起进程。
+ *
+ * 只读角色恒 false；`implement` 自带写工具，恒 true；
+ * `general` 看是否显式要了写/bash。用来决定能不能和其他委派并发跑——
+ * 两个子 Agent 同时写同一个文件时，谁的改动生效取决于调度顺序，
+ * 这种冲突在结果上看不出来（都会返回成功），只能从根上不让它们并发。
+ */
+export function subAgentMutates(
+  role: SubAgentRole,
+  allowWrite: boolean,
+  allowBash: boolean,
+): boolean {
+  const preset = rolePreset(role);
+  if (!preset.canEscalate) {
+    return false;
+  }
+  if (preset.tools.some((name) => MUTATING_TOOLS.has(name))) {
+    return true;
+  }
+  return allowWrite || allowBash;
+}
+
 /**
  * 角色 + 显式 maxTurns -> 最终轮次预算。
  *

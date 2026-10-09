@@ -871,4 +871,151 @@ describe("subagent", () => {
       assert.strictEqual(endTyped?.ok, true);
     });
   });
+
+  describe("并行 fan-out", () => {
+    const workspace = makeWorkspace();
+
+    it("只读委派可并发，会改写了的不可并发", () => {
+      const registry = createToolRegistry(workspace);
+      registry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => null,
+          parentRegistry: () => registry,
+          depth: 0,
+        }),
+      );
+
+      const call = (args: Record<string, unknown>) => ({
+        type: "toolCall" as const,
+        id: "c1",
+        name: "task",
+        arguments: args,
+      });
+
+      assert.strictEqual(
+        registry.canRunConcurrently(call({ goal: "g", role: "explore" })),
+        true,
+      );
+      assert.strictEqual(
+        registry.canRunConcurrently(call({ goal: "g", role: "review" })),
+        true,
+      );
+      // implement 自带写工具：两个同时改同一个文件就看运气了
+      assert.strictEqual(
+        registry.canRunConcurrently(call({ goal: "g", role: "implement" })),
+        false,
+      );
+      assert.strictEqual(
+        registry.canRunConcurrently(call({ goal: "g", allowWrite: true })),
+        false,
+      );
+      // 既不并发也不免确认：两个维度各判各的
+      assert.strictEqual(registry.isReadOnly("task"), false);
+    });
+
+    it("三次只读委派真的重叠执行，且结果顺序与调用顺序一致", async () => {
+      const parentRegistry = createToolRegistry(workspace);
+      const provider = new SubAgentRuntimeProvider();
+      const supervisor = new SubAgentSupervisor({ maxParallel: 3 });
+
+      let running = 0;
+      let peak = 0;
+      const order: string[] = [];
+
+      /**
+       * 子 Agent 的模型：每次委派跑若干 ms 后才给结论，
+       * 期间把并发计数记下来——串行执行的话峰值恒为 1。
+       */
+      const subModel: LlmModel = {
+        async complete(input: CompleteInput): Promise<AssistantMessage> {
+          const goal = String(
+            (input.messages[0]?.content?.[0] as { text?: string } | undefined)
+              ?.text ?? "",
+          ).slice(0, 20);
+          running += 1;
+          peak = Math.max(peak, running);
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          running -= 1;
+          order.push(goal);
+          return assistant([createTextContent(`结论：${goal}`)]);
+        },
+      };
+      provider.set({ supervisor, model: subModel, parentId: null });
+      parentRegistry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => parentRegistry,
+          depth: 0,
+        }),
+      );
+
+      const parentModel = createSpyModel([
+        assistant(
+          [
+            { type: "toolCall", id: "c1", name: "task", arguments: { goal: "AAA" } },
+            { type: "toolCall", id: "c2", name: "task", arguments: { goal: "BBB" } },
+            { type: "toolCall", id: "c3", name: "task", arguments: { goal: "CCC" } },
+          ],
+          "toolUse",
+        ),
+        assistant([createTextContent("汇总完成")]),
+      ]);
+
+      const startedAt = Date.now();
+      const result = await runAgentLoop({
+        systemPrompt: "父",
+        messages: [
+          { role: "user", content: [createTextContent("并行查三处")], timestamp: Date.now() },
+        ],
+        tools: parentRegistry.definitions(),
+        model: parentModel,
+        toolRegistry: parentRegistry,
+        maxTurns: 3,
+      });
+      const elapsed = Date.now() - startedAt;
+
+      // 峰值 >1 说明确实有并行（三个 40ms 的委派串行要 120ms+）
+      assert.ok(peak >= 2, `应当出现并发，实测峰值 ${peak}`);
+      assert.ok(elapsed < 120, `并发后总耗时应明显短于串行：${elapsed}ms`);
+
+      // 顺序一致性：toolResult 必须按 toolCall 的顺序归档，
+      // 否则 assistant/toolResult 配对错位，会话文件就废了
+      const results = result.newMessages.filter(
+        (m): m is Extract<AgentMessage, { role: "toolResult" }> =>
+          m.role === "toolResult",
+      );
+      assert.deepStrictEqual(results.map((r) => r.toolCallId), ["c1", "c2", "c3"]);
+      const texts = results.map((r) =>
+        r.content.map((c) => c.text).join(""),
+      );
+      assert.ok(texts[0].includes("AAA"), texts[0]);
+      assert.ok(texts[1].includes("BBB"), texts[1]);
+      assert.ok(texts[2].includes("CCC"), texts[2]);
+    });
+
+    it("超过并行上限的委派会等名额，不会挤爆预算", async () => {
+      const supervisor = new SubAgentSupervisor({
+        maxParallel: 2,
+        maxDelegations: 8,
+      });
+      const slots = [
+        await supervisor.acquire(),
+        await supervisor.acquire(),
+      ];
+      assert.ok(slots[0] && slots[1]);
+
+      // 第三个必须排队，而不是直接失败或挤进来
+      const third = await Promise.race([supervisor.acquire(), after(20, null)]);
+      assert.strictEqual(third, null, "名额满时应当等待");
+
+      // 释放一个后等待者立刻拿到：否则并行上限会把并发永久卡死
+      slots[0]!.release();
+      const gotIt = await Promise.race([supervisor.acquire(), after(200, null)]);
+      assert.ok(gotIt, "释放名额后等待中的委派应当拿到名额");
+      slots[1]!.release();
+      gotIt.release();
+    });
+  });
 });
