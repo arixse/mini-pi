@@ -92,12 +92,14 @@ CLI 内置工具（`src/agent/tools.ts`，全部限制在 `workspaceRoot` 内）
 | `write_file` | — | 写入文件 |
 | `edit_file` | — | 精确文本替换（返回 `lineNumber` 供卡片标注 diff 位置） |
 | `bash` | — | 执行命令；单次输出上限 20000 字符并显式标注，超时可配（默认 30s，上限 10min），超时会结束整棵进程树 |
+| `task` | — | 委派子 Agent（见 3.6）；读着头绪独立的一件事时用它换 isolation，代价是一次 toolCall |
 
 - 路径统一走**词法 + 真实路径**两层校验（symlink/junction 逃逸会被拒绝），
   凭据类文件（`.env*`、私钥、`*.pem`）默认禁止读写；
-- 只读工具由注册表标记（`readOnly`），同一轮里连续的只读调用**并发执行**，
-  写类工具保持串行；审批白名单与并发判定都取自 `READ_ONLY_TOOL_NAMES` 这同一份常量，
-  避免"能并发却要确认"这类分叉；
+- **只读与并发是两个维度**：`READ_ONLY_TOOL_NAMES` 只表达"不修改 + 免确认"这唯一事实，
+  可用性安全性（能不能和别的调用同时跑）由 `RegisteredTool.concurrent` /
+  `ToolRegistry.canRunConcurrently(call)` 单独表达。两者混用过一次，就会出现"能并发却要确认"或"免确认却不该并发"。
+  循环的批次划分只看 `canRunConcurrently`：只读工具恒 true；
 - `write_file` 的结果会区分新建与覆盖（覆盖时带出原有行数），
   审批提示在覆盖已存在文件时明确标注"原内容将被替换"；
 - 输出上限一律遵循"要么完整返回，要么明确告知被截断以及如何收窄"，
@@ -139,6 +141,27 @@ CLI 侧由 `createInputScheduler` 保证**任意时刻只有一个回合在跑**
 - `/trust` 切换会话级信任模式。
 
 > 路径校验与 bash 守卫都是尽力而为的静态检查，**审批才是安全边界**。
+
+### 3.6 子 Agent 委派 (SubAgent)
+
+`task` 工具把一件相对独立的事交给子 Agent。**委派是一次工具调用，不是另一套运行时**：
+一次 `runAgentLoop`，只是换了 system prompt / messages / 工具集 / 轮次上限 / 取消信号。
+
+| 约束 | 落地方式 |
+| --- | --- |
+| 上下文隔离 | 子 Agent 的 `messages` 只有一条 goal（+ 显式 `context` 素材），不继承父历史；只回传裁剪后的结论（8000 字符上限并显式标注截断） |
+| 权限隔离 | 工具集由父注册表 `filter` 派生，不可能拿到父级没有的能力；写操作仍走同一个 `beforeToolCall`，提示带 `[子 Agent depth=N <id>]` |
+| 递归闸门 | `depth` 到顶时子注册表**不注册 `task`**——模型想递归也没有工具可调，不靠提示词自觉 |
+| 取消 | 每轮一个 `SubAgentSupervisor`，是取消树的根：父 signal → slot.signal → 子 Agent 循环，Ctrl+C 一次中断整棵子树 |
+| 落盘 | 委派本身以 toolCall/toolResult 形态随主会话落盘，子 Agent 的内部来回不进父上下文 |
+
+角色（`src/agent/roles.ts`）把**工具集 + 轮次预算 + 输出契约**绑在一起下发：
+`explore` 只读、`review` 只读且即使传 `allowWrite:true` 也不放开（契约依赖边界）、
+`implement` 带写工具且必须自述验证、`general` 为默认白板。
+
+> 并发：只读委派可并发（顺序仍由 `slots` 保证与 toolCall 一致），会改磁盘的一律串行——
+> 两个子 Agent 同时写同一文件时都返回成功，谁的改动生效取决于调度顺序。
+> 详见 [多 Agent 实现方案](multi-agent-design.md)。
 
 ## 4. 数据流
 

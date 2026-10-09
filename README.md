@@ -22,6 +22,9 @@ mini-pi/
 ├── src/
 │   ├── agent/          # AI 代理核心逻辑
 │   │   ├── loop.ts     # 主循环（Agent Loop）
+│   │   ├── subagent.ts # 子 Agent 运行时（委派预算、并行配额、取消树）
+│   │   ├── subagentTool.ts # task 工具
+│   │   ├── roles.ts    # 角色预设（explore / implement / review / general）
 │   │   ├── model.ts    # 模型封装（支持 OpenAI/Anthropic）
 │   │   ├── tools.ts    # 工具定义（read/edit/bash）
 │   │   ├── message.ts  # 消息处理
@@ -64,6 +67,11 @@ mini-pi/
 14. **Anthropic 支持** - 支持 Anthropic 官方 Messages API（`claude-opus-5-5` 等）
 15. **智谱支持** - 支持智谱开放平台的 OpenAI 兼容接口（`glm-5.3` 等 GLM 系列）
 16. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+17. **子 Agent 委派** - 通过 `task` 工具把一件相对独立的事交给子 Agent：`explore`（只读侦察）/
+    `implement`（可写且须自述验证）/ `review`（只读评审）/ `general` 四种角色。
+    子 Agent 跑在独立上下文里，只回传裁剪后的结论；写操作仍逐次审批且标明来自第几层；
+    调查类委派可以并发；Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列
+    （详见 [多 Agent 实现方案](docs/multi-agent-design.md)）
 
 ## 运行方式
 
