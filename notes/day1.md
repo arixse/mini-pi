@@ -11,7 +11,7 @@
 从零开始做一个轻量 AI 编程助手 CLI。立项时先写设计文档再写码：init 提交里
 `docs/product-design.md`（70 行）和 `docs/technical-solution.md`（90 行）与代码同时入库，
 明确了两条主线——**第一阶段做命令行交互，第二阶段做 Web 图形界面**，
-并且统一模型接口 `TeachingModel`，同时支持 OpenAI 与 Anthropic。
+并且统一模型接口 `LlmModel`，同时支持 OpenAI 与 Anthropic。
 
 ---
 
@@ -48,13 +48,13 @@ mini-pi/
 
 ### 2. 四个核心模块
 
-| 模块 | 职责 |
-|------|------|
-| `src/shared/protocol.ts` | 工具定义 `ToolDefinition`、工具结果 `ToolResult` 等共享类型，是 agent 与 cli 的契约层 |
-| `src/agent/model.ts` | 模型封装，统一 `TeachingModel` 接口，屏蔽 OpenAI / Anthropic 差异 |
-| `src/agent/tools.ts` | 工具注册表与 `read` / `edit` / `bash` 实现 |
-| `src/agent/loop.ts` | `runAgentLoop` 主循环：推理 → 工具调用 → 再推理 |
-| `src/agent/sessionStore.ts` | 会话持久化与上下文窗口控制 |
+| 模块                          | 职责                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `src/shared/protocol.ts`    | 工具定义`ToolDefinition`、工具结果 `ToolResult` 等共享类型，是 agent 与 cli 的契约层 |
+| `src/agent/model.ts`        | 模型封装，统一`TeachingModel` 接口，屏蔽 OpenAI / Anthropic 差异                       |
+| `src/agent/tools.ts`        | 工具注册表与`read` / `edit` / `bash` 实现                                          |
+| `src/agent/loop.ts`         | `runAgentLoop` 主循环：推理 → 工具调用 → 再推理                                      |
+| `src/agent/sessionStore.ts` | 会话持久化与上下文窗口控制                                                               |
 
 ### 3. 测试从第一天就写
 
@@ -72,11 +72,11 @@ init 提交里 5 个源文件各自配了 `.test.ts`（loop / message / model / 
 
 ## 结果 Result
 
-| 产出物 | 说明 |
-|--------|------|
-| 骨架代码 | 22 个文件、4328 行，四个核心模块齐备 |
-| 单元测试 | 5 组测试随代码同时入库 |
-| 设计文档 | product-design + technical-solution，明确两阶段路线 |
+| 产出物       | 说明                                                                |
+| ------------ | ------------------------------------------------------------------- |
+| 骨架代码     | 22 个文件、4328 行，四个核心模块齐备                                |
+| 单元测试     | 5 组测试随代码同时入库                                              |
+| 设计文档     | product-design + technical-solution，明确两阶段路线                 |
 | 环境变量方案 | `.env.example` + 六个环境变量（MODEL_PROVIDER / OPENAI_* / PORT） |
 
 ### 关键 Commit
