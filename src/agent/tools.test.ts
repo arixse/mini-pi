@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, taskkillSucceeded, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
+import { ToolRegistry, createToolRegistry, checkBashCommand, tokenizeCommand, classifyBashFailure, resolveBashTimeout, taskkillSucceeded, findCredentialMentions, READ_ONLY_TOOL_NAMES, MAX_READ_CHARS, MAX_READ_LINES, MAX_READ_BYTES, MAX_BASH_OUTPUT_CHARS, DEFAULT_BASH_TIMEOUT_MS, MIN_BASH_TIMEOUT_MS, MAX_BASH_TIMEOUT_MS, MAX_LIST_ENTRIES, MAX_LIST_DEPTH, MAX_GLOB_RESULTS, MAX_GREP_MATCHES } from "./tools";
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { platform, tmpdir } from "node:os";
@@ -1169,6 +1169,46 @@ describe("tools", () => {
 
     it("taskkill 返回非零（进程已不存在等）不得判为成功", () => {
       assert.strictEqual(taskkillSucceeded({ status: 128 }), false);
+    });
+  });
+
+  /**
+   * 凭据守卫在 bash 上曾经**完全失效**：只挂在 read_file / write_file /
+   * edit_file 三个文件工具上，而 bash 只查绝对路径与 `..`，
+   * 于是 `cat .env`（相对路径）直接放行——README 承诺的"默认禁止读写"
+   * 在 bash 路径上并不成立。
+   */
+  describe("bash 凭据守卫（凭据类文件）", () => {
+    it("findCredentialMentions 应认出命令里的凭据文件", () => {
+      assert.deepStrictEqual(findCredentialMentions("cat .env"), [".env"]);
+      assert.deepStrictEqual(findCredentialMentions("cat ./config/.env.local"), [".env.local"]);
+      assert.deepStrictEqual(findCredentialMentions("cat config/id_rsa"), ["id_rsa"]);
+      assert.deepStrictEqual(findCredentialMentions("cat server.pem"), ["server.pem"]);
+      assert.deepStrictEqual(findCredentialMentions("cat .git-credentials"), [
+        ".git-credentials",
+      ]);
+      // 参数形式：`--file=.env` 同样是在读凭据
+      assert.deepStrictEqual(findCredentialMentions("node app.js --file=.env"), [".env"]);
+    });
+
+    it("findCredentialMentions 不应误伤同形名字", () => {
+      assert.deepStrictEqual(findCredentialMentions("npm i dotenv"), []);
+      assert.deepStrictEqual(findCredentialMentions("cat foo.env"), []);
+      // 模板文件不含真实凭据，允许访问
+      assert.deepStrictEqual(findCredentialMentions("cat .env.example"), []);
+      assert.deepStrictEqual(findCredentialMentions("grep -r process.env src"), []);
+    });
+
+    it("bash 命令涉及凭据文件时应被拒绝", () => {
+      assert.throws(() => checkBashCommand("cat .env", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("cat .env.production", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("head -20 id_rsa", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("rm .env", testDir), /credential file/);
+    });
+
+    it("凭据守卫不得影响普通命令", () => {
+      assert.doesNotThrow(() => checkBashCommand("cat .env.example", testDir));
+      assert.doesNotThrow(() => checkBashCommand("ls -la", testDir));
     });
   });
 

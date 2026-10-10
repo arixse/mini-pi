@@ -1131,6 +1131,11 @@ function bashTool(workspaceRoot: string): RegisteredTool {
  * 这里是「尽力而为的守卫 + 明确报错」，真正的防线是执行前的用户审批
  * （`beforeToolCall`，见 src/cli/approval.ts）。
  *
+ * 除了路径逃逸，这里还复用 {@link isCredentialFile} 拦住凭据类文件：
+ * 此前凭据保护只挂在 read_file / write_file / edit_file 上，`cat .env`
+ * （相对路径、既非绝对路径也不含 `..`）会**完全绕过**检查，README 里
+ * "默认禁止读写"的承诺在 bash 路径上并不成立。
+ *
  * 相比旧实现（按空白切分 token + 正则匹配 token 开头）的关键改进：
  * - 先做引号感知的词法切分并去掉引号/转义，`cat "D:\secret.txt"` 不再漏检；
  * - 同时扫描整条命令，能发现写在字符串内部拼接出来的绝对路径；
@@ -1142,6 +1147,15 @@ export function checkBashCommand(command: string, workspaceRoot: string): void {
     throw new Error(
       "Bash command references a home-directory variable, which is outside the workspace: " +
         command.match(HOME_REFERENCE_PATTERN)![0],
+    );
+  }
+
+  const credentials = findCredentialMentions(command);
+  if (credentials.length > 0) {
+    throw new Error(
+      `Bash command touches credential file(s): ${credentials.join(", ")}. ` +
+        `凭据类文件（.env、私钥、*.pem、.git-credentials）默认禁止读写；` +
+        `如确需处理，请先向用户说明并取得同意。`,
     );
   }
 
@@ -1339,6 +1353,40 @@ export function isCredentialFile(filePath: string): boolean {
     return false;
   }
   return CREDENTIAL_FILE_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+/** 命令里"片段"的分隔符：shell 元字符与引号 */
+const COMMAND_FRAGMENT_SPLIT = /[\s"'`;|&<>()$]+/;
+/** 片段内部再按这些字符切开：`--file=.env`、`config/.env` 都要能命中 */
+const FRAGMENT_INNER_SPLIT = /[=:\\/]+/;
+
+/**
+ * 找出命令里提到的凭据类文件。
+ *
+ * 做法上刻意"宁可多报"：把命令按 shell 元字符切成片段，片段再按
+ * `= : \ /` 切开，逐段用 {@link isCredentialFile} 判定。
+ * 这样 `cat .env`、`cat ./config/.env`、`--file=.env`、`grep x .env`
+ * 都能命中，而 `dotenv`、`foo.env` 这类同形名字不会误伤
+ * （模板文件 .env.example 由 isCredentialFile 排除）。
+ *
+ * 静态检查拦不住 `node -e "..."` 之类的构造，这里只是第一道闸，
+ * 最终防线仍是执行前的用户审批。
+ */
+export function findCredentialMentions(command: string): string[] {
+  const hits = new Set<string>();
+
+  for (const fragment of command.split(COMMAND_FRAGMENT_SPLIT)) {
+    if (fragment === "") {
+      continue;
+    }
+    for (const piece of fragment.split(FRAGMENT_INNER_SPLIT)) {
+      if (piece !== "" && isCredentialFile(piece)) {
+        hits.add(piece);
+      }
+    }
+  }
+
+  return [...hits];
 }
 
 function assertNotCredentialFile(filePath: string, workspaceRoot: string): void {
