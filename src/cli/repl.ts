@@ -36,6 +36,7 @@ import { createToolApproval } from "./approval";
 import { createStatusLine, StatusController } from "./status";
 import { createRenderContext, followTerminalWidth, renderLastToolOutput, renderToolCall, renderSubAgentHeader, renderSubAgentFooter, RenderContext, ToolCallView } from "./render";
 import { padToWidth } from "./width";
+import { printSeparator } from "./ui";
 import { ExitCoordinator } from "./exit";
 
 /**
@@ -736,7 +737,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
     try {
       console.log("");
-      console.log(chalk.dim("─".repeat(60)));
+      printSeparator();
       console.log("");
 
       // 压缩要调模型生成摘要，可能静默数秒：先给出可见状态
@@ -801,7 +802,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       usageTracker.recordTurn(result.newMessages);
 
       console.log("");
-      console.log(chalk.dim("─".repeat(60)));
+      printSeparator();
       console.log("");
     } catch (error) {
       status.stop();
@@ -873,6 +874,8 @@ export function switchSession(options: ReplOptions, target: string): boolean {
   store.syncContext(options.messages);
   // 换会话后用量从头计：统计的是"当前会话"而不是"本次进程"
   options.usageTracker?.reset();
+  // 工具卡片缓存与 /last 的上一条输出同样属于旧会话
+  resetToolRenderState();
   return true;
 }
 
@@ -1137,6 +1140,8 @@ export async function appendAgentMessages(
 export async function clearSession(options: ReplOptions): Promise<void> {
   options.messages.length = 0;
   options.usageTracker?.reset();
+  // /clear 之后 /last 不该还能翻出清空前的工具输出
+  resetToolRenderState();
   await options.sessionStore?.reset();
 }
 
@@ -1154,6 +1159,7 @@ export function startNewSession(options: ReplOptions): boolean {
   options.sessionStore = created;
   created.syncContext(options.messages);
   options.usageTracker?.reset();
+  resetToolRenderState();
   return true;
 }
 
@@ -1163,12 +1169,31 @@ const toolStartCache = new Map<
   { toolName: string; args: Record<string, unknown>; startedAt: number }
 >();
 
+/**
+ * 取消 / 中断路径下 `tool_execution_end` 可能永远不来，
+ * 缓存条目就会一直挂着；这里给个上限，超出按插入顺序丢弃最早的。
+ */
+const MAX_TOOL_START_CACHE = 200;
+
 // 最近一次工具调用（供 /last 查看完整输出）。
 // 与 toolStartCache 一样是会话级状态；后续可整体收进一个渲染上下文对象。
 let lastToolCall: ToolCallView | null = null;
 
 export function getLastToolCall(): ToolCallView | null {
   return lastToolCall;
+}
+
+/**
+ * 丢弃工具渲染的会话级状态。
+ *
+ * 这些状态（start 缓存、`/last` 的上一条输出）**属于某个会话**：
+ * `/new`、`/clear`、`/switch` 之后它们都成了上一个会话的残留——
+ * 用户在新会话里敲 `/last`，看到的是上一个会话读过的文件，
+ * 而新会话里其实还没有任何工具调用。
+ */
+export function resetToolRenderState(): void {
+  toolStartCache.clear();
+  lastToolCall = null;
 }
 
 /** 状态行里的工具摘要：bash 用命令，检索类用模式，其余优先用路径 */
@@ -1299,6 +1324,13 @@ export function printToolInfo(
   context: RenderContext = createRenderContext(),
 ): void {
   if (event.type === "tool_execution_start") {
+    // 取消路径下可能收不到 end，缓存只增不减；超出上限先丢最早的
+    if (toolStartCache.size >= MAX_TOOL_START_CACHE) {
+      const oldest = toolStartCache.keys().next().value;
+      if (oldest !== undefined) {
+        toolStartCache.delete(oldest);
+      }
+    }
     // 缓存 start 事件信息，等待 end 事件一起输出
     toolStartCache.set(event.toolCallId, {
       toolName: event.toolName,

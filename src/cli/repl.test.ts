@@ -18,9 +18,11 @@ import {
   createAgentEventHandler,
   createInputScheduler,
   formatSessionList,
+  getLastToolCall,
   parseSubAgentCommand,
   printLastToolOutput,
   printToolInfo,
+  resetToolRenderState,
   resolveContextBudget,
   sessionStatusEntries,
   startNewSession,
@@ -1387,12 +1389,98 @@ describe("session context wiring", () => {
       captured.push(args.map(String).join(" "));
     };
     try {
+      resetToolRenderState();
       printLastToolOutput("0");
     } finally {
       console.log = originalLog;
     }
-    // 上一条工具输出已由前一个用例写入，这里只验证不会抛错且输出非空
-    assert.ok(captured.length > 0);
+    assert.ok(
+      captured.join("\n").includes("还没有工具调用记录"),
+      `清空后应给出提示，实际：${captured.join("\n")}`,
+    );
+  });
+
+  /**
+   * 回归用例：`/last` 的上一条工具输出是**模块级**状态，
+   * 换会话 / clear 之后不重置，用户在新会话里敲 `/last`
+   * 会看到上一个会话读过的文件。
+   */
+  it("切会话与 /clear 后 /last 不应再翻出旧会话的工具输出", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    printToolInfo(
+      {
+        type: "tool_execution_end",
+        toolCallId: "stale-1",
+        toolName: "read_file",
+        result: {
+          content: [{ type: "text", text: "old session content" }],
+          details: { path: "old.txt" },
+        },
+        isError: false,
+      },
+      PLAIN_CONTEXT,
+    );
+    assert.ok(getLastToolCall(), "先制造一条旧的工具输出");
+
+    await clearSession(options);
+    assert.strictEqual(getLastToolCall(), null, "/clear 后不应有上一条工具输出");
+
+    printToolInfo(
+      {
+        type: "tool_execution_end",
+        toolCallId: "stale-2",
+        toolName: "read_file",
+        result: { content: [{ type: "text", text: "x" }], details: {} },
+        isError: false,
+      },
+      PLAIN_CONTEXT,
+    );
+    options.onSwitchSession = () => new JsonlSessionStore(sessionFile, testDir);
+    assert.strictEqual(switchSession(options, "1"), true);
+    assert.strictEqual(getLastToolCall(), null, "/switch 后不应有上一条工具输出");
+
+    resetToolRenderState();
+  });
+
+  it("toolStartCache 不会因为收不到 end 事件而无限增长", () => {
+    // 取消路径下 end 事件可能永远不来：缓存必须有上限，否则整场会话都在泄漏
+    for (let i = 0; i < 240; i++) {
+      printToolInfo(
+        {
+          type: "tool_execution_start",
+          toolCallId: `orphan-${i}`,
+          toolName: "read_file",
+          args: { path: `f-${i}.ts` },
+        },
+        PLAIN_CONTEXT,
+      );
+    }
+    // 只喂 start 不喂 end，再喂一次 end 时应能正常出卡片（不该崩、不该残留）
+    const captured: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      captured.push(args.map(String).join(" "));
+    };
+    try {
+      printToolInfo(
+        {
+          type: "tool_execution_end",
+          toolCallId: "orphan-239",
+          toolName: "read_file",
+          result: { content: [{ type: "text", text: "ok" }], details: {} },
+          isError: false,
+        },
+        PLAIN_CONTEXT,
+      );
+    } finally {
+      console.log = originalLog;
+    }
+    const text = captured.join("\n");
+    assert.ok(text.includes("f-239.ts"), `卡片应带上 start 缓存的参数：${text}`);
+    assert.ok(text.includes("ok"), "end 事件应照常出卡片");
+    resetToolRenderState();
   });
 
   it("summarizeToolCall 应为不同工具挑选有信息量的参数", () => {
