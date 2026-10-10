@@ -1,4 +1,5 @@
 import { Provider, buildModelsUrl } from "./index";
+import { logger } from "../shared/logger";
 
 export class OpenAIProvider implements Provider {
   private baseUrl: string = "https://api.openai.com/v1";
@@ -55,7 +56,7 @@ export class OpenAIProvider implements Provider {
 
       return [];
     } catch (error) {
-      console.error("Failed to get model list:", error);
+      logger.error("Failed to get model list:", error);
       throw error;
     }
   }

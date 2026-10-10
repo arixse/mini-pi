@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { logger } from "../shared/logger";
 
 /**
  * Skill 元数据（从 SKILL.md frontmatter 解析）
@@ -139,11 +140,11 @@ export class SkillLoader {
           }
         } catch (error) {
           // 跳过无法读取的 skill
-          console.error(`Failed to read skill ${skillFile}:`, error);
+          logger.warn(`Failed to read skill ${skillFile}:`, error);
         }
       }
     } catch (error) {
-      console.error(`Failed to scan skill directory ${dirPath}:`, error);
+      logger.warn(`Failed to scan skill directory ${dirPath}:`, error);
     }
 
     return results;
@@ -200,7 +201,7 @@ export class SkillLoader {
       this.contentCache.set(skillName, skill);
       return skill;
     } catch (error) {
-      console.error(`Failed to load skill ${skillName}:`, error);
+      logger.warn(`Failed to load skill ${skillName}:`, error);
       return null;
     }
   }

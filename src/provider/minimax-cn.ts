@@ -1,4 +1,5 @@
 import { Provider } from "./index";
+import { logger } from "../shared/logger";
 export class MiniMaxCnProvider implements Provider {
   private baseUrl: string = "https://api.minimax.cn/anthropic";
   private sdkType: string = "Anthropic";
@@ -57,7 +58,7 @@ export class MiniMaxCnProvider implements Provider {
       
       return [];
     } catch (error) {
-      console.error("Failed to get model list:", error);
+      logger.error("Failed to get model list:", error);
       throw error;
     }
   }

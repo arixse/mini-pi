@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadPrivateJsonFile, writePrivateJsonFileAtomic } from "./private-json-file";
+import { logger } from "../shared/logger";
 
 type Settings = {
   defaultModel?: string; // 格式: [模型供应商]/[模型名称]
@@ -47,7 +48,7 @@ export class SettingsStore {
         this.settings = {};
         this.corruptReason = result.reason;
         this.corruptBackupPath = result.backupPath ?? null;
-        console.error(
+        logger.error(
           `settings.json 无法解析（${result.reason}）` +
             (result.backupPath ? `，原文件已备份为 ${result.backupPath}` : "") +
             "。为避免覆盖原有配置，本次运行将拒绝写入；" +
@@ -55,7 +56,7 @@ export class SettingsStore {
         );
       }
     } catch (error) {
-      console.error("Failed to initialize settings store:", error);
+      logger.error("Failed to initialize settings store:", error);
       this.settings = {};
     }
 
@@ -92,7 +93,7 @@ export class SettingsStore {
       // 原子写：先写临时文件再 rename，避免半截 JSON
       await writePrivateJsonFileAtomic(this.settingsPath, this.settings);
     } catch (error) {
-      console.error("Failed to persist settings:", error);
+      logger.error("Failed to persist settings:", error);
       throw error;
     }
   }

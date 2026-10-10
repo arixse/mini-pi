@@ -4,6 +4,7 @@ import { appendFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createTextContent, isTextContent } from "./message";
 import { LlmModel } from "./model";
+import { logger } from "../shared/logger";
 
 type MessageEntry = Extract<SessionEntry, { type: "message" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
@@ -84,7 +85,7 @@ async function summarizeEntries(
     if (signal?.aborted) {
       throw error;
     }
-    console.error("Failed to generate summary with model:", error);
+    logger.error("Failed to generate summary with model:", error);
     throw error;
   }
 }

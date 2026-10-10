@@ -14,7 +14,8 @@
     "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test"
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run test:coverage"
   },
   "keywords": [],
   "author": "",

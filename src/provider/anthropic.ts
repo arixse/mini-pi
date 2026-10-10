@@ -1,4 +1,5 @@
 import { Provider } from "./index";
+import { logger } from "../shared/logger";
 
 /** 模型列表接口要求的 API 版本号（Anthropic 所有接口都要带） */
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -72,7 +73,7 @@ export class AnthropicProvider implements Provider {
 
       return [];
     } catch (error) {
-      console.error("Failed to get model list:", error);
+      logger.error("Failed to get model list:", error);
       throw error;
     }
   }

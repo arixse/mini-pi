@@ -85,7 +85,11 @@ pnpm build:cli
 # 类型检查 / 测试 / 提交前自检
 pnpm typecheck
 pnpm test
-pnpm check
+pnpm test:coverage   # 带覆盖率门槛（行 85% / 分支 85% / 函数 90%），低于门槛即失败
+pnpm check           # typecheck + test:coverage
+
+# 诊断日志一律写 stderr（stdout 留给对话正文），级别可用环境变量调整
+MINI_PI_LOG_LEVEL=debug pnpm dev:cli
 ```
 
 > 第二阶段（Web 界面 + API 服务）尚未实现，因此 `dev:server` / `dev:web` / `build`

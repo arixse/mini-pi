@@ -7,8 +7,9 @@
  * 本文件不做任何业务实现，单元测试也不会 import 本文件。
  */
 import { main } from "./index";
+import { logger } from "../shared/logger";
 
 main().catch((error) => {
-  console.error(error);
+  logger.error(error);
   process.exit(1);
 });

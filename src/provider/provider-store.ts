@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadPrivateJsonFile, writePrivateJsonFileAtomic } from "./private-json-file";
+import { logger } from "../shared/logger";
 
 type ProviderConfig = {
   apiKey?: string;
@@ -43,7 +44,7 @@ export class ProviderStore {
         this.data = {};
         this.corruptReason = result.reason;
         this.corruptBackupPath = result.backupPath ?? null;
-        console.error(
+        logger.error(
           `auth.json 无法解析（${result.reason}）` +
             (result.backupPath ? `，原文件已备份为 ${result.backupPath}` : "") +
             "。为避免覆盖掉其它服务商的密钥，本次运行将拒绝写入；" +
@@ -51,7 +52,7 @@ export class ProviderStore {
         );
       }
     } catch (error) {
-      console.error("Failed to initialize provider store:", error);
+      logger.error("Failed to initialize provider store:", error);
       this.data = {};
     }
 
@@ -88,7 +89,7 @@ export class ProviderStore {
       // 原子写：先写临时文件再 rename，避免半截 JSON，也避免并发覆盖
       await writePrivateJsonFileAtomic(this.storePath, this.data);
     } catch (error) {
-      console.error("Failed to persist provider store:", error);
+      logger.error("Failed to persist provider store:", error);
       throw error;
     }
   }

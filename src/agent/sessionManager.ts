@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, platform } from "node:os";
+import { logger } from "../shared/logger";
 import { JsonlSessionStore } from "./sessionStore";
 import { LlmModel } from "./model";
 import { SkillLoader, SkillSource, SkillWithSource } from "./skillLoader";
@@ -210,7 +211,7 @@ export class SessionManager {
         return readFileSync(filePath, "utf8");
       }
     } catch (error) {
-      console.error(`读取 ${filePath} 失败:`, error);
+      logger.error(`读取 ${filePath} 失败:`, error);
     }
     return "";
   }

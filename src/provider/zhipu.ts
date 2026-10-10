@@ -1,4 +1,5 @@
 import { Provider, buildModelsUrl } from "./index";
+import { logger } from "../shared/logger";
 
 /**
  * 智谱（Zhipu / 开放平台 BigModel）提供商。
@@ -71,7 +72,7 @@ export class ZhipuProvider implements Provider {
 
       return [];
     } catch (error) {
-      console.error("Failed to get model list:", error);
+      logger.error("Failed to get model list:", error);
       throw error;
     }
   }
