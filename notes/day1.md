@@ -1,169 +1,116 @@
-# Day 1 - 项目初始化
+# Day 1 - 项目初始化与骨架搭建
 
-> 日期：2026-09-12  
-> Commit: `7096651` (init)
+> 日期：**2026-09-12**
+> Commit 范围：`7096651` ~ `7096651`（1 个提交）
+> 下一篇：[Day 2 - Provider 抽象层与凭据配置](./day2.md)
 
 ---
 
 ## 背景 Situation
 
-项目 "mini-pi" 需要从零开始构建。这是一个 AI 编程助手 CLI 工具，需要具备与 LLM 模型交互、文件操作、会话管理、工具调用等核心能力。项目使用 TypeScript + Node.js 技术栈。
+从零开始做一个轻量 AI 编程助手 CLI。立项时先写设计文档再写码：init 提交里
+`docs/product-design.md`（70 行）和 `docs/technical-solution.md`（90 行）与代码同时入库，
+明确了两条主线——**第一阶段做命令行交互，第二阶段做 Web 图形界面**，
+并且统一模型接口 `TeachingModel`，同时支持 OpenAI 与 Anthropic。
 
 ---
 
 ## 任务 Task
 
-搭建项目的基础架构，实现：
-- 项目初始化与基础配置
-- Provider 模块（LLM 提供商抽象）
-- 命令行交互基础功能
+搭出可运行的骨架，覆盖模型调用、工具调用、主循环、会话存储四块：
+
+- 模型层：封装 OpenAI / Anthropic API，统一接口，支持流式与工具调用
+- 工具层：`read` / `edit` / `bash` 三个基础工具
+- 会话层：对话历史管理 + 上下文窗口控制 + 持久化
+- 主循环：接收输入 → 模型推理 → 工具调用 → 返回结果
 
 ---
 
 ## 行动 Action
 
-### 1. 项目结构搭建
-
-```bash
-pnpm init
-pnpm add typescript vite @types/node
-```
-
-创建了完整的项目结构：
+### 1. 目录结构
 
 ```
 mini-pi/
 ├── src/
-│   ├── agent/        # Agent 核心逻辑
-│   ├── cli/          # 命令行交互
-│   ├── provider/     # 模型提供商
-│   └── shared/       # 共享类型
-├── bin/              # 可执行入口
-├── docs/             # 文档
-├── AGENTS.md         # 项目代理规则
+│   ├── agent/           # AI 代理核心逻辑
+│   │   ├── loop.ts          # 主循环
+│   │   ├── model.ts         # 模型封装
+│   │   ├── tools.ts         # 工具定义
+│   │   ├── message.ts       # 消息构造
+│   │   └── sessionStore.ts  # 会话存储
+│   └── shared/
+│       └── protocol.ts      # 通信协议
+├── docs/                # 设计文档 + 技术方案
+├── AGENTS.md
 └── package.json
 ```
 
-### 2. Provider 模块核心实现
+### 2. 四个核心模块
 
-**文件：** `src/provider/index.ts`
+| 模块 | 职责 |
+|------|------|
+| `src/shared/protocol.ts` | 工具定义 `ToolDefinition`、工具结果 `ToolResult` 等共享类型，是 agent 与 cli 的契约层 |
+| `src/agent/model.ts` | 模型封装，统一 `TeachingModel` 接口，屏蔽 OpenAI / Anthropic 差异 |
+| `src/agent/tools.ts` | 工具注册表与 `read` / `edit` / `bash` 实现 |
+| `src/agent/loop.ts` | `runAgentLoop` 主循环：推理 → 工具调用 → 再推理 |
+| `src/agent/sessionStore.ts` | 会话持久化与上下文窗口控制 |
 
-```typescript
-// 定义 Provider 接口
-export interface Provider {
-  name: string;
-  apiKey: string;
-  baseUrl: string;
-  models: string[];
-  createModel(model: string): Model;
-}
+### 3. 测试从第一天就写
 
-// DeepSeek Provider 实现
-export class DeepSeekProvider implements Provider {
-  // ...
-}
+init 提交里 5 个源文件各自配了 `.test.ts`（loop / message / model / sessionStore / tools），
+这是后面几轮"大范围重构还能保持 typecheck 全绿"的基础。
 
-// OpenAI Provider 实现
-export class OpenAIProvider implements Provider {
-  // ...
-}
-```
+### 4. 第二阶段预留
 
-### 3. Provider Store 凭据管理
-
-**文件：** `src/provider/provider-store.ts`
-
-实现凭据的安全存储：
-- 使用 `~/.mini-pi/` 目录存储
-- 文件权限设置为 `0600`（仅所有者可读写）
-- 支持多个 Provider 的凭据管理
-
-```typescript
-export class ProviderStore {
-  private credentialsPath = path.join(os.homedir(), '.mini-pi', 'credentials.json');
-  
-  // 保存凭据时设置安全权限
-  fs.writeFileSync(path, data, { mode: 0o600 });
-}
-```
-
-### 4. Settings 配置管理
-
-**文件：** `src/provider/settings-store.ts`
-
-```typescript
-interface Settings {
-  defaultModel?: string;
-  defaultProvider?: string;
-}
-```
-
-支持通过 `settings.json` 配置默认模型和提供商。
-
-### 5. CLI 命令实现
-
-**文件：** `src/cli/index.ts`
-
-实现了 `/login` 和 `/model` 命令：
-
-```typescript
-// /login - 保存 LLM 提供商 apiKey
-// /model - 选择模型供应商和模型
-```
+`package.json` 装了 Express / React / Vite 等 Web 栈依赖，`index.html` 指向
+`/src/client/main.tsx`、`vite.config.ts` 把请求代理到 4317 端口。
+**这两条后来成为长期遗留问题**：`src/client` / `src/server` 从未创建，
+8 个依赖在 `src/` 中零引用，直到 Day 15 的代码审查才被正式点名。
 
 ---
 
 ## 结果 Result
 
-### 产出
-
 | 产出物 | 说明 |
 |--------|------|
-| Provider 抽象层 | 支持 DeepSeek、OpenAI 等多 Provider 灵活切换 |
-| 凭据安全管理 | 文件落盘即收紧权限 (POSIX 0600) |
-| 配置系统 | 支持 settings.json 设置默认模型 |
-| CLI 命令 | `/login` 和 `/model` 命令完成凭据和模型选择 |
+| 骨架代码 | 22 个文件、4328 行，四个核心模块齐备 |
+| 单元测试 | 5 组测试随代码同时入库 |
+| 设计文档 | product-design + technical-solution，明确两阶段路线 |
+| 环境变量方案 | `.env.example` + 六个环境变量（MODEL_PROVIDER / OPENAI_* / PORT） |
 
-### 架构亮点
+### 关键 Commit
 
 ```
-┌─────────────────────────────────────┐
-│            CLI Layer                │
-│   (/login, /model, /new, /exit...)  │
-├─────────────────────────────────────┤
-│            Agent Core               │
-│   (Loop, Session, Context...)       │
-├─────────────────────────────────────┤
-│          Provider Layer             │
-│   (DeepSeek, OpenAI, MiniMax...)    │
-└─────────────────────────────────────┘
+7096651  init
 ```
 
-### 经验总结
+---
 
-1. **Provider 抽象的重要性**：通过统一的 Provider 接口，可以灵活支持多个 LLM 提供商，未来扩展成本低
+## 经验总结
 
-2. **凭据安全**：凭据文件必须设置严格的文件权限（0600），防止泄露
+### 1. 先写设计文档，后写码
 
-3. **配置与代码分离**：将默认配置项放在 settings.json，便于用户自定义而不改代码
+init 提交里文档先于代码成型，好处是技术选型（TypeScript / pnpm / 统一 `TeachingModel` 接口）
+在写第一行码之前就定死了，避免了后面推翻重来。
 
-4. **TypeScript 严格类型**：从一开始就使用严格的 TypeScript 类型定义，减少后续重构成本
+### 2. 契约层要先独立出来
+
+`src/shared/protocol.ts` 单独成层，让 agent 与 cli 之间只依赖类型而非实现。
+后面 Day 16 往 protocol 追加 `subagent_start` / `subagent_end` 事件时，
+只要"一律追加在联合类型末尾、不改既有成员"，老代码就一行都不用动。
+
+### 3. 反面教训：为"第二阶段"提前装依赖
+
+Express / React / Vite / lucide-react / concurrently / dotenv 这一批依赖是给
+**尚未开始的第二阶段**准备的，结果在 `src/` 里零引用躺了近一个月，
+期间还不断出现在审查清单里。
+**不为没开工的计划预先铺依赖**——需要的时候再装，成本远低于长期维护空壳。
 
 ---
 
 ## 后续关联
 
-Day 1 建立的基础架构在后续开发中被持续扩展：
-
-- **Day 2-3**: 扩展 CLI 命令（/new, /exit, /status 等）和会话管理
-- **Day 4+**: 添加更多工具（read_file, write_file, bash, glob, grep）
-- **Day 5+**: 完善安全加固和交互体验
-
----
-
-## 关键 Commit
-
-```
-7096651 - init
-```
-
+- **Day 2**：Provider 抽象层落地，模型的 apiKey / baseUrl / model 全部改为从 provider 取
+- **Day 3**：`/new` 会话命令、AGENTS.md 固定上下文、命令统一为 `/` 前缀
+- **Day 15**：第二阶段空壳依赖被正式列为待清理项
