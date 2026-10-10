@@ -20,6 +20,8 @@ import {
   MAX_PARALLEL_SUBAGENTS,
   MAX_SUBAGENT_DEPTH,
   SUBAGENT_RESULT_MAX_CHARS,
+  AcquireResult,
+  SubAgentSlot,
   SubAgentSupervisor,
   buildSubAgentSystemPrompt,
   buildSubAgentUserMessage,
@@ -231,44 +233,185 @@ describe("subagent", () => {
   });
 
   describe("SubAgentSupervisor", () => {
-    it("预算耗尽后 acquire 返回 null（而不是静默放行）", async () => {
+    it("预算耗尽后 acquire 明确失败（而不是静默放行）", async () => {
       const supervisor = new SubAgentSupervisor({ maxDelegations: 2 });
       const first = await supervisor.acquire();
       const second = await supervisor.acquire();
       const third = await supervisor.acquire();
 
-      assert.ok(first && second, "前两次应当成功");
-      assert.strictEqual(third, null, "超出预算必须给出明确信号");
+      assert.ok(first.ok && second.ok, "前两次应当成功");
+      assert.deepStrictEqual(third, {
+        ok: false,
+        reason: "budget_exhausted",
+      });
       assert.strictEqual(supervisor.remaining, 0);
       assert.strictEqual(supervisor.stats.delegations, 2);
 
-      first.release();
-      second.release();
+      first.slot.release();
+      second.slot.release();
+    });
+
+    /**
+     * A1 的核心回归用例：并发申请数必须**越过** `maxDelegations`，
+     * 否则走不到被绕过的那条路径。
+     *
+     * 此前有一条同名用例（"不会挤爆预算"）只申请了 3 次、上限 8，
+     * 恰好停在安全的一侧，于是缺陷一直是绿的。
+     *
+     * @see docs/multi-agent-fix-plan.md §A1
+     */
+    it("并发申请数超过预算时，预算不再被突破", async () => {
+      const supervisor = new SubAgentSupervisor({
+        maxDelegations: 8,
+        maxParallel: 4,
+      });
+
+      const granted: SubAgentSlot[] = [];
+      const outcomes: AcquireResult[] = [];
+      const pending = Array.from({ length: 12 }, () =>
+        supervisor.acquire().then((result) => {
+          outcomes.push(result);
+          if (result.ok) {
+            granted.push(result.slot);
+          }
+          return result;
+        }),
+      );
+
+      /**
+       * 模拟真实委派：拿到名额的一批跑完后 release，排队的才补位。
+       *
+       * 不是"一次性同步释放"，那样会让 running 计数先减到负数、
+       * 掩盖真正的放行逻辑。12 次申请 > 8 次预算，正是线上会被绕过的形态。
+       */
+      for (let guard = 0; guard < 20 && outcomes.length < 12; guard += 1) {
+        await after(1, null);
+        for (const slot of granted.splice(0)) {
+          slot.release();
+        }
+      }
+      if (outcomes.length < 12) {
+        assert.fail(`还有委派没有收尾：${outcomes.length}/12`);
+      }
+
+      const okCount = outcomes.filter((result) => result.ok).length;
+      const denied = outcomes.filter((result) => !result.ok);
+
+      assert.strictEqual(okCount, 8, `恰好发放 8 个名额，实际 ${okCount}`);
+      assert.strictEqual(denied.length, 4);
+      for (const result of denied) {
+        assert.deepStrictEqual(result, {
+          ok: false,
+          reason: "budget_exhausted",
+        });
+      }
+      assert.strictEqual(supervisor.stats.delegations, 8, "记账不能超过预算");
+      assert.strictEqual(supervisor.remaining, 0);
+      await Promise.all(pending);
+    });
+
+    /**
+     * A2：名额满时排队，此时 Ctrl+C（父信号 abort）要能立刻收尾。
+     *
+     * 修复前等待只由 release 唤醒，父取消对排队者不可见——
+     * 用户看到"已请求取消"，但这一条委派要等运行中的子 Agent 自己结束。
+     */
+    it("排队中的委派感知父信号取消并立刻返回 cancelled", async () => {
+      const parent = new AbortController();
+      const supervisor = new SubAgentSupervisor({
+        parentSignal: parent.signal,
+        maxParallel: 2,
+        maxDelegations: 8,
+      });
+      const running = [
+        await supervisor.acquire(),
+        await supervisor.acquire(),
+      ];
+      assert.ok(running[0].ok && running[1].ok);
+
+      let settled = false;
+      const queued = supervisor.acquire().then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await after(10, null);
+      assert.strictEqual(settled, false, "名额已满，应当排队");
+
+      parent.abort();
+      const result = await Promise.race([queued, after(200, null)]);
+      assert.deepStrictEqual(
+        result,
+        { ok: false, reason: "cancelled" },
+        "取消后必须立刻给出明确答复，不能等到槽位释放",
+      );
+      assert.strictEqual(
+        getEventListeners(parent.signal, "abort").length,
+        0,
+        // abort 派发后 once 监听器会被自动摘除；关键是"一个都不剩"——
+        // 等待期间注册的监听器若没随唤醒摘掉，这里会大于 0
+        "取消之后不能残留任何监听者",
+      );
+
+      running[0].slot.release();
+      running[1].slot.release();
+      assert.strictEqual(getEventListeners(parent.signal, "abort").length, 0);
+    });
+
+    it("排队者被名额唤醒后不残留监听器（等待期的监听是随用随注册的）", async () => {
+      const parent = new AbortController();
+      const supervisor = new SubAgentSupervisor({
+        parentSignal: parent.signal,
+        maxParallel: 1,
+      });
+      const busy = await supervisor.acquire();
+      assert.ok(busy.ok);
+
+      let woken = false;
+      const queued = supervisor.acquire().then((result) => {
+        woken = true;
+        return result;
+      });
+      await after(10, null);
+      assert.strictEqual(woken, false);
+
+      busy.slot.release();
+      const got = await Promise.race([queued, after(200, null)]);
+      assert.ok(got && got.ok, "释放名额后应当放行");
+
+      assert.strictEqual(
+        getEventListeners(parent.signal, "abort").length,
+        1,
+        "只剩正在跑的槽位自己那一个监听",
+      );
+      got.slot.release();
+      assert.strictEqual(getEventListeners(parent.signal, "abort").length, 0);
     });
 
     it("release 幂等：重复释放不会让并行名额凭空增加", async () => {
       const supervisor = new SubAgentSupervisor({ maxParallel: 1 });
       const first = await supervisor.acquire();
-      assert.ok(first);
-      first.release();
-      first.release();
+      assert.ok(first.ok);
+      first.slot.release();
+      first.slot.release();
 
       const second = await supervisor.acquire();
-      assert.ok(second, "重复 release 后仍应能拿到名额");
+      assert.ok(second.ok, "重复 release 后仍应能拿到名额");
       // running 没被减成负数的话，第三个必须排队
       const third = await Promise.race([
         supervisor.acquire(),
         after(20, null),
       ]);
       assert.strictEqual(third, null);
-      second.release();
+      second.slot.release();
     });
 
     it("父信号 abort 会级联中断正在跑的槽位", async () => {
       const parent = new AbortController();
       const supervisor = new SubAgentSupervisor({ parentSignal: parent.signal });
-      const slot = await supervisor.acquire();
-      assert.ok(slot);
+      const acquired = await supervisor.acquire();
+      assert.ok(acquired.ok);
+      const slot = acquired.slot;
       assert.strictEqual(slot.signal.aborted, false);
 
       parent.abort();
@@ -276,22 +419,30 @@ describe("subagent", () => {
       slot.release();
     });
 
-    it("父信号已提前取消时，槽位一开始就是 aborted", async () => {
+    /**
+     * 本轮已取消时不再发放名额。
+     *
+     * 旧行为是发一个"已 abort 的槽位"，子 Agent 仍会真的跑起来
+     * （占一次预算、可能还烧一轮 token）后立刻被打断；
+     * 直接拒绝既不花预算，也让模型立刻知道这不是它派多了。
+     */
+    it("父信号已提前取消时直接拒绝，不再占预算", async () => {
       const parent = new AbortController();
       parent.abort();
       const supervisor = new SubAgentSupervisor({ parentSignal: parent.signal });
-      const slot = await supervisor.acquire();
-      assert.ok(slot);
-      assert.strictEqual(slot.signal.aborted, true);
-      slot.release();
+      const acquired = await supervisor.acquire();
+
+      assert.deepStrictEqual(acquired, { ok: false, reason: "cancelled" });
+      assert.strictEqual(supervisor.stats.delegations, 0, "取消不应占用预算");
+      assert.strictEqual(getEventListeners(parent.signal, "abort").length, 0);
     });
 
     it("release 后不再监听父信号（避免监听器泄漏）", async () => {
       const parent = new AbortController();
       const supervisor = new SubAgentSupervisor({ parentSignal: parent.signal });
-      const slot = await supervisor.acquire();
-      assert.ok(slot);
-      slot.release();
+      const acquired = await supervisor.acquire();
+      assert.ok(acquired.ok);
+      acquired.slot.release();
 
       assert.strictEqual(getEventListeners(parent.signal, "abort").length, 0);
       parent.abort();
@@ -312,7 +463,7 @@ describe("subagent", () => {
       const supervisor = new SubAgentSupervisor({ maxParallel: 2 });
       const a = await supervisor.acquire();
       const b = await supervisor.acquire();
-      assert.ok(a && b);
+      assert.ok(a.ok && b.ok);
 
       let acquired = false;
       const pending = supervisor.acquire().then((slot) => {
@@ -323,12 +474,12 @@ describe("subagent", () => {
       await after(10, null);
       assert.strictEqual(acquired, false, "并行已满，第三次应当排队");
 
-      a.release();
+      a.slot.release();
       const c = await pending;
       assert.strictEqual(acquired, true);
-      assert.ok(c);
-      b.release();
-      c.release();
+      assert.ok(c.ok);
+      b.slot.release();
+      c.slot.release();
     });
 
     it("并行上限是正数", () => {
@@ -618,12 +769,53 @@ describe("subagent", () => {
       assert.ok(prompt.includes("严重级别"));
     });
 
-    it("预算耗尽时给出明确错误，而不是静默什么都不做", async () => {
-      const { registry } = setup(1);
+    it("预算耗尽时给出明确错误且不占额度，而不是静默什么都不做", async () => {
+      const { registry, supervisor } = setup(1);
       await registry.execute("task", { goal: "first" });
-      await assert.rejects(
-        () => registry.execute("task", { goal: "second" }),
-        /委派次数已用完/,
+
+      const result = await registry.execute("task", { goal: "second" });
+      const text = result.content.map((block) => block.text).join("");
+      assert.strictEqual(result.isError, true);
+      assert.ok(text.includes("委派次数已用完"), text);
+      assert.strictEqual(supervisor.stats.delegations, 1, "没执行就不该占额度");
+    });
+
+    /**
+     * A3：取消与超预算要说不同的话。
+     *
+     * 之前的两者共用"委派次数已用完"，Ctrl+C 之后模型会以为是自己派多了，
+     * 于是收缩目标重试——它误解了刚刚发生的事。
+     */
+    it("取消与被限流的文案不同：不能把取消说成派多了", async () => {
+      const parent = new AbortController();
+      parent.abort();
+      const workspaceRoot = makeWorkspace();
+      const registry = createToolRegistry(workspaceRoot);
+      const provider = new SubAgentRuntimeProvider();
+      const supervisor = new SubAgentSupervisor({ parentSignal: parent.signal });
+      provider.set({
+        supervisor,
+        model: createSpyModel([assistant([createTextContent("不会被用到")])]),
+        parentId: null,
+      });
+      registry.register(
+        createSubAgentTool({
+          workspaceRoot,
+          runtime: () => provider.get(),
+          parentRegistry: () => registry,
+          depth: 0,
+        }),
+      );
+
+      const result = await registry.execute("task", { goal: "g" });
+      const text = result.content.map((block) => block.text).join("");
+
+      assert.strictEqual(result.isError, true);
+      assert.ok(text.includes("取消"), text);
+      assert.ok(!text.includes("委派次数已用完"), `不能说成派多了：${text}`);
+      assert.deepStrictEqual(
+        (result.details as { reason?: string } | undefined)?.reason,
+        "cancelled",
       );
     });
 
@@ -1004,18 +1196,18 @@ describe("subagent", () => {
         await supervisor.acquire(),
         await supervisor.acquire(),
       ];
-      assert.ok(slots[0] && slots[1]);
+      assert.ok(slots[0].ok && slots[1].ok);
 
       // 第三个必须排队，而不是直接失败或挤进来
       const third = await Promise.race([supervisor.acquire(), after(20, null)]);
       assert.strictEqual(third, null, "名额满时应当等待");
 
       // 释放一个后等待者立刻拿到：否则并行上限会把并发永久卡死
-      slots[0]!.release();
+      slots[0].slot.release();
       const gotIt = await Promise.race([supervisor.acquire(), after(200, null)]);
-      assert.ok(gotIt, "释放名额后等待中的委派应当拿到名额");
-      slots[1]!.release();
-      gotIt.release();
+      assert.ok(gotIt && gotIt.ok, "释放名额后等待中的委派应当拿到名额");
+      slots[1].slot.release();
+      gotIt.slot.release();
     });
   });
 });

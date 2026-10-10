@@ -8,6 +8,7 @@ import { LlmModel } from "./model";
 import { RegisteredTool, ToolRegistry } from "./tools";
 import { createTextContent } from "./message";
 import {
+  AcquireDeniedReason,
   MAX_DELEGATIONS_PER_TURN,
   MAX_SUBAGENT_DEPTH,
   SUBAGENT_TOOL_NAME,
@@ -26,6 +27,26 @@ import {
   rolePreset,
   subAgentMutates,
 } from "./roles";
+
+/**
+ * 委派被拒绝时回给父 Agent 的正文。
+ *
+ * 两种原因必须说不同的话：预算用完是"你派多了，合并任务"；回合被取消是
+ * "用户按了 Ctrl+C，别重试"。在此之前两者共用一句"本回合的委派次数已用完"，
+ * 模型在取消后会误以为是自己派多了而收缩目标（docs/multi-agent-fix-plan.md A3）。
+ */
+export function describeDelegationDenied(reason: AcquireDeniedReason): string {
+  if (reason === "cancelled") {
+    return (
+      "本次委派未执行：当前回合已被取消（用户中断）。" +
+      "不要重试这次委派，也不要改派同一任务——等用户给出新指令。"
+    );
+  }
+  return (
+    `本回合的委派次数已用完（上限 ${MAX_DELEGATIONS_PER_TURN} 次）：` +
+    `请把多个子任务合并成一次委派，或先自己完成其中一部分`
+  );
+}
 
 /**
  * 委派工具 `task`：把一件相对独立的事交给子 Agent 去做。
@@ -187,18 +208,20 @@ export function createSubAgentTool(
         throw new Error("task 需要 goal：请用一句话完整说明要让子 Agent 完成什么");
       }
 
-      /**
-       * 预算必须先于 slot 检查之外的任何动作：预算耗尽时返回明确的错误结果，
-       * 而不是抛给上层静默失败——父 Agent 得知道"委派没发生"，
-       * 否则它会一直等一个永远不会到来的结论。
-       */
-      const slot = await runtime.supervisor.acquire();
-      if (!slot) {
-        throw new Error(
-          `本回合的委派次数已用完（上限 ${MAX_DELEGATIONS_PER_TURN} 次）：` +
-            `请把多个子任务合并成一次委派，或先自己完成其中一部分`,
-        );
+      const acquired = await runtime.supervisor.acquire();
+      if (!acquired.ok) {
+        // 委派压根没发生：如实回一个失败结果（不能静默，也不能让子 Agent 跑起来）
+        return {
+          content: [createTextContent(describeDelegationDenied(acquired.reason))],
+          details: {
+            goal,
+            delegated: false,
+            reason: acquired.reason,
+          },
+          isError: true,
+        };
       }
+      const slot = acquired.slot;
 
       const agentId = newAgentId();
       const identity: AgentIdentity = {

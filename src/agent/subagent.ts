@@ -211,6 +211,21 @@ export type SubAgentSlot = {
   release: () => void;
 };
 
+/** `acquire()` 拒绝一次委派的原因 */
+export type AcquireDeniedReason = "budget_exhausted" | "cancelled";
+
+/**
+ * `acquire()` 的结果。
+ *
+ * 用可辨识联合而不是 `slot | null`：调用方需要区分"你派多了"与"整轮已被取消"，
+ * 两者的处置完全相反——前者要引导模型合并子任务，后者必须让它别再重试。
+ * 之前只能拿到 `null`，Ctrl+C 之后模型收到的是"本回合委派次数已用完"，
+ * 于是它收缩目标重新规划，而真实情况是用户按了取消。
+ */
+export type AcquireResult =
+  | { ok: true; slot: SubAgentSlot }
+  | { ok: false; reason: AcquireDeniedReason };
+
 /**
  * 委派监督者：管预算、并行配额与取消树的根。
  *
@@ -250,21 +265,33 @@ export class SubAgentSupervisor {
   /**
    * 登记一次委派并拿到它的运行位。
    *
-   * 预算耗尽时返回 `null`：调用方据此给出**明确的错误结果**而不是静默放行，
-   * 否则模型会以为委派成功、继续等待一个永远不会到来的结论。
+   * 拿不到名额时返回**带原因的失败**而不是静默放行：调用方据此给出明确的错误
+   * 结果，模型知道"委派没发生"，才不会一直等一个永远不会到来的结论。
    *
    * 并行名额满时会等待，直到有子 Agent 结束——保证 toolResult 的顺序不受影响
    * （顺序由 loop 的 slots 保证，这里只负责限流）。
+   *
+   * 三步的顺序是被两个真实缺陷倒逼出来的，改动前请先读 docs/multi-agent-fix-plan.md：
+   * 1. **等待必须与取消竞速**（A2），否则 Ctrl+C 之后排队者要等运行中的子 Agent 自己收尾；
+   * 2. **预算检查必须在等待之后**（A1），因为等待者正是从这里醒来的——
+   *    放在排队之前，同一批并发申请会先后通过同一个检查，预算可被无限突破。
    */
-  async acquire(): Promise<SubAgentSlot | null> {
-    if (this.delegations >= this.maxDelegations) {
-      return null;
+  async acquire(): Promise<AcquireResult> {
+    while (this.running >= this.maxParallel && this.parentSignal?.aborted !== true) {
+      await this.waitForTurn();
     }
 
-    while (this.running >= this.maxParallel) {
-      await new Promise<void>((resolve) => {
-        this.waiters.push(resolve);
-      });
+    // 先看取消：整棵树都要停了，让不让名额已经不重要。
+    // 早退也省下一次注定被中断的委派——此前这里是返回一个已 abort 的槽位，
+    // 子 Agent 仍会真的跑起来并白占一次额度。
+    if (this.parentSignal?.aborted === true) {
+      this.wakeAll();
+      return { ok: false, reason: "cancelled" };
+    }
+
+    if (this.delegations >= this.maxDelegations) {
+      this.wakeAll();
+      return { ok: false, reason: "budget_exhausted" };
     }
 
     this.delegations += 1;
@@ -274,28 +301,53 @@ export class SubAgentSupervisor {
     const forward = (): void => {
       controller.abort();
     };
-
-    // 父信号已经取消的情况：链接之前就 abort，不要让它跑起来再被打断
-    if (this.parentSignal?.aborted === true) {
-      controller.abort();
-    } else {
-      this.parentSignal?.addEventListener("abort", forward, { once: true });
-    }
+    this.parentSignal?.addEventListener("abort", forward, { once: true });
 
     let released = false;
     return {
-      signal: controller.signal,
-      release: (): void => {
-        // 重复 release 会让并行名额凭空增加
-        if (released) {
-          return;
-        }
-        released = true;
-        this.parentSignal?.removeEventListener("abort", forward);
-        this.running -= 1;
-        this.waiters.shift()?.();
+      ok: true,
+      slot: {
+        signal: controller.signal,
+        release: (): void => {
+          // 重复 release 会让并行名额凭空增加
+          if (released) {
+            return;
+          }
+          released = true;
+          this.parentSignal?.removeEventListener("abort", forward);
+          this.running -= 1;
+          this.waiters.shift()?.();
+        },
       },
     };
+  }
+
+  /**
+   * 等一个并行名额：由 `release()` 或父信号唤醒。
+   *
+   * 监听器**随用随注册、唤醒即摘除**：常驻监听会打破"没有活跃委派时父信号上没有
+   * 监听器"这条性质（既有用例在断言它），而构造时就注册等于每次回合都 leaks 一个。
+   */
+  private waitForTurn(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        this.parentSignal?.removeEventListener("abort", wake);
+        resolve();
+      };
+      this.waiters.push(wake);
+      this.parentSignal?.addEventListener("abort", wake, { once: true });
+    });
+  }
+
+  /**
+   * 唤醒所有等待者，让它们各自重新判定。
+   *
+   * 拒绝一次申请时必须这么做：`release()` 一次只唤醒一个等待者，
+   * 而拒绝方没有占用名额、也不会 release，剩下的等待者会永远挂在队列里。
+   */
+  private wakeAll(): void {
+    // 先取空再逐个唤醒：被唤醒者可能立刻再次入队
+    this.waiters.splice(0).forEach((wake) => wake());
   }
 
   /** 累计子 Agent 用量 */
