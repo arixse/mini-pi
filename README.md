@@ -43,6 +43,8 @@ mini-pi/
 - [命令行登录与鉴权](docs/auth.md)
 - [模型供应商对接](docs/providers.md)
 - [Session 管理功能](docs/session-management.md)
+- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑
+- [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题与分批修复清单
 - [产品设计文档](docs/product-design.md)
 - [技术方案](docs/technical-solution.md)
 
