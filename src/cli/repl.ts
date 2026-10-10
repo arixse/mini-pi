@@ -254,7 +254,11 @@ export type ReplOptions = {
   /** 会话级子 Agent 用量查询，供 `/status` 展示（避免委派成本隐形） */
   subAgentStats?: () => { delegations: number; usage: Usage };
   /**
-   * 会话初始的子 Agent 开关状态；缺省开启。
+   * 会话初始的子 Agent 开关状态；**缺省关闭**。
+   *
+   * 委派会额外烧 token 且成本难预估，默认让人 opt-in：
+   * 关着的时候模型压根看不到 `task`，不会偷偷产生子 Agent 用量；
+   * 需要时用 `/subagent on` 打开（可选持久化）。
    *
    * 关闭时 `task` 不出现在给模型的工具列表里——靠"看不见"而不是"调用时报错"，
    * 否则模型每次都会先试着派一次，白白多一轮。
@@ -471,9 +475,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
   /**
    * 会话级的子 Agent 开关：决定是否把 `task` 放进本轮的工具列表。
-   * 初值来自 settings.json（index.ts 读入），切换后写回，重开终端仍保持。
+   * 初值来自 settings.json（index.ts 读入，缺省关闭），切换后写回，重开终端仍保持。
    */
-  let subAgentEnabled = options.subAgentEnabled ?? true;
+  let subAgentEnabled = options.subAgentEnabled ?? false;
   const persistSubAgentEnabled = options.settingsStore
     ? async (enabled: boolean): Promise<void> => {
         await options.settingsStore!.setSubagentEnabled(enabled);
@@ -858,7 +862,8 @@ export function switchSession(options: ReplOptions, target: string): boolean {
 export function sessionStatusEntries(
   options: ReplOptions,
   trusted: boolean,
-  subAgentEnabled = true,
+  // 默认关闭：与 getSubagentEnabled 同一口径，没配就是关
+  subAgentEnabled = false,
 ): Array<[string, string]> {
   const store = options.sessionStore;
   const { window, source } = contextWindowInfo(options);
@@ -896,7 +901,8 @@ function subAgentStatusRow(
 ): Array<[string, string]> {
   const stats = options.subAgentStats?.();
   if (!subAgentEnabled) {
-    // 关掉时也要占一行：否则用户看到"本会话未委派"会以为是模型不想用
+    // 关掉时（也是默认状态）必须占一行：否则用户看到"本会话未委派"会以为是模型不想用，
+    // 更不会知道有这条命令可以打开
     return [["子 Agent", "🚫 已关闭（/subagent 开启）"]];
   }
   if (!stats) {
@@ -931,7 +937,7 @@ function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[strin
 export function printStatus(
   options: ReplOptions,
   trusted: boolean,
-  subAgentEnabled = true,
+  subAgentEnabled = false,
 ): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
@@ -1279,7 +1285,7 @@ function printHelp() {
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
   console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
-  console.log(chalk.white("  /subagent [on|off]") + chalk.dim(" - 开关子 Agent 委派（不带参数则切换）"));
+  console.log(chalk.white("  /subagent [on|off]") + chalk.dim(" - 开关子 Agent 委派（默认关闭，不带参数则切换）"));
   console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文用量与确认模式"));
   console.log(chalk.white("  /sessions") + chalk.dim(" - 列出当前工作目录的会话"));
   console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));

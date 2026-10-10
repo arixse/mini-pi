@@ -96,20 +96,11 @@ describe("SettingsStore", () => {
   });
 
   describe("子 Agent 开关", () => {
-    it("未配置时默认可用", async () => {
-      assert.strictEqual(await store.getSubagentEnabled(), true);
-    });
-
-    it("关掉之后重新读出 false（重开终端仍然关着）", async () => {
-      await store.setSubagentEnabled(false);
+    it("未配置时默认关闭：委派昂贵且不透明，应当是 opt-in", async () => {
       assert.strictEqual(await store.getSubagentEnabled(), false);
-
-      const fresh = new SettingsStore(testFilePath);
-      assert.strictEqual(await fresh.getSubagentEnabled(), false);
     });
 
-    it("再打开之后回到 true，而不是只删掉了那一项", async () => {
-      await store.setSubagentEnabled(false);
+    it("打开之后重新读出 true（重开终端仍然开着）", async () => {
       await store.setSubagentEnabled(true);
       assert.strictEqual(await store.getSubagentEnabled(), true);
 
@@ -117,8 +108,17 @@ describe("SettingsStore", () => {
       assert.strictEqual(await fresh.getSubagentEnabled(), true);
     });
 
-    it("手改配置写成非布尔时不把人静默降级成没有子 Agent", async () => {
-      for (const value of ["false", 0, null, "yes"]) {
+    it("再关掉回到 false，而不是只删掉了那一项", async () => {
+      await store.setSubagentEnabled(true);
+      await store.setSubagentEnabled(false);
+      assert.strictEqual(await store.getSubagentEnabled(), false);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentEnabled(), false);
+    });
+
+    it("手改配置写成非布尔时保持关闭（不能被看起来像 true 的字符串打开）", async () => {
+      for (const value of ["true", 1, null, "yes"]) {
         writeFileSync(
           testFilePath,
           JSON.stringify({ subagentEnabled: value }),
@@ -127,20 +127,20 @@ describe("SettingsStore", () => {
         const fresh = new SettingsStore(testFilePath);
         assert.strictEqual(
           await fresh.getSubagentEnabled(),
-          true,
-          `subagentEnabled=${JSON.stringify(value)} 应按"可用"处理`,
+          false,
+          `subagentEnabled=${JSON.stringify(value)} 不该开启委派`,
         );
       }
     });
 
-    it("显式写的 false 会被忠实读出", async () => {
+    it("手写的布尔 true 会被忠实读出", async () => {
       writeFileSync(
         testFilePath,
-        JSON.stringify({ subagentEnabled: false }),
+        JSON.stringify({ subagentEnabled: true }),
         "utf-8",
       );
       const fresh = new SettingsStore(testFilePath);
-      assert.strictEqual(await fresh.getSubagentEnabled(), false);
+      assert.strictEqual(await fresh.getSubagentEnabled(), true);
     });
   });
 

@@ -195,7 +195,7 @@ export async function main() {
   const { window: contextWindow, source: contextWindowSource } =
     await resolveContextWindowFromSettings(settingsStore, modelName);
 
-  // 子 Agent 开关：默认开，关过就一直关着（/subagent 写回 settings.json）
+  // 子 Agent 开关：默认关闭，打开过就一直开着（/subagent 写回 settings.json）
   const subAgentEnabled = await settingsStore.getSubagentEnabled();
 
   // 创建 sessionManager

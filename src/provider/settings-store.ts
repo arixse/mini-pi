@@ -182,8 +182,9 @@ export class SettingsStore {
   /**
    * 子 Agent 委派是否可用（`/subagent` 开关）。
    *
-   * 只有显式写过 false 才算关：类型不对（"false"、0、null…）一律按开处理，
-   * 免得手改配置的人因为一个字符串就被静默降级成"没有子 Agent"。
+   * **默认关闭**：委派会额外烧 token 且单次成本难以预估，属于需要用户主动
+   * 打开的高级能力——`opt-in` 比 `opt-out` 稳妥，不想用的人不必付出成本，
+   * 想用的人敲一次 `/subagent on` 即可。
    * @throws settings.json 处于损坏状态时拒绝写入
    */
   async setSubagentEnabled(enabled: boolean): Promise<void> {
@@ -192,12 +193,13 @@ export class SettingsStore {
     await this.persist();
   }
 
-  /** 子 Agent 委派是否可用；未配置时默认可用 */
+  /** 子 Agent 委派是否可用；只有显式写过 true 才开启 */
   async getSubagentEnabled(): Promise<boolean> {
     await this.initialize();
-    // 只认布尔 false：与 maxTokens / contextWindow 同一口径——
-    // 类型不对就当没配，而不是把人静默降级成"没有子 Agent"
-    return this.settings.subagentEnabled !== false;
+    // 只认布尔 true：没配、或配成了别的类型（"true"、1、"yes"…）一律关闭。
+    // 委派是可选能力，方向取"打不开"的一侧——用户可以再敲 /subagent on，
+    // 反过来如果他没写字却被默认开启，多花的 token 是收不回来的。
+    return this.settings.subagentEnabled === true;
   }
 
   /**

@@ -861,6 +861,14 @@ describe("子 Agent 开关（/subagent）", () => {
     assert.deepStrictEqual(writes, [false]);
   });
 
+  it("默认关闭：不带第三参数时 /status 显示关闭", () => {
+    const rows = new Map(sessionStatusEntries(createOptions(), false));
+    assert.ok(
+      rows.get("子 Agent")?.includes("关闭"),
+      "缺省必须落在关闭一侧，否则用户会在不知情的情况下产生委派用量",
+    );
+  });
+
   it("/status 要显示委派被关闭，否则用户以为模型只是不想用", () => {
     const rows = new Map(
       sessionStatusEntries(createOptions(), false, false),
