@@ -12,6 +12,13 @@ type Settings = {
    * **真实窗口更小的模型必须显式配小**，否则可能在压缩触发前就发过窗口上限。
    */
   contextWindow?: number;
+  /**
+   * 子 Agent 委派是否可用（`/subagent` 开关，缺省 true）。
+   *
+   * 默认开、显式关才落 false：委派是已实现的能力，没必要让所有人都在
+   * settings.json 里写一行才能用；而一旦有人主动关掉，重开终端应当仍然关着。
+   */
+  subagentEnabled?: boolean;
 };
 
 export class SettingsStore {
@@ -170,6 +177,27 @@ export class SettingsStore {
       return undefined;
     }
     return Math.floor(value);
+  }
+
+  /**
+   * 子 Agent 委派是否可用（`/subagent` 开关）。
+   *
+   * 只有显式写过 false 才算关：类型不对（"false"、0、null…）一律按开处理，
+   * 免得手改配置的人因为一个字符串就被静默降级成"没有子 Agent"。
+   * @throws settings.json 处于损坏状态时拒绝写入
+   */
+  async setSubagentEnabled(enabled: boolean): Promise<void> {
+    await this.initialize();
+    this.settings.subagentEnabled = enabled;
+    await this.persist();
+  }
+
+  /** 子 Agent 委派是否可用；未配置时默认可用 */
+  async getSubagentEnabled(): Promise<boolean> {
+    await this.initialize();
+    // 只认布尔 false：与 maxTokens / contextWindow 同一口径——
+    // 类型不对就当没配，而不是把人静默降级成"没有子 Agent"
+    return this.settings.subagentEnabled !== false;
   }
 
   /**

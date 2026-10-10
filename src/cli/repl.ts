@@ -12,6 +12,7 @@ import {
   SubAgentRuntimeProvider,
 } from "../agent/subagentTool";
 import {
+  SUBAGENT_TOOL_NAME,
   SubAgentSupervisor,
   addUsage,
   emptyUsage,
@@ -252,7 +253,147 @@ export type ReplOptions = {
   subAgentRuntime?: SubAgentRuntimeProvider;
   /** 会话级子 Agent 用量查询，供 `/status` 展示（避免委派成本隐形） */
   subAgentStats?: () => { delegations: number; usage: Usage };
+  /**
+   * 会话初始的子 Agent 开关状态；缺省开启。
+   *
+   * 关闭时 `task` 不出现在给模型的工具列表里——靠"看不见"而不是"调用时报错"，
+   * 否则模型每次都会先试着派一次，白白多一轮。
+   */
+  subAgentEnabled?: boolean;
 };
+
+/**
+ * 本回合实际生效的工具注册表：关闭委派时把 `task` 摘掉。
+ *
+ * 用"过滤后的子集"而不是注销工具：注册表（含 `task` 的执行器）是一次性构建的，
+ * 这里改的只是模型这一轮看不看得到它，两者不应互相影响。
+ */
+export function activeToolRegistry(
+  registry: ToolRegistry,
+  subAgentEnabled: boolean,
+): ToolRegistry {
+  if (subAgentEnabled || !registry.has(SUBAGENT_TOOL_NAME)) {
+    return registry;
+  }
+  const names = registry
+    .definitions()
+    .map((definition) => definition.name)
+    .filter((name) => name !== SUBAGENT_TOOL_NAME);
+  return registry.filter(names);
+}
+
+/** `/subagent` 的参数解析结果 */
+export type SubAgentCommand =
+  | { kind: "toggle" }
+  | { kind: "set"; enabled: boolean }
+  | { kind: "unknown"; raw: string };
+
+const SUBAGENT_ON_WORDS = ["on", "开", "开启", "打开", "true", "enable"];
+const SUBAGENT_OFF_WORDS = ["off", "关", "关闭", "false", "disable"];
+
+/**
+ * 解析 `/subagent` 的参数：不带参数是切换，带 on/off 是显式设定。
+ *
+ * 中英文都收：终端里大家习惯输入 `/subagent 关`，
+ * 只认 `off` 的话这条命令在中文会话里形同没有。
+ */
+export function parseSubAgentCommand(argument: string): SubAgentCommand {
+  const raw = argument.trim();
+  if (!raw) {
+    return { kind: "toggle" };
+  }
+  const word = raw.toLowerCase();
+  if (SUBAGENT_ON_WORDS.includes(word)) {
+    return { kind: "set", enabled: true };
+  }
+  if (SUBAGENT_OFF_WORDS.includes(word)) {
+    return { kind: "set", enabled: false };
+  }
+  return { kind: "unknown", raw };
+}
+
+export type SubAgentCommandResult = {
+  /** 生效后的开关状态 */
+  enabled: boolean;
+  /** 写入持久化失败时为 true：开关在本会话仍然生效，只是下次启动会回到默认 */
+  persistFailed?: boolean;
+  /** 参数无法识别时给出用法 */
+  error?: string;
+};
+
+/**
+ * 执行一次 `/subagent`。
+ *
+ * 只在本会话内保证状态正确；`persist` 缺省时便是纯会话开关。
+ * 落盘失败不该让命令失效——但必须如实告诉用户"重启会回到默认"。
+ */
+export async function applySubAgentCommand(input: {
+  argument: string;
+  current: boolean;
+  persist?: (enabled: boolean) => Promise<void>;
+}): Promise<SubAgentCommandResult> {
+  const command = parseSubAgentCommand(input.argument);
+  if (command.kind === "unknown") {
+    return {
+      enabled: input.current,
+      error: `无法识别的参数：${command.raw}。用法：/subagent [on|off]`,
+    };
+  }
+
+  const enabled = command.kind === "set" ? command.enabled : !input.current;
+  if (input.persist) {
+    try {
+      await input.persist(enabled);
+    } catch {
+      return { enabled, persistFailed: true };
+    }
+  }
+  return { enabled };
+}
+
+/**
+ * `/subagent`：开关子 Agent 委派，并把结果告知用户。
+ *
+ * @returns 生效后的开关状态
+ */
+export async function toggleSubAgent(
+  argument: string,
+  current: boolean,
+  persist?: (enabled: boolean) => Promise<void>,
+): Promise<boolean> {
+  const outcome = await applySubAgentCommand({ argument, current, persist });
+
+  if (outcome.error) {
+    console.log(chalk.red(`\n❌ ${outcome.error}\n`));
+    return outcome.enabled;
+  }
+  if (outcome.enabled === current) {
+    // 显式设成当前状态时也要回一句，否则用户会以为命令没生效
+    console.log(
+      outcome.enabled
+        ? chalk.dim("\n🤝 子 Agent 委派已经是开启状态\n")
+        : chalk.dim("\n🤝 子 Agent 委派已经是关闭状态\n"),
+    );
+    return outcome.enabled;
+  }
+
+  console.log(
+    outcome.enabled
+      ? chalk.green("\n🤝 已开启子 Agent 委派：模型可以再次使用 task 工具\n")
+      : chalk.yellow(
+          "\n🚫 已关闭子 Agent 委派：本回合起模型看不到 task 工具" +
+            "（已在跑的子任务不受影响）\n",
+        ),
+  );
+  if (outcome.persistFailed) {
+    console.log(
+      chalk.red(
+        "⚠️  开关未能写入 settings.json（文件不可写），本次只在当前会话生效\n",
+      ),
+    );
+  }
+  return outcome.enabled;
+}
 
 export async function startRepl(options: ReplOptions): Promise<void> {
   const rl = createInterface({
@@ -327,6 +468,17 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       usage: { ...subAgentTotals.usage },
     });
   }
+
+  /**
+   * 会话级的子 Agent 开关：决定是否把 `task` 放进本轮的工具列表。
+   * 初值来自 settings.json（index.ts 读入），切换后写回，重开终端仍保持。
+   */
+  let subAgentEnabled = options.subAgentEnabled ?? true;
+  const persistSubAgentEnabled = options.settingsStore
+    ? async (enabled: boolean): Promise<void> => {
+        await options.settingsStore!.setSubagentEnabled(enabled);
+      }
+    : undefined;
 
   // 本轮是否正在处理中。
   // 必须从 line 处理函数的第一行就为 true：/exit 或 Ctrl+C 可能在本轮
@@ -403,7 +555,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/status") {
-      printStatus(options, trusted);
+      printStatus(options, trusted, subAgentEnabled);
       rl.prompt();
       return;
     }
@@ -517,6 +669,16 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return;
     }
 
+    if (input === "/subagent" || input.startsWith("/subagent ")) {
+      subAgentEnabled = await toggleSubAgent(
+        input.slice("/subagent".length).trim(),
+        subAgentEnabled,
+        persistSubAgentEnabled,
+      );
+      rl.prompt();
+      return;
+    }
+
     if (input.startsWith("/load ")) {
       const skillName = input.slice(6).trim();
       if (skillName) {
@@ -573,8 +735,11 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
       status.set({ kind: "thinking", startedAt: Date.now() });
 
+      // 本回合给模型的工具集：关掉委派时 task 不在列表里，模型就不会试着派
+      const turnRegistry = activeToolRegistry(options.toolRegistry, subAgentEnabled);
+
       // 把本轮运行时交给 task 工具：没有这一步委派无法拿到模型、取消信号与审批钩子
-      if (options.subAgentRuntime) {
+      if (options.subAgentRuntime && subAgentEnabled) {
         supervisor = new SubAgentSupervisor({
           parentSignal: run.signal,
           onEvent: onAgentEvent,
@@ -594,9 +759,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       const result = await runAgentLoop({
         systemPrompt: options.systemPrompt,
         messages: options.messages,
-        tools: options.toolRegistry.definitions(),
+        tools: turnRegistry.definitions(),
         model: options.model,
-        toolRegistry: options.toolRegistry,
+        toolRegistry: turnRegistry,
         maxTurns: 100,
         beforeToolCall,
         signal: run.signal,
@@ -693,6 +858,7 @@ export function switchSession(options: ReplOptions, target: string): boolean {
 export function sessionStatusEntries(
   options: ReplOptions,
   trusted: boolean,
+  subAgentEnabled = true,
 ): Array<[string, string]> {
   const store = options.sessionStore;
   const { window, source } = contextWindowInfo(options);
@@ -712,7 +878,7 @@ export function sessionStatusEntries(
         : "未启用",
     ],
     ...compactionStatusRow(store),
-    ...subAgentStatusRow(options),
+    ...subAgentStatusRow(options, subAgentEnabled),
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
     ["工作目录", options.workspaceRoot],
   ];
@@ -724,8 +890,15 @@ export function sessionStatusEntries(
  * 委派烧掉的 token 不在主会话的消息里（子 Agent 只回传裁剪后的结论），
  * 不单列的话用户看到的只有"好像也没多贵"，等账单出来才发现量级不对。
  */
-function subAgentStatusRow(options: ReplOptions): Array<[string, string]> {
+function subAgentStatusRow(
+  options: ReplOptions,
+  subAgentEnabled: boolean,
+): Array<[string, string]> {
   const stats = options.subAgentStats?.();
+  if (!subAgentEnabled) {
+    // 关掉时也要占一行：否则用户看到"本会话未委派"会以为是模型不想用
+    return [["子 Agent", "🚫 已关闭（/subagent 开启）"]];
+  }
   if (!stats) {
     return [];
   }
@@ -755,10 +928,18 @@ function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[strin
   ];
 }
 
-export function printStatus(options: ReplOptions, trusted: boolean): void {
+export function printStatus(
+  options: ReplOptions,
+  trusted: boolean,
+  subAgentEnabled = true,
+): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
-  for (const [label, value] of sessionStatusEntries(options, trusted)) {
+  for (const [label, value] of sessionStatusEntries(
+    options,
+    trusted,
+    subAgentEnabled,
+  )) {
     console.log(
       `${chalk.dim("│")} ${chalk.dim(label.padEnd(8, " "))} ${value}`,
     );
@@ -1098,6 +1279,7 @@ function printHelp() {
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
   console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
+  console.log(chalk.white("  /subagent [on|off]") + chalk.dim(" - 开关子 Agent 委派（不带参数则切换）"));
   console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文用量与确认模式"));
   console.log(chalk.white("  /sessions") + chalk.dim(" - 列出当前工作目录的会话"));
   console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));

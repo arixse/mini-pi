@@ -72,7 +72,8 @@ mini-pi/
 17. **子 Agent 委派** - 通过 `task` 工具把一件相对独立的事交给子 Agent：`explore`（只读侦察）/
     `implement`（可写且须自述验证）/ `review`（只读评审）/ `general` 四种角色。
     子 Agent 跑在独立上下文里，只回传裁剪后的结论；写操作仍逐次审批且标明来自第几层；
-    调查类委派可以并发；Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列
+    调查类委派可以并发；Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列；
+    `/subagent` 可随时关闭（关闭后模型看不到 `task` 工具，状态持久化到 settings.json）
     （详见 [多 Agent 实现方案](docs/multi-agent-design.md)）
 
 ## 运行方式
@@ -299,6 +300,7 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
+| `/subagent [on\|off]` | 开关子 Agent 委派（`task` 工具），不带参数则切换；状态写入 settings.json |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、确认模式 |
 | `/sessions` | 列出当前工作目录的会话 |
 | `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |

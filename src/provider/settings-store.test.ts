@@ -95,6 +95,55 @@ describe("SettingsStore", () => {
     }
   });
 
+  describe("子 Agent 开关", () => {
+    it("未配置时默认可用", async () => {
+      assert.strictEqual(await store.getSubagentEnabled(), true);
+    });
+
+    it("关掉之后重新读出 false（重开终端仍然关着）", async () => {
+      await store.setSubagentEnabled(false);
+      assert.strictEqual(await store.getSubagentEnabled(), false);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentEnabled(), false);
+    });
+
+    it("再打开之后回到 true，而不是只删掉了那一项", async () => {
+      await store.setSubagentEnabled(false);
+      await store.setSubagentEnabled(true);
+      assert.strictEqual(await store.getSubagentEnabled(), true);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentEnabled(), true);
+    });
+
+    it("手改配置写成非布尔时不把人静默降级成没有子 Agent", async () => {
+      for (const value of ["false", 0, null, "yes"]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ subagentEnabled: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getSubagentEnabled(),
+          true,
+          `subagentEnabled=${JSON.stringify(value)} 应按"可用"处理`,
+        );
+      }
+    });
+
+    it("显式写的 false 会被忠实读出", async () => {
+      writeFileSync(
+        testFilePath,
+        JSON.stringify({ subagentEnabled: false }),
+        "utf-8",
+      );
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentEnabled(), false);
+    });
+  });
+
   describe("getDefaultModel", () => {
     it("should return undefined when no default model is set", async () => {
       const defaultModel = await store.getDefaultModel();
