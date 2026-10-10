@@ -225,9 +225,16 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 - **正文上限**：普通工具最多 8 行、`edit_file` 的 diff 最多 20 行，超出以 `… 省略 N 行` 收尾；
   单行最多 200 列，超出按**显示宽度**（CJK/emoji 记 2 列）截断。
+- **失败时看尾部**：调用失败（`isError` 或 `bash` 退出码非 0）时正文改为显示**末尾**的 N 行，
+  前面以 `… 已省略前 N 行` 标注——报错几乎总在最后（编译日志、测试摘要、`npm error` 段），
+  从头截会把原因留在屏幕外。
+- **省略后给出去处**：被省略时页脚追加 `· /last 查看全部`，`/last` 的行号跟随
+  `read_file` 的 `returnedFrom`（分页读取时是真实文件行号，与卡片正文一致）。
 - **diff 来源**：由调用参数里的 `oldText` / `newText` 计算（前后缀折叠，只保留变更行与各一行上下文），
   行号来自 `edit_file` 返回的 `details.lineNumber`；多处替换时用 `@@ 共 N 处替换 @@`。
 - **错误**：`❌` 红色；工具抛错（无 `details`）时错误信息整行红色，`bash` 失败则按 stdout/stderr 分别着色。
+  关色（`NO_COLOR` / 非 TTY）时 stderr 每行加 `! ` 前缀——颜色是区分 stderr 与 stdout 的唯一手段，
+  颜色没了不能让语义跟着没。
 - **宽度来源**：终端列数在启动时探测一次，此后**跟随 resize 变化**（`followTerminalWidth`），
   拖窗口后新卡片按新列数排版；宽度工具（显示宽度、截断、标签补齐）集中在 `src/cli/width.ts`。
 - **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`，

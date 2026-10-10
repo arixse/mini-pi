@@ -67,6 +67,13 @@ export type RenderContext = {
   style: Style;
   /** ASCII 模式：用 [bash] 之类的标签代替 emoji，用 | / + 代替框线 */
   ascii: boolean;
+  /**
+   * 是否输出颜色。
+   *
+   * 关色不只是"换一套 Style"：靠颜色区分的信息（stderr 用黄色）会**整条消失**，
+   * 因此渲染层要知道颜色没了，改用文本标记把这些语义补回来。
+   */
+  color: boolean;
 };
 
 /** 测试与非 TTY 场景可直接使用的纯文本上下文 */
@@ -74,6 +81,7 @@ export const PLAIN_CONTEXT: RenderContext = {
   width: 100,
   style: PLAIN_STYLE,
   ascii: false,
+  color: false,
 };
 
 export function createRenderContext(
@@ -85,6 +93,7 @@ export function createRenderContext(
     width: overrides.width ?? process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
     style: color ? createChalkStyle() : PLAIN_STYLE,
     ascii: overrides.ascii ?? Boolean(process.env.MINI_PI_ASCII),
+    color,
   };
 }
 
@@ -395,6 +404,58 @@ function bodyLimit(view: ToolCallView): number {
   return view.name === "edit_file" ? MAX_DIFF_LINES : MAX_BODY_LINES;
 }
 
+/**
+ * 这次调用算不算失败。
+ *
+ * 除 `isError` 外还要看 `bash` 的退出码：工具把非零退出码当正常结果返回时
+ * （命令"成功执行但失败了"），卡片状态位是 `✅` 而输出里全是报错。
+ */
+export function isFailedCall(
+  view: ToolCallView,
+  details: Record<string, unknown> = detailsOf(view),
+): boolean {
+  if (view.isError) {
+    return true;
+  }
+  if (view.name === "bash") {
+    const exitCode = numberOf(details.exitCode);
+    return exitCode !== null && exitCode !== 0;
+  }
+  return false;
+}
+
+/**
+ * 正文的显示窗口。
+ *
+ * 默认取**前** N 行；失败时取**后** N 行——报错几乎总是打在末尾
+ * （编译日志、测试失败摘要、npm 的 `npm error` 段），
+ * 而正文上限只有 8 行，取前面的话用户看到的全是无用的中间过程，
+ * 真正的失败原因被截在屏幕外。
+ *
+ * @returns 要显示的行，以及被截掉的前缀/后缀行数
+ */
+export function selectBodyWindow<T>(
+  lines: readonly T[],
+  limit: number,
+  tailFirst = false,
+): { lines: T[]; headOmitted: number; tailOmitted: number } {
+  if (lines.length <= limit) {
+    return { lines: [...lines], headOmitted: 0, tailOmitted: 0 };
+  }
+  if (tailFirst) {
+    return {
+      lines: [...lines.slice(lines.length - limit)],
+      headOmitted: lines.length - limit,
+      tailOmitted: 0,
+    };
+  }
+  return {
+    lines: [...lines.slice(0, limit)],
+    headOmitted: 0,
+    tailOmitted: lines.length - limit,
+  };
+}
+
 function bodyLines(
   view: ToolCallView,
   details: Record<string, unknown>,
@@ -646,18 +707,26 @@ function contentWidth(ctx: RenderContext, prefixWidth: number): number {
  *
  * 卡片正文最多 8 行，用户因此看不到"模型实际看到了什么"；
  * 这里补上可审计的完整视图。
+ *
+ * 行号**必须跟随 `details.returnedFrom`**：`read_file` 分页读取时
+ * （offset/limit）结果从文件中间开始，编号却从 1 起的话，
+ * 用户照着 `/last` 报的"第 12 行"去编辑器里找，找到的完全是别的地方。
+ * 卡片正文用的是同一套行号，两者必须一致。
  */
 export function renderLastToolOutput(
   view: ToolCallView,
   ctx: RenderContext,
   options: { maxLines: number } = { maxLines: 200 },
 ): string[] {
+  const details = detailsOf(view);
   const text = resultText(view);
   const lines = toLines(text);
   const total = lines.length;
   const maxLines = Math.max(1, options.maxLines);
   const shown = lines.slice(0, maxLines);
-  const numberWidth = String(Math.max(1, shown.length)).length;
+  const firstLine = numberOf(details.returnedFrom) ?? 1;
+  const lastLine = firstLine + Math.max(0, shown.length - 1);
+  const numberWidth = String(Math.max(1, lastLine)).length;
 
   const title = `${toolIcon(view.name, ctx)} 上一条工具输出：${view.name} ${truncateToWidth(
     primaryText(view),
@@ -681,7 +750,7 @@ export function renderLastToolOutput(
   const gutter = ctx.style.dim(gutterGlyph(ctx));
   const linePrefixWidth = displayWidth(gutterGlyph(ctx)) + numberWidth + 3;
   shown.forEach((line, index) => {
-    const numbered = `${String(index + 1).padStart(numberWidth)} │ ${line}`;
+    const numbered = `${String(firstLine + index).padStart(numberWidth)} │ ${line}`;
     out.push(
       `${gutter} ${truncateToWidth(numbered, contentWidth(ctx, linePrefixWidth))}`,
     );
@@ -690,17 +759,26 @@ export function renderLastToolOutput(
   const hidden = total - shown.length;
   const footer =
     hidden > 0
-      ? `显示第 1-${shown.length} 行，共 ${total} 行 · /last ${shown.length + maxLines} 查看后续`
+      ? `显示第 ${firstLine}-${lastLine} 行，共 ${total} 行 · /last ${shown.length + maxLines} 查看后续`
       : `共 ${total} 行`;
   out.push(`${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
 
   return out;
 }
 
+/**
+ * 关色时 stderr 的行首标记。
+ *
+ * 有色时 stderr 靠黄色区分；`NO_COLOR` 或非 TTY 下这套样式全部退化为原文本，
+ * stderr 和 stdout 混成一坨——用户看不出哪几行才是命令真正的抱怨。
+ * 颜色没了就把语义补回文本里（diff 的 `+`/`-` 同理，本来就有标记）。
+ */
+export const STDERR_MARK = "! ";
+
 function paintBodyLine(line: BodyLine, ctx: RenderContext): string {
   switch (line.kind) {
     case "stderr":
-      return ctx.style.yellow(line.text);
+      return ctx.style.yellow(ctx.color ? line.text : `${STDERR_MARK}${line.text}`);
     case "add":
       return ctx.style.green(line.text);
     case "remove":
@@ -763,20 +841,37 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   // ---- 正文
   const body = bodyLines(view, details, ctx);
   const limit = bodyLimit(view);
-  const shown = body.slice(0, limit);
-  for (const line of shown) {
+  // 失败时窗口移到末尾：报错在尾部，取前 8 行等于把原因藏起来
+  const failed = isFailedCall(view, details);
+  const window = selectBodyWindow(body, limit, failed);
+  const bodyLimitNote = (text: string): string =>
+    `${gutter} ${ctx.style.dim(text)}`;
+
+  if (window.headOmitted > 0) {
+    lines.push(bodyLimitNote(`… 已省略前 ${window.headOmitted} 行`));
+  }
+  for (const line of window.lines) {
     const text = truncateToWidth(
       line.text,
       contentWidth(ctx, displayWidth(gutterGlyph(ctx)) + 1),
     );
     lines.push(`${gutter} ${paintBodyLine({ ...line, text }, ctx)}`);
   }
-  if (body.length > shown.length) {
-    lines.push(`${gutter} ${ctx.style.dim(`… 省略 ${body.length - shown.length} 行`)}`);
+  if (window.tailOmitted > 0) {
+    lines.push(bodyLimitNote(`… 省略 ${window.tailOmitted} 行`));
   }
 
   // ---- 页脚
-  const footer = footerText(view, details, shown.length);
+  const omitted = window.headOmitted + window.tailOmitted;
+  const baseFooter = footerText(view, details, window.lines.length);
+  // 卡片只给结论，被省掉的部分必须告诉用户去哪儿看：不然"显示前 8 行"
+  // 就变成了"剩下的你自己想办法"
+  const footer =
+    baseFooter === null
+      ? null
+      : omitted > 0
+        ? `${baseFooter} · /last 查看全部`
+        : baseFooter;
   if (footer) {
     lines.push(`${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
   }

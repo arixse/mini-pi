@@ -6,14 +6,17 @@ import {
   PLAIN_CONTEXT,
   PLAIN_STYLE,
   RenderContext,
+  STDERR_MARK,
   ToolCallView,
   createRenderContext,
   diffLines,
   displayWidth,
   formatBytes,
+  isFailedCall,
   layoutHeader,
   packItems,
   renderLastToolOutput,
+  selectBodyWindow,
   renderSubAgentFooter,
   renderSubAgentHeader,
   renderToolCall,
@@ -187,8 +190,115 @@ describe("renderToolCall", () => {
     assert.ok(lines[1].includes("❌"));
     assert.ok(lines[1].includes("exit 1"));
     assert.ok(lines[1].includes("400ms"), "不足 1 秒时按毫秒展示");
-    assert.strictEqual(lines[2], "│ npm error Missing script");
+    // 纯文本上下文没有颜色可用，stderr 靠行首 `! ` 标记区分（否则与 stdout 混在一起）
+    assert.strictEqual(lines[2], `│ ${STDERR_MARK}npm error Missing script`);
     assert.ok(lines.at(-1)?.includes("stderr"));
+  });
+
+  it("有颜色时不再重复加 stderr 标记", () => {
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "npm run build" },
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "npm error" }],
+          details: { command: "npm run build", exitCode: 1, stdout: "", stderr: "npm error\n" },
+        },
+      }),
+      { ...ctx, color: true },
+    );
+
+    const stderrLine = lines.find((line) => line.includes("npm error")) ?? "";
+    assert.ok(!stderrLine.includes(STDERR_MARK), "有色时靠颜色区分，不必再加标记");
+  });
+
+  /**
+   * 回归用例：正文上限 8 行，而报错几乎总在末尾。
+   * 此前一律取前 8 行，于是"命令失败"的卡片里全是无关的中间输出，
+   * 真正的失败原因被截在屏幕外。
+   */
+  it("失败时正文取尾部，报错不会被前 8 行挤出窗口", () => {
+    const stdout = Array.from({ length: 20 }, (_, i) => `compiling ${i}`).join("\n");
+    const stderr = ["npm error code ELIFECYCLE", "npm error Missing script: build"].join("\n");
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "npm run build" },
+        isError: true,
+        result: {
+          content: [{ type: "text", text: `${stdout}\n${stderr}` }],
+          details: { command: "npm run build", exitCode: 1, stdout, stderr },
+        },
+      }),
+      ctx,
+    );
+
+    const body = lines.filter((line) => line.startsWith("│ ")).join("\n");
+    assert.ok(body.includes("Missing script"), `报错必须出现在正文里：\n${body}`);
+    assert.ok(!body.includes("compiling 0"), "窗口应移到末尾，不再从第一行开始");
+    // 20 行 stdout + 2 行 stderr = 22 行，只留末尾 8 行
+    assert.ok(lines.some((line) => line.includes("已省略前 14 行")));
+  });
+
+  it("成功时仍然从头开始显示，并在末尾标出省略量", () => {
+    const stdout = Array.from({ length: 20 }, (_, i) => `row-${i}`).join("\n");
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: "ls" },
+        result: {
+          content: [{ type: "text", text: stdout }],
+          details: { command: "ls", exitCode: 0, stdout, stderr: "" },
+        },
+      }),
+      ctx,
+    );
+
+    const body = lines.filter((line) => line.startsWith("│ ")).join("\n");
+    assert.ok(body.includes("row-0"), "成功时保留开头");
+    assert.ok(lines.some((line) => line.includes("省略 12 行")));
+    // 省略了内容就要告诉用户去哪儿看完整的
+    assert.ok(lines.at(-1)?.includes("/last 查看全部"));
+  });
+
+  it("selectBodyWindow：默认取前段，失败时取后段", () => {
+    const items = [1, 2, 3, 4, 5];
+    assert.deepStrictEqual(selectBodyWindow(items, 3), {
+      lines: [1, 2, 3],
+      headOmitted: 0,
+      tailOmitted: 2,
+    });
+    assert.deepStrictEqual(selectBodyWindow(items, 3, true), {
+      lines: [3, 4, 5],
+      headOmitted: 2,
+      tailOmitted: 0,
+    });
+    assert.deepStrictEqual(selectBodyWindow(items, 10), {
+      lines: items,
+      headOmitted: 0,
+      tailOmitted: 0,
+    });
+  });
+
+  it("isFailedCall：非零退出码也算失败（工具未抛错时）", () => {
+    const base = {
+      args: { command: "x" },
+      startedAt: 0,
+      finishedAt: 1,
+      result: { content: [{ type: "text" as const, text: "x" }] },
+      isError: false,
+    };
+    assert.strictEqual(
+      isFailedCall(
+        { ...base, name: "bash" },
+        { exitCode: 1 },
+      ),
+      true,
+    );
+    assert.strictEqual(isFailedCall({ ...base, name: "bash" }, { exitCode: 0 }), false);
+    assert.strictEqual(isFailedCall({ ...base, name: "bash" }, {}), false);
+    assert.strictEqual(isFailedCall({ ...base, name: "read_file" }), false);
   });
 
   it("bash 长输出应省略并给出省略行数", () => {
@@ -333,6 +443,44 @@ describe("renderToolCall", () => {
     assert.strictEqual(lines[6], "│ 5 │ line-5");
     assert.ok(lines.at(-1)?.includes("显示第 1-5 行，共 12 行"));
     assert.ok(lines.at(-1)?.includes("/last 10"));
+  });
+
+  /**
+   * 回归用例：`read_file` 带 offset/limit 分页读取时，结果从文件中部开始，
+   * 而 `/last` 的行号此前一律从 1 起——用户照它给的"第 12 行"去编辑器里找，
+   * 找到的是完全不相干的地方（卡片正文用的是真实行号，两者还对不上）。
+   */
+  it("renderLastToolOutput：行号跟随 returnedFrom，与卡片正文一致", () => {
+    const target = view({
+      name: "read_file",
+      args: { path: "src/agent/tools.ts", offset: 281 },
+      result: {
+        content: [
+          {
+            type: "text",
+            text: ["alpha", "beta", "gamma"].join("\n"),
+          },
+        ],
+        details: {
+          path: "src/agent/tools.ts",
+          totalLines: 744,
+          returnedFrom: 281,
+          returnedLines: 3,
+        },
+      },
+    });
+
+    const lines = renderLastToolOutput(target, ctx, { maxLines: 200 });
+
+    assert.strictEqual(lines[2], "│ 281 │ alpha");
+    assert.strictEqual(lines[4], "│ 283 │ gamma");
+
+    // 只看前 2 行时，页脚的区间也要是真实行号
+    const paged = renderLastToolOutput(target, ctx, { maxLines: 2 });
+    assert.ok(
+      paged.at(-1)?.includes("显示第 281-282 行，共 3 行"),
+      `页脚应给真实区间：${paged.at(-1)}`,
+    );
   });
 
   it("renderLastToolOutput：内容不足时不需要续看提示", () => {
@@ -686,6 +834,7 @@ describe("renderToolCall", () => {
     // 验证渲染层确实把注入的样式用上了（diff / stderr / 状态各自着色）
     const marked: RenderContext = {
       ...ctx,
+      color: true,
       style: {
         ...PLAIN_STYLE,
         dim: (text) => `<d>${text}</d>`,
@@ -699,6 +848,12 @@ describe("renderToolCall", () => {
     assert.ok(markedText.includes("<g>✅</g>"), "成功状态应为绿色");
     assert.ok(markedText.includes("<y>warn</y>"), "stderr 应为黄色");
     assert.ok(markedText.includes("<d>│</d>"), "gutter 应为 dim");
+
+    // 纯文本模式下 stderr 必须带行首标记：颜色没了，语义不能跟着没
+    assert.ok(
+      renderToolCall(bash, ctx).some((line) => line.includes(`${STDERR_MARK}warn`)),
+      "关色时 stderr 应有文本标记",
+    );
   });
 
   it("颜色开关决定使用哪套样式", () => {
