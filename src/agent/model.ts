@@ -11,6 +11,7 @@ import {
   createTextContent,
   messageText,
 } from "./message";
+import { logger } from "../shared/logger";
 export type CompleteInput = {
   systemPrompt: string;
   messages: AgentMessage[];
@@ -34,12 +35,84 @@ export const REQUEST_TIMEOUT_MS = 120_000;
 export const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /**
- * Anthropic 默认 max_tokens。
+ * 默认 max_tokens（OpenAI 与 Anthropic 两条路径共用）。
  *
  * 原来的 4096 容易把长回答截断成 stop_reason=max_tokens；
  * 可通过 settings.json 的 maxTokens 覆盖。
  */
 export const DEFAULT_MAX_TOKENS = 8_192;
+
+/**
+ * 组装 OpenAI 兼容请求体（纯函数，便于单测 max_tokens 的取值与夹取）。
+ *
+ * 推理型模型（o1 / o3 / o4-mini 等）只接受 `max_completion_tokens`，
+ * 传 `max_tokens` 会被直接拒绝（400），因此按模型名分流。
+ */
+export type OpenAIRequestPayload = {
+  model: string;
+  messages: unknown[];
+  tools?: unknown[];
+  tool_choice?: "auto";
+  stream: true;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  stream_options?: { include_usage: boolean };
+};
+
+/** 只接受 `max_completion_tokens` 的推理型模型（`o1` / `o3` / `o4-mini` …） */
+export const REASONING_MODEL_PATTERN = /^o\d/i;
+
+export function buildOpenAIRequest(params: {
+  model: string;
+  messages: unknown[];
+  tools: unknown[];
+  maxTokens?: number;
+  includeStreamUsage?: boolean;
+}): OpenAIRequestPayload {
+  const payload: OpenAIRequestPayload = {
+    model: params.model,
+    messages: params.messages,
+    stream: true,
+  };
+
+  if (params.tools.length > 0) {
+    payload.tools = params.tools;
+    payload.tool_choice = "auto";
+  }
+
+  // 不传（undefined）表示"让提供方自己决定"：网关不接受该参数时用它降级
+  if (params.maxTokens !== undefined) {
+    const maxTokens = Math.max(1, Math.floor(params.maxTokens));
+    if (REASONING_MODEL_PATTERN.test(params.model)) {
+      payload.max_completion_tokens = maxTokens;
+    } else {
+      payload.max_tokens = maxTokens;
+    }
+  }
+
+  if (params.includeStreamUsage) {
+    payload.stream_options = { include_usage: true };
+  }
+
+  return payload;
+}
+
+/**
+ * 提供方不接受 `max_tokens` / `max_completion_tokens` 时的错误特征。
+ *
+ * 两种真实场景都会走到这里：一是网关根本不认这个参数，二是配的
+ * `maxTokens` 超过了模型自身的输出上限（此时"不再下发该参数"比直接报错
+ * 更有用——落回提供方默认值）。
+ */
+export function isUnsupportedMaxTokensError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/max_(?:completion_)?tokens/i.test(message)) {
+    return false;
+  }
+  return /unsupported|not supported|unrecognized|unexpected|unknown|invalid|extra|too large|too high|greater than|exceeds|must be/i.test(
+    message,
+  );
+}
 
 /** 组装 Anthropic 请求体（纯函数，便于单测 max_tokens 的取值与夹取） */
 export function buildAnthropicRequest(params: {
@@ -177,6 +250,13 @@ export function createStreamIdleWatchdog(
       parent?.removeEventListener("abort", onParentAbort);
     },
   };
+}
+
+/** 输出上限规范化：非法值（0 / 负数 / NaN / 非数字）回退到默认值 */
+export function resolveMaxTokens(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 1
+    ? Math.floor(value)
+    : DEFAULT_MAX_TOKENS;
 }
 
 /** 流式静默上限规范化：非法值回退到默认值 */
@@ -722,7 +802,10 @@ export type ModelConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
-  /** Anthropic 路径的输出上限；默认 {@link DEFAULT_MAX_TOKENS} */
+  /**
+   * 输出上限（两条路径共用）：OpenAI 下发 max_tokens / max_completion_tokens，
+   * Anthropic 下发 max_tokens。默认 {@link DEFAULT_MAX_TOKENS}
+   */
   maxTokens?: number;
   /**
    * 流式响应两段数据之间的最大间隔（毫秒）；默认 {@link STREAM_IDLE_TIMEOUT_MS}。
@@ -738,6 +821,13 @@ export class OpenAIModel implements LlmModel {
   private model: string;
   /** 提供方是否支持 stream_options.include_usage；不支持时自动关闭，避免每次请求都失败 */
   private includeStreamUsage = true;
+  /**
+   * 是否下发 max_tokens / max_completion_tokens。
+   * 网关不认该参数（或配的值超过模型自身的输出上限）时自动降级为不下发。
+   */
+  private includeMaxTokens = true;
+  /** 输出上限：默认 {@link DEFAULT_MAX_TOKENS}，可用 settings.json 的 maxTokens 覆盖 */
+  private maxTokens: number;
   /** 流式正文的静默上限 */
   private streamIdleTimeoutMs: number;
 
@@ -750,6 +840,7 @@ export class OpenAIModel implements LlmModel {
       maxRetries: 0,
     });
     this.model = config?.model || "gpt-3.5-turbo";
+    this.maxTokens = resolveMaxTokens(config?.maxTokens);
     this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }
 
@@ -758,25 +849,45 @@ export class OpenAIModel implements LlmModel {
     const tools = this.convertTools(input.tools);
 
     try {
-      return await this.requestWithRetry(input, messages, tools);
+      return await this.requestWithFallbacks(input, messages, tools);
     } catch (error) {
-      // 某些 OpenAI 兼容网关不认 stream_options：只针对这一种情况降级一次
-      if (this.includeStreamUsage && isUnsupportedStreamOptionsError(error)) {
-        this.includeStreamUsage = false;
-        console.error(
-          "提供方不支持 stream_options.include_usage，已关闭流式用量统计（不影响对话）",
-        );
-        try {
-          return await this.requestWithRetry(input, messages, tools);
-        } catch (retryError) {
-          error = retryError;
-        }
-      }
       // 以取消信号为准：打包改名等任何命名差异都不该把"用户取消"报成 API 故障
       if (!isAbortError(error) && !input.signal?.aborted) {
-        console.error("OpenAI API error:", error);
+        logger.error("OpenAI API error:", error);
       }
       return this.createErrorResponse(error, input.signal);
+    }
+  }
+
+  /**
+   * 请求，并在提供方不认某个参数时**只针对该参数**降级重试一次。
+   *
+   * 兼容网关的能力差异很大（不认 stream_options、不认 max_tokens），
+   * 但降级必须精准：笼统地"400 就重试"会掩盖真正的请求错误。
+   */
+  private async requestWithFallbacks(
+    input: CompleteInput,
+    messages: OpenAI.ChatCompletionMessageParam[],
+    tools: OpenAI.ChatCompletionTool[],
+  ): Promise<AssistantMessage> {
+    try {
+      return await this.requestWithRetry(input, messages, tools);
+    } catch (error) {
+      if (this.includeStreamUsage && isUnsupportedStreamOptionsError(error)) {
+        this.includeStreamUsage = false;
+        logger.warn(
+          "提供方不支持 stream_options.include_usage，已关闭流式用量统计（不影响对话）",
+        );
+        return await this.requestWithRetry(input, messages, tools);
+      }
+      if (this.includeMaxTokens && isUnsupportedMaxTokensError(error)) {
+        this.includeMaxTokens = false;
+        logger.warn(
+          "提供方不接受 max_tokens / max_completion_tokens，已不再下发该参数（输出上限由提供方决定）",
+        );
+        return await this.requestWithRetry(input, messages, tools);
+      }
+      throw error;
     }
   }
 
@@ -790,7 +901,7 @@ export class OpenAIModel implements LlmModel {
       {
         signal: input.signal,
         onRetry: (attempt, error, delayMs) =>
-          console.error(
+          logger.warn(
             `OpenAI 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
           ),
       },
@@ -816,16 +927,14 @@ export class OpenAIModel implements LlmModel {
 
     try {
       const stream = await this.client.chat.completions.create(
-        {
+        buildOpenAIRequest({
           model: this.model,
           messages,
-          tools: tools.length > 0 ? tools : undefined,
-          tool_choice: tools.length > 0 ? "auto" : undefined,
-          stream: true,
-          ...(this.includeStreamUsage
-            ? { stream_options: { include_usage: true } }
-            : {}),
-        },
+          tools,
+          // 降级后不再下发，让提供方用自己的默认输出上限
+          maxTokens: this.includeMaxTokens ? this.maxTokens : undefined,
+          includeStreamUsage: this.includeStreamUsage,
+        }) as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
         { signal: watchdog.signal, timeout: REQUEST_TIMEOUT_MS },
       );
 
@@ -944,7 +1053,7 @@ export class AnthropicModel implements LlmModel {
       maxRetries: 0,
     });
     this.model = config?.model || "claude-3-sonnet-20240229";
-    this.maxTokens = Math.max(1, Math.floor(config?.maxTokens ?? DEFAULT_MAX_TOKENS));
+    this.maxTokens = resolveMaxTokens(config?.maxTokens);
     this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }
   async complete(input: CompleteInput): Promise<AssistantMessage> {
@@ -960,7 +1069,7 @@ export class AnthropicModel implements LlmModel {
         {
           signal: input.signal,
           onRetry: (attempt, error, delayMs) =>
-            console.error(
+            logger.warn(
               `Anthropic 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
             ),
         },
@@ -968,7 +1077,7 @@ export class AnthropicModel implements LlmModel {
       return this.convertResponse(response);
     } catch (error) {
       if (!isAbortError(error) && !input.signal?.aborted) {
-        console.error("Anthropic API error:", error);
+        logger.error("Anthropic API error:", error);
       }
       return this.createErrorResponse(error, input.signal);
     }

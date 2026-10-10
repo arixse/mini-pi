@@ -20,6 +20,8 @@ import {
 import { JsonlSessionStore, estimateTextTokens } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
+import { createUsageTracker, formatUsage, UsageTracker } from "../agent/usage";
+import { logger } from "../shared/logger";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
 import { createStatusLine, StatusController } from "./status";
@@ -217,6 +219,11 @@ export type ReplOptions = {
   /** `contextWindow` 的来源，只用于 `/status` 展示 */
   contextWindowSource?: ContextWindowSource;
   /**
+   * token 用量累计器：由 `startRepl` 创建并写回 options，
+   * 便于 `/status` 与外部（测试）共用同一份统计。
+   */
+  usageTracker?: UsageTracker;
+  /**
    * `/model` 选中新模型后重建模型与上下文窗口。
    * 不传时退化为旧行为：只写 settings.json，提示用户用 /reload 生效。
    */
@@ -240,6 +247,10 @@ export type ReplOptions = {
 };
 
 export async function startRepl(options: ReplOptions): Promise<void> {
+  // 用量统计：整个 REPL 生命周期共用一份，切会话/清历史时清零
+  const usageTracker = options.usageTracker ?? createUsageTracker();
+  options.usageTracker = usageTracker;
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -559,13 +570,15 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       status.stop();
       // 只补写尚未落盘的部分（例如到达最大轮次时的 guardrail 消息）
       await appendAgentMessages(options, result.newMessages.slice(syncedMessages));
+      // 用量在整轮结束后统计一次：newMessages 含本轮全部 assistant 消息
+      usageTracker.recordTurn(result.newMessages);
 
       console.log("");
       console.log(chalk.dim("─".repeat(60)));
       console.log("");
     } catch (error) {
       status.stop();
-      console.error(chalk.red("\n❌ 错误:"), error instanceof Error ? error.message : error);
+      logger.error("❌ 错误:", error instanceof Error ? error.message : error);
     } finally {
       status.stop();
       activeRun = null;
@@ -583,10 +596,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
         chalk.dim("\n⏳ 上一条消息仍在处理，本条已排队，将在其结束后执行\n"),
       ),
     onError: (error) =>
-      console.error(
-        chalk.red("\n❌ 错误:"),
-        error instanceof Error ? error.message : error,
-      ),
+      logger.error("❌ 错误:", error instanceof Error ? error.message : error),
   });
 
   rl.on("line", (line) => {
@@ -626,6 +636,8 @@ export function switchSession(options: ReplOptions, target: string): boolean {
   }
   options.sessionStore = store;
   store.syncContext(options.messages);
+  // 换会话后用量从头计：统计的是"当前会话"而不是"本次进程"
+  options.usageTracker?.reset();
   return true;
 }
 
@@ -652,6 +664,10 @@ export function sessionStatusEntries(
         : "未启用",
     ],
     ...compactionStatusRow(store),
+    // 用量：模型返回的 usage 此前只在消息里躺着，没人累加，/status 也看不到
+    ...(options.usageTracker
+      ? ([["用量", formatUsage(options.usageTracker.snapshot())]] as Array<[string, string]>)
+      : []),
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
     ["工作目录", options.workspaceRoot],
   ];
@@ -823,6 +839,7 @@ export async function appendAgentMessages(
  */
 export async function clearSession(options: ReplOptions): Promise<void> {
   options.messages.length = 0;
+  options.usageTracker?.reset();
   await options.sessionStore?.reset();
 }
 
@@ -839,6 +856,7 @@ export function startNewSession(options: ReplOptions): boolean {
   }
   options.sessionStore = created;
   created.syncContext(options.messages);
+  options.usageTracker?.reset();
   return true;
 }
 
@@ -937,7 +955,7 @@ export function createAgentEventHandler(
       deps.quiet(
         chalk.yellow(
           "\n⚠️  输出达到 max_tokens 上限被截断，可以继续对话让它接着写" +
-            "（Anthropic 路径可用 settings.json 的 maxTokens 放宽）\n",
+            "（可用 settings.json 的 maxTokens 放宽）\n",
         ),
       );
     }
@@ -998,7 +1016,7 @@ function printHelp() {
   console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
   console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
   console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
-  console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文用量与确认模式"));
+  console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文与 token 用量、确认模式"));
   console.log(chalk.white("  /sessions") + chalk.dim(" - 列出当前工作目录的会话"));
   console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));
   console.log(chalk.white("  /last [n]") + chalk.dim(" - 查看上一条工具输出的完整内容（默认 200 行）"));

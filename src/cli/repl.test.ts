@@ -37,6 +37,7 @@ import { runAgentLoop } from "../agent/loop";
 import { ToolRegistry } from "../agent/tools";
 import { createAssistantMessage, createTextContent, createUserMessage } from "../agent/message";
 import { AgentMessage } from "../shared/protocol";
+import { createUsageTracker } from "../agent/usage";
 import { PLAIN_CONTEXT, RenderContext } from "./render";
 import { RunState, StatusController } from "./status";
 
@@ -969,6 +970,64 @@ describe("session context wiring", () => {
     assert.strictEqual(entries.get("会话文件"), "(未启用会话存储)");
     assert.strictEqual(entries.get("模型"), "未配置");
     assert.strictEqual(entries.get("上下文"), "未启用");
+  });
+
+  /**
+   * 回归：模型早就返回了 usage，但没人累加，`/status` 里根本看不到消耗。
+   */
+  it("sessionStatusEntries 应显示本次会话的 token 用量", () => {
+    const options = createOptions();
+    options.usageTracker = createUsageTracker();
+    options.usageTracker.recordTurn([
+      { role: "user", content: [createTextContent("hi")], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [createTextContent("yo")],
+        stopReason: "stop",
+        usage: { input: 1200, output: 300, totalTokens: 1500 },
+        timestamp: 2,
+      },
+    ]);
+
+    const entries = new Map(sessionStatusEntries(options, false));
+    const usage = entries.get("用量") ?? "";
+
+    assert.ok(usage.includes("输入 1.2k"), `应显示输入用量，实际：${usage}`);
+    assert.ok(usage.includes("输出 300"), `应显示输出用量，实际：${usage}`);
+    assert.ok(usage.includes("1 次请求"), `应显示请求次数，实际：${usage}`);
+  });
+
+  it("sessionStatusEntries 无用量累计器时不显示用量行", () => {
+    const entries = new Map(sessionStatusEntries(createOptions(), false));
+    assert.strictEqual(entries.get("用量"), undefined);
+  });
+
+  it("切会话与 /clear 应把用量统计清零", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+    const tracker = createUsageTracker();
+    options.usageTracker = tracker;
+
+    const turn = (): AgentMessage[] => [
+      {
+        role: "assistant",
+        content: [createTextContent("yo")],
+        stopReason: "stop",
+        usage: { input: 10, output: 2, totalTokens: 12 },
+        timestamp: Date.now(),
+      },
+    ];
+
+    tracker.recordTurn(turn());
+    assert.strictEqual(tracker.snapshot().requests, 1);
+
+    await clearSession(options);
+    assert.strictEqual(tracker.snapshot().requests, 0, "/clear 后应重新计数");
+
+    tracker.recordTurn(turn());
+    options.onSwitchSession = () => new JsonlSessionStore(sessionFile, testDir);
+    assert.strictEqual(switchSession(options, "1"), true);
+    assert.strictEqual(tracker.snapshot().requests, 0, "切会话后应重新计数");
   });
 
   it("formatSessionList 应标记当前会话并给出大小", () => {

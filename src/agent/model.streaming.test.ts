@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import { createOpenAIModel } from "./model";
+import { createOpenAIModel, DEFAULT_MAX_TOKENS } from "./model";
 import { createTextContent } from "./message";
 
 /**
@@ -73,6 +73,9 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
         const payload = JSON.parse(body);
         assert.strictEqual(payload.stream, true);
         assert.deepStrictEqual(payload.stream_options, { include_usage: true });
+        // 输出上限必须真的下发：此前 OpenAI 路径完全没传，
+        // settings.json 的 maxTokens 只对 Anthropic 生效
+        assert.strictEqual(payload.max_tokens, DEFAULT_MAX_TOKENS);
 
         writeSse(res, [
           { choices: [{ delta: { content: "你" } }] },
@@ -192,6 +195,55 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
    * fetch() resolve 后就 clearTimeout），因此上游"发出响应头之后不再发送数据"
    * 时，正文读取阶段此前**没有任何时限**——本轮永久卡住，重试也不会触发。
    */
+  /**
+   * 输出上限是"尽力而为"：第三方网关可能不认 max_tokens，
+   * 配的值也可能超过模型自身的上限。这两种情况都应降级为"不再下发"，
+   * 而不是让整个对话直接失败。
+   */
+  it("提供方拒绝 max_tokens 时应自动降级重试并成功", async () => {
+    await withServer(
+      (_req, res, body) => {
+        const payload = JSON.parse(body);
+        if (payload.max_tokens !== undefined) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: { message: "Unrecognized request argument supplied: max_tokens" },
+            }),
+          );
+          return;
+        }
+        writeSse(res, [
+          { choices: [{ delta: { content: "降级成功" } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
+      },
+      async (baseUrl, requests) => {
+        const model = createOpenAIModel({
+          apiKey: "test-key",
+          baseUrl,
+          model: "test-model",
+          maxTokens: 4096,
+        });
+
+        const message = await model.complete(baseInput());
+
+        assert.strictEqual(message.stopReason, "stop");
+        assert.strictEqual(
+          (message.content[0] as { type: "text"; text: string }).text,
+          "降级成功",
+        );
+        assert.strictEqual(requests.length, 2, "第一次失败后应只重试一次");
+        assert.strictEqual(JSON.parse(requests[0]).max_tokens, 4096, "首次请求带配置的上限");
+        assert.strictEqual(
+          JSON.parse(requests[1]).max_tokens,
+          undefined,
+          "降级后的请求不应再带 max_tokens",
+        );
+      },
+    );
+  });
+
   it("上游发送响应头后一直静默时，应被静默看门狗中止并可按瞬时故障重试", async () => {
     let requests = 0;
 

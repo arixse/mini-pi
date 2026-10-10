@@ -12,6 +12,9 @@ import {
   DEFAULT_MAX_TOKENS,
   REQUEST_TIMEOUT_MS,
   buildAnthropicRequest,
+  buildOpenAIRequest,
+  isUnsupportedMaxTokensError,
+  resolveMaxTokens,
 } from "./model";
 import {
   collectOpenAIStream,
@@ -33,6 +36,7 @@ import {
 import type { ChatCompletionChunkLike } from "./model";
 import { createTextContent } from "./message";
 import { AgentMessage } from "../shared/protocol";
+import { configureLogger, createMemorySink, resetLogger } from "../shared/logger";
 
 /** 等到看门狗的静默超时真的触发（而不是靠 sleep 猜时间） */
 function waitForAbort(signal: AbortSignal): Promise<void> {
@@ -169,11 +173,10 @@ describe("model", () => {
 
     it("should not log an API error when the call is aborted", async () => {      // SDK 抛出的取消错误 name 是 "Error"、构造函数名才是 APIUserAbortError，
       // 只检查 name 会把用户取消误报成 API 故障
-      const originalError = console.error;
-      const logged: unknown[] = [];
-      console.error = (...args: unknown[]) => {
-        logged.push(args[0]);
-      };
+      // 捕获的是统一 logger 的落点，而不是 monkey patch console：
+      // 26 处 console.error 直写收敛到 logger 之后，这里才真正测得到"有没有打日志"
+      const { entries, sink } = createMemorySink();
+      configureLogger({ level: "debug", sink });
 
       try {
         const model = createOpenAIModel({ apiKey: "test-key" });
@@ -189,10 +192,10 @@ describe("model", () => {
           signal: controller.signal,
         });
       } finally {
-        console.error = originalError;
+        resetLogger();
       }
 
-      assert.deepStrictEqual(logged, [], "用户取消不应打印 API 错误日志");
+      assert.deepStrictEqual(entries, [], "用户取消不应打印 API 错误日志");
     });
   });
 
@@ -440,6 +443,125 @@ describe("model", () => {
         (model as unknown as { maxTokens: number }).maxTokens,
         999,
       );
+    });
+  });
+
+  /**
+   * OpenAI 路径此前**完全没传 max_tokens**：settings.json 的 maxTokens
+   * 只对 Anthropic 生效，OpenAI 侧永远用提供方的默认输出上限，
+   * 长回答会被静默截断而用户无从调整。
+   */
+  describe("OpenAI 请求体（max_tokens 可配置）", () => {
+    it("默认应下发 DEFAULT_MAX_TOKENS", () => {
+      const body = buildOpenAIRequest({
+        model: "gpt-4o",
+        messages: [],
+        tools: [],
+        maxTokens: DEFAULT_MAX_TOKENS,
+      });
+
+      assert.strictEqual(body.max_tokens, DEFAULT_MAX_TOKENS);
+      assert.strictEqual(body.stream, true);
+      assert.strictEqual(body.tools, undefined, "无工具时不应带 tools/tool_choice");
+    });
+
+    it("应使用配置的 maxTokens 并做夹取", () => {
+      const custom = buildOpenAIRequest({
+        model: "gpt-4o",
+        messages: [],
+        tools: [],
+        maxTokens: 1234,
+      });
+      assert.strictEqual(custom.max_tokens, 1234);
+
+      const clamped = buildOpenAIRequest({
+        model: "gpt-4o",
+        messages: [],
+        tools: [],
+        maxTokens: 0.2,
+      });
+      assert.strictEqual(clamped.max_tokens, 1, "至少为 1，避免非法请求");
+    });
+
+    it("推理型模型应改用 max_completion_tokens（传 max_tokens 会被拒）", () => {
+      const body = buildOpenAIRequest({
+        model: "o3-mini",
+        messages: [],
+        tools: [],
+        maxTokens: 4096,
+      });
+
+      assert.strictEqual(body.max_completion_tokens, 4096);
+      assert.strictEqual(body.max_tokens, undefined);
+    });
+
+    it("网关不接受该参数时可不下发（降级后由提供方决定上限）", () => {
+      const body = buildOpenAIRequest({
+        model: "gpt-4o",
+        messages: [],
+        tools: [],
+        maxTokens: undefined,
+      });
+
+      assert.strictEqual(body.max_tokens, undefined);
+      assert.strictEqual(body.max_completion_tokens, undefined);
+    });
+
+    it("有工具时应带上 tools 与 tool_choice", () => {
+      const tool = { type: "function" as const, function: { name: "t" } };
+      const body = buildOpenAIRequest({
+        model: "gpt-4o",
+        messages: [],
+        tools: [tool],
+      });
+
+      assert.deepStrictEqual(body.tools, [tool]);
+      assert.strictEqual(body.tool_choice, "auto");
+    });
+
+    it("模型实例应带上配置的 maxTokens", () => {
+      const model = createOpenAIModel({ apiKey: "k", maxTokens: 999 });
+      assert.strictEqual((model as unknown as { maxTokens: number }).maxTokens, 999);
+      // 缺省与非法值都应回落到默认上限
+      assert.strictEqual(
+        (createOpenAIModel({ apiKey: "k" }) as unknown as { maxTokens: number }).maxTokens,
+        DEFAULT_MAX_TOKENS,
+      );
+      assert.strictEqual(resolveMaxTokens(undefined), DEFAULT_MAX_TOKENS);
+      assert.strictEqual(resolveMaxTokens(-5), DEFAULT_MAX_TOKENS);
+    });
+  });
+
+  describe("max_tokens 降级判定", () => {
+    it("网关不认该参数时应判为可降级", () => {
+      assert.strictEqual(
+        isUnsupportedMaxTokensError(
+          new Error("Unrecognized request argument supplied: max_tokens"),
+        ),
+        true,
+      );
+      assert.strictEqual(
+        isUnsupportedMaxTokensError(
+          new Error("Invalid 'max_completion_tokens': unsupported value"),
+        ),
+        true,
+      );
+      // 配的值超过模型输出上限：降级为"不下发"比直接报错有用
+      assert.strictEqual(
+        isUnsupportedMaxTokensError(
+          new Error("max_tokens must be less than 4096 for this model"),
+        ),
+        true,
+      );
+    });
+
+    it("无关错误不应被降级吞掉", () => {
+      assert.strictEqual(isUnsupportedMaxTokensError(new Error("model not found")), false);
+      assert.strictEqual(
+        isUnsupportedMaxTokensError(new Error("Incorrect API key provided")),
+        false,
+      );
+      assert.strictEqual(isUnsupportedMaxTokensError(undefined), false);
     });
   });
 
