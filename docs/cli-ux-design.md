@@ -10,7 +10,7 @@
 | 1 | 真流式输出、工作状态行（spinner）、工具耗时 | ✅ 已实现 |
 | 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code/stderr） | ✅ 已实现（`src/cli/render.ts`） |
 | 3 | 结果逐行缩进、规模提示、`/last` 回看 | ✅ 已实现（`/last [n]` 带行号查看完整输出；卡片缩进与规模提示随第 2 档落地） |
-| 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | 🟡 部分完成（渲染已收口到 `render.ts`，降级支持 NO_COLOR / `MINI_PI_ASCII` / 窄终端换行；工具状态对象仍为模块级） |
+| 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | ✅ 已实现（渲染收口到 `render.ts`；宽度工具抽到 `width.ts`，状态行、`/status` 标签一并按显示宽度计算；终端 resize 会同步给渲染上下文） |
 | — | `read_file` 分页与上限（12.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
 | — | bash 输出上限、`list_files` 忽略规则与上限、循环内压缩、会话文件容错 | ✅ 已实现 |
 | — | `glob` / `grep` 工具、只读工具并发、`/status` `/sessions` `/switch` | ✅ 已实现 |
@@ -330,11 +330,16 @@ agent 是否基于错误或过期的信息做决策。这是可信度问题，�
 | `NO_COLOR` 环境变量 | 关闭全部颜色，保留结构与图标 |
 | `--no-emoji` / `MINI_PI_ASCII=1` | 图标替换为 ASCII 标签：`[bash] [read] [write] [edit] [list] [ok] [fail]` |
 | 终端宽度 < 60 | 右对齐取消，状态另起一行；gutter 用 `| ` |
+| 终端宽度**中途变化** | 监听 `resize` 更新渲染上下文宽度，之后的卡片按新列数排版 |
 | 无 CJK 字体 / 宽度不可测 | 回退为按码点计数（并在 `/status` 提示可能错位） |
 
 ## 9. 实现结构
 
 **新增 `src/cli/render.ts`（纯函数，便于单测）**
+
+宽度相关的函数（`displayWidth` / `truncateToWidth` / `padToWidth`）单独放在
+`src/cli/width.ts`——`render.ts` 依赖 `status.ts` 的 `formatDuration`，
+把宽度留在 render 里会让 status 想用时形成循环依赖。
 
 ```ts
 export type RenderContext = {
@@ -368,6 +373,9 @@ export function renderStatus(state: RunState, ctx): string;
 
 - `printToolInfo` 变为薄壳：缓存 `start` 时间戳与参数 → 终态时调用 `render.ts`。
 - `toolStartCache` 由模块级 Map 改为随会话创建的状态对象（避免缺 `end` 事件时永久残留）。
+- 状态行对并发记账：工具 start/end 走 `begin(id)` / `end(id)` 配对，
+  打印卡片前后用 `suspend()` / `resume()` 让出并重占该行（否则同批第一个跑完的工具
+  会把仍在跑的 spinner 一起抹掉）。
 - 图标/颜色表移出函数体，成为模块级常量。
 - `model.ts` 增加流式路径（`stream: true`），`loop.ts` 转发增量 delta；`message_update` 事件语义不变。
 - 轮次用量：`turn_end.message.usage` 已带单轮用量，直接渲染即可；整轮合计在 `loop.ts` 内累加后随 `turn_end` 交回 REPL。

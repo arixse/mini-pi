@@ -34,7 +34,8 @@ import { logger } from "../shared/logger";
 import { promptSelect } from "./select";
 import { createToolApproval } from "./approval";
 import { createStatusLine, StatusController } from "./status";
-import { createRenderContext, renderLastToolOutput, renderToolCall, renderSubAgentHeader, renderSubAgentFooter, RenderContext, ToolCallView } from "./render";
+import { createRenderContext, followTerminalWidth, renderLastToolOutput, renderToolCall, renderSubAgentHeader, renderSubAgentFooter, RenderContext, ToolCallView } from "./render";
+import { padToWidth } from "./width";
 import { ExitCoordinator } from "./exit";
 
 /**
@@ -463,10 +464,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
   const beforeToolCall = options.beforeToolCall ?? approval;
 
-  // 卡片渲染上下文与事件处理：整个会话复用同一份（宽度探测只做一次）
+  // 卡片渲染上下文与事件处理：整个会话复用同一份（样式开关只在启动时定）
+  const renderContext = createRenderContext();
+  // 宽度要跟着终端走：会话是长期存在的，中途拖窗口不该让后续卡片按旧列数排版
+  const unfollowWidth = followTerminalWidth(renderContext);
   const onAgentEvent = createAgentEventHandler({
     status,
-    renderContext: createRenderContext(),
+    renderContext,
     quiet,
   });
 
@@ -513,6 +517,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     },
     onExit: (code) => {
       status.stop();
+      // 退出前摘掉 resize 监听：否则监听器持有 stdout，进程收尾不清爽
+      unfollowWidth();
       console.log(chalk.yellow("\n👋 再见！\n"));
       process.exit(code);
     },
@@ -593,7 +599,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/last" || input.startsWith("/last ")) {
-      printLastToolOutput(input.slice(5).trim());
+      printLastToolOutput(input.slice(5).trim(), renderContext);
       rl.prompt();
       return;
     }
@@ -963,11 +969,25 @@ export function printStatus(
     subAgentEnabled,
   )) {
     console.log(
-      `${chalk.dim("│")} ${chalk.dim(label.padEnd(8, " "))} ${value}`,
+      `${chalk.dim("│")} ${chalk.dim(alignLabel(label, STATUS_LABEL_WIDTH))} ${value}`,
     );
   }
   console.log(chalk.dim("└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换"));
   console.log("");
+}
+
+/** `/status` 标签列的最小显示宽度 */
+export const STATUS_LABEL_WIDTH = 12;
+
+/**
+ * 把标签按**显示宽度**补齐到标签列。
+ *
+ * `padEnd` 是按 UTF-16 长度补齐的，而这里的标签全是中文：
+ * "模型" 长度 2 却占 4 列，"上下文窗口" 长度 5 却占 10 列，
+ * 按长度补齐的结果是值列的起点差出 3 列——一眼看上去就是没对齐。
+ */
+export function alignLabel(label: string, width = STATUS_LABEL_WIDTH): string {
+  return padToWidth(label, width);
 }
 
 /** /sessions 的展示行（纯函数，便于测试） */
@@ -1012,8 +1032,16 @@ export function handleSessions(options: ReplOptions): void {
   console.log("");
 }
 
-/** /last：查看上一条工具输出的完整内容 */
-export function printLastToolOutput(argument: string): void {
+/**
+ * /last：查看上一条工具输出的完整内容。
+ *
+ * 上下文由调用方传入（默认新建一份），为的是与工具卡片**共用同一个宽度**——
+ * 两份宽度不一致时会出现"卡片按 80 列截断、/last 按另一个宽度排版"的割裂感。
+ */
+export function printLastToolOutput(
+  argument: string,
+  context: RenderContext = createRenderContext(),
+): void {
   const view = getLastToolCall();
   if (!view) {
     console.log(chalk.dim("\n还没有工具调用记录\n"));
@@ -1023,9 +1051,7 @@ export function printLastToolOutput(argument: string): void {
   const parsed = Number.parseInt(argument, 10);
   const maxLines = Number.isFinite(parsed) && parsed > 0 ? parsed : 200;
 
-  for (const line of renderLastToolOutput(view, createRenderContext(), {
-    maxLines,
-  })) {
+  for (const line of renderLastToolOutput(view, context, { maxLines })) {
     console.log(line);
   }
   console.log("");
@@ -1204,16 +1230,29 @@ export function createAgentEventHandler(
     if (event.type === "tool_execution_start") {
       // 必须先喂卡片缓存，再更新状态行
       printToolInfo(event, deps.renderContext);
-      deps.status.set({
+      /**
+       * 与下面的 {@link tool_execution_end} 配对记账。
+       *
+       * 只读工具是并发执行的（同一批调用走 `Promise.all`）：若 end 时直接 stop，
+       * 这批里**第一个跑完的**会顺手把还在跑的那几个的 spinner 一起抹掉，
+       * 后半段用户盯着一行空白以为卡住了。
+       */
+      deps.status.begin(event.toolCallId, {
         kind: "tool",
         toolName: event.toolName,
         detail: summarizeToolCall(event.toolName, event.args),
         startedAt: Date.now(),
       });
+      return;
     }
     if (event.type === "tool_execution_end") {
-      deps.status.stop();
+      // 记账先行：还有工具在跑时它会把状态切过去（不重绘），没有了才收尾
+      deps.status.end(event.toolCallId);
+      // 卡片是多行输出，打印前必须让出状态行，打印后再把未完成的进度接回来
+      deps.status.suspend();
       printToolInfo(event, deps.renderContext);
+      deps.status.resume();
+      return;
     }
     if (event.type === "tool_permission") {
       const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";

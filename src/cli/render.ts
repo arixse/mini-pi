@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { DEFAULT_TERMINAL_WIDTH, displayWidth, truncateToWidth } from "./width";
 import { formatDuration } from "./status";
 import { AgentEvent } from "../shared/protocol";
 
@@ -81,9 +82,36 @@ export function createRenderContext(
   const color =
     overrides.color ?? Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
   return {
-    width: overrides.width ?? process.stdout.columns ?? 80,
+    width: overrides.width ?? process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
     style: color ? createChalkStyle() : PLAIN_STYLE,
     ascii: overrides.ascii ?? Boolean(process.env.MINI_PI_ASCII),
+  };
+}
+
+/**
+ * 让渲染上下文跟随终端宽度变化。
+ *
+ * 上下文原本只在启动时探测一次列数，而一个 REPL 会话往往是"开着的"：
+ * 用户中途拉窄/拉宽窗口（或把 tmux 分屏）后，卡片仍按旧宽度排版——
+ * 右对齐的状态跑到屏幕外，长行被终端折行把 gutter 冲得七零八落。
+ *
+ * 这里**原地改同一份上下文**而不是重建：颜色与 ASCII 开关在启动时已经
+ * 定下来了（`NO_COLOR` / `MINI_PI_ASCII` 不会中途变），重算毫无意义，
+ * 而共享同一份对象才能让卡片与 `/last` 一直用同一个宽度。
+ *
+ * @returns 取消订阅的函数（REPL 收尾时调用，避免监听器泄漏）
+ */
+export function followTerminalWidth(
+  context: RenderContext,
+  stdout: NodeJS.WriteStream = process.stdout,
+): () => void {
+  const update = (): void => {
+    context.width = stdout.columns ?? DEFAULT_TERMINAL_WIDTH;
+  };
+  update();
+  stdout.on("resize", update);
+  return () => {
+    stdout.off("resize", update);
   };
 }
 
@@ -96,74 +124,22 @@ export const MAX_TEXT_WIDTH = 200;
 
 // ---------------------------------------------------------------- 宽度计算
 
-/** East Asian Wide / Fullwidth、常见 emoji 与符号的码点区间（够用即可） */
-const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x1100, 0x115f],
-  [0x2600, 0x27bf], // ☀ ✅ ❌ 等符号，CJK 环境下通常占 2 列
-  [0x2e80, 0x303e],
-  [0x3041, 0x33ff],
-  [0x3400, 0x4dbf],
-  [0x4e00, 0x9fff],
-  [0xa000, 0xa4cf],
-  [0xac00, 0xd7a3],
-  [0xf900, 0xfaff],
-  [0xfe30, 0xfe6f],
-  [0xff00, 0xff60],
-  [0xffe0, 0xffe6],
-  [0x1f1e6, 0x1f1ff],
-  [0x1f300, 0x1f64f],
-  [0x1f680, 0x1f6ff],
-  [0x1f900, 0x1f9ff],
-  [0x20000, 0x3fffd],
-];
+/**
+ * 宽度工具搬到了 {@link ./width}。
+ *
+ * 搬走是为了让 `status.ts` 也能按显示宽度清屏，而不需要 import 本模块
+ * （本模块依赖 status 的 `formatDuration`，反向依赖会成环）。
+ * 这里 re-export 是为了不改动既有 import。
+ */
+export {
+  charDisplayWidth,
+  displayWidth,
+  isWide,
+  isZeroWidth,
+  padToWidth,
+  truncateToWidth,
+} from "./width";
 
-function isZeroWidth(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
-    codePoint === 0x200d ||
-    (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
-  );
-}
-
-function isWide(codePoint: number): boolean {
-  return WIDE_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end);
-}
-
-/** 按显示宽度计算字符串占多少列（CJK 与 emoji 记 2 列） */
-export function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    if (isZeroWidth(codePoint)) {
-      continue;
-    }
-    width += isWide(codePoint) ? 2 : 1;
-  }
-  return width;
-}
-
-/** 截断到指定显示宽度，超出部分用 … 表示 */
-export function truncateToWidth(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) {
-    return "";
-  }
-  if (displayWidth(text) <= maxWidth) {
-    return text;
-  }
-
-  let width = 0;
-  let result = "";
-  for (const char of text) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    const charCols = isZeroWidth(codePoint) ? 0 : isWide(codePoint) ? 2 : 1;
-    if (width + charCols > maxWidth - 1) {
-      break;
-    }
-    result += char;
-    width += charCols;
-  }
-  return `${result}…`;
-}
 
 /**
  * 标题行排版：能并排就给出同一行的间距，放不下则退化为上下两行。

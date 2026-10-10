@@ -7,6 +7,7 @@ import {
   MIN_CONTEXT_BUDGET,
   ReplOptions,
   activeToolRegistry,
+  alignLabel,
   appendAgentMessages,
   appendUserMessage,
   applySubAgentCommand,
@@ -39,10 +40,11 @@ import { LlmModel, collectOpenAIStream } from "../agent/model";
 import { runAgentLoop } from "../agent/loop";
 import { ToolRegistry } from "../agent/tools";
 import { createAssistantMessage, createTextContent, createUserMessage } from "../agent/message";
-import { AgentMessage } from "../shared/protocol";
+import { AgentMessage, ToolResult } from "../shared/protocol";
 import { createUsageTracker } from "../agent/usage";
-import { PLAIN_CONTEXT, RenderContext } from "./render";
-import { RunState, StatusController } from "./status";
+import { PLAIN_CONTEXT, RenderContext, followTerminalWidth } from "./render";
+import { RunState, StatusController, createStatusLine } from "./status";
+import { displayWidth } from "./width";
 
 // Mock Provider for testing
 class MockProvider implements Provider {
@@ -513,6 +515,13 @@ describe("ReplOptions", () => {
         isActive(): boolean {
           return false;
         },
+        // 并发记账接口：这里的用例只关心卡片输出，记账行为在 status.test.ts 里受测
+        begin(_id: string, state: RunState): void {
+          states.push(state);
+        },
+        end(): void {},
+        suspend(): void {},
+        resume(): void {},
       };
     }
 
@@ -633,6 +642,87 @@ describe("ReplOptions", () => {
       const text = notices.join("\n");
       assert.ok(text.includes("max_tokens"), `应说明是输出上限截断，实际：${text}`);
       assert.ok(!text.includes("取消"), "不能把截断说成用户取消");
+    });
+
+    /**
+     * 回归用例：只读工具并发执行时，事件处理器此前在每个 end 上都直接 stop，
+     * 于是**这批里第一个跑完的**会把同伴的 spinner 一起抹掉。
+     *
+     * 这里刻意用真的 `createStatusLine` 而不是记录调用的假对象：
+     * bug 出在"谁负责收尾"的契约上，假对象只能证明调用顺序，证明不了
+     * 同批工具跑完前状态行还活着。
+     */
+    it("并发工具：只有最后一个结束时才收起状态行", () => {
+      const fakeStream = {
+        write: () => true,
+        columns: 100,
+      } as unknown as NodeJS.WriteStream;
+      const status = createStatusLine({
+        stream: fakeStream,
+        enabled: true,
+        intervalMs: 60_000,
+      });
+
+      const handler = createAgentEventHandler({
+        status,
+        renderContext: context,
+        quiet: () => {},
+        write: () => {},
+      });
+
+      const ok: ToolResult = { content: [createTextContent("ok")] };
+      capture(() => {
+        handler({ type: "tool_execution_start", toolCallId: "a", toolName: "read_file", args: { path: "a.ts" } });
+        handler({ type: "tool_execution_start", toolCallId: "b", toolName: "grep", args: { pattern: "TODO" } });
+      });
+      assert.strictEqual(status.isActive(), true, "两个工具都在跑时应有状态行");
+
+      capture(() => {
+        handler({ type: "tool_execution_end", toolCallId: "a", toolName: "read_file", result: ok, isError: false });
+      });
+      assert.strictEqual(status.isActive(), true, "a 结束时同批还有 b 在跑，不应收起状态行");
+
+      capture(() => {
+        handler({ type: "tool_execution_end", toolCallId: "b", toolName: "grep", result: ok, isError: false });
+      });
+      assert.strictEqual(status.isActive(), false, "最后一个结束后应收起状态行");
+    });
+  });
+
+  describe("followTerminalWidth", () => {
+    it("立即同步一次宽度，并随 resize 事件更新同一份上下文", () => {
+      const listeners = new Map<string, () => void>();
+      const stdout = {
+        columns: 70,
+        on: (event: string, fn: () => void) => {
+          listeners.set(event, fn);
+        },
+        off: (event: string) => {
+          listeners.delete(event);
+        },
+      } as unknown as NodeJS.WriteStream;
+
+      const ctx = { width: 80, style: {}, ascii: false } as unknown as RenderContext;
+      const unfollow = followTerminalWidth(ctx, stdout);
+      assert.strictEqual(ctx.width, 70, "应立刻同步一次，而不是等第一次 resize");
+
+      stdout.columns = 120;
+      listeners.get("resize")?.();
+      assert.strictEqual(ctx.width, 120);
+
+      unfollow();
+      assert.strictEqual(listeners.size, 0, "取消订阅后不应留下监听器");
+    });
+
+    it("探测不到宽度时回退到 80 列", () => {
+      const stdout = {
+        columns: undefined,
+        on: () => {},
+        off: () => {},
+      } as unknown as NodeJS.WriteStream;
+      const ctx = { width: 100, style: {}, ascii: false } as unknown as RenderContext;
+      followTerminalWidth(ctx, stdout);
+      assert.strictEqual(ctx.width, 80);
     });
   });
 });
@@ -950,6 +1040,12 @@ describe("session context wiring", () => {
         counters.stopped += 1;
       },
       isActive: () => false,
+      begin: (_id, state) => {
+        states.push(state);
+      },
+      end: () => {},
+      suspend: () => {},
+      resume: () => {},
     };
     return { status, states, counters };
   }
@@ -1155,6 +1251,27 @@ describe("session context wiring", () => {
   it("sessionStatusEntries 无用量累计器时不显示用量行", () => {
     const entries = new Map(sessionStatusEntries(createOptions(), false));
     assert.strictEqual(entries.get("用量"), undefined);
+  });
+
+  /**
+   * 回归用例：`/status` 的标签此前用 `label.padEnd(8)` 补齐，
+   * 而 padEnd 数的是字符数——中文标签（"上下文窗口" 5 字符 / 10 列）
+   * 与短标签（"模型" 2 字符 / 4 列）补完后，值列的视觉起点差出 3 列。
+   */
+  it("所有状态标签补齐后的显示宽度一致（值列起点对齐）", () => {
+    const entries = sessionStatusEntries(createOptions(), false);
+    const widths = new Set(
+      entries.map(([label]) => displayWidth(alignLabel(label))),
+    );
+
+    assert.ok(entries.length > 0, "至少要有几行状态可看");
+    assert.strictEqual(widths.size, 1, `标签宽度应统一，实际：${[...widths]}`);
+  });
+
+  it("标签超长时不会把值挤没：仍留一个空格分隔", () => {
+    const aligned = alignLabel("这是一个特别长的标签", 8);
+    assert.ok(aligned.endsWith(" "));
+    assert.ok(displayWidth(aligned) > 8);
   });
 
   it("切会话与 /clear 应把用量统计清零", async () => {

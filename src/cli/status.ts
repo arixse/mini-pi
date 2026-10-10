@@ -61,12 +61,40 @@ function stateLabel(state: RunState): string {
   }
 }
 
+import { displayWidth, truncateToWidth } from "./width";
+
 export type StatusController = {
   /** 切换状态；重复设置同一状态只刷新计时 */
   set(state: RunState): void;
   /** 清除状态行（幂等） */
   stop(): void;
   isActive(): boolean;
+  /**
+   * 让出状态行：擦掉当前绘制的内容并暂停刷新，但**保留状态与并发记账**。
+   *
+   * 用于打印大块输出（工具卡片）之前：不擦的话卡片会被追加到 spinner 那一行
+   * 后面；不暂停的话定时器可能在打印中途重新画一行，把卡片糊成两半。
+   * 打印完用 {@link resume} 在当前行重新起 spinner。幂等。
+   */
+  suspend(): void;
+  /** {@link suspend} 的逆操作：还有未完成的工作就在当前行重新起 spinner */
+  resume(): void;
+  /**
+   * 标记一个**并发单元**开始，并切到它的状态。
+   *
+   * 只读工具会并发执行（`loop.ts` 里同一批调用走 `Promise.all`），
+   * 所以"某一个工具结束了"不等于"这批结束了"：调用方应当用
+   * {@link begin} / {@link end} 配对记账，由控制器判断何时真正收尾。
+   */
+  begin(id: string, state: RunState): void;
+  /**
+   * 结束一个并发单元。
+   *
+   * 还有别的单元在跑时切到最早开始的那一个（而不是停掉 spinner，
+   * 那是同批工具里第一个跑完的把后面还在跑的进度指示器一起抹掉的老问题），
+   * 全部结束才 {@link stop}。
+   */
+  end(id: string): void;
 };
 
 export type StatusOptions = {
@@ -91,7 +119,10 @@ export function createStatusLine(options: StatusOptions): StatusController {
 
   let state: RunState | null = null;
   let timer: NodeJS.Timeout | null = null;
+  /** 上一次绘制占了多少**显示列**（不是字符数） */
   let renderedWidth = 0;
+  /** 进行中的并发单元，按开始顺序排列；空=这一批跑完了 */
+  const pending = new Map<string, RunState>();
 
   const clear = (): void => {
     if (renderedWidth === 0) {
@@ -106,10 +137,15 @@ export function createStatusLine(options: StatusOptions): StatusController {
     if (!state) {
       return;
     }
-    const text = statusText(state, now(), ascii);
+    const raw = statusText(state, now(), ascii);
+    // 画得太宽会在窄终端上折行，此时 \r + 空格只能清掉第一行，清屏必须留够宽度
+    const columns = stream.columns ?? 0;
+    const text = columns > 8 ? truncateToWidth(raw, columns - 1) : raw;
     clear();
     stream.write(text);
-    renderedWidth = text.length;
+    // 必须按显示宽度记录：状态文案里全是中文（"思考中…" 字符数 4 / 显示 7 列），
+    // 按 length 覆写会少写空格，清除后屏幕上留下上一帧的残字
+    renderedWidth = displayWidth(text);
   };
 
   const stopTimer = (): void => {
@@ -119,29 +155,38 @@ export function createStatusLine(options: StatusOptions): StatusController {
     }
   };
 
-  return {
+  /**
+   * 切到一个新状态并立即重绘。
+   * `set` / `begin` / `end` 三条路径共用，避免记账逻辑重复实现。
+   */
+  const apply = (next: RunState): void => {
+    state = next;
+
+    if (!enabled) {
+      stream.write(`${statusTextPlain(next)}\n`);
+      return;
+    }
+
+    if (timer === null) {
+      timer = setInterval(() => {
+        if (state) {
+          draw();
+        }
+      }, intervalMs);
+      // 不要因为 spinner 让进程无法退出
+      timer.unref?.();
+    }
+    draw();
+  };
+
+  const controller: StatusController = {
     set(next: RunState): void {
-      state = next;
-
-      if (!enabled) {
-        stream.write(`${statusTextPlain(next)}\n`);
-        return;
-      }
-
-      if (timer === null) {
-        timer = setInterval(() => {
-          if (state) {
-            draw();
-          }
-        }, intervalMs);
-        // 不要因为 spinner 让进程无法退出
-        timer.unref?.();
-      }
-      draw();
+      apply(next);
     },
 
     stop(): void {
       state = null;
+      pending.clear();
       stopTimer();
       if (enabled) {
         clear();
@@ -151,5 +196,43 @@ export function createStatusLine(options: StatusOptions): StatusController {
     isActive(): boolean {
       return state !== null;
     },
+
+    begin(id: string, next: RunState): void {
+      pending.set(id, next);
+      apply(next);
+    },
+
+    end(id: string): void {
+      if (!pending.delete(id)) {
+        // 没有对应的 begin（事件乱序或缺 start）时不要替别人收尾
+        return;
+      }
+      if (pending.size === 0) {
+        controller.stop();
+        return;
+      }
+      // 同批还有工具在跑：只把状态切过去，**不在这里重绘**——
+      // 调用方接下来要打印刚结束那张卡片，画了也会被它挤掉。
+      // 卡片打印完由 resume() 在新的空行上重新起 spinner。
+      if (enabled) {
+        state = pending.values().next().value as RunState;
+      }
+    },
+
+    suspend(): void {
+      stopTimer();
+      if (enabled) {
+        clear();
+      }
+    },
+
+    resume(): void {
+      if (!enabled || !state || timer !== null) {
+        return;
+      }
+      apply(state);
+    },
   };
+
+  return controller;
 }
