@@ -13,6 +13,13 @@ type Settings = {
    * **真实窗口更小的模型必须显式配小**，否则可能在压缩触发前就发过窗口上限。
    */
   contextWindow?: number;
+  /**
+   * 子 Agent 委派是否可用（`/subagent` 开关，缺省 true）。
+   *
+   * 默认开、显式关才落 false：委派是已实现的能力，没必要让所有人都在
+   * settings.json 里写一行才能用；而一旦有人主动关掉，重开终端应当仍然关着。
+   */
+  subagentEnabled?: boolean;
 };
 
 export class SettingsStore {
@@ -171,6 +178,29 @@ export class SettingsStore {
       return undefined;
     }
     return Math.floor(value);
+  }
+
+  /**
+   * 子 Agent 委派是否可用（`/subagent` 开关）。
+   *
+   * **默认关闭**：委派会额外烧 token 且单次成本难以预估，属于需要用户主动
+   * 打开的高级能力——`opt-in` 比 `opt-out` 稳妥，不想用的人不必付出成本，
+   * 想用的人敲一次 `/subagent on` 即可。
+   * @throws settings.json 处于损坏状态时拒绝写入
+   */
+  async setSubagentEnabled(enabled: boolean): Promise<void> {
+    await this.initialize();
+    this.settings.subagentEnabled = enabled;
+    await this.persist();
+  }
+
+  /** 子 Agent 委派是否可用；只有显式写过 true 才开启 */
+  async getSubagentEnabled(): Promise<boolean> {
+    await this.initialize();
+    // 只认布尔 true：没配、或配成了别的类型（"true"、1、"yes"…）一律关闭。
+    // 委派是可选能力，方向取"打不开"的一侧——用户可以再敲 /subagent on，
+    // 反过来如果他没写字却被默认开启，多花的 token 是收不回来的。
+    return this.settings.subagentEnabled === true;
   }
 
   /**

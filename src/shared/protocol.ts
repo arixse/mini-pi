@@ -83,6 +83,37 @@ export type SessionEntry =
         tokensBefore:number
     }
 
+/**
+ * Agent 在委派树里的身份。
+ *
+ * 主 Agent 的 `parentId` 为 `null`、`depth` 为 0；每委派一层 depth 加 1。
+ * `agentId` 用于把 CLI 上的事件与具体的工具调用对起来——嵌套之后
+ * "这条 bash 是谁要跑的"必须能回答，否则审批提示就是一笔糊涂账。
+ */
+export type AgentIdentity = {
+  agentId: string;
+  parentId: string | null;
+  depth: number;
+};
+
+/** 一次委派的结果（子 Agent 回交给父 Agent 的全部内容） */
+export type SubAgentResult = {
+  /** 是否完整完成了目标；到轮次上限或出错时为 false（此时 summary 是"做到哪一步"） */
+  ok: boolean;
+  /** 给父 Agent 看的结论，已按上限裁剪并显式标注 */
+  summary: string;
+  /** 子 Agent 各轮用量之和 */
+  usage: Usage;
+  /** 实际跑过的轮次数 */
+  turns: number;
+  /** 是否被用户取消 */
+  aborted: boolean;
+  /** summary 是否被截断 */
+  truncated: boolean;
+  /** ok 为 false 时的原因，例如 `max_turns_exceeded` */
+  error?: string;
+};
+
 export type AgentEvent = 
     | {type:"agent_start"}
     | {type:"agent_end",messages:AgentMessage[]}
@@ -96,6 +127,15 @@ export type AgentEvent =
     | {type:"tool_permission";toolCallId:string;toolName:string;action:string;reason?:string;originalArgs:ToolCallContent["arguments"];args:ToolCallContent["arguments"]}
     | {type:"compaction";summary:string;tokensBefore:number;firstKeptEntryId:string}
     | {type:"branch_switch";leafId:string}
+    /**
+     * 子 Agent 生命周期。
+     *
+     * 这两个事件只对**委派**发出，用于 CLI 渲染嵌套结构；子 Agent 内部的
+     * 工具卡片等仍用既有事件，由 `AgentIdentity` 区分来自哪一层。
+     * 追加在联合类型末尾，不改动已有成员，既有的 switch 不会漏分支。
+     */
+    | ({type:"subagent_start";goal:string;role?:string} & AgentIdentity)
+    | ({type:"subagent_end";ok:boolean;goal:string;role?:string;turns:number;usage:Usage;elapsedMs:number} & AgentIdentity)
 
 export type SessionResponse = {
     sessionId:string

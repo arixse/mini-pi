@@ -6,8 +6,10 @@ import {
   MAX_CONTEXT_TOKENS,
   MIN_CONTEXT_BUDGET,
   ReplOptions,
+  activeToolRegistry,
   appendAgentMessages,
   appendUserMessage,
+  applySubAgentCommand,
   clearSession,
   compactContext,
   contextOverheadTokens,
@@ -15,6 +17,7 @@ import {
   createAgentEventHandler,
   createInputScheduler,
   formatSessionList,
+  parseSubAgentCommand,
   printLastToolOutput,
   printToolInfo,
   resolveContextBudget,
@@ -735,6 +738,158 @@ describe("上下文窗口的来源与展示", () => {
     const window = entries.get("上下文窗口") ?? "";
     assert.ok(window.includes("16384"), `应显示窗口值，实际：${window}`);
     assert.ok(window.includes("推断"), `应说明来源，实际：${window}`);
+  });
+});
+
+describe("子 Agent 开关（/subagent）", () => {
+  function createOptions(overrides: Partial<ReplOptions> = {}): ReplOptions {
+    return {
+      prompt: "You: ",
+      systemPrompt: "test system prompt",
+      messages: [],
+      model: null,
+      toolRegistry: new ToolRegistry(),
+      workspaceRoot: process.cwd(),
+      ...overrides,
+    };
+  }
+
+  function registryWithTask(): ToolRegistry {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "read_file",
+      description: "read only",
+      parameters: { type: "object", properties: {} },
+      readOnly: true,
+      async execute() {
+        return { content: [createTextContent("ok")] };
+      },
+    });
+    registry.register({
+      name: "task",
+      description: "delegate",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [createTextContent("delegated")] };
+      },
+    });
+    return registry;
+  }
+
+  it("关闭时模型看不到 task，其余工具不受影响", () => {
+    const registry = registryWithTask();
+    const filtered = activeToolRegistry(registry, false);
+    const names = filtered.definitions().map((tool) => tool.name);
+
+    assert.ok(!names.includes("task"), "关闭后 task 不应出现在工具定义里");
+    assert.deepStrictEqual(names, ["read_file"]);
+    // 派生子集不能影响注册表本身：下一轮开启时要能原样回来
+    assert.ok(registry.has("task"));
+  });
+
+  it("开启时原样使用完整注册表", () => {
+    const registry = registryWithTask();
+    assert.strictEqual(activeToolRegistry(registry, true), registry);
+  });
+
+  it("注册表里本来就没有 task 时不需要过滤", () => {
+    const registry = new ToolRegistry();
+    assert.strictEqual(activeToolRegistry(registry, false), registry);
+  });
+
+  it("解析：不带参数切换，on/off 显式设定，中英文都认", () => {
+    assert.deepStrictEqual(parseSubAgentCommand(""), { kind: "toggle" });
+    assert.deepStrictEqual(parseSubAgentCommand("  "), { kind: "toggle" });
+    assert.deepStrictEqual(parseSubAgentCommand("on"), {
+      kind: "set",
+      enabled: true,
+    });
+    assert.deepStrictEqual(parseSubAgentCommand("OFF"), {
+      kind: "set",
+      enabled: false,
+    });
+    assert.deepStrictEqual(parseSubAgentCommand("开"), {
+      kind: "set",
+      enabled: true,
+    });
+    assert.deepStrictEqual(parseSubAgentCommand("关闭"), {
+      kind: "set",
+      enabled: false,
+    });
+    assert.match(
+      (parseSubAgentCommand("yes") as { raw: string }).raw,
+      /yes/,
+      "无法识别的参数要原样带回，好提醒用户",
+    );
+  });
+
+  it("applySubAgentCommand：切换、显式设定与非法参数各自的处置", async () => {
+    assert.strictEqual(
+      (await applySubAgentCommand({ argument: "", current: true })).enabled,
+      false,
+      "不带参数应当由开变关",
+    );
+    assert.strictEqual(
+      (await applySubAgentCommand({ argument: "on", current: false })).enabled,
+      true,
+    );
+    assert.strictEqual(
+      (await applySubAgentCommand({ argument: "off", current: true })).enabled,
+      false,
+    );
+
+    const failed = await applySubAgentCommand({
+      argument: "wat",
+      current: true,
+    });
+    assert.match(failed.error ?? "", /用法/);
+    assert.strictEqual(failed.enabled, true, "非法参数不改变状态");
+  });
+
+  it("落盘失败时开关仍在本会话生效，但要告诉用户", async () => {
+    const writes: boolean[] = [];
+    const result = await applySubAgentCommand({
+      argument: "",
+      current: true,
+      persist: async (enabled) => {
+        writes.push(enabled);
+        throw new Error("settings.json 处于损坏状态");
+      },
+    });
+
+    assert.strictEqual(result.enabled, false, "开关照样生效");
+    assert.strictEqual(result.persistFailed, true);
+    assert.deepStrictEqual(writes, [false]);
+  });
+
+  it("默认关闭：不带第三参数时 /status 显示关闭", () => {
+    const rows = new Map(sessionStatusEntries(createOptions(), false));
+    assert.ok(
+      rows.get("子 Agent")?.includes("关闭"),
+      "缺省必须落在关闭一侧，否则用户会在不知情的情况下产生委派用量",
+    );
+  });
+
+  it("/status 要显示委派被关闭，否则用户以为模型只是不想用", () => {
+    const rows = new Map(
+      sessionStatusEntries(createOptions(), false, false),
+    );
+    const row = rows.get("子 Agent") ?? "";
+
+    assert.ok(row.includes("关闭"), row);
+    assert.ok(row.includes("/subagent"), "要给出怎么再打开");
+  });
+
+  it("/status 开启且从未委派时显示未委派", () => {
+    const options = createOptions({
+      subAgentStats: () => ({
+        delegations: 0,
+        usage: { input: 0, output: 0, totalTokens: 0 },
+      }),
+    });
+    const rows = new Map(sessionStatusEntries(options, false, true));
+
+    assert.ok(rows.get("子 Agent")?.includes("未委派"));
   });
 });
 

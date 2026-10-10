@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   AUTO_APPROVED_TOOLS,
+  agentTag,
   buildApprovalQuestion,
   createToolApproval,
   describeToolCall,
@@ -290,4 +291,49 @@ describe("tool approval", () => {
 
     assert.strictEqual(executed, 1);
   });
+
+describe("审批提示的调用来源（子 Agent 的写操作必须可辨认）", () => {
+  const call: ToolCallContent = {
+    type: "toolCall",
+    id: "c1",
+    name: "write_file",
+    arguments: { path: "a.ts", content: "x" },
+  };
+
+  it("主 Agent 的调用不带标签：日常确认不该多一行噪音", () => {
+    const question = buildApprovalQuestion(call);
+    assert.strictEqual(agentTag(), "");
+    assert.strictEqual(agentTag({ agentId: "id", parentId: null, depth: 0 }), "");
+    assert.ok(!question.includes("子 Agent"));
+  });
+
+  it("子 Agent 的调用带 depth 前缀，并说明拒绝的后果", () => {
+    const question = buildApprovalQuestion(call, undefined, {
+      agentId: "1234567890abcdef",
+      parentId: null,
+      depth: 1,
+    });
+    assert.ok(question.includes("[子 Agent depth=1 12345678]"));
+    // 用户没法预览子 Agent 的上下文，必须能一眼确认"拒绝是安全的"
+    assert.ok(question.includes("拒绝不会中断它的其他步骤"));
+  });
+
+  it("createToolApproval 把 context 透传给提示：同一份钩子，两种提示", async () => {
+    const prompts: string[] = [];
+    const beforeToolCall = createToolApproval({
+      isTrusted: () => false,
+      confirm: async (text) => {
+        prompts.push(text);
+        return true;
+      },
+    });
+
+    await beforeToolCall(call);
+    await beforeToolCall(call, { agentId: "abcdefg", parentId: null, depth: 2 });
+
+    assert.strictEqual(prompts.length, 2);
+    assert.ok(!prompts[0].includes("子 Agent"));
+    assert.ok(prompts[1].includes("[子 Agent depth=2 abcdefg]"));
+  });
+});
 });

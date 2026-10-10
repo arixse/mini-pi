@@ -22,6 +22,9 @@ mini-pi/
 ├── src/
 │   ├── agent/          # AI 代理核心逻辑
 │   │   ├── loop.ts     # 主循环（Agent Loop）
+│   │   ├── subagent.ts # 子 Agent 运行时（委派预算、并行配额、取消树）
+│   │   ├── subagentTool.ts # task 工具
+│   │   ├── roles.ts    # 角色预设（explore / implement / review / general）
 │   │   ├── model.ts    # 模型封装（支持 OpenAI/Anthropic）
 │   │   ├── tools.ts    # 工具定义（read/edit/bash）
 │   │   ├── message.ts  # 消息处理
@@ -40,6 +43,8 @@ mini-pi/
 - [命令行登录与鉴权](docs/auth.md)
 - [模型供应商对接](docs/providers.md)
 - [Session 管理功能](docs/session-management.md)
+- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑
+- [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题与分批修复清单
 - [产品设计文档](docs/product-design.md)
 - [技术方案](docs/technical-solution.md)
 
@@ -66,6 +71,13 @@ mini-pi/
 14. **Anthropic 支持** - 支持 Anthropic 官方 Messages API（`claude-opus-5-5` 等）
 15. **智谱支持** - 支持智谱开放平台的 OpenAI 兼容接口（`glm-5.3` 等 GLM 系列）
 16. **安全退出** - 任务执行中 `/exit` / Ctrl+D 会先取消本轮、等结果落盘后再退出
+17. **子 Agent 委派** - 通过 `task` 工具把一件相对独立的事交给子 Agent：`explore`（只读侦察）/
+    `implement`（可写且须自述验证）/ `review`（只读评审）/ `general` 四种角色。
+    子 Agent 跑在独立上下文里，只回传裁剪后的结论；写操作仍逐次审批且标明来自第几层；
+    调查类委派可以并发；Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列；
+    **默认关闭**（委派会额外烧 token 且单次成本难预估），需用 `/subagent on` 主动打开，
+    状态持久化到 settings.json；关闭后模型看不到 `task` 工具
+    （详见 [多 Agent 实现方案](docs/multi-agent-design.md)）
 
 ## 运行方式
 
@@ -298,7 +310,8 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
-| `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式 |
+| `/subagent [on\|off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；状态写入 settings.json |
+| `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
 | `/sessions` | 列出当前工作目录的会话 |
 | `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行） |
