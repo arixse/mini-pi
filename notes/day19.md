@@ -1,7 +1,7 @@
 # Day 19 - 展示层收尾、大文件拆分与工程化收口（CI 门禁 + npm 发布）
 
 > 日期：**2026-10-11**
-> Commit 范围：`8182dfa` ~ `590e13b`（15 个提交）
+> Commit 范围：`8182dfa` ~ `976e77b`（16 个提交）
 > 相关文档：[发布到 npm](../docs/publishing.md) · [CI](../.github/workflows/ci.yml) · [多 Agent 修复方案](../docs/multi-agent-fix-plan.md)
 > 上一篇：[Day 18 - 多 Agent 委派](./day18.md)
 
@@ -92,6 +92,20 @@ Day 18 把多 Agent 委派这条主链路打通后，剩下的都是"能用但�
 
 推 `v*` 标签即发布，版本号**以 tag 为准**回写 `package.json`。
 
+### 七、README 与代码对齐（`976e77b`）
+
+收尾时通读源码逐项核对 README，发现它落后于代码的不只是措辞：
+
+- **运行时写的是 Node.js 18+**，而 `engines` 与 `.nvmrc` 都是 22 —— 照 README 装环境会直接装错。
+- **目录树缺了近一半模块**（`usage.ts` / `skillLoader.ts` / `prompt.ts` /
+  `projectStack.ts` 等），顶层也缺 `notes/`、`.agents/skills/`、`.github/workflows/`。
+- **文档索引漏了两篇**（`cli-ux-design.md`、`new-command-implementation.md`）。
+- **包体积停在 333KB**（那是去掉 `src` 之前的数），实际产物已 1.7MB。
+- Skills / 项目技术栈探测 / 回合脚注这三项能力**在 README 里根本没出现**。
+
+补齐后把新增内容收进「Skills」与「开发日志」两节，命令表文案与
+`src/cli/commands.ts` 注册表对齐（`commands.test.ts` 会校验 README 覆盖全部命令）。
+
 ---
 
 ## 结果 Result
@@ -112,6 +126,7 @@ Day 18 把多 Agent 委派这条主链路打通后，剩下的都是"能用但�
 | `9cad3eb` | 系统提示词重写 + 项目技术栈探测 |
 | `abcd489` | CI 改为 `pnpm check`，Node 换 22 |
 | `590e13b` | npm 发布工作流与包内容白名单 |
+| `976e77b` | README 与代码对齐（运行时、目录树、文档索引、Skills） |
 
 ---
 
