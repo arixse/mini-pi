@@ -405,3 +405,15 @@ pnpm dev:cli
 - **项目 AGENTS.md**: `<项目目录>/AGENTS.md`
 
 这些文件的内容会被添加到系统提示中，作为 AI 助手必须遵循的规则。
+
+### 系统提示词
+
+除固定上下文外，系统提示词还包含（`src/cli/prompt.ts`）：
+
+- **工具使用指南**：先用 `glob` / `grep` 定位再 `read_file`；改文件优先 `edit_file`
+  而非整文件 `write_file`；只读工具免确认且可同批并发提出；不要用 `bash` 读文件。
+- **代码风格约束**：先读再改、跟随既有风格、不随便加依赖、不留死代码。
+- **错误处理指导**：先读完整错误信息、同一参数不连试三次、不许假装成功。
+- **项目技术栈**：由 `src/cli/projectStack.ts` 自动探测（`package.json` / lock 文件 /
+  `tsconfig.json`），给出模块系统、包管理器、主要依赖与项目里真实存在的验证命令
+  （如 `pnpm test`、`pnpm typecheck`）。长驻的 `dev` / `start` 不列入。

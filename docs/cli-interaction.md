@@ -74,25 +74,43 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 6. **加载会话**：`loadLatestSession()` —— 存在历史会话则加载**当前工作目录**最近的一个，否则新建；随后用 `syncContext()` 把该会话的历史消息（含压缩摘要）恢复进内存 `messages`，并在欢迎信息后回放最后一轮（见 3.2）。会话按工作目录隔离，换目录就是另一串会话（见第 6 节）。
 7. **加载固定上下文**：`getFixedContext()` 读取全局与项目的 `AGENTS.md`。
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览，并在控制台打印已发现的 Skill 名称。
-9. **构建 System Prompt**：基础提示词 + 固定上下文 + Skill 摘要。
+9. **构建 System Prompt**：基础提示词（含工具使用 / 代码风格 / 错误处理指南）
+   + 自动探测的项目技术栈 + 固定上下文 + Skill 摘要。
 10. **打印 Logo 与欢迎信息**：`printLogo()` + `printWelcome(providerName, modelName)`。
 11. **进入 REPL**：`startRepl()`。
 
 ### 3.1 System Prompt 组成
 
+由 `src/cli/prompt.ts` 的 `buildSystemPrompt()` 组装，段落顺序固定：
+
 ```
-你是……AI编程助手……
+# 角色                      ← 身份与"把任务做完"的目标
+# 工作区                    ← workspaceRoot、越界与凭据文件禁令
+## 工具使用                  ← 检索优先、edit 优先于 write、只读可并发
+## 代码风格                  ← 先读再改、不随便加依赖、不留死代码
+## 遇到错误时                ← 先读错误、不无限重试、不许假装成功
+# 当前项目                   ← 自动探测的技术栈（没有则整段省略）
+# 输出                      ← 中文、简洁、用项目已有命令
 
-当前工作目录：<workspaceRoot>，禁止查看或操作<workspaceRoot>以外目录的文件，
-
-请用中文回复用户的问题。
-
-# 固定上下文          ← 来自 AGENTS.md
-……
-
-## 可用 Skills         ← 来自 Skill 元数据摘要
-……
+# 固定上下文                ← 来自 AGENTS.md（放最后）
+## 可用 Skills              ← 来自 Skill 元数据摘要（放最后）
 ```
+
+**技术栈**由 `src/cli/projectStack.ts` 探测：`package.json` 的 `name` / `type` /
+`engines.node`、lock 文件（认包管理器）、`tsconfig.json`、`.git`，以及依赖里能
+认出的框架；`scripts` 里**真实存在**的 `test` / `typecheck` / `lint` / `build`
+会带上正确的包管理器前缀（`pnpm test` 而非 `npm run test`）列成常用命令。
+非 Node 项目能认出 Python / Go / Rust。
+
+两条刻意的取舍：
+
+- **不收 `dev` / `start`**：那是长驻进程，而 `bash` 默认 30 秒超时，
+  列进"常用命令"等于请模型去跑一个必然挂到超时的命令；
+- **探测不出任何东西时整段省略**：塞一句"技术栈：未知"只是噪声。
+
+系统提示词**每次请求都会带上**，并计入压缩的固定开销（见 6.2），
+所以每加一段都要能回答"少了它模型会犯什么错"；`prompt.test.ts` 里有一条
+长度上限的断言兜着，防止它慢慢膨胀。
 
 ### 3.2 启动界面示例
 

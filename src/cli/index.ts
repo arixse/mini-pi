@@ -13,6 +13,8 @@ import {
   createSubAgentTool,
 } from "../agent/subagentTool";
 import { startRepl } from "./repl";
+import { buildSystemPrompt } from "./prompt";
+import { detectProjectStack, formatProjectStack } from "./projectStack";
 import {
   ContextWindowSource,
   ModelProviderService,
@@ -137,33 +139,6 @@ async function tryCreateDefaultSettings(
   return undefined;
 }
 
-function buildSystemPrompt(workspaceRoot: string, fixedContext: string, skillSummary?: string): string {
-  let prompt = `你是一个有用的AI编程助手。你可以帮助用户完成编程任务，包括：
-    - 读取和写入文件
-    - 执行命令
-    - 解答编程问题
-
-    当前工作目录：${workspaceRoot}，禁止查看或操作${workspaceRoot}以外目录的文件，
-
-    请用中文回复用户的问题。
-    禁止：
-      - 读取读取或操作用户隐私文件，例如.env
-    注意：
-      - 不要生成项目无关的临时文件
-      - 如果确实有必要生成文件进行测试，请在使用完成后自行删除
-`;
-
-  if (fixedContext) {
-    prompt += `\n\n${fixedContext}`;
-  }
-
-  if (skillSummary) {
-    prompt += `\n\n${skillSummary}`;
-  }
-
-  return prompt;
-}
-
 export async function main() {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
@@ -214,17 +189,27 @@ export async function main() {
   // 加载最近的 session 或创建新的
   const sessionStore = sessionManager.loadLatestSession();
 
-  // 获取固定上下文
-  const fixedContext = sessionManager.getFixedContext();
-
   // 加载 skill 元数据并生成摘要
-  const skillSummary = sessionManager.getSkillSummary();
-  if (skillSummary) {
+  if (sessionManager.getSkillSummary()) {
     const skills = sessionManager.loadSkillMetadata()
     console.log(chalk.dim(`[Skills]\n ${skills.length > 0 ? skills.map(skill => skill.name).join(',') : ''}`));
   }
 
-  let systemPrompt = buildSystemPrompt(workspaceRoot, fixedContext, skillSummary);
+  /**
+   * 每次都重新探测技术栈与固定上下文，不缓存。
+   *
+   * `/reload` 就是为了让用户改完 AGENTS.md / package.json 之后立刻生效，
+   * 缓存下来等于让 `/reload` 只重载一半。
+   */
+  const buildPrompt = (): string =>
+    buildSystemPrompt({
+      workspaceRoot,
+      fixedContext: sessionManager.getFixedContext(),
+      skillSummary: sessionManager.getSkillSummary(),
+      projectStack: formatProjectStack(detectProjectStack(workspaceRoot)),
+    });
+
+  let systemPrompt = buildPrompt();
 
   // 从会话文件恢复历史上下文（含压缩摘要），而不是丢弃历史重新开始
   const messages: AgentMessage[] = sessionStore.syncContext([]);
@@ -276,10 +261,8 @@ export async function main() {
       sessionManager.setModel(newModel);
     }
 
-    // 重新构建 systemPrompt（获取最新的固定上下文）
-    const newFixedContext = sessionManager.getFixedContext();
-    const newSkillSummary = sessionManager.getSkillSummary();
-    const newSystemPrompt = buildSystemPrompt(workspaceRoot, newFixedContext, newSkillSummary);
+    // 重新构建 systemPrompt（获取最新的固定上下文与技术栈）
+    const newSystemPrompt = buildPrompt();
 
     // 换了模型就要换窗口：沿用旧窗口会让小窗口模型在压缩前超窗
     const resolved = await resolveContextWindowFromSettings(
