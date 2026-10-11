@@ -16,6 +16,16 @@
   `.agents/skills/<name>/SKILL.md`。
 - `docs/providers.md` 是新增模型厂商的实现步骤清单（含各家踩坑）。
 
+## npm 发布约定（详见 docs/publishing.md）
+
+- 推 `v*` 标签触发发布，**版本号以 tag 为准**，CI 回写 package.json 后再发包。
+- `files` 白名单是 bin 产物进包的唯一途径：产物在 `.gitignore` 里，
+  npm 打包默认读 .gitignore。files 优先级高于 .gitignore，但
+  **files 里的文件无法被 `.npmignore` 排除**（想剔除就得先不带它）。
+- 包里不带 `src`：CLI 是 esbuild 自包含 bundle，src 只服务于仓库内的 bin/mini-pi.js。
+- 发布任务 concurrency **只排队不取消**（传到一半被取消会占住版本号，重跑必 403）。
+- 冒烟只能 `node --check` + shebang：CLI 没有 `--version`，真跑会起 REPL 挂住 stdin。
+
 ## 反复出现的技术约束（详见各 Skill）
 
 - `toolCall` 与 `toolResult` 必须一一配对且同序——压缩窗口、取消提前 return 都会破坏它。
