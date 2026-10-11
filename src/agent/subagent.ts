@@ -9,7 +9,7 @@ import {
 } from "../shared/protocol";
 import { BeforeToolCall, runAgentLoop } from "./loop";
 import { LlmModel } from "./model";
-import { READ_ONLY_TOOL_NAMES, ToolRegistry } from "./tools";
+import { ToolRegistry } from "./tools";
 import { createUserMessage } from "./message";
 
 /**
@@ -44,27 +44,75 @@ export const MAX_PARALLEL_SUBAGENTS = 4;
  */
 export const SUBAGENT_RESULT_MAX_CHARS = 8_000;
 
+/**
+ * 单个回合内**所有**委派结论的回传总量上限（字符）。
+ *
+ * 单条上限挡不住总量：预算允许一回合最多 {@link MAX_DELEGATIONS_PER_TURN} 次委派，
+ * 8 次 × 8k = 64k 字符灌回主上下文——委派省下的上下文被加倍吃回去，
+ * 于是整个多 Agent 设计失去意义。总量必须单独设闸。
+ */
+export const MAX_TURN_RESULT_CHARS = 24_000;
+
+/** 子 Agent 的默认整体墙钟超时（毫秒）；角色可覆盖 */
+export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
+
 /** 委派工具自身的名字 */
 export const SUBAGENT_TOOL_NAME = "task";
 
 /**
- * 子 Agent 可用的工具集。
+ * 把若干个取消信号合并成一个。
  *
- * `bash` 不在 `allowWrite` 里：它能启动任意进程，权限比改文件重得多，
- * 需要单独申请。这与 CLI 侧"写文件与执行命令都要逐次确认"是同一逻辑。
+ * 刻意不用 `AbortSignal.any`：它是 Node 20+ 才有的 API，而本项目基线是 Node 18+，
+ * 用它在 CI 与旧环境上会直接崩。手写十几行换来的是零新依赖与明确的清理时机。
+ *
+ * @returns 合并后的信号，以及一个用于解除全部监听与清计时器的收尾函数
  */
-export function subAgentToolNames(abilities: {
-  allowWrite?: boolean;
-  allowBash?: boolean;
-}): string[] {
-  const names: string[] = [...READ_ONLY_TOOL_NAMES];
-  if (abilities.allowWrite) {
-    names.push("write_file", "edit_file");
+export function linkSignals(
+  sources: Array<AbortSignal | undefined>,
+  timeoutMs?: number,
+): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const cleanups: Array<() => void> = [];
+  let timer: NodeJS.Timeout | null = null;
+
+  const abort = (): void => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    if (source.aborted) {
+      // 源头已经取消：不必再注册监听，但要把这个事实传下去
+      abort();
+      continue;
+    }
+    source.addEventListener("abort", abort, { once: true });
+    cleanups.push(() => source.removeEventListener("abort", abort));
   }
-  if (abilities.allowBash) {
-    names.push("bash");
+
+  if (timeoutMs !== undefined && timeoutMs > 0 && !controller.signal.aborted) {
+    timer = setTimeout(abort, timeoutMs);
+    cleanups.push(() => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    });
   }
-  return names;
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      cleanups.length = 0;
+    },
+  };
 }
 
 /**
@@ -79,6 +127,14 @@ export function buildSubAgentSystemPrompt(input: {
   workspaceRoot: string;
   canWrite: boolean;
   instructions?: string;
+  /**
+   * 项目规则（`AGENTS.md` 固定上下文）。
+   *
+   * 子 Agent 的 system prompt 里只有委派指令，于是 `implement` 不知道本项目
+   * "每次改动要 commit、交付前必须跑单测"这类约定——它会改完就报告完成。
+   * 放在角色指令**之前**，与父 System Prompt 的组织顺序保持一致。
+   */
+  projectRules?: string;
 }): string {
   const parts: string[] = [
     `你是一个被委派的子任务执行 Agent，工作目录：${input.workspaceRoot}。`,
@@ -90,6 +146,10 @@ export function buildSubAgentSystemPrompt(input: {
     "",
     "请用中文回复。不要向调用方反问；信息不足时先自行查阅，再在结论里说明缺口。",
   ];
+
+  if (input.projectRules) {
+    parts.push("", "以下是本项目的规则，必须遵守：", input.projectRules);
+  }
 
   if (!input.canWrite) {
     parts.push(
@@ -132,18 +192,40 @@ export function buildSubAgentUserMessage(input: {
   return lines.join("\n");
 }
 
-/** 按上限裁剪结论，并明确告知被截断以及如何收窄 */
+/**
+ * 按上限裁剪结论，并明确告知被截断以及如何收窄。
+ *
+ * @param limit 本条结论的字符上限；回合剩余额度比单条上限更小时，
+ *   调用方会传入更小的值（见 `SubAgentSupervisor.remainingResultChars`）。
+ * @param canWrite 结论方**实际**是否具备写文件能力。
+ *   收窄建议必须落在它真有的能力上：让一个没有 `write_file` 的 `explore`
+ *   "把结果写入文件后回传路径"等于给了一条它走不通的路（day5 经验 4 的同一原则）。
+ * @param budgetExhausted 回合回传总量是否已耗尽。文案要换成"拆分目标"，
+ *   因为此时即便子 Agent 有写权限，写文件也救不了已经用完的额度。
+ */
 export function capSubAgentResult(
   text: string,
+  options: {
+    limit?: number;
+    canWrite?: boolean;
+    budgetExhausted?: boolean;
+  } = {},
 ): { summary: string; truncated: boolean } {
-  if (text.length <= SUBAGENT_RESULT_MAX_CHARS) {
+  const limit = options.limit ?? SUBAGENT_RESULT_MAX_CHARS;
+  if (text.length <= limit) {
     return { summary: text, truncated: false };
   }
+
+  const hint = options.budgetExhausted
+    ? "本回合回传总量已到上限，请把目标拆成更小的几次委派，或改用文件交接。"
+    : options.canWrite
+      ? "请让子 Agent 输出更聚焦的结论，或把完整结果写入文件后回传路径。"
+      : "请让子 Agent 输出更聚焦的结论，或直接把目标拆成两次更小的委派。";
+
   return {
     summary:
-      `${text.slice(0, SUBAGENT_RESULT_MAX_CHARS)}\n` +
-      `...[已截断：结论共 ${text.length} 字符，仅返回前 ${SUBAGENT_RESULT_MAX_CHARS} 字符。` +
-      `请让子 Agent 输出更聚焦的结论，或把完整结果写入文件后回传路径]`,
+      `${text.slice(0, limit)}\n` +
+      `...[已截断：结论共 ${text.length} 字符，仅返回前 ${limit} 字符。${hint}]`,
     truncated: true,
   };
 }
@@ -173,6 +255,23 @@ export function sumUsage(messages: readonly AgentMessage[]): Usage {
   return total;
 }
 
+/**
+ * 取最后一次 assistant 消息。
+ *
+ * 用于判定"最终结果"类问题（批次 C1）：中途某轮出错不该让整次委派被判失败。
+ */
+function lastAssistant(
+  messages: readonly AgentMessage[],
+): AssistantMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
+}
+
 /** 取子 Agent 最后一次 assistant 的文本作为结论 */
 export function lastAssistantText(messages: readonly AgentMessage[]): string {
   let text = "";
@@ -200,9 +299,15 @@ export type SubAgentSupervisorOptions = {
   parentSignal?: AbortSignal;
   /** 单个回合内的委派次数上限 */
   maxDelegations?: number;
-  /** 并行上限 */
+  /**
+   * 并行上限
+   */
   maxParallel?: number;
-  onEvent?: (event: AgentEvent) => void;
+  /**
+   * 本回合所有委派结论的回传总量上限（字符）。
+   * 默认 {@link MAX_TURN_RESULT_CHARS}；测试可传小值快速触顶。
+   */
+  maxResultChars?: number;
 };
 
 /** 一次委派占用的运行位；子 Agent 结束后必须调用 `release` */
@@ -236,17 +341,19 @@ export class SubAgentSupervisor {
   private readonly parentSignal?: AbortSignal;
   private readonly maxDelegations: number;
   private readonly maxParallel: number;
-  private readonly onEvent?: (event: AgentEvent) => void;
   private readonly usage: Usage = emptyUsage();
   private delegations = 0;
   private running = 0;
   private waiters: Array<() => void> = [];
+  /** 本回合已回传的结论字符数 */
+  private resultCharsUsed = 0;
+  private readonly maxResultChars: number;
 
   constructor(options: SubAgentSupervisorOptions = {}) {
     this.parentSignal = options.parentSignal;
     this.maxDelegations = options.maxDelegations ?? MAX_DELEGATIONS_PER_TURN;
     this.maxParallel = options.maxParallel ?? MAX_PARALLEL_SUBAGENTS;
-    this.onEvent = options.onEvent;
+    this.maxResultChars = options.maxResultChars ?? MAX_TURN_RESULT_CHARS;
   }
 
   /** 本轮已委派次数与累计用量（供 /status 展示，避免成本"隐形"） */
@@ -260,6 +367,29 @@ export class SubAgentSupervisor {
   /** 本轮剩余可委派次数 */
   get remaining(): number {
     return Math.max(0, this.maxDelegations - this.delegations);
+  }
+
+  /**
+   * 本回合还能回传多少字符结论。
+   *
+   * 单条上限 {@link SUBAGENT_RESULT_MAX_CHARS} 挡不住总量（预算允许最多
+   * {@link MAX_DELEGATIONS_PER_TURN} 次委派），所以额度必须按回合计。
+   * 下限取 1：额度耗尽时要给模型一句可执行的话，而不是让它收到一条空结论。
+   */
+  remainingResultChars(): number {
+    return Math.max(1, this.maxResultChars - this.resultCharsUsed);
+  }
+
+  /** 回传总量预算是否已耗尽（用于选择截断文案） */
+  get resultBudgetExhausted(): boolean {
+    return this.resultCharsUsed >= this.maxResultChars;
+  }
+
+  /** 记账一次委派实际回传的字符数 */
+  recordResultChars(chars: number): void {
+    if (Number.isFinite(chars) && chars > 0) {
+      this.resultCharsUsed += Math.floor(chars);
+    }
   }
 
   /**
@@ -354,10 +484,51 @@ export class SubAgentSupervisor {
   recordUsage(usage: Usage): void {
     addUsage(this.usage, usage);
   }
+}
 
-  emit(event: AgentEvent): void {
-    this.onEvent?.(event);
-  }
+/**
+ * 判定一次委派的成败口径。
+ *
+ * 抽成纯函数有两个原因：
+ * 1. **口径要能被单独测**。`ok` 与 `summary` 都必须落在"最后一条 assistant"上，
+ *    而这条路径在真实链路上几乎构造不出来——`runAgentLoop` 一遇到 `stopReason === "error"`
+ *    就收尾返回，重试发生在模型 provider 内部（不会进历史），
+ *    所以"中途 error、最终成功"只能靠直接喂消息列表来验证。
+ * 2. **`error` 字段要如实反映中途波动**。中途错误不影响 `ok`，
+ *    但必须以"曾出错 N 次但最终已完成"的附注形式留在 `error` 里，
+ *    否则排障时这段失败记录就凭空消失了。
+ */
+export function judgeSubAgentOutcome(
+  messages: readonly AgentMessage[],
+  options: { timedOut: boolean },
+): {
+  ok: boolean;
+  guardrail: boolean;
+  modelError: boolean;
+  transientErrors: number;
+  timedOut: boolean;
+} {
+  const assistants = messages.filter(
+    (message): message is AssistantMessage => message.role === "assistant",
+  );
+  const finalAssistant = assistants[assistants.length - 1];
+
+  // 轮次护栏：它本身也是一条 error assistant，靠errorMessage 区分
+  const guardrail = assistants.some(
+    (message) => message.errorMessage === "max_turns_exceeded",
+  );
+  const modelError = finalAssistant?.stopReason === "error";
+  const transientErrors = assistants.filter(
+    (message) => message.stopReason === "error",
+  ).length - (modelError ? 1 : 0);
+
+  return {
+    ok: !guardrail && !modelError && !options.timedOut,
+    guardrail,
+    modelError,
+    transientErrors,
+    timedOut: options.timedOut,
+  };
 }
 
 export type RunSubAgentInput = {
@@ -374,6 +545,33 @@ export type RunSubAgentInput = {
   /** 取消信号：缺省时子 Agent 不可被外部中断（测试与只读场景） */
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * 本条结论的字符上限。
+   *
+   * 由调用方取 `Math.min(SUBAGENT_RESULT_MAX_CHARS, supervisor.remainingResultChars())`
+   * 得到——单条上限与回合总量上限是两个闸，缺一不可。
+   */
+  resultCharLimit?: number;
+  /** 回传总量预算是否已耗尽（只影响截断文案的选择） */
+  resultBudgetExhausted?: boolean;
+  /** 这次委派实际具备的写能力（只影响截断文案里的收窄建议） */
+  canWrite?: boolean;
+  /**
+   * trace 写入器；提供时把子 Agent 的完整消息与内部事件落盘（排障用）。
+   * 见 {@link createSubAgentTraceWriter}——写失败不许影响委派本身。
+   */
+  trace?: {
+    write: (message: AgentMessage) => Promise<void>;
+    writeEvent: (event: unknown) => Promise<void>;
+    close: () => Promise<string | null>;
+  };
+  /**
+   * 整体墙钟上限（毫秒）；缺省不计时。
+   *
+   * 与轮次上限互补：轮次管"能走多远"，墙钟管"最多等多久"——
+   * 上游挂死或某个工具卡住时，轮次再少也不会自己结束。
+   */
+  timeoutMs?: number;
 };
 
 /**
@@ -386,16 +584,33 @@ export type RunSubAgentInput = {
  *   交回去让父 Agent 决定收缩目标还是重试，而不是让它看到一个失败。
  * - **inner events 原样转发**：子 Agent 的工具卡片也要出现在终端上，
  *   否则用户看到的是"委派期间什么都没发生"。
+ * - **超时用独立信号**：不能直接 abort 传入的 `signal`，否则父 Agent 无法区分
+ *   "用户中断"与"系统超时"，而两者该给模型的建议完全相反。
  */
 export async function runSubAgent(
   input: RunSubAgentInput,
 ): Promise<SubAgentResult> {
   const startedAt = Date.now();
-  const emit =
+
+  /**
+   * 事件出口：既要喂给订阅者（终端呈现），也要在开了 trace 时落盘。
+   *
+   * trace 只能旁路挂在这里——`runAgentLoop` 不该知道 trace 的存在，
+   * 而把它做成"包装 emit"是唯一不需要改 loop 签名的做法。
+   */
+  const emitToSubscribers =
     input.onEvent ??
     ((): void => {
       /* 没有订阅者时静默 */
     });
+  const trace = input.trace;
+  const emit = (event: AgentEvent): void => {
+    emitToSubscribers(event);
+    if (trace) {
+      // 不 await：落盘不能挡住流式渲染，失败已由 trace 层内部吞掉
+      void trace.writeEvent(event);
+    }
+  };
 
   emit({
     type: "subagent_start",
@@ -412,20 +627,58 @@ export async function runSubAgent(
     ),
   ];
 
-  const result = await runAgentLoop({
-    systemPrompt: input.systemPrompt,
-    messages,
-    tools: input.toolRegistry.definitions(),
-    model: input.model,
-    toolRegistry: input.toolRegistry,
-    maxTurns: input.maxTurns,
-    beforeToolCall: input.beforeToolCall,
-    // 身份随循环下传：子 Agent 的工具调用带着自己的 depth 去审批，
-    // 用户看到的不再是"某个 Agent 要写文件"，而是"第几层 Agent 要写文件"
-    identity: input.identity,
-    signal: input.signal,
-    onEvent: emit,
-  });
+  /**
+   * 父信号 + 墙钟超时合并成一个信号。
+   *
+   * 单独持有 `deadline`：只有它先到才算"超时"，而父信号先到是"用户取消"。
+   * 只看合并后的 `signal.aborted` 分不出这两者。
+   */
+  /**
+   * 墙钟超时与父取消合并成一个信号下发给循环。
+   *
+   * 刻意把超时单独装在`timeoutGuard` 里而不是只看合并后的 `signal.aborted`：
+   * 只有"`timeoutGuard` 先到"才是超时，父信号先到是用户取消——
+   * 两者该给模型的建议完全相反，混在一起父 Agent 就没法判断该不该重派。
+   */
+  const timeoutGuard = new AbortController();
+  const timeoutTimer =
+    input.timeoutMs && input.timeoutMs > 0
+      ? setTimeout(() => timeoutGuard.abort(), input.timeoutMs)
+      : null;
+  timeoutTimer?.unref?.();
+  const linked = linkSignals([input.signal, timeoutGuard.signal]);
+  const signal = linked.signal;
+
+  let result: { newMessages: AgentMessage[]; events: AgentEvent[] };
+  try {
+    result = await runAgentLoop({
+      systemPrompt: input.systemPrompt,
+      messages,
+      tools: input.toolRegistry.definitions(),
+      model: input.model,
+      toolRegistry: input.toolRegistry,
+      maxTurns: input.maxTurns,
+      beforeToolCall: input.beforeToolCall,
+      // 身份随循环下传：子 Agent 的工具调用带着自己的 depth 去审批，
+      // 用户看到的不再是"某个 Agent 要写文件"，而是"第几层 Agent 要写文件"
+      identity: input.identity,
+      signal,
+      onEvent: emit,
+    });
+  } finally {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
+    linked.dispose();
+  }
+
+  // trace 落盘：完整消息（含工具调用参数与结果），这正是排障时最缺的那部分
+  if (trace) {
+    for (const message of result.newMessages) {
+      await trace.write(message);
+    }
+    await trace.close();
+  }
 
   const elapsedMs = Date.now() - startedAt;
   const usage = sumUsage(result.newMessages);
@@ -433,15 +686,20 @@ export async function runSubAgent(
     (message): message is AssistantMessage => message.role === "assistant",
   ).length;
 
-  const guardrail = result.newMessages.find(
-    (message): message is AssistantMessage =>
-      message.role === "assistant" &&
-      message.errorMessage === "max_turns_exceeded",
-  );
-  const modelError = result.newMessages.find(
-    (message): message is AssistantMessage =>
-      message.role === "assistant" && message.stopReason === "error",
-  );
+  /**
+   * `ok` 只看**最后一条** assistant（批次 C1）。
+   *
+   * 此前取"任意一条 error"：一旦历史里出现过错误轮就整次判失败。抽出成纯函数
+   * {@link judgeSubAgentOutcome} 正是为了让这条口径能被单独测到——它在真实链路上
+   * 几乎构造不出来（`runAgentLoop` 遇到error 就收尾，重试发生在模型层内部）。
+   */
+  const verdict = judgeSubAgentOutcome(result.newMessages, {
+    // 超时与取消的区别只能从各自独立的信号上读：
+    // 合并后的 signal 两边都会置位，看它等于什么都不知道
+    timedOut: timeoutGuard.signal.aborted && input.signal?.aborted !== true,
+  });
+  const { guardrail, modelError, transientErrors, timedOut } = verdict;
+
   /**
    * 是否被取消。
    *
@@ -450,11 +708,12 @@ export async function runSubAgent(
    * 误判成"正常完成"，父 Agent 于是拿着半截结论继续往下走。
    */
   const aborted =
-    input.signal?.aborted === true ||
-    result.newMessages.some(
-      (message): message is AssistantMessage =>
-        message.role === "assistant" && message.stopReason === "aborted",
-    );
+    !timedOut &&
+    (input.signal?.aborted === true ||
+      result.newMessages.some(
+        (message): message is AssistantMessage =>
+          message.role === "assistant" && message.stopReason === "aborted",
+      ));
 
   const rawText = lastAssistantText(result.newMessages);
   const { summary, truncated } = capSubAgentResult(
@@ -462,21 +721,45 @@ export async function runSubAgent(
       ? rawText
       : aborted
         ? "(子 Agent 已被取消，没有产出结论)"
-        : "(子 Agent 未产出任何结论)",
+        : timedOut
+          ? "(子 Agent 达到时间上限，没有产出结论)"
+          : "(子 Agent 未产出任何结论)",
+    {
+      limit: input.resultCharLimit,
+      canWrite: input.canWrite,
+      budgetExhausted: input.resultBudgetExhausted,
+    },
   );
 
+  const errorText = ((): string | undefined => {
+    if (guardrail) {
+      return "max_turns_exceeded";
+    }
+    if (timedOut) {
+      return "timeout";
+    }
+    if (modelError) {
+      const base =
+        lastAssistant(result.newMessages)?.errorMessage ?? "model_error";
+      return transientErrors > 0
+        ? `${base}（中途另有 ${transientErrors} 次请求出错，但最终已完成）`
+        : base;
+    }
+    // 中途出错但最终成功：如实附注，不让它影响 ok（否则父 Agent 会重派一次同样的任务）
+    return transientErrors > 0
+      ? `中途有 ${transientErrors} 次请求出错，但最终已完成`
+      : undefined;
+  })();
+
   const outcome: SubAgentResult = {
-    ok: !guardrail && !modelError && !aborted,
+    ok: verdict.ok && !aborted,
     summary,
     usage,
     turns,
     aborted,
     truncated,
-    error: guardrail
-      ? "max_turns_exceeded"
-      : modelError
-        ? modelError.errorMessage ?? "model_error"
-        : undefined,
+    error: errorText,
+    ...(timedOut ? { timedOut: true } : {}),
   };
 
   emit({
@@ -534,6 +817,8 @@ export function subAgentResultDetails(
     usage: result.usage,
     aborted: result.aborted,
     truncated: result.truncated,
+    // 只有超时时才带这个字段：它要与 aborted 分开看，不能靠"没写 aborted"推断
+    ...(result.timedOut ? { timedOut: true } : {}),
     ...(result.error ? { error: result.error } : {}),
   };
 }
@@ -546,8 +831,10 @@ export function formatSubAgentResult(result: SubAgentResult): string {
   }
   const reason = result.aborted
     ? "已被用户取消"
-    : result.error === "max_turns_exceeded"
-      ? `已达到轮次上限，以下是不完整的阶段性结论`
-      : `执行出错（${result.error ?? "未知原因"}），以下是不完整的阶段性结论`;
+    : result.timedOut
+      ? "已达到时间上限，以下是不完整的阶段性结论"
+      : result.error === "max_turns_exceeded"
+        ? `已达到轮次上限，以下是不完整的阶段性结论`
+        : `执行出错（${result.error ?? "未知原因"}），以下是不完整的阶段性结论`;
   return `${body}\n\n[子 Agent ${reason}]`;
 }

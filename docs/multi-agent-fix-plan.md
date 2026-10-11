@@ -1,7 +1,7 @@
 # 多 Agent 委派逻辑修复方案
 
-> 状态：**A 批已落地**（`f1c1e27`），B/C/D/E 待评审。
-> 本文只描述改动清单、实施顺序与验收标准，不含已写代码。
+> 状态：**A~E 批全部落地**。B/C/D/E 见下方"实施记录"。
+> 本文描述改动清单、实施顺序与验收标准。
 > 前置阅读：[多 Agent 实现方案](multi-agent-design.md)、`src/agent/subagent.ts`、`notes/day5.md`。
 > 本文的第 1 节已用临时脚本实测复现（脚本已删），其余节为代码评审结论。
 >
@@ -9,8 +9,16 @@
 >
 > - **A（正确性）**：预算检查移到 `await` 之后、等待与取消竞速、`AcquireResult`
 >   可辨识联合；配套用例含"12 次并发 vs 8 预算"这一此前缺失的核心回归。
-> - 附带新增 `/subagent [on|off]` 开关（关闭时 `task` 不进本轮工具列表，
->   状态持久化到 `settings.json` 的 `subagentEnabled`）。
+> - **B（成本护栏）**：角色级整体墙钟超时（与用户取消分开汇报）、
+>   回合级回传总量预算 `MAX_TURN_RESULT_CHARS`。
+> - **C（结论质量）**：`ok` 判定收敛到最后一条 assistant（`judgeSubAgentOutcome`）、
+>   截断建议随写能力/ 预算耗尽状态切换、注入项目规则 `AGENTS.md`。
+> - **D（可观测）**：工具卡片与 `/last` 按 depth 缩进、`task` 专属两行审批摘要、
+>   子 Agent trace 落盘（`/subagent trace on`，默认关闭）。
+> - **E（一致性与清理）**：删除重复的 `subAgentToolNames` 与不夹取的 `resolveSubAgentTurns`、
+>   并发判定改用最终过滤后的工具集、清掉 supervisor 上从未使用的死参数。
+> - 附带新增 `/subagent [on|off|trace on|trace off]` 开关（关闭时 `task` 不进本轮工具列表，
+>   状态持久化到 `settings.json` 的 `subagentEnabled` 与 `subagentTrace`）。
 
 ---
 
@@ -22,11 +30,11 @@
 
 | 批次 | 主题 | 主要文件 | 建议 |
 | --- | --- | --- | --- |
-| A | 正确性：预算突破、取消不感知、失败语义 | `subagent.ts`、`subagentTool.ts` | **立即做** |
-| B | 成本护栏：整体超时、回传总量、token 预算 | `subagent.ts`、`protocol.ts` | **立即做** |
-| C | 结论质量：判定口径、提示与能力对齐、注入项目规则 | `subagent.ts`、`index.ts` | 建议做 |
-| D | 可观测：卡片层级、审批摘要、trace 落盘 | `render.ts`、`approval.ts`、`repl.ts` | 建议做 |
-| E | 一致性与清理：归一口径、删重复实现 | `subagent.ts`、`roles.ts`、`subagentTool.ts` | 可选，但别拖太久 |
+| A | 正确性：预算突破、取消不感知、失败语义 | `subagent.ts`、`subagentTool.ts` | **立即做** ✅ 已落地 |
+| B | 成本护栏：整体超时、回传总量、token 预算 | `subagent.ts`、`protocol.ts` | **立即做** ✅ B1/B2 已落地 |
+| C | 结论质量：判定口径、提示与能力对齐、注入项目规则 | `subagent.ts`、`index.ts` | 建议做 ✅ C1~C3 已落地 |
+| D | 可观测：卡片层级、审批摘要、trace 落盘 | `render.ts`、`approval.ts`、`repl.ts` | 建议做 ✅ 已落地 |
+| E | 一致性与清理：归一口径、删重复实现 | `subagent.ts`、`roles.ts`、`subagentTool.ts` | 可选，但别拖太久 ✅ 已落地 |
 
 ---
 
@@ -339,3 +347,41 @@ B 批专项：人为让子 Agent 跑满 `timeoutMs` → 结果与"用户取消"�
 - 不为了修 A2 引入工具栏超时框架（如 `p-timeout`）：信号链接这一件事本就只有十几行，多一个依赖不划算。
 - 不在本轮动 `READ_ONLY_TOOL_NAMES` 的语义——它是"只读 + 免确认"的唯一事实来源，任何改动都要连带 `tools.test.ts` 的一致性断言一起评估，属于独立议题。
 - B4（探索模型）不在本方案内决定数值与配置位置。
+
+---
+
+## 9. 实施记录（B~E）
+
+### 落地时的偏差与发现
+
+**B1 超时信号最初接错了地方。** 第一版把 `linkSignals([input.signal], timeoutMs)` 的返回值
+建好却没下发——循环拿到的是另一个只监听父信号的 `deadline.signal`。
+于是超时**永远不会触发**，只有测试能发现：`result.timedOut` 恒为 `undefined`。
+最终形态是 `timeoutGuard`（只装超时）+ `linkSignals([父signal, timeoutGuard.signal])`（下发给循环），
+两者分开正是为了让`timedOut` 有独立判据。
+
+**C1 的用例必须绕开真实链路。** 计划里写的 `[error, stop] → ok:true` 在真实链路上构造不出来：
+`loop.ts:351` 一遇到 `stopReason === "error"` 就`finishTurnEarly` 返回，
+而网络重试发生在模型 provider 内部（不进历史）。
+所以"中途 error、最终成功"只能靠直接喂消息列表验证——
+`judgeSubAgentOutcome` 因此被抽成纯函数，这不是为测试而设计的妥协，
+而是它本来就该有的形状：成败判定是纯逻辑，不该和IO 缠在一起。
+（顺带补了一条真实链路的用例，断言 error 之后不再请求模型。）
+
+**E3 的测试反过来纠正了我的预期。** 我原本断言"父表只读 + `allowBash:true` → 不可并发"，
+结果实现返回可并发——因为父表里根本没有 `bash`，申请了也拿不到，**实际能力**确实只是只读。
+这正是 E3 想要的口径，断言写错了，改断言。
+
+**`/subagent trace` 的落盘失败处置原本与委派开关不一致。**
+委派开关写盘失败返回 `persistFailed: true` 且状态照样生效；
+trace 分支却直接丢弃 `traceEnabled` 并返回 `error`——
+恰好在用户最需要 trace 的时刻让它不生效。已统一为前者，
+回执里也补上了对应的告警行。
+
+### 遗留
+
+- C4（结构化素材 `{ path, from, to }`）未做，等出现"父 Agent 反复显式注入同一批素材"的真实案例再动。
+- B3（token 预算）与 B4（探索模型）未做：前者需要先定"预算不足时怎么裁剪上下文"的策略，
+  后者要定数值与配置位置，都不适合夹在这次修复里。
+- `identity` 目前只在工具事件与渲染层透传，尚未进入会话落盘格式；
+  要做"跨会话回看某个子 Agent 干了什么"时才需要动它。

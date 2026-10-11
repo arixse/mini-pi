@@ -42,8 +42,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     note: "      y = 允许本次 / n = 拒绝 / a = 本会话全部允许",
   },
   {
-    usage: "/subagent [on|off]",
-    description: "开关子 Agent 委派（默认关闭，不带参数则切换）",
+    usage: "/subagent [on|off|trace on|trace off]",
+    description: "开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘",
   },
   { usage: "/status", description: "查看模型、会话文件、上下文与 token 用量、确认模式" },
   { usage: "/sessions", description: "列出当前工作目录的会话" },

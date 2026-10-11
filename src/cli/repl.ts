@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import chalk from "chalk";
-import { AgentEvent, AgentMessage, ToolDefinition, Usage } from "../shared/protocol";
+import { AgentEvent, AgentIdentity, AgentMessage, ToolDefinition, Usage } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
 import { LlmModel } from "../agent/model";
 import { ToolRegistry } from "../agent/tools";
@@ -297,6 +297,13 @@ export type ReplOptions = {
    * 否则模型每次都会先试着派一次，白白多一轮。
    */
   subAgentEnabled?: boolean;
+  /**
+   * 会话初始的子 Agent trace 落盘状态；**缺省关闭**。
+   *
+   * trace 会把子 Agent 读到的文件内容原样写进磁盘（额外的敏感数据副本），
+   * 所以与委派开关一样默认关，用 `/subagent trace on` 主动打开。
+   */
+  subAgentTrace?: boolean;
 };
 
 /**
@@ -323,13 +330,18 @@ export function activeToolRegistry(
 export type SubAgentCommand =
   | { kind: "toggle" }
   | { kind: "set"; enabled: boolean }
+  /** 只切换 trace 落盘，不动委派开关 */
+  | { kind: "trace"; enabled: boolean }
   | { kind: "unknown"; raw: string };
 
 const SUBAGENT_ON_WORDS = ["on", "开", "开启", "打开", "true", "enable"];
 const SUBAGENT_OFF_WORDS = ["off", "关", "关闭", "false", "disable"];
+const SUBAGENT_TRACE_ON_WORDS = ["trace on", "trace 开", "trace 开启"];
+const SUBAGENT_TRACE_OFF_WORDS = ["trace off", "trace 关", "trace 关闭"];
 
 /**
- * 解析 `/subagent` 的参数：不带参数是切换，带 on/off 是显式设定。
+ * 解析 `/subagent` 的参数：不带参数是切换，带 on/off 是显式设定，
+ * 带 trace 则只切 trace 落盘。
  *
  * 中英文都收：终端里大家习惯输入 `/subagent 关`，
  * 只认 `off` 的话这条命令在中文会话里形同没有。
@@ -340,6 +352,12 @@ export function parseSubAgentCommand(argument: string): SubAgentCommand {
     return { kind: "toggle" };
   }
   const word = raw.toLowerCase();
+  if (SUBAGENT_TRACE_ON_WORDS.includes(word)) {
+    return { kind: "trace", enabled: true };
+  }
+  if (SUBAGENT_TRACE_OFF_WORDS.includes(word)) {
+    return { kind: "trace", enabled: false };
+  }
   if (SUBAGENT_ON_WORDS.includes(word)) {
     return { kind: "set", enabled: true };
   }
@@ -352,9 +370,11 @@ export function parseSubAgentCommand(argument: string): SubAgentCommand {
 export type SubAgentCommandResult = {
   /** 生效后的开关状态 */
   enabled: boolean;
+  /** `trace` 分支生效后的落盘状态 */
+  traceEnabled?: boolean;
   /** 写入持久化失败时为 true：开关在本会话仍然生效，只是下次启动会回到默认 */
   persistFailed?: boolean;
-  /** 参数无法识别时给出用法 */
+  /** 参数无法识别或持久化失败时给出用法 */
   error?: string;
 };
 
@@ -368,13 +388,38 @@ export async function applySubAgentCommand(input: {
   argument: string;
   current: boolean;
   persist?: (enabled: boolean) => Promise<void>;
+  trace?: {
+    current: boolean;
+    persist?: (enabled: boolean) => Promise<void>;
+  };
 }): Promise<SubAgentCommandResult> {
   const command = parseSubAgentCommand(input.argument);
   if (command.kind === "unknown") {
     return {
       enabled: input.current,
-      error: `无法识别的参数：${command.raw}。用法：/subagent [on|off]`,
+      error:
+        `无法识别的参数：${command.raw}。` +
+        `用法：/subagent [on|off|trace on|trace off]`,
     };
+  }
+
+  // trace 分支不动委派开关：两者是独立的两件事，排障开关不该影响能不能委派
+  if (command.kind === "trace") {
+    if (input.trace?.persist) {
+      try {
+        await input.trace.persist(command.enabled);
+      } catch {
+        // 与委派开关同一处置：开关在本会话照样生效，只是不落盘。
+        // 不能因为写不进settings.json 就让 trace 也不生效——
+        // 那正是用户排障时最需要它的时刻。
+        return {
+          enabled: input.current,
+          traceEnabled: command.enabled,
+          persistFailed: true,
+        };
+      }
+    }
+    return { enabled: input.current, traceEnabled: command.enabled };
   }
 
   const enabled = command.kind === "set" ? command.enabled : !input.current;
@@ -389,29 +434,50 @@ export async function applySubAgentCommand(input: {
 }
 
 /**
- * `/subagent`：开关子 Agent 委派，并把结果告知用户。
+ * 把 `/subagent` 的执行结果打印成回执。
  *
- * @returns 生效后的开关状态
+ * 抽出来是为了让"改状态"与"告知用户"分开：`applySubAgentCommand` 是纯状态转换
+ * （可单测），这里只管措辞。`previous` 用来判断"显式设成当前值"这种无需变更的情况。
  */
-export async function toggleSubAgent(
-  argument: string,
-  current: boolean,
-  persist?: (enabled: boolean) => Promise<void>,
-): Promise<boolean> {
-  const outcome = await applySubAgentCommand({ argument, current, persist });
-
+export function printSubAgentCommandResult(
+  outcome: SubAgentCommandResult,
+  previous: boolean,
+): void {
   if (outcome.error) {
     console.log(chalk.red(`\n❌ ${outcome.error}\n`));
-    return outcome.enabled;
+    return;
   }
-  if (outcome.enabled === current) {
+
+  // trace 分支：只回执 trace 状态，委派开关一个字都不提（它没被改动）
+  if (outcome.traceEnabled !== undefined) {
+    console.log(
+      outcome.traceEnabled
+        ? chalk.green(
+            "\n🔍 已开启子 Agent trace：每次委派会在会话文件旁写 .sub-<id>.jsonl\n",
+          )
+        : chalk.yellow(
+            "\n🔍 已关闭子 Agent trace：不再落盘子 Agent 的内部消息\n",
+          ),
+    );
+    // 落盘失败也要说：否则用户以为下次启动还会继续记 trace
+    if (outcome.persistFailed) {
+      console.log(
+        chalk.red(
+          "⚠️  trace 开关未能写入 settings.json（文件不可写），本次只在当前会话生效\n",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (outcome.enabled === previous) {
     // 显式设成当前状态时也要回一句，否则用户会以为命令没生效
     console.log(
       outcome.enabled
         ? chalk.dim("\n🤝 子 Agent 委派已经是开启状态\n")
         : chalk.dim("\n🤝 子 Agent 委派已经是关闭状态\n"),
     );
-    return outcome.enabled;
+    return;
   }
 
   console.log(
@@ -422,6 +488,7 @@ export async function toggleSubAgent(
             "（已在跑的子任务不受影响）\n",
         ),
   );
+
   if (outcome.persistFailed) {
     console.log(
       chalk.red(
@@ -429,6 +496,27 @@ export async function toggleSubAgent(
       ),
     );
   }
+}
+
+/**
+ * `/subagent`：开关子 Agent 委派，并把结果告知用户。
+ *
+ * 保留这个包装是为了兼容既有调用点与用例；新代码请直接用
+ * {@link applySubAgentCommand} + {@link printSubAgentCommandResult}。
+ *
+ * @returns 生效后的委派开关状态
+ */
+export async function toggleSubAgent(
+  argument: string,
+  current: boolean,
+  persist?: (enabled: boolean) => Promise<void>,
+  trace?: {
+    current: boolean;
+    persist?: (enabled: boolean) => Promise<void>;
+  },
+): Promise<boolean> {
+  const outcome = await applySubAgentCommand({ argument, current, persist, trace });
+  printSubAgentCommandResult(outcome, current);
   return outcome.enabled;
 }
 
@@ -536,6 +624,23 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       }
     : undefined;
 
+  /**
+   * 子 Agent trace 落盘开关（`/subagent trace on|off`）。
+   *
+   * 与委派开关分开存：trace 是排障手段，默认关（它会把子 Agent 读到的内容
+   * 原样写进磁盘），且与"能不能委派"互不影响。
+   */
+  let subAgentTrace = options.subAgentTrace ?? false;
+  const persistSubAgentTrace = options.settingsStore
+    ? async (enabled: boolean): Promise<void> => {
+        await options.settingsStore!.setSubagentTrace(enabled);
+      }
+    : undefined;
+  const traceState = (): {
+    current: boolean;
+    persist?: (enabled: boolean) => Promise<void>;
+  } => ({ current: subAgentTrace, persist: persistSubAgentTrace });
+
   // 本轮是否正在处理中。
   // 必须从 line 处理函数的第一行就为 true：/exit 或 Ctrl+C 可能在本轮
   // 尚未走到模型调用（例如还在写会话文件）时到达，若只看 activeRun
@@ -607,7 +712,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/status") {
-      printStatus(options, trusted, subAgentEnabled);
+      printStatus(options, trusted, subAgentEnabled, subAgentTrace);
       rl.prompt();
       return;
     }
@@ -722,11 +827,20 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     }
 
     if (input === "/subagent" || input.startsWith("/subagent ")) {
-      subAgentEnabled = await toggleSubAgent(
-        input.slice("/subagent".length).trim(),
-        subAgentEnabled,
-        persistSubAgentEnabled,
-      );
+      const outcome = await applySubAgentCommand({
+        argument: input.slice("/subagent".length).trim(),
+        current: subAgentEnabled,
+        persist: persistSubAgentEnabled,
+        trace: traceState(),
+      });
+      printSubAgentCommandResult(outcome, subAgentEnabled);
+      // trace 分支不动委派开关；只有 set/toggle 才更新它
+      if (outcome.error === undefined && outcome.traceEnabled === undefined) {
+        subAgentEnabled = outcome.enabled;
+      }
+      if (outcome.traceEnabled !== undefined) {
+        subAgentTrace = outcome.traceEnabled;
+      }
       rl.prompt();
       return;
     }
@@ -796,7 +910,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       if (options.subAgentRuntime && subAgentEnabled) {
         supervisor = new SubAgentSupervisor({
           parentSignal: run.signal,
-          onEvent: onAgentEvent,
         });
         options.subAgentRuntime.set({
           supervisor,
@@ -804,6 +917,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
           parentId: null,
           beforeToolCall,
           onEvent: onAgentEvent,
+          // trace 需要主会话路径落地；没有会话存储时自动失效
+          sessionFilePath: options.sessionStore?.getFilePath() ?? null,
+          traceEnabled: subAgentTrace,
         });
       }
 
@@ -986,6 +1102,8 @@ export function sessionStatusEntries(
   trusted: boolean,
   // 默认关闭：与 getSubagentEnabled 同一口径，没配就是关
   subAgentEnabled = false,
+  // 同上：trace 默认关（它是磁盘上额外的敏感数据副本）
+  subAgentTrace = false,
 ): Array<[string, string]> {
   const store = options.sessionStore;
   const { window, source } = contextWindowInfo(options);
@@ -1009,7 +1127,7 @@ export function sessionStatusEntries(
     ...(options.usageTracker
       ? ([["用量", formatUsage(options.usageTracker.snapshot())]] as Array<[string, string]>)
       : []),
-    ...subAgentStatusRow(options, subAgentEnabled),
+    ...subAgentStatusRow(options, subAgentEnabled, subAgentTrace),
     ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
     ["工作目录", options.workspaceRoot],
   ];
@@ -1024,24 +1142,26 @@ export function sessionStatusEntries(
 function subAgentStatusRow(
   options: ReplOptions,
   subAgentEnabled: boolean,
+  subAgentTrace = false,
 ): Array<[string, string]> {
   const stats = options.subAgentStats?.();
+  const traceLabel = subAgentTrace ? " · 🔍 trace 开" : "";
   if (!subAgentEnabled) {
     // 关掉时（也是默认状态）必须占一行：否则用户看到"本会话未委派"会以为是模型不想用，
     // 更不会知道有这条命令可以打开
-    return [["子 Agent", "🚫 已关闭（/subagent 开启）"]];
+    return [["子 Agent", `🚫 已关闭（/subagent 开启）${traceLabel}`]];
   }
   if (!stats) {
     return [];
   }
   if (stats.delegations === 0) {
-    return [["子 Agent", "本会话未委派"]];
+    return [["子 Agent", `本会话未委派${traceLabel}`]];
   }
   return [
     [
       "子 Agent",
       `已委派 ${stats.delegations} 次 · 累计 ${stats.usage.totalTokens} tokens` +
-        `（入 ${stats.usage.input} / 出 ${stats.usage.output}）`,
+        `（入 ${stats.usage.input} / 出 ${stats.usage.output}）${traceLabel}`,
     ],
   ];
 }
@@ -1087,11 +1207,12 @@ export function printStatus(
   options: ReplOptions,
   trusted: boolean,
   subAgentEnabled = false,
+  subAgentTrace = false,
 ): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
   for (const line of sessionStatusLines(
-    sessionStatusEntries(options, trusted, subAgentEnabled),
+    sessionStatusEntries(options, trusted, subAgentEnabled, subAgentTrace),
   )) {
     console.log(chalk.dim(line));
   }
@@ -1288,7 +1409,12 @@ export function startNewSession(options: ReplOptions): boolean {
 // 缓存 tool_execution_start 事件信息
 const toolStartCache = new Map<
   string,
-  { toolName: string; args: Record<string, unknown>; startedAt: number }
+  {
+    toolName: string;
+    args: Record<string, unknown>;
+    startedAt: number;
+    identity?: AgentIdentity;
+  }
 >();
 
 /**
@@ -1458,6 +1584,7 @@ export function printToolInfo(
       toolName: event.toolName,
       args: event.args,
       startedAt: Date.now(),
+      identity: event.identity,
     });
     return;
   }
@@ -1477,6 +1604,9 @@ export function printToolInfo(
     finishedAt,
     result: event.result,
     isError: event.isError,
+    // 层级优先取 start 事件的：end 事件在取消路径下可能缺失，
+    // 拿不到缓存时退到 end 事件自带的 identity（协议允许两个事件都带）
+    identity: cached?.identity ?? event.identity,
   };
   lastToolCall = view;
 

@@ -8,6 +8,7 @@ import {
   buildApprovalQuestion,
   createToolApproval,
   describeToolCall,
+  describeTaskCall,
   parseApprovalAnswer,
 } from "./approval";
 import { ToolCallContent } from "../shared/protocol";
@@ -465,7 +466,7 @@ describe("命令风险识别", () => {
 });
 
 describe("审批提示的版式", () => {
-  const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+  const strip = (text: string): string => text.replace(/\[[0-9;]*m/g, "");
 
   it("与工具卡片同一套 gutter 语法", () => {
     const lines = strip(buildApprovalQuestion(call("bash", { command: "npm test" }))).split("\n");
@@ -532,6 +533,87 @@ describe("审批提示的调用来源（子 Agent 的写操作必须可辨认）
     assert.strictEqual(prompts.length, 2);
     assert.ok(!prompts[0].includes("子 Agent"));
     assert.ok(prompts[1].includes("[子 Agent depth=2 abcdefg]"));
+  });
+});
+
+/**
+ * D2：`task` 有专属审批摘要。
+ *
+ * 此前走通用分支，把 goal / role / allowWrite / allowBash / maxTurns 全量铺开，
+ * 用户要在一堆参数里自己找"这次会不会动我的文件"。
+ */
+describe("task 的审批摘要", () => {
+  const strip = (text: string): string => text.replace(/\[[0-9;]*m/g, "");
+
+  it("两行：目标 / 角色 + 权限", () => {
+    const lines = describeTaskCall(
+      call("task", { goal: "总结导出项", role: "explore" }),
+    );
+    assert.strictEqual(lines.length, 2);
+    assert.strictEqual(lines[0], "目标: 总结导出项");
+    assert.strictEqual(lines[1], "角色: explore · 权限: 只读");
+  });
+
+  it("缺省角色是 general", () => {
+    const lines = describeTaskCall(call("task", { goal: "g" }));
+    assert.ok(lines[1].includes("general"), lines[1]);
+  });
+
+  /**
+   * "是否含写 / bash"是用户决定放不放行的唯一依据，必须第一眼可见。
+   */
+  it("写权限与 bash 权限都点出来", () => {
+    const lines = describeTaskCall(
+      call("task", { goal: "g", allowWrite: true, allowBash: true }),
+    );
+    assert.ok(lines[1].includes("写文件"), lines[1]);
+    assert.ok(lines[1].includes("执行命令"), lines[1]);
+  });
+
+  it("只开写权限时不该出现执行命令", () => {
+    const lines = describeTaskCall(call("task", { goal: "g", allowWrite: true }));
+    assert.ok(lines[1].includes("写文件"));
+    assert.ok(!lines[1].includes("执行命令"), lines[1]);
+  });
+
+  it("goal 截断到 120 字", () => {
+    const long = "x".repeat(500);
+    const [first] = describeTaskCall(call("task", { goal: long }));
+    assert.ok(first.startsWith("目标: "));
+    assert.ok(first.length <= "目标: ".length + 121, `实际 ${first.length}`);
+    assert.ok(first.endsWith("…"));
+  });
+
+  it("goal 里的换行被压平（不能让后续行掉出卡片）", () => {
+    const [first] = describeTaskCall(
+      call("task", { goal: "第一行\n第二行\n\n第三行" }),
+    );
+    assert.strictEqual(first, "目标: 第一行 第二行 第三行");
+  });
+
+  it("goal 缺失或非字符串时不崩", () => {
+    const [first] = describeTaskCall(call("task", {}));
+    assert.strictEqual(first, "目标: ");
+    const [second] = describeTaskCall(call("task", { goal: { a: 1 } }));
+    assert.ok(second.includes("目标: "), second);
+  });
+
+  it("最终提示里确实用了这两行摘要", () => {
+    const question = strip(
+      buildApprovalQuestion(
+        call("task", { goal: "改一下导出逻辑", role: "implement", allowWrite: true }),
+      ),
+    );
+    assert.ok(question.includes("目标: 改一下导出逻辑"), question);
+    assert.ok(question.includes("权限: 写文件"), question);
+  });
+
+  it("其余工具仍走单行描述（不被 task 分支影响）", () => {
+    assert.strictEqual(describeTaskCall(call("task", { goal: "g" })).length, 2);
+    assert.strictEqual(
+      describeToolCall(call("bash", { command: "npm test" })).includes("\n"),
+      false,
+    );
   });
 });
 });

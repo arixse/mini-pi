@@ -974,3 +974,109 @@ describe("子 Agent 委派卡片", () => {
     assert.ok(end.includes("[ok]"));
   });
 });
+
+/**
+ * D1：工具卡片要带层级。
+ *
+ * 此前子 Agent 内部的 read_file / grep 卡片与父级长得完全一样，
+ * 终端上分不清是谁在读文件——README 里"卡片标明来自第几层"只在审批提示里成立。
+ */
+describe("工具卡片的层级缩进", () => {
+  const identity = { agentId: "12345678abcd", parentId: null, depth: 1 };
+
+  it("主 Agent（depth=0）不缩进", () => {
+    const lines = renderToolCall(
+      view({ name: "read_file", args: { path: "a.ts" } }),
+      ctx,
+    );
+    for (const line of lines) {
+      assert.ok(!line.startsWith(" "), `主 Agent 的卡片不该缩进：${JSON.stringify(line)}`);
+    }
+  });
+
+  /**
+   * 缩进与委派头尾必须同一套算法，否则卡片的竖线与委派头对不齐。
+   *
+   * depth=1 是"第一层子 Agent"，它自己的卡片与它的委派头部同列（都不缩进）；
+   * 真正的层级差出现在 depth>=2。
+   */
+  it("与委派头尾落在同一列", () => {
+    const tool = renderToolCall(
+      view({
+        name: "read_file",
+        args: { path: "a.ts" },
+        result: {
+          content: [{ type: "text", text: "const a = 1;" }],
+          details: {},
+        },
+        identity: { ...identity, depth: 2 },
+      }),
+      ctx,
+    );
+    const header = renderSubAgentHeader(
+      { type: "subagent_start", goal: "g", ...identity, depth: 2 },
+      ctx,
+    );
+    const toolBody = tool.find((line) => line.includes("const a = 1")) ?? "";
+    const headerLine = header.find((line) => line.includes("🤖")) ?? "";
+    assert.ok(toolBody && headerLine, `未找到可比对的行：${JSON.stringify({ tool, header })}`);
+    assert.strictEqual(
+      toolBody.length - toolBody.trimStart().length,
+      headerLine.length - headerLine.trimStart().length,
+      `缩进必须一致：tool=${JSON.stringify(toolBody)} header=${JSON.stringify(headerLine)}`,
+    );
+  });
+
+  it("depth 越大缩进越深", () => {
+    const indentOf = (depth: number): number => {
+      const line =
+        renderToolCall(
+          view({
+            name: "read_file",
+            args: { path: "a.ts" },
+            identity: { ...identity, depth },
+          }),
+          ctx,
+        ).find((l) => l.includes("📖")) ?? "";
+      return line.length - line.trimStart().length;
+    };
+    assert.strictEqual(indentOf(1), 0, "第一层与它的委派头部同列");
+    assert.ok(indentOf(3) > indentOf(2), "第三层应比第二层更深");
+  });
+
+  it("`/last` 同样缩进：否则用户看到的完整输出与卡片不在一列", () => {
+    const lines = renderLastToolOutput(
+      view({
+        name: "read_file",
+        args: { path: "a.ts" },
+        result: { content: [{ type: "text", text: "line1\nline2" }], details: {} },
+        identity: { ...identity, depth: 2 },
+      }),
+      ctx,
+    );
+    const numbered = lines.find((line) => line.includes("1 │")) ?? "";
+    assert.ok(
+      numbered.startsWith("  ") && !numbered.startsWith("   "),
+      `应当缩进两格：${JSON.stringify(numbered)}`,
+    );
+  });
+
+  it("缩进占掉的列要从可用宽度里扣掉（长行不顶出右边界）", () => {
+    const long = "y".repeat(200);
+    const lines = renderToolCall(
+      view({
+        name: "bash",
+        args: { command: long },
+        result: { content: [{ type: "text", text: long }], details: {} },
+        identity: { ...identity, depth: 2 },
+      }),
+      ctx,
+    );
+    for (const line of lines) {
+      assert.ok(
+        displayWidth(line) <= ctx.width,
+        `行宽 ${displayWidth(line)} 超过 ${ctx.width}：${JSON.stringify(line)}`,
+      );
+    }
+  });
+});

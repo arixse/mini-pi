@@ -112,6 +112,14 @@ export type SubAgentResult = {
   truncated: boolean;
   /** ok 为 false 时的原因，例如 `max_turns_exceeded` */
   error?: string;
+  /**
+   * 是否因**整体墙钟超时**被掐断。
+   *
+   * 必须与「用户取消」（`aborted`）分开：前者是系统按超时护栏主动收尾，
+   * 收尾时会带上已经得到的阶段性结论；后者是用户主动中断，整棵树立刻停。
+   * 两者都表现为「没做完」，但该给模型的建议完全相反。
+   */
+  timedOut?: boolean;
 };
 
 export type AgentEvent = 
@@ -122,8 +130,27 @@ export type AgentEvent =
     | {type:"message_start";message:AgentMessage}
     | {type:"message_update";message:AssistantMessage;delta:string}
     | {type:"message_end";message:AgentMessage}
-    | {type:"tool_execution_start";toolCallId:string;toolName:string;args:Record<string,unknown>}
-    | {type:"tool_execution_end";toolCallId:string;toolName:string;result:ToolResult;isError:boolean}
+    | {
+        type: "tool_execution_start";
+        toolCallId: string;
+        toolName: string;
+        args: Record<string, unknown>;
+        /**
+         * 这次调用来自哪一层 Agent；主 Agent 不携带。
+         *
+         * 没有它时子 Agent 的 `read_file` 卡片与父级的长得完全一样，
+         * 终端上分不清是谁在读文件（`/last` 同理）。
+         */
+        identity?: AgentIdentity;
+      }
+    | {
+        type: "tool_execution_end";
+        toolCallId: string;
+        toolName: string;
+        result: ToolResult;
+        isError: boolean;
+        identity?: AgentIdentity;
+      }
     | {type:"tool_permission";toolCallId:string;toolName:string;action:string;reason?:string;originalArgs:ToolCallContent["arguments"];args:ToolCallContent["arguments"]}
     | {type:"compaction";summary:string;tokensBefore:number;firstKeptEntryId:string}
     | {type:"branch_switch";leafId:string}

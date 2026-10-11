@@ -11,7 +11,6 @@ import {
   SubAgentRole,
   resolveRole,
   resolveSubAgentTools,
-  resolveSubAgentTurns,
   rolePreset,
 } from "./roles";
 
@@ -145,21 +144,58 @@ describe("角色与显式开关的冲突消解", () => {
     });
     assert.deepStrictEqual(tools, ["read_file"]);
   });
-});
 
-describe("角色轮次预算", () => {
-  it("显式传值优先于角色默认值", () => {
-    assert.strictEqual(resolveSubAgentTurns("general", 7, 30), 7);
+  it("allowWrite 不放开 bash：起进程比改文件重得多，必须单独申请", () => {
+    // 这条性质此前只被已删除的 subAgentToolNames 覆盖，
+    // 而那套实现恰恰是没在用的错的一套（不认识 canEscalate）。
+    const tools = resolveSubAgentTools({
+      role: "general",
+      allowWrite: true,
+      allowBash: false,
+      parentRegistry: registry,
+    });
+    assert.ok(tools.includes("write_file"));
+    assert.ok(tools.includes("edit_file"));
+    assert.ok(!tools.includes("bash"));
   });
 
-  it("没传则取角色预设值", () => {
-    assert.strictEqual(
-      resolveSubAgentTurns("review", undefined, 30),
-      rolePreset("review").maxTurns,
-    );
-    assert.strictEqual(
-      resolveSubAgentTurns("implement", undefined, 30),
-      rolePreset("implement").maxTurns,
-    );
+  it("只读角色即使被要求加权限也拿不到写工具", () => {
+    for (const role of ["explore", "review"] as const) {
+      const tools = resolveSubAgentTools({
+        role,
+        allowWrite: true,
+        allowBash: true,
+        parentRegistry: registry,
+      });
+      assert.deepStrictEqual(
+        tools,
+        [...READ_ONLY_TOOL_NAMES],
+        `${role} 必须保持只读`,
+      );
+    }
+  });
+});
+
+describe("角色轮次与墙钟预算", () => {
+  it("每个角色都登记了正数的墙钟上限", () => {
+    // 墙钟与轮次是两个正交维度：轮次管"能走多远"，墙钟管"最多等多久"。
+    // 缺了任何一个，一次卡住的委派就只能靠 Ctrl+C 收场。
+    for (const role of SUBAGENT_ROLE_NAMES) {
+      const preset = rolePreset(role);
+      assert.ok(
+        Number.isFinite(preset.timeoutMs) && preset.timeoutMs > 0,
+        `${role} 的 timeoutMs 必须是正数`,
+      );
+    }
+  });
+
+  it("写权限越重的角色给的墙钟越长", () => {
+    // implement 要改文件还要自述验证（通常含一次测试/构建），最慢；
+    // review 只读且轮次最少，最快。
+    const byTimeout = (a: SubAgentRole, b: SubAgentRole): number =>
+      rolePreset(a).timeoutMs - rolePreset(b).timeoutMs;
+    assert.ok(byTimeout("implement", "general") > 0);
+    assert.ok(byTimeout("general", "explore") > 0);
+    assert.ok(byTimeout("explore", "review") > 0);
   });
 });

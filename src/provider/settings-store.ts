@@ -20,6 +20,14 @@ type Settings = {
    * settings.json 里写一行才能用；而一旦有人主动关掉，重开终端应当仍然关着。
    */
   subagentEnabled?: boolean;
+  /**
+   * 是否把子 Agent 的完整消息落到 trace 文件（默认关闭）。
+   *
+   * 委派本身以一条 toolCall/toolResult 进主会话，但子 Agent **内部**的来回
+   * 不进主会话：排障时看不到它读了什么、在哪一轮跑偏、为什么给出这个结论。
+   * 打开后每次委派写一个 `<会话>.sub-<agentId>.jsonl`。
+   */
+  subagentTrace?: boolean;
 };
 
 export class SettingsStore {
@@ -201,6 +209,27 @@ export class SettingsStore {
     // 委派是可选能力，方向取"打不开"的一侧——用户可以再敲 /subagent on，
     // 反过来如果他没写字却被默认开启，多花的 token 是收不回来的。
     return this.settings.subagentEnabled === true;
+  }
+
+  /**
+   * 是否把子 Agent 的内部消息落盘（`subagentTrace`）。
+   *
+   * **默认关闭**：trace 会把子 Agent 读到的文件内容原样写进磁盘，
+   * 属于额外的敏感数据副本，不该在用户不知情时产生。
+   */
+  async getSubagentTrace(): Promise<boolean> {
+    await this.initialize();
+    return this.settings.subagentTrace === true;
+  }
+
+  /**
+   * 开关子 Agent trace 落盘。
+   * @throws settings.json 处于损坏状态时拒绝写入
+   */
+  async setSubagentTrace(enabled: boolean): Promise<void> {
+    await this.initialize();
+    this.settings.subagentTrace = enabled;
+    await this.persist();
   }
 
   /**

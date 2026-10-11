@@ -22,8 +22,9 @@ mini-pi/
 ├── src/
 │   ├── agent/          # AI 代理核心逻辑
 │   │   ├── loop.ts     # 主循环（Agent Loop）
-│   │   ├── subagent.ts # 子 Agent 运行时（委派预算、并行配额、取消树）
+│   │   ├── subagent.ts # 子 Agent 运行时（委派预算、回传总量、墙钟超时、取消树）
 │   │   ├── subagentTool.ts # task 工具
+│   │   ├── subagentTrace.ts # 子 Agent trace 落盘（默认关闭，排障用）
 │   │   ├── roles.ts    # 角色预设（explore / implement / review / general）
 │   │   ├── model.ts    # 模型封装（支持 OpenAI/Anthropic）
 │   │   ├── tools.ts    # 工具定义（read/edit/bash）
@@ -74,7 +75,14 @@ mini-pi/
 17. **子 Agent 委派** - 通过 `task` 工具把一件相对独立的事交给子 Agent：`explore`（只读侦察）/
     `implement`（可写且须自述验证）/ `review`（只读评审）/ `general` 四种角色。
     子 Agent 跑在独立上下文里，只回传裁剪后的结论；写操作仍逐次审批且标明来自第几层；
-    调查类委派可以并发；Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列；
+    调查类委派可以并发（并发判定基于**最终过滤后**的工具集，父表没写工具时不误判为不可并发）；
+    Ctrl+C 一次中断整棵委派树；用量在 `/status` 单列；
+    **成本护栏**：每个角色有整体墙钟超时（超时与用户取消分别汇报），
+    单条结论上限 8000 字符、**单回合回传总量上限 24000 字符**，超限时明确告知如何收窄；
+    子 Agent 的 system prompt 会注入项目规则（`AGENTS.md`），它同样受"改动要提交、要跑测试"约束；
+    **可观测**：子 Agent 的工具卡片按层级缩进，`/last` 同步；`task` 的审批摘要分两行显示
+    目标与权限；`/subagent trace on` 会把每次委派的内部消息写到 `<会话>.sub-<id>.jsonl`
+    （**默认关闭**，trace 是磁盘上额外的敏感数据副本）；
     **默认关闭**（委派会额外烧 token 且单次成本难预估），需用 `/subagent on` 主动打开，
     状态持久化到 settings.json；关闭后模型看不到 `task` 工具
     （详见 [多 Agent 实现方案](docs/multi-agent-design.md)）
@@ -322,8 +330,8 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容 |
 | `/trust` | 切换信任模式（跳过工具调用确认） |
-| `/subagent [on\|off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；状态写入 settings.json |
-| `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
+| `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on\|off` 单独开关子 Agent trace 落盘（**默认关闭**）。两者状态都写入 settings.json |
+| `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关、trace 开关与累计用量 |
 | `/sessions` | 列出当前工作目录的会话 |
 | `/switch <序号>` | 切换到指定会话并恢复其历史上下文 |
 | `/last [n]` | 查看上一条工具输出的完整内容（默认 200 行） |

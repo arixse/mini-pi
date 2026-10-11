@@ -7,10 +7,12 @@ import { BeforeToolCall } from "./loop";
 import { LlmModel } from "./model";
 import { RegisteredTool, ToolRegistry } from "./tools";
 import { createTextContent } from "./message";
+import { createSubAgentTraceWriter } from "./subagentTrace";
 import {
   AcquireDeniedReason,
   MAX_DELEGATIONS_PER_TURN,
   MAX_SUBAGENT_DEPTH,
+  SUBAGENT_RESULT_MAX_CHARS,
   SUBAGENT_TOOL_NAME,
   SubAgentSupervisor,
   buildSubAgentSystemPrompt,
@@ -22,10 +24,10 @@ import {
 } from "./subagent";
 import {
   SUBAGENT_ROLE_NAMES,
+  MUTATING_TOOL_NAMES,
   resolveRole,
   resolveSubAgentTools,
   rolePreset,
-  subAgentMutates,
 } from "./roles";
 
 /**
@@ -68,6 +70,13 @@ export type SubAgentRuntime = {
   parentId: string | null;
   beforeToolCall?: BeforeToolCall;
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * 主会话文件路径；配合 `traceEnabled` 落子 Agent 的 trace。
+   * 没有会话存储时 trace 自动失效（无处可写）。
+   */
+  sessionFilePath?: string | null;
+  /** 是否记录 trace（settings.json 的 `subagentTrace`，默认关） */
+  traceEnabled?: boolean;
 };
 
 /**
@@ -100,6 +109,8 @@ export type CreateSubAgentToolOptions = {
   instructions?: string;
   /** 角色名，只用于事件展示 */
   role?: string;
+  /** 项目规则（`AGENTS.md`）；会注入子 Agent 的 system prompt */
+  projectRules?: string | (() => string);
 };
 
 function stringArg(value: unknown, fallback = ""): string {
@@ -129,7 +140,28 @@ export function createSubAgentTool(
      * 就免确认（它要花 token、要花时间，还可能写文件），
      * 把委派塞进只读白名单会得到"能并发却要确认"的分叉。
      */
-    concurrent: (args) => !subAgentMutates(resolveRole(args.role), boolArg(args.allowWrite), boolArg(args.allowBash)),
+    /**
+     * 并发安全性：以**最终工具集**为准（批次 E3）。
+     *
+     * 此前只看"角色 + 入参"，而真实工具集还要被 `parentRegistry.filter` 过一遍：
+     * 父级没有 `write_file` 时的 `implement` 实际是只读委派，却被判成会改磁盘而
+     * 不许并发。口径必须落在真正拿到手的那份工具集上。
+     *
+     * 拿不到父注册表时保守判 true（不可并发）：宁可少一次并行，也不冒写坏文件的风险。
+     */
+    concurrent: (args) => {
+      const parentRegistry = options.parentRegistry();
+      if (!parentRegistry) {
+        return false;
+      }
+      const toolNames = resolveSubAgentTools({
+        role: resolveRole(args.role),
+        allowWrite: boolArg(args.allowWrite),
+        allowBash: boolArg(args.allowBash),
+        parentRegistry,
+      });
+      return !toolNames.some((name) => MUTATING_TOOL_NAMES.includes(name));
+    },
     description:
       "Delegate a self-contained task to a sub-agent. The sub-agent runs in its own " +
       "isolated context: it only sees the goal and the snippets you pass in `context`, " +
@@ -272,6 +304,10 @@ export function createSubAgentTool(
           // 以最终工具集为准，而不是入参：角色自带写权限时也要如实告诉它"能写"，
           // 否则 prompt 与工具列表互相矛盾，模型会犹豫不动手
           canWrite: childRegistry.has("write_file"),
+          projectRules:
+            typeof options.projectRules === "function"
+              ? options.projectRules()
+              : options.projectRules,
           instructions: [
             `本次委派的角色：${preset.label}`,
             preset.instructions,
@@ -280,6 +316,17 @@ export function createSubAgentTool(
             .filter((part): part is string => Boolean(part))
             .join("\n\n"),
         });
+
+        /**
+         * 本条结论的上限：单条闸与回合总量闸取较小者。
+         *
+         * 两个闸缺一不可：只留单条，8 次委派就能灌回 64k 字符；
+         * 只留总量，单条 8k 仍可能一次性吃掉全部额度。
+         */
+        const resultCharLimit = Math.min(
+          SUBAGENT_RESULT_MAX_CHARS,
+          runtime.supervisor.remainingResultChars(),
+        );
 
         const result: SubAgentResult = await runSubAgent({
           agentId,
@@ -291,15 +338,27 @@ export function createSubAgentTool(
           maxTurns: resolveSubAgentMaxTurns(
             args.maxTurns ?? preset.maxTurns,
           ),
+          // 墙钟上限按角色下发；父 Agent 不能为单次委派无限延长
+          timeoutMs: preset.timeoutMs,
           model: runtime.model,
           toolRegistry: childRegistry,
           beforeToolCall: runtime.beforeToolCall,
           signal: slot.signal,
           onEvent: runtime.onEvent,
+          resultCharLimit,
+          resultBudgetExhausted: runtime.supervisor.resultBudgetExhausted,
+          canWrite: childRegistry.has("write_file"),
+          trace: createSubAgentTraceWriter({
+            enabled: runtime.traceEnabled === true,
+            sessionFilePath: runtime.sessionFilePath ?? null,
+            agentId,
+          }),
         });
 
         // 子 Agent 的用量要计入本轮总量，否则 /status 会显著低报成本
         runtime.supervisor.recordUsage(result.usage);
+        // 回传字符数同样要记账：下一条委派据此拿到更小的额度
+        runtime.supervisor.recordResultChars(result.summary.length);
 
         return {
           content: [createTextContent(formatSubAgentResult(result))],

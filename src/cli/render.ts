@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { DEFAULT_TERMINAL_WIDTH, displayWidth, truncateToWidth } from "./width";
 import { formatDuration } from "./status";
-import { AgentEvent } from "../shared/protocol";
+import { AgentEvent, AgentIdentity } from "../shared/protocol";
 
 /**
  * 工具调用卡片的渲染。
@@ -227,6 +227,13 @@ export type ToolCallView = {
     details?: unknown;
   };
   isError: boolean;
+  /**
+   * 这次调用来自哪一层 Agent；主 Agent 为 undefined。
+   *
+   * 卡片据此缩进，与 `renderSubAgentHeader` 用同一套层级语法：
+   * depth 藏在纯数字里没人会在被打断时去数，缩进才是一眼能认出的信号。
+   */
+  identity?: AgentIdentity;
 };
 
 /** 正文行的语义类型，决定如何着色 */
@@ -703,6 +710,16 @@ function contentWidth(ctx: RenderContext, prefixWidth: number): number {
 }
 
 /**
+ * 工具卡片的层级缩进。
+ *
+ * 与 {@link renderSubAgentHeader} / {@link renderSubAgentFooter} 必须是同一套算法，
+ * 否则卡片的竖线与委派头尾对不齐，层级感就散了。
+ */
+function depthIndent(depth: number | undefined): string {
+  return "  ".repeat(Math.max(0, (depth ?? 0) - 1));
+}
+
+/**
  * 渲染 `/last`：展示上一条工具输出的完整内容（带行号）。
  *
  * 卡片正文最多 8 行，用户因此看不到"模型实际看到了什么"；
@@ -733,26 +750,32 @@ export function renderLastToolOutput(
     60,
   )}`;
   const rightPlain = `${total} 行 · ${formatBytes(Buffer.byteLength(text, "utf8"))}`;
+
+  const indent = depthIndent(view.identity?.depth);
+  const out: string[] = [""];
+  // 缩进占掉的列要从可用宽度里扣掉，否则长行会顶到右边界之外
+  const available = Math.max(20, ctx.width - displayWidth(indent));
   const layout = layoutHeader(
     displayWidth(title),
     displayWidth(rightPlain),
-    ctx.width,
+    available,
   );
 
-  const out: string[] = [""];
   if (layout.mode === "inline") {
-    out.push(`${title}${" ".repeat(layout.pad)}${ctx.style.dim(rightPlain)}`);
+    out.push(`${indent}${title}${" ".repeat(layout.pad)}${ctx.style.dim(rightPlain)}`);
   } else {
-    out.push(title);
-    out.push(`  ${ctx.style.dim(rightPlain)}`);
+    out.push(`${indent}${title}`);
+    out.push(`${indent}  ${ctx.style.dim(rightPlain)}`);
   }
 
-  const gutter = ctx.style.dim(gutterGlyph(ctx));
-  const linePrefixWidth = displayWidth(gutterGlyph(ctx)) + numberWidth + 3;
+  // 缩进保持纯文本（不参与着色），只把竖线本身压暗
+  const gutterPlain = `${indent}${gutterGlyph(ctx)}`;
+  const gutterWithIndent = `${indent}${ctx.style.dim(gutterGlyph(ctx))}`;
+  const linePrefixWidth = displayWidth(gutterPlain) + numberWidth + 3;
   shown.forEach((line, index) => {
     const numbered = `${String(firstLine + index).padStart(numberWidth)} │ ${line}`;
     out.push(
-      `${gutter} ${truncateToWidth(numbered, contentWidth(ctx, linePrefixWidth))}`,
+      `${gutterWithIndent} ${truncateToWidth(numbered, contentWidth(ctx, linePrefixWidth))}`,
     );
   });
 
@@ -761,7 +784,7 @@ export function renderLastToolOutput(
     hidden > 0
       ? `显示第 ${firstLine}-${lastLine} 行，共 ${total} 行 · /last ${shown.length + maxLines} 查看后续`
       : `共 ${total} 行`;
-  out.push(`${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
+  out.push(`${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
 
   return out;
 }
@@ -801,8 +824,13 @@ function paintBodyLine(line: BodyLine, ctx: RenderContext): string {
 export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[] {
   const details = detailsOf(view);
   const durationMs = Math.max(0, view.finishedAt - view.startedAt);
-  const gutter = ctx.style.dim(gutterGlyph(ctx));
   const paint = toolPaint(view.name, ctx);
+
+  /**
+   * 层级缩进：与 `renderSubAgentHeader` / `renderSubAgentFooter` 同一套算法，
+   * 于是一张工具卡片与它的委派头尾在视觉上落在同一列。
+   */
+  const indent = depthIndent(view.identity?.depth);
 
   // ---- 标题行：先按纯文本测量，再着色
   const icon = toolIcon(view.name, ctx);
@@ -820,22 +848,24 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
     : (text: string): string => ctx.style.green(ctx.style.bold(text));
   const rightStyled = `${paintStatus(statusPlain)} ${ctx.style.dim(tailPlain)}`;
 
+  // 缩进占掉的列要从可用宽度里扣掉，否则长行会顶到右边界之外
+  const available = Math.max(20, ctx.width - displayWidth(indent));
   const layout = layoutHeader(
     displayWidth(leftPlain),
     displayWidth(rightPlain),
-    ctx.width,
+    available,
   );
 
   const lines: string[] = [""];
   if (layout.mode === "inline") {
-    lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled}`);
+    lines.push(`${indent}${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled}`);
   } else {
     const trimmed = truncateToWidth(
       primaryPlain,
       Math.max(1, layout.maxLeft - displayWidth(icon) - 1),
     );
-    lines.push(`${icon} ${paint(trimmed)}`);
-    lines.push(`  ${rightStyled}`);
+    lines.push(`${indent}${icon} ${paint(trimmed)}`);
+    lines.push(`${indent}  ${rightStyled}`);
   }
 
   // ---- 正文
@@ -844,8 +874,10 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   // 失败时窗口移到末尾：报错在尾部，取前 8 行等于把原因藏起来
   const failed = isFailedCall(view, details);
   const window = selectBodyWindow(body, limit, failed);
+  const gutterPlain = `${indent}${gutterGlyph(ctx)}`;
+  const gutterWithIndent = `${indent}${ctx.style.dim(gutterGlyph(ctx))}`;
   const bodyLimitNote = (text: string): string =>
-    `${gutter} ${ctx.style.dim(text)}`;
+    `${gutterWithIndent} ${ctx.style.dim(text)}`;
 
   if (window.headOmitted > 0) {
     lines.push(bodyLimitNote(`… 已省略前 ${window.headOmitted} 行`));
@@ -853,9 +885,9 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   for (const line of window.lines) {
     const text = truncateToWidth(
       line.text,
-      contentWidth(ctx, displayWidth(gutterGlyph(ctx)) + 1),
+      contentWidth(ctx, displayWidth(gutterPlain) + 1),
     );
-    lines.push(`${gutter} ${paintBodyLine({ ...line, text }, ctx)}`);
+    lines.push(`${gutterWithIndent} ${paintBodyLine({ ...line, text }, ctx)}`);
   }
   if (window.tailOmitted > 0) {
     lines.push(bodyLimitNote(`… 省略 ${window.tailOmitted} 行`));
@@ -873,7 +905,7 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
         ? `${baseFooter} · /last 查看全部`
         : baseFooter;
   if (footer) {
-    lines.push(`${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
+    lines.push(`${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
   }
 
   return lines;
@@ -892,7 +924,7 @@ export function renderSubAgentHeader(
   event: Extract<AgentEvent, { type: "subagent_start" }>,
   ctx: RenderContext = createRenderContext(),
 ): string[] {
-  const indent = "  ".repeat(Math.max(0, event.depth - 1));
+  const indent = depthIndent(event.depth);
   const label = event.role ?? "agent";
   const icon = ctx.ascii ? "[sub]" : "\u{1F916}";
   const heading = ctx.style.cyan(
@@ -919,7 +951,7 @@ export function renderSubAgentFooter(
   event: Extract<AgentEvent, { type: "subagent_end" }>,
   ctx: RenderContext = createRenderContext(),
 ): string[] {
-  const indent = "  ".repeat(Math.max(0, event.depth - 1));
+  const indent = depthIndent(event.depth);
   const okMark = ctx.ascii ? "[ok]" : "✅";
   const failMark = ctx.ascii ? "[fail]" : "❌";
   const prefix = `${indent}${event.ok ? okMark : failMark}`;

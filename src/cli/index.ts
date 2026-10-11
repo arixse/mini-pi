@@ -186,6 +186,11 @@ export async function main() {
         runtime: () => subAgentRuntime.get(),
         // 子 Agent 的工具集必须从父注册表派生：派生保证它拿不到父级没有的能力
         parentRegistry: () => toolRegistry,
+        // 项目规则（AGENTS.md）：子 Agent 也要知道本项目的约定，
+        // 否则 implement 不知道"每次改动要 commit、交付前必须跑单测"。
+        // 用惰性取值而不是闭包捕获：注册表在 fixedContext 读取之前就要构建，
+        // 而 /reload 之后规则可能已变，捕获会把旧值永久钉住。
+        projectRules: () => sessionManager.getFixedContext(),
       }),
     ],
   });
@@ -197,6 +202,8 @@ export async function main() {
 
   // 子 Agent 开关：默认关闭，打开过就一直开着（/subagent 写回 settings.json）
   const subAgentEnabled = await settingsStore.getSubagentEnabled();
+  // trace 落盘同样默认关闭：它是磁盘上额外的敏感数据副本
+  const subAgentTrace = await settingsStore.getSubagentTrace();
 
   // 创建 sessionManager
   const sessionManager = new SessionManager(workspaceRoot);
@@ -326,6 +333,7 @@ export async function main() {
     toolRegistry,
     subAgentRuntime,
     subAgentEnabled,
+    subAgentTrace,
     workspaceRoot,
     providerService,
     settingsStore,

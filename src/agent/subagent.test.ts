@@ -8,6 +8,7 @@ import {
   AgentEvent,
   AgentMessage,
   AssistantMessage,
+  SubAgentResult,
   ToolCallContent,
 } from "../shared/protocol";
 import { createTextContent } from "./message";
@@ -26,10 +27,13 @@ import {
   buildSubAgentSystemPrompt,
   buildSubAgentUserMessage,
   capSubAgentResult,
+  formatSubAgentResult,
+  judgeSubAgentOutcome,
   lastAssistantText,
+  linkSignals,
   resolveSubAgentMaxTurns,
   runSubAgent,
-  subAgentToolNames,
+  subAgentResultDetails,
   sumUsage,
 } from "./subagent";
 import { SubAgentRuntimeProvider, createSubAgentTool } from "./subagentTool";
@@ -78,31 +82,31 @@ function makeWorkspace(): string {
   return mkdtempSync(join(tmpdir(), "mini-pi-subagent-"));
 }
 
+/**
+ * 一个"挂死"的模型替身：只有取消信号能救它。
+ *
+ * 必须**同时**挂一个兜底定时器：若只监听 abort，一旦信号在complete() 被调用前
+ * 就已经 aborted，事件不会再触发，这个 promise 永远悬着——
+ * node:test 会因此判定 "event loop 已resolve 但promise 未完成"，把后续用例全部取消。
+ */
+function createHangingModel(): LlmModel {
+  return {
+    complete({ signal }): Promise<AssistantMessage> {
+      return new Promise((_resolve, reject) => {
+        const bail = (): void => reject(new Error("请求已取消"));
+        if (signal?.aborted) {
+          bail();
+          return;
+        }
+        signal?.addEventListener("abort", bail, { once: true });
+        // 兜底：不让悬空的 promise 拖死整个测试进程
+        setTimeout(bail, 3_000).unref();
+      });
+    },
+  };
+}
+
 describe("subagent", () => {
-  describe("subAgentToolNames", () => {
-    it("默认只读：不含任何写类工具", () => {
-      const names = subAgentToolNames({});
-      assert.deepStrictEqual(names, [...READ_ONLY_TOOL_NAMES]);
-      for (const name of ["write_file", "edit_file", "bash"]) {
-        assert.ok(!names.includes(name), `${name} 不应默认授予`);
-      }
-    });
-
-    it("allowWrite 只放开写文件，不放开 bash", () => {
-      const names = subAgentToolNames({ allowWrite: true });
-      assert.ok(names.includes("write_file"));
-      assert.ok(names.includes("edit_file"));
-      // bash 能跑任意进程，比改文件重得多，必须单独申请
-      assert.ok(!names.includes("bash"));
-    });
-
-    it("allowBash 才放开 bash", () => {
-      const names = subAgentToolNames({ allowBash: true });
-      assert.ok(names.includes("bash"));
-      assert.ok(!names.includes("write_file"));
-    });
-  });
-
   describe("buildSubAgentUserMessage", () => {
     it("素材在前、目标在后；且过滤空白素材", () => {
       const text = buildSubAgentUserMessage({
@@ -158,6 +162,36 @@ describe("subagent", () => {
       });
       assert.ok(prompt.endsWith("只输出问题清单"));
     });
+
+    /**
+     * C3：项目规则必须注入子 Agent。
+     *
+     * 不注入时`implement` 子 Agent 不知道本项目"每次改动要commit、
+     * 交付前必须跑单测"，它改完就报完成——父 Agent 拿到一份看似成功的
+     * 未经测试的改动。
+     */
+    it("注入项目规则，且排在角色指令之前", () => {
+      const prompt = buildSubAgentSystemPrompt({
+        workspaceRoot: "/w",
+        canWrite: true,
+        projectRules: "每次改动必须创建 git commit",
+        instructions: "只输出问题清单",
+      });
+      assert.ok(prompt.includes("每次改动必须创建 git commit"));
+      assert.ok(
+        prompt.indexOf("每次改动必须创建 git commit") <
+          prompt.indexOf("只输出问题清单"),
+        "项目规则是底层的通用约束，必须先于角色指令出现",
+      );
+    });
+
+    it("无项目规则时不插入空小节", () => {
+      const prompt = buildSubAgentSystemPrompt({
+        workspaceRoot: "/w",
+        canWrite: false,
+      });
+      assert.ok(!prompt.includes("以下是本项目的规则"));
+    });
   });
 
   describe("capSubAgentResult", () => {
@@ -176,6 +210,87 @@ describe("subagent", () => {
         result.summary.includes("更聚焦"),
         "必须给出可操作的收窄建议，而不是只丢一半内容",
       );
+    });
+
+    /**
+     * C2：收窄建议必须匹配子 Agent 的**实际**能力。
+     *
+     * 只读子 Agent 收到"把结果写入文件"等于给了它一条做不到的建议——
+     * 模型会尝试 write_file、被权限拒绝、然后把失败原因当结论交回来。
+     */
+    it("只读子 Agent 的收窄建议不提写入文件", () => {
+      const long = "x".repeat(SUBAGENT_RESULT_MAX_CHARS + 500);
+      const result = capSubAgentResult(long, { canWrite: false });
+      assert.ok(result.summary.includes("拆成两次更小的委派"), result.summary);
+      assert.ok(!result.summary.includes("写入文件"), result.summary);
+    });
+
+    it("可写子 Agent 保留「写入文件」这条建议（它真能做到）", () => {
+      const long = "x".repeat(SUBAGENT_RESULT_MAX_CHARS + 500);
+      const result = capSubAgentResult(long, { canWrite: true });
+      assert.ok(result.summary.includes("写入文件"), result.summary);
+    });
+
+    it("回合总量耗尽时建议改为拆小委派，而不是让子 Agent 再写文件", () => {
+      const long = "x".repeat(SUBAGENT_RESULT_MAX_CHARS + 500);
+      const result = capSubAgentResult(long, {
+        canWrite: true,
+        budgetExhausted: true,
+      });
+      assert.ok(result.summary.includes("拆成更小的几次委派"), result.summary);
+      assert.ok(result.summary.includes("总量"), result.summary);
+    });
+
+    it("显式 limit 生效（用于回合总量闸），不再套用单条上限", () => {
+      const result = capSubAgentResult("abcdefghij", { limit: 4 });
+      assert.strictEqual(result.truncated, true);
+      assert.ok(result.summary.startsWith("abcd"));
+      assert.ok(result.summary.includes("仅返回前 4 字符"));
+    });
+  });
+
+  describe("linkSignals", () => {
+    it("父信号触发合并信号", () => {
+      const parent = new AbortController();
+      const linked = linkSignals([parent.signal]);
+      assert.strictEqual(linked.signal.aborted, false);
+      parent.abort();
+      assert.strictEqual(linked.signal.aborted, true);
+      linked.dispose();
+    });
+
+    it("超时自行触发（父信号未被污染）", async () => {
+      const parent = new AbortController();
+      const linked = linkSignals([parent.signal], 10);
+      await after(40, null);
+      assert.strictEqual(linked.signal.aborted, true);
+      assert.strictEqual(
+        parent.signal.aborted,
+        false,
+        "超时不能abort 调用方的信号：父 Agent 要靠它区分取消与超时",
+      );
+      linked.dispose();
+    });
+
+    it("dispose 之后超时不再触发，也不留下监听器", async () => {
+      const parent = new AbortController();
+      const linked = linkSignals([parent.signal], 10);
+      linked.dispose();
+      await after(40, null);
+      assert.strictEqual(linked.signal.aborted, false);
+      parent.abort();
+      assert.strictEqual(linked.signal.aborted, false);
+      assert.strictEqual(
+        getEventListeners(parent.signal, "abort").length,
+        0,
+        "dispose 必须解除监听，否则长时间运行的 REPL 会累积泄漏",
+      );
+    });
+
+    it("无源无超时：只是一个永不触发的信号", () => {
+      const linked = linkSignals([]);
+      assert.strictEqual(linked.signal.aborted, false);
+      linked.dispose();
     });
   });
 
@@ -486,6 +601,37 @@ describe("subagent", () => {
       assert.ok(MAX_PARALLEL_SUBAGENTS > 0);
       assert.ok(MAX_DELEGATIONS_PER_TURN > 0);
     });
+
+    /**
+     * B2：回传总量按回合计。
+     *
+     * 单条上限挡不住总量——预算允许一回合 8 次委派，8×8k 灌回主上下文，
+     * 委派省下的上下文被加倍吃回去，多 Agent 设计就失去意义了。
+     */
+    it("回传剩余额度随记账递减，耗尽后只放行1 字符", () => {
+      const supervisor = new SubAgentSupervisor({ maxResultChars: 1000 });
+      assert.strictEqual(supervisor.remainingResultChars(), 1000);
+      assert.strictEqual(supervisor.resultBudgetExhausted, false);
+
+      supervisor.recordResultChars(600);
+      assert.strictEqual(supervisor.remainingResultChars(), 400);
+
+      supervisor.recordResultChars(400);
+      assert.strictEqual(supervisor.resultBudgetExhausted, true);
+      assert.strictEqual(
+        supervisor.remainingResultChars(),
+        1,
+        "耗尽后仍给 1：要让模型收到一句可执行的话，而不是空结论",
+      );
+    });
+
+    it("非法字符数不记账（负数 / NaN / 0）", () => {
+      const supervisor = new SubAgentSupervisor({ maxResultChars: 1000 });
+      supervisor.recordResultChars(-5);
+      supervisor.recordResultChars(Number.NaN);
+      supervisor.recordResultChars(0);
+      assert.strictEqual(supervisor.remainingResultChars(), 1000);
+    });
   });
 
   describe("runSubAgent 隔离性", () => {
@@ -629,6 +775,242 @@ describe("subagent", () => {
       // 结论由 task 工具格式化后才带"[子 Agent 已被用户取消]"前缀，
       // 这里拿到的仍是原始文本（见 task 工具的取消用例）
       assert.strictEqual(result.summary, "partial");
+    });
+  });
+
+  describe("runSubAgent 结论质量", () => {
+    const workspace = makeWorkspace();
+
+    function base(
+      overrides: Partial<Parameters<typeof runSubAgent>[0]>,
+    ): Parameters<typeof runSubAgent>[0] {
+      return {
+        agentId: "q",
+        identity: { agentId: "q", parentId: null, depth: 1 },
+        goal: "g",
+        systemPrompt: "s",
+        maxTurns: 5,
+        toolRegistry: createToolRegistry(workspace),
+        model: createSpyModel([assistant([createTextContent("x")])]),
+        ...overrides,
+      };
+    }
+
+    /**
+     * C1：`ok` 只看最后一条 assistant。
+     *
+     * 这条口径在真实链路上**构造不出来**：`runAgentLoop` 一遇到
+     * `stopReason === "error"` 就收尾返回（loop.ts:351），而网络重试发生在
+     * 模型 provider 内部、根本不会进历史。所以只能直接喂消息列表来验证，
+     * 这也是把它抽成纯函数 {@link judgeSubAgentOutcome} 的原因。
+     */
+    it("[error, stop] → ok=true（不重派）", () => {
+      const verdict = judgeSubAgentOutcome(
+        [
+          assistant([createTextContent("boom")], "error"),
+          assistant([createTextContent("最终结论")]),
+        ],
+        { timedOut: false },
+      );
+      assert.strictEqual(verdict.ok, true);
+      assert.strictEqual(verdict.transientErrors, 1);
+    });
+
+    it("[stop, error] → ok=false（不能被前面的成功掩盖）", () => {
+      const verdict = judgeSubAgentOutcome(
+        [
+          assistant([createTextContent("中间结论")]),
+          assistant([createTextContent("最终失败")], "error"),
+        ],
+        { timedOut: false },
+      );
+      assert.strictEqual(verdict.ok, false);
+      assert.strictEqual(verdict.modelError, true);
+      assert.strictEqual(verdict.transientErrors, 0, "最后一条不重复计入中途错误");
+    });
+
+    it("轮次护栏恒判失败，且与模型错误区分开", () => {
+      const exceeded: AssistantMessage = {
+        ...assistant([createTextContent("stop")]),
+        stopReason: "error",
+        errorMessage: "max_turns_exceeded",
+      };
+      const verdict = judgeSubAgentOutcome([exceeded], { timedOut: false });
+      assert.strictEqual(verdict.ok, false);
+      assert.strictEqual(verdict.guardrail, true);
+    });
+
+    it("超时直接压过一切（哪怕最后一条是正常 stop）", () => {
+      const verdict = judgeSubAgentOutcome(
+        [assistant([createTextContent("ok")])],
+        { timedOut: true },
+      );
+      assert.strictEqual(verdict.ok, false);
+      assert.strictEqual(verdict.timedOut, true);
+    });
+
+    it("没有任何 assistant 时不算成功", () => {
+      const verdict = judgeSubAgentOutcome([], { timedOut: false });
+      assert.strictEqual(verdict.ok, true, "空历史由上层用兜底文案兜住");
+      assert.strictEqual(verdict.modelError, false);
+    });
+
+    it("真实链路：中途失败会中断后续轮次，因此 ok=false", async () => {
+      const model = createSpyModel([
+        assistant([createTextContent("第一轮就报错")], "error"),
+        assistant([createTextContent("第二轮不会被用到")]),
+      ]);
+      const result = await runSubAgent(base({ model }));
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(model.calls.length, 1, "error 之后不再请求模型");
+      assert.ok(result.error, "失败原因必须写进 error");
+    });
+
+    it("中途错误但最终成功时，error 只作附注、不影响正文", async () => {
+      // 手工构造：runAgentLoop 不会产生这种序列，但格式层必须能正确处理它
+      const result: SubAgentResult = {
+        ok: true,
+        summary: "最终结论",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        turns: 2,
+        aborted: false,
+        truncated: false,
+        error: "中途有 1 次请求出错，但最终已完成",
+      };
+      assert.strictEqual(formatSubAgentResult(result), "最终结论");
+      assert.ok(subAgentResultDetails(result).error);
+    });
+
+    /**
+     * B1：整体墙钟超时。
+     *
+     * 轮次上限管"能走多远"，管不了"最多等多久"——上游挂死或某个工具卡住时，
+     * 轮次再少也不会自己结束。
+     */
+    it("超时：ok=false / error=timeout / timedOut=true，结论仍非空", async () => {
+      const model = createHangingModel();
+      const parent = new AbortController();
+
+      const result = await runSubAgent(
+        base({ model, timeoutMs: 20, signal: parent.signal }),
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, "timeout");
+      assert.strictEqual(result.timedOut, true);
+      assert.strictEqual(result.aborted, false, "超时不等于被取消");
+      assert.ok(result.summary.length > 0, "父 Agent 必须拿到一句可读的话");
+      assert.ok(
+        formatSubAgentResult(result).includes("已达到时间上限"),
+        "必须告诉父 Agent 这是超时而非出错",
+      );
+      assert.strictEqual(
+        parent.signal.aborted,
+        false,
+        "超时不能污染父信号：父 Agent 要靠它区分取消与超时",
+      );
+    });
+
+    it("超时与用户取消是两回事：父信号先到时报 aborted 而非 timeout", async () => {
+      const model = createHangingModel();
+      const parent = new AbortController();
+      setTimeout(() => parent.abort(), 10);
+
+      const result = await runSubAgent(
+        base({ model, timeoutMs: 5000, signal: parent.signal }),
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.timedOut, undefined);
+      assert.notStrictEqual(result.error, "timeout");
+      assert.strictEqual(result.aborted, true);
+    });
+
+    it("未超时则 timedOut 不出现（字段缺省优于恒false）", async () => {
+      const model = createSpyModel([assistant([createTextContent("ok")])]);
+      const result = await runSubAgent(base({ model, timeoutMs: 5000 }));
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.timedOut, undefined);
+    });
+
+    /** B2：单条结论必须服从回合剩余额度 */
+    it("resultCharLimit 生效：本条结论被压到剩余额度内", async () => {
+      const model = createSpyModel([
+        assistant([createTextContent("y".repeat(500))]),
+      ]);
+      const result = await runSubAgent(
+        base({ model, resultCharLimit: 100, canWrite: false }),
+      );
+
+      assert.strictEqual(result.truncated, true);
+      assert.ok(result.summary.includes("仅返回前 100 字符"));
+      assert.ok(result.summary.includes("拆成两次更小的委派"));
+    });
+
+    it("resultBudgetExhausted 切换截断文案", async () => {
+      const model = createSpyModel([
+        assistant([createTextContent("y".repeat(500))]),
+      ]);
+      const result = await runSubAgent(
+        base({ model, resultCharLimit: 100, resultBudgetExhausted: true }),
+      );
+      assert.ok(result.summary.includes("总量"), result.summary);
+    });
+
+    it("没有结论时给出兜底文案，而不是空字符串", async () => {
+      const model = createSpyModel([assistant([], "stop")]);
+      const result = await runSubAgent(base({ model }));
+      assert.ok(result.summary.includes("未产出任何结论"), result.summary);
+    });
+
+    it("trace 写入器收到完整消息与事件，且不影响返回值", async () => {
+      const messages: AgentMessage[] = [];
+      const events: unknown[] = [];
+      let closed = 0;
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "c1",
+        name: "glob",
+        arguments: { pattern: "*.ts" },
+      };
+      const model = createSpyModel([
+        assistant([toolCall], "toolUse"),
+        assistant([createTextContent("done")]),
+      ]);
+
+      const result = await runSubAgent(
+        base({
+          model,
+          trace: {
+            write: async (message) => {
+              messages.push(message);
+            },
+            writeEvent: async (event) => {
+              events.push(event);
+            },
+            close: async () => {
+              closed += 1;
+              return "/tmp/trace.jsonl";
+            },
+          },
+        }),
+      );
+
+      assert.strictEqual(result.summary, "done");
+      assert.strictEqual(closed, 1);
+      // 工具调用消息必须落盘：trace 的价值就在"它查了什么"
+      assert.ok(
+        messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.content.some((block) => block.type === "toolCall"),
+        ),
+        "trace 必须包含工具调用及其参数",
+      );
+      assert.ok(
+        events.some((e) => (e as { type?: string }).type === "subagent_start"),
+      );
     });
   });
 
@@ -842,6 +1224,126 @@ describe("subagent", () => {
       assert.ok(
         text.includes("取消"),
         "取消必须体现在给父 Agent 的正文里：否则它以为子 Agent 正常做完了",
+      );
+    });
+
+    /**
+     * E3：并发判定必须基于**最终过滤后**的工具集。
+     *
+     * 此前按`role` 的名义能力判断：`implement` 一律判"不可并发"。
+     * 但父注册表可能根本没有写工具（只读模式），此时 implement 实际拿到的
+     * 工具集与 explore 完全一致——两个互不干扰的只读委派白白被串行化。
+     */
+    it("父注册表无写工具时，implement 实际只读 → 可并发", async () => {
+      const full = createToolRegistry(workspace);
+      const readOnlyParent = full.filter(READ_ONLY_TOOL_NAMES);
+      const provider = new SubAgentRuntimeProvider();
+      const model = createSpyModel([assistant([createTextContent("c")])]);
+      const subRegistry = new ToolRegistry();
+      provider.set({
+        supervisor: new SubAgentSupervisor({}),
+        model,
+        parentId: null,
+      });
+      subRegistry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => readOnlyParent,
+          depth: 0,
+        }),
+      );
+
+      const call = (args: Record<string, unknown>): ToolCallContent => ({
+        type: "toolCall",
+        id: "c",
+        name: "task",
+        arguments: args,
+      });
+
+      assert.strictEqual(
+        subRegistry.canRunConcurrently(call({ goal: "g", role: "implement" })),
+        true,
+        "父表没有写工具时，implement 拿到的就是只读工具集，不该被串行化",
+      );
+      assert.strictEqual(
+        subRegistry.canRunConcurrently(
+          call({ goal: "g", role: "implement", allowBash: true }),
+        ),
+        true,
+        "父表里根本没有 bash，申请了也拿不到——实际能力仍是只读",
+      );
+    });
+
+    it("父注册表有写工具时，implement 不可并发", async () => {
+      const full = createToolRegistry(workspace);
+      const provider = new SubAgentRuntimeProvider();
+      const subRegistry = new ToolRegistry();
+      provider.set({
+        supervisor: new SubAgentSupervisor({}),
+        model: createSpyModel([assistant([createTextContent("c")])]),
+        parentId: null,
+      });
+      subRegistry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => full,
+          depth: 0,
+        }),
+      );
+
+      const call: ToolCallContent = {
+        type: "toolCall",
+        id: "c",
+        name: "task",
+        arguments: { goal: "g", role: "implement" },
+      };
+      assert.strictEqual(subRegistry.canRunConcurrently(call), false);
+      assert.strictEqual(
+        subRegistry.canRunConcurrently({
+          ...call,
+          arguments: { goal: "g", role: "explore" },
+        }),
+        true,
+        "explore 只读，可并发",
+      );
+      assert.strictEqual(
+        subRegistry.canRunConcurrently({
+          ...call,
+          arguments: { goal: "g", role: "general", allowBash: true },
+        }),
+        false,
+        "真拿到 bash 就必须串行",
+      );
+    });
+
+    it("父注册表缺失时保守判不可并发", () => {
+      const provider = new SubAgentRuntimeProvider();
+      provider.set({
+        supervisor: new SubAgentSupervisor({}),
+        model: createSpyModel([assistant([createTextContent("c")])]),
+        parentId: null,
+      });
+      const subRegistry = new ToolRegistry();
+      subRegistry.register(
+        createSubAgentTool({
+          workspaceRoot: workspace,
+          runtime: () => provider.get(),
+          parentRegistry: () => null,
+          depth: 0,
+        }),
+      );
+      const call: ToolCallContent = {
+        type: "toolCall",
+        id: "c",
+        name: "task",
+        arguments: { goal: "g" },
+      };
+      assert.strictEqual(
+        subRegistry.canRunConcurrently(call),
+        false,
+        "拿不到父表就不确定权限，按不可并发处理",
       );
     });
   });

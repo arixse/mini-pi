@@ -203,6 +203,35 @@ export function assessToolRisk(
   return { level: "none", reasons: [] };
 }
 
+/** 委派摘要里目标字段的显示上限 */
+const TASK_GOAL_PREVIEW = 120;
+
+/**
+ * `task` 的专属审批摘要（批次 D2）。
+ *
+ * 此前走 `default` 分支，把 `goal` / `role` / `allowWrite` / `allowBash` /
+ * `maxTurns` 全量铺开，用户要在一堆参数里自己找"这次会不会动我的文件"。
+ *
+ * 重排的判据很直接：**"是否含写 / bash"是用户决定放不放行的唯一依据**，
+ * 必须放在第一行可见处；角色与工具数量是背景，轮次预算可省。
+ */
+export function describeTaskCall(call: ToolCallContent): string[] {
+  const args = call.arguments ?? {};
+  const granted = [
+    args.allowWrite ? "写文件" : "",
+    args.allowBash ? "执行命令" : "",
+  ].filter(Boolean);
+
+  const role = typeof args.role === "string" && args.role ? args.role : "general";
+  const lines: string[] = [
+    `目标: ${truncateToValue(args.goal, TASK_GOAL_PREVIEW)}`,
+    `角色: ${truncateToValue(role, 40)} · 权限: ${
+      granted.length > 0 ? granted.join(" / ") : "只读"
+    }`,
+  ];
+  return lines;
+}
+
 /**
  * 压平成单行。
  *
@@ -213,15 +242,18 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function truncateValue(value: unknown): string {
+function truncateToValue(value: unknown, limit: number): string {
   if (value === undefined || value === null) {
     return "";
   }
   const text =
     typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  return oneLine(text).length > MAX_VALUE_LENGTH
-    ? `${oneLine(text).slice(0, MAX_VALUE_LENGTH)}…`
-    : oneLine(text);
+  const flat = oneLine(text);
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+function truncateValue(value: unknown): string {
+  return truncateToValue(value, MAX_VALUE_LENGTH);
 }
 
 /**
@@ -305,8 +337,16 @@ export function buildApprovalQuestion(
   const lines: string[] = [
     "",
     tag ? `${header} ${chalk.dim(tag)}` : header,
-    `${gutter}${describeToolCall(call, fileExists)}`,
   ];
+
+  // task 有专属的多行摘要（目标 / 角色 / 权限分两行），其余工具走单行描述
+  const summaryLines =
+    call.name === "task"
+      ? describeTaskCall(call)
+      : [describeToolCall(call, fileExists)];
+  for (const line of summaryLines) {
+    lines.push(`${gutter}${line}`);
+  }
 
   for (const reason of risk.reasons) {
     const text = `${gutter}${risk.level === "high" ? "⚠ 高危" : "· 注意"}：${reason}`;

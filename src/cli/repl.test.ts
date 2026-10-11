@@ -958,6 +958,89 @@ describe("子 Agent 开关（/subagent）", () => {
     assert.deepStrictEqual(writes, [false]);
   });
 
+  /**
+   * D3：trace 是独立开关。
+   *
+   * 不能与"是否允许委派"绑在一起：排障时用户往往想保留委派能力、
+   * 只把子Agent 的内部过程记下来（或反过来）。
+   */
+  it("trace 是独立开关：/subagent trace on|off 不影响委派本身", async () => {
+    assert.deepStrictEqual(parseSubAgentCommand("trace on"), {
+      kind: "trace",
+      enabled: true,
+    });
+    assert.deepStrictEqual(parseSubAgentCommand("trace OFF"), {
+      kind: "trace",
+      enabled: false,
+    });
+    assert.deepStrictEqual(parseSubAgentCommand("trace 关"), {
+      kind: "trace",
+      enabled: false,
+    });
+
+    assert.strictEqual(
+      (
+        await applySubAgentCommand({
+          argument: "trace on",
+          current: false,
+          trace: { current: false },
+        })
+      ).enabled,
+      false,
+      "只开 trace 不该顺手把委派也打开",
+    );
+    assert.strictEqual(
+      (
+        await applySubAgentCommand({
+          argument: "trace on",
+          current: true,
+          trace: { current: false },
+        })
+      ).traceEnabled,
+      true,
+    );
+    assert.strictEqual(
+      (
+        await applySubAgentCommand({
+          argument: "trace off",
+          current: false,
+          trace: { current: true },
+        })
+      ).traceEnabled,
+      false,
+    );
+  });
+
+  it("trace 落盘失败不影响开关本身", async () => {
+    const result = await applySubAgentCommand({
+      argument: "trace on",
+      current: false,
+      trace: {
+        current: false,
+        persist: async () => {
+          throw new Error("settings.json 处于损坏状态");
+        },
+      },
+    });
+    assert.strictEqual(result.traceEnabled, true);
+    assert.strictEqual(result.persistFailed, true);
+  });
+
+  it("trace 默认关闭，且与委派开关分开显示", () => {
+    const off = new Map(sessionStatusEntries(createOptions(), false));
+    assert.ok(
+      off.get("子 Agent")?.includes("关闭"),
+      "缺省必须落在关闭一侧：trace 是磁盘上额外的敏感数据副本",
+    );
+
+    const on = new Map(
+      sessionStatusEntries(createOptions(), false, false, true),
+    );
+    const row = on.get("子 Agent") ?? "";
+    assert.ok(row.includes("trace"), `应显示 trace 状态：${row}`);
+    assert.ok(row.includes("开"), row);
+  });
+
   it("默认关闭：不带第三参数时 /status 显示关闭", () => {
     const rows = new Map(sessionStatusEntries(createOptions(), false));
     assert.ok(

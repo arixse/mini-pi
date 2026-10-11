@@ -968,4 +968,64 @@ describe("loop", () => {
       assert.strictEqual(message.errorMessage, "boom");
     });
   });
+
+  /**
+   * D1：工具事件必须带上发起者的identity。
+   *
+   * 终端靠它把子 Agent 的卡片缩进到与委派头尾同一列；
+   * 事件里没有 identity 的话渲染层无从判断"这张卡片是谁的"。
+   */
+  describe("工具事件的 identity 透传", () => {
+    async function collect(
+      identity?: { agentId: string; parentId: string | null; depth: number },
+    ): Promise<AgentEvent[]> {
+      const events: AgentEvent[] = [];
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "c1",
+        name: "test_tool",
+        arguments: {},
+      };
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [
+          { role: "user", content: [createTextContent("hi")], timestamp: Date.now() },
+        ],
+        tools: [],
+        model: createMockModel([
+          createAssistantMessage([toolCall], "toolUse"),
+          createAssistantMessage([createTextContent("done")]),
+        ]),
+        toolRegistry: createMockToolRegistry(),
+        identity,
+        onEvent: (event) => events.push(event),
+      });
+      return events;
+    }
+
+    it("带 identity 时工具事件原样带上", async () => {
+      const identity = { agentId: "a1", parentId: "root", depth: 1 };
+      const events = await collect(identity);
+
+      const start = events.find((e) => e.type === "tool_execution_start");
+      const end = events.find((e) => e.type === "tool_execution_end");
+      assert.strictEqual(start?.type, "tool_execution_start");
+      assert.strictEqual(end?.type, "tool_execution_end");
+      if (start?.type !== "tool_execution_start" || end?.type !== "tool_execution_end") {
+        return;
+      }
+      assert.deepStrictEqual(start.identity, identity);
+      assert.deepStrictEqual(end.identity, identity);
+    });
+
+    it("不传 identity 时为 undefined（消费侧 `?? 默认` 即可）", async () => {
+      const events = await collect();
+      const start = events.find((e) => e.type === "tool_execution_start");
+      assert.strictEqual(start?.type, "tool_execution_start");
+      if (start?.type !== "tool_execution_start") {
+        return;
+      }
+      assert.strictEqual(start.identity, undefined);
+    });
+  });
 });

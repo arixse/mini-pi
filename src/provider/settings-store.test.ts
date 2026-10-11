@@ -142,6 +142,57 @@ describe("SettingsStore", () => {
       const fresh = new SettingsStore(testFilePath);
       assert.strictEqual(await fresh.getSubagentEnabled(), true);
     });
+
+    /**
+     * trace 是磁盘上额外的敏感数据副本（子Agent 读了哪些文件一并落盘），
+     * 所以与委派开关一样默认关闭，且只认显式布尔 true。
+     */
+    it("trace 默认关闭，且与委派开关彼此独立", async () => {
+      assert.strictEqual(await store.getSubagentTrace(), false);
+
+      await store.setSubagentEnabled(true);
+      assert.strictEqual(
+        await store.getSubagentTrace(),
+        false,
+        "打开委派不该顺带打开 trace",
+      );
+
+      await store.setSubagentTrace(true);
+      assert.strictEqual(await store.getSubagentTrace(), true);
+      assert.strictEqual(
+        await store.getSubagentEnabled(),
+        true,
+        "开trace 不应影响委派开关",
+      );
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentTrace(), true);
+    });
+
+    it("trace 关掉回到 false", async () => {
+      await store.setSubagentTrace(true);
+      await store.setSubagentTrace(false);
+      assert.strictEqual(await store.getSubagentTrace(), false);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getSubagentTrace(), false);
+    });
+
+    it("手改配置写成非布尔时 trace 保持关闭", async () => {
+      for (const value of ["true", 1, null, "yes"]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ subagentTrace: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getSubagentTrace(),
+          false,
+          `subagentTrace=${JSON.stringify(value)} 不该开启 trace`,
+        );
+      }
+    });
   });
 
   describe("getDefaultModel", () => {

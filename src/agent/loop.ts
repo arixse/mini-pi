@@ -406,7 +406,9 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
                     type:"tool_execution_start",
                     toolCallId:executable.id,
                     toolName:executable.name,
-                    args:executable.arguments
+                    args:executable.arguments,
+                    // 带上层级：子 Agent 的工具卡片据此缩进，终端上才分得出是谁在读文件
+                    identity: options.identity
                 })
             })
 
@@ -445,7 +447,8 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
                         content:toolResult.content,
                         details:toolResult.details
                     },
-                    isError:toolResult.isError
+                    isError:toolResult.isError,
+                    identity: options.identity
                 })
                 emitMessageLifeCycle(toolResult, emit)
             }

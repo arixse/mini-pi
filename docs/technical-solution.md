@@ -155,12 +155,55 @@ CLI 侧由 `createInputScheduler` 保证**任意时刻只有一个回合在跑**
 | 取消 | 每轮一个 `SubAgentSupervisor`，是取消树的根：父 signal → slot.signal → 子 Agent 循环，Ctrl+C 一次中断整棵子树 |
 | 落盘 | 委派本身以 toolCall/toolResult 形态随主会话落盘，子 Agent 的内部来回不进父上下文 |
 
+#### 成本护栏：三道闸，缺一不可
+
+| 闸 | 常量 | 管什么 |
+| --- | --- | --- |
+| 次数 | `MAX_DELEGATIONS_PER_TURN = 8` | 单回合委派次数 |
+| 总量 | `MAX_TURN_RESULT_CHARS = 24000` | 单回合**所有**结论回传字符数 |
+| 单条 | `SUBAGENT_RESULT_MAX_CHARS = 8000` | 单条结论字符数 |
+| 墙钟 | 各角色 `timeoutMs`（60s~ 300s） | 单次委派整体超时 |
+
+总量闸不可省：预算允许一回合 8 次委派，8×8k 灌回主上下文，
+委派省下的上下文被加倍吃回去，多 Agent 设计就失去意义了。
+本条结论的上限取 `Math.min(单条上限, supervisor.remainingResultChars())`——两个闸分别生效。
+
+**超时与取消必须分开**：两者给模型的建议完全相反（"收窄目标重试" vs "别再重试"），
+所以用独立的 `timeoutGuard` 记录超时，只看合并后的 `signal.aborted` 等于什么都不知道。
+合并信号用手写 `linkSignals` 而非 `AbortSignal.any`（Node 20+ 才有，本项目基线 Node 18+）。
+
+`ok` 只看**最后一条** assistant（`judgeSubAgentOutcome`）：中途某次请求报错、
+后续成功时，父 Agent不该重派一次完全相同的任务。中间错误折进 `error` 字段作附注。
+注意这条口径在真实链路上构造不出来——`runAgentLoop` 一遇到 `error` 就收尾返回，
+网络重试发生在模型 provider 内部、根本不会进历史，所以它被抽成纯函数单独测。
+
+#### 结论质量
+
+- **截断建议必须落在子 Agent 真有的能力上**：只读角色收到"把结果写入文件"会真的去试、
+  被权限拒绝、再把失败原因当结论交回来。只读改说"拆成两次更小的委派"；
+  回合总量耗尽时改说"拆成更小的几次委派"。
+- **注入项目规则**：`buildSubAgentSystemPrompt({ projectRules })` 把 `AGENTS.md` 固定上下文
+  放进子 Agent 的 system prompt（排在角色指令之前）。否则 `implement` 不知道本项目
+  "每次改动要commit、交付前必须跑单测"，改完就报完成。规则用惰性函数注入，
+  这样 `/reload` 之后能拿到最新的那份。
+
+#### 可观测
+
+| 能力 | 落地 |
+| --- | --- |
+| 卡片层级 | `tool_execution_start/end` 事件带 `identity`，`ToolCallView` 一路透传到 `/last`；`depthIndent` 是卡片与委派头尾**唯一**的缩进算法 |
+| 审批摘要 | `task` 有专属两行摘要（目标 / 角色+权限），"会不会动我的文件"必须第一眼可见 |
+| trace | `/subagent trace on` 时每次委派写 `<会话>.sub-<id>.jsonl`（JSON Lines，含工具参数）；**默认关闭**，写失败只记 warning 不影响委派 |
+
 角色（`src/agent/roles.ts`）把**工具集 + 轮次预算 + 输出契约**绑在一起下发：
 `explore` 只读、`review` 只读且即使传 `allowWrite:true` 也不放开（契约依赖边界）、
 `implement` 带写工具且必须自述验证、`general` 为默认白板。
 
 > 并发：只读委派可并发（顺序仍由 `slots` 保证与 toolCall 一致），会改磁盘的一律串行——
 > 两个子 Agent 同时写同一文件时都返回成功，谁的改动生效取决于调度顺序。
+>
+> 判据是**最终过滤后的工具集**，不是角色的名义能力：父注册表没有写工具时，
+> `implement` 实际拿到的工具集与 `explore` 完全一致，不该被白白串行化。
 > 详见 [多 Agent 实现方案](multi-agent-design.md)。
 
 ## 4. 数据流

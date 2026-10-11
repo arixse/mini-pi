@@ -21,6 +21,14 @@ export type SubAgentRolePreset = {
   tools: readonly string[];
   /** 该角色典型的轮次预算 */
   maxTurns: number;
+  /**
+   * 该角色典型的**整体墙钟上限**（毫秒）。
+   *
+   * 与 {@link maxTurns} 是两个正交维度：轮次管"能走多远"，墙钟管"最多等多久"。
+   * 一次 `read_file` 卡在磁盘上、或模型上游挂死，轮次再少也不会自己结束——
+   * 缺的正是这条与轮次无关的时限。
+   */
+  timeoutMs: number;
   /** 是否允许通过 allowWrite/allowBash 临时加权限 */
   canEscalate: boolean;
   /** 输出契约，会作为 instructions 拼进 system prompt */
@@ -67,6 +75,8 @@ export const SUBAGENT_ROLE_PRESETS: Record<
     label: "explore",
     tools: READ_ONLY_TOOL_NAMES,
     maxTurns: 20,
+    // 纯读取，最容易被大范围检索拖长：给得比 implement 短
+    timeoutMs: 120_000,
     canEscalate: false,
     instructions: EXPLORE_INSTRUCTIONS,
   },
@@ -74,6 +84,8 @@ export const SUBAGENT_ROLE_PRESETS: Record<
     label: "implement",
     tools: [...READ_ONLY_TOOL_NAMES, "write_file", "edit_file"],
     maxTurns: 40,
+    // 要改文件还要自述验证（通常含一次测试/构建），最慢
+    timeoutMs: 300_000,
     // 只有 implement 允许临时申请 bash：别的角色要执行能力没有正当理由
     canEscalate: true,
     instructions: IMPLEMENT_INSTRUCTIONS,
@@ -82,6 +94,7 @@ export const SUBAGENT_ROLE_PRESETS: Record<
     label: "review",
     tools: READ_ONLY_TOOL_NAMES,
     maxTurns: 10,
+    timeoutMs: 60_000,
     canEscalate: false,
     instructions: REVIEW_INSTRUCTIONS,
   },
@@ -89,6 +102,7 @@ export const SUBAGENT_ROLE_PRESETS: Record<
     label: "general",
     tools: READ_ONLY_TOOL_NAMES,
     maxTurns: 30,
+    timeoutMs: 180_000,
     canEscalate: true,
     instructions: GENERAL_INSTRUCTIONS,
   },
@@ -145,51 +159,14 @@ export function resolveSubAgentTools(input: {
   return [...wanted].filter((name) => input.parentRegistry.has(name));
 }
 
-/** 会改动工作区或起进程的工具 */
+/**
+ * 会改动工作区或起进程的工具。
+ *
+ * 并发判定的唯一依据：委派真正拿到手的是**过滤后的工具集**，
+ * 而不是"角色 + 入参"的名义配置（见 `subagentTool.ts` 的 `concurrent`）。
+ */
 export const MUTATING_TOOL_NAMES: readonly string[] = [
   "write_file",
   "edit_file",
   "bash",
 ];
-
-const MUTATING_TOOLS: ReadonlySet<string> = new Set(MUTATING_TOOL_NAMES);
-
-/**
- * 这次委派的子 Agent 会不会动磁盘或起进程。
- *
- * 只读角色恒 false；`implement` 自带写工具，恒 true；
- * `general` 看是否显式要了写/bash。用来决定能不能和其他委派并发跑——
- * 两个子 Agent 同时写同一个文件时，谁的改动生效取决于调度顺序，
- * 这种冲突在结果上看不出来（都会返回成功），只能从根上不让它们并发。
- */
-export function subAgentMutates(
-  role: SubAgentRole,
-  allowWrite: boolean,
-  allowBash: boolean,
-): boolean {
-  const preset = rolePreset(role);
-  if (!preset.canEscalate) {
-    return false;
-  }
-  if (preset.tools.some((name) => MUTATING_TOOLS.has(name))) {
-    return true;
-  }
-  return allowWrite || allowBash;
-}
-
-/**
- * 角色 + 显式 maxTurns -> 最终轮次预算。
- *
- * 显式传值优先，但必须落在合理区间：模型可以请求更多轮，
- * 不能请求无限轮（见 `resolveSubAgentMaxTurns`）。
- */
-export function resolveSubAgentTurns(
-  role: SubAgentRole,
-  requested: number | undefined,
-  fallback: number,
-): number {
-  if (requested === undefined || !Number.isFinite(requested)) {
-    return rolePreset(role).maxTurns || fallback;
-  }
-  return requested;
-}
