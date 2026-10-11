@@ -27,7 +27,7 @@ mini-pi/
 │   │   ├── subagentTrace.ts # 子 Agent trace 落盘（默认关闭，排障用）
 │   │   ├── roles.ts    # 角色预设（explore / implement / review / general）
 │   │   ├── model.ts    # 模型封装（支持 OpenAI/Anthropic）
-│   │   ├── tools.ts    # 工具定义（read/edit/bash）
+│   │   ├── tools/      # 工具定义（registry / search / files / bash / workspace）
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互

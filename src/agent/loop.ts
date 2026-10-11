@@ -1,7 +1,7 @@
 import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
-import { ToolRegistry } from "./tools";
+import { ToolRegistry } from "./tools/registry";
 
 
 export type ToolDecision = 

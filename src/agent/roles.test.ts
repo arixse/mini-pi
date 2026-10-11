@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { READ_ONLY_TOOL_NAMES, createToolRegistry } from "./tools";
+import { READ_ONLY_TOOL_NAMES, createToolRegistry } from "./tools/registry";
 import {
   DEFAULT_SUBAGENT_ROLE,
   SUBAGENT_ROLE_NAMES,

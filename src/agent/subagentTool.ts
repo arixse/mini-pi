@@ -5,7 +5,7 @@ import {
 } from "../shared/protocol";
 import { BeforeToolCall } from "./loop";
 import { LlmModel } from "./model";
-import { RegisteredTool, ToolRegistry } from "./tools";
+import { RegisteredTool, ToolRegistry } from "./tools/registry";
 import { createTextContent } from "./message";
 import { createSubAgentTraceWriter } from "./subagentTrace";
 import {

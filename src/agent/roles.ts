@@ -1,4 +1,4 @@
-import { READ_ONLY_TOOL_NAMES, ToolRegistry } from "./tools";
+import { READ_ONLY_TOOL_NAMES, ToolRegistry } from "./tools/registry";
 
 /**
  * 内置角色预设。

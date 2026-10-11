@@ -9,7 +9,7 @@ import {
 } from "../shared/protocol";
 import { BeforeToolCall, runAgentLoop } from "./loop";
 import { LlmModel } from "./model";
-import { ToolRegistry } from "./tools";
+import { ToolRegistry } from "./tools/registry";
 import { createUserMessage } from "./message";
 
 /**

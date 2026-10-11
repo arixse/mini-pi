@@ -241,7 +241,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 │ +   const response = await this.client.chat.completions.create(
 └ 1 处修改 · +1 -1
 
-📖 src/agent/tools.ts                                                       ✅ 8ms · 744 行
+📖 src/agent/tools/registry.ts                                              ✅ 8ms · 744 行
 │ 1 │ import { existsSync, realpathSync } from "node:fs";
 │ 2 │ import { ToolDefinition, ToolResult } from "../shared/protocol";
 └ 共 744 行 · 24.2 KB · 显示前 2 行
@@ -298,7 +298,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 4.4 可用工具
 
-CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `workspaceRoot` 内：
+CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `workspaceRoot` 内：
 
 | 工具 | 说明 |
 | ---- | ---- |
@@ -399,7 +399,7 @@ CLI 内置以下工具（定义于 `src/agent/tools.ts`），全部限制在 `wo
   除命令外，`write_file` 覆盖已有文件、`task` 给子 Agent 放开 `bash`/写权限也算 `elevated`；
 
 - **只读工具自动放行**：`list_files`、`glob`、`grep`、`read_file` 不询问
-  （白名单取自 `tools.ts` 的 `READ_ONLY_TOOL_NAMES`，注册表的 `readOnly` 标记、
+  （白名单取自 `tools/registry.ts` 的 `READ_ONLY_TOOL_NAMES`，注册表的 `readOnly` 标记、
   并发调度与审批白名单三者共用同一份常量，新增只读工具只改一处）；
 - **需要确认**：`write_file`、`edit_file`、`bash`；
 - **`write_file` 会区分新建与覆盖**：目标文件已存在时，提示语写的是

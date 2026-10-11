@@ -4,7 +4,7 @@ import { runAgentLoop } from "./loop";
 import { AgentEvent, AgentMessage, AssistantMessage, ToolCallContent } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
-import { ToolRegistry } from "./tools";
+import { ToolRegistry } from "./tools/registry";
 
 describe("loop", () => {
   function createMockModel(responses: AssistantMessage[]): LlmModel {

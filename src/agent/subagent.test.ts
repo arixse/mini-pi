@@ -13,7 +13,7 @@ import {
 } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { CompleteInput, LlmModel } from "./model";
-import { READ_ONLY_TOOL_NAMES, ToolRegistry, createToolRegistry } from "./tools";
+import { READ_ONLY_TOOL_NAMES, ToolRegistry, createToolRegistry } from "./tools/registry";
 import { BeforeToolCall, runAgentLoop } from "./loop";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,

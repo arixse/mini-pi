@@ -20,7 +20,7 @@ mini-pi/
 │   ├── agent/           # AI 代理核心逻辑
 │   │   ├── loop.ts      # 主循环
 │   │   ├── model.ts     # 模型封装
-│   │   ├── tools.ts     # 工具定义
+│   │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
 │   │   └── sessionStore.ts # 会话存储
 │   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
 │   ├── cli/             # 命令行交互
@@ -81,7 +81,7 @@ mini-pi/
 
 ### 3.2 工具层 (Tools)
 
-CLI 内置工具（`src/agent/tools.ts`，全部限制在 `workspaceRoot` 内）：
+CLI 内置工具（`src/agent/tools/`，全部限制在 `workspaceRoot` 内）：
 
 | 工具 | 只读 | 说明 |
 | --- | --- | --- |

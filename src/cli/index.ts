@@ -6,7 +6,7 @@
  * 否则测试文件 import 时会启动 REPL 占住 stdin 导致测试挂起。
  */
 import { createModelFromProvider, LlmModel } from "../agent/model";
-import { createToolRegistry } from "../agent/tools";
+import { createToolRegistry } from "../agent/tools/registry";
 import { AgentMessage } from "../shared/protocol";
 import {
   SubAgentRuntimeProvider,

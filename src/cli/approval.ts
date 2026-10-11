@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { BeforeToolCall, ToolCallContext, ToolDecision } from "../agent/loop";
 import { ToolCallContent } from "../shared/protocol";
-import { READ_ONLY_TOOLS } from "../agent/tools";
+import { READ_ONLY_TOOLS } from "../agent/tools/registry";
 
 /**
  * 工具调用的用户审批。

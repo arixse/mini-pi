@@ -13,7 +13,7 @@ import {
 } from "./approval";
 import { ToolCallContent } from "../shared/protocol";
 import { runAgentLoop } from "../agent/loop";
-import { ToolRegistry, createToolRegistry } from "../agent/tools";
+import { ToolRegistry, createToolRegistry } from "../agent/tools/registry";
 import { createTextContent } from "../agent/message";
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCallContent {
