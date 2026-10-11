@@ -108,3 +108,66 @@ export function padToWidth(text: string, width: number): string {
   }
   return `${text}${" ".repeat(missing)}`;
 }
+
+/**
+ * 按显示宽度折行。
+ *
+ * 优先在空格处断开；一个词本身就超过一行时才硬断（中文、长路径没有空格）。
+ * 返回至少一行：空串也返回 `[""]`，让调用方不必再判空。
+ */
+export function wrapToWidth(text: string, maxWidth: number): string[] {
+  if (maxWidth <= 0) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  let line = "";
+
+  const breakAt = (): number => {
+    // 行内最后一个空格之后的内容留给下一行
+    const space = line.lastIndexOf(" ");
+    return space > 0 ? space + 1 : -1;
+  };
+
+  for (const char of text) {
+    if (/\s/.test(char)) {
+      // 行首不留空格：折下来的续行应该和新行对齐，而不是多缩进一格
+      if (line === "") {
+        continue;
+      }
+      if (displayWidth(line) >= maxWidth) {
+        lines.push(line.trimEnd());
+        line = "";
+        continue;
+      }
+      line += char;
+      continue;
+    }
+
+    if (displayWidth(line) + displayWidth(char) > maxWidth) {
+      const cut = breakAt();
+      if (cut > 0) {
+        lines.push(line.slice(0, cut).trimEnd());
+        line = line.slice(cut) + char;
+      } else {
+        lines.push(line);
+        line = char;
+      }
+      continue;
+    }
+
+    line += char;
+  }
+
+  // 折出来的行不该带尾随空格（多余空格在输出里看不见，却会干扰断言与比较），
+  // 但空字符串仍要返回一行：调用方不该为了"没内容"再写一次判空
+  if (line !== "" || lines.length === 0) {
+    lines.push(line.trimEnd());
+  }
+  return lines;
+}
+
+/** 当前终端可用列数（拿不到时回退到常见默认值） */
+export function terminalWidth(): number {
+  return process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH;
+}

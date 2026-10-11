@@ -32,10 +32,11 @@ import { SkillWithSource } from "../agent/skillLoader";
 import { createUsageTracker, formatUsage, UsageTracker } from "../agent/usage";
 import { logger } from "../shared/logger";
 import { promptSelect } from "./select";
-import { createToolApproval } from "./approval";
+import { createToolApproval, parseApprovalAnswer } from "./approval";
+import { helpEntries } from "./commands";
 import { createStatusLine, StatusController } from "./status";
 import { createRenderContext, followTerminalWidth, renderLastToolOutput, renderToolCall, renderSubAgentHeader, renderSubAgentFooter, RenderContext, ToolCallView } from "./render";
-import { padToWidth } from "./width";
+import { padToWidth, terminalWidth, wrapToWidth } from "./width";
 import { printSeparator } from "./ui";
 import { ExitCoordinator } from "./exit";
 
@@ -452,10 +453,22 @@ export async function startRepl(options: ReplOptions): Promise<void> {
             ),
           );
         }
-        return false;
+        return "no";
       }
       const answer = await question(rl, chalk.yellow(promptText));
-      return /^(y|yes|是|允许)$/i.test(answer.trim());
+      return parseApprovalAnswer(answer);
+    },
+    // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
+    ascii: Boolean(process.env.MINI_PI_ASCII),
+    /**
+     * 用户在确认时按了 `a`：语义等价于 `/trust`，只是由真实上下文触发。
+     *
+     * 必须回写 `trusted`，否则 `/status` 仍显示"需确认"，
+     * 而实际上已经不再问了——状态与实际不符比少一次确认更危险。
+     */
+    onSessionAllow: () => {
+      trusted = true;
+      printTrustNotice(true);
     },
     // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
@@ -565,13 +578,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
     if (input === "/trust") {
       trusted = !trusted;
-      console.log(
-        trusted
-          ? chalk.yellow(
-              "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认\n",
-            )
-          : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
-      );
+      printTrustNotice(trusted);
       rl.prompt();
       return;
     }
@@ -879,6 +886,22 @@ export function switchSession(options: ReplOptions, target: string): boolean {
   return true;
 }
 
+/**
+ * 信任模式变更回执。
+ *
+ * `/trust` 与确认时的 `a` 走同一份文案：两者是同一个开关的两条入口，
+ * 分开写迟早会说辞不一致。
+ */
+export function printTrustNotice(trusted: boolean): void {
+  console.log(
+    trusted
+      ? chalk.yellow(
+          "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n",
+        )
+      : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
+  );
+}
+
 /** /status 的条目（纯数据，便于测试） */
 export function sessionStatusEntries(
   options: ReplOptions,
@@ -959,6 +982,29 @@ function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[strin
   ];
 }
 
+/** `/status` 的行渲染（纯函数，便于测试） */
+export function sessionStatusLines(
+  entries: Array<[string, string]>,
+  width = terminalWidth(),
+): string[] {
+  // gutter 占 2 列（`│ `），标签占 STATUS_LABEL_WIDTH，值前再留 1 列
+  const valueStart = 2 + STATUS_LABEL_WIDTH + 1;
+  const maxValueWidth = Math.max(width - valueStart - 1, MIN_STATUS_VALUE_WIDTH);
+  // 续行与首行的值起点对齐：`│` 本身已占 1 列，后面补 valueStart-1 个空格
+  const hanging = " ".repeat(valueStart - 1);
+  const lines: string[] = [];
+
+  for (const [label, value] of entries) {
+    const [first = "", ...rest] = wrapToWidth(value, maxValueWidth);
+    lines.push(`│ ${alignLabel(label, STATUS_LABEL_WIDTH)} ${first}`);
+    // 折下来的续行缩进到值的起点：否则长路径会糊在 gutter 上难以分辨
+    for (const line of rest) {
+      lines.push(`│${hanging}${line}`);
+    }
+  }
+  return lines;
+}
+
 export function printStatus(
   options: ReplOptions,
   trusted: boolean,
@@ -966,14 +1012,10 @@ export function printStatus(
 ): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
-  for (const [label, value] of sessionStatusEntries(
-    options,
-    trusted,
-    subAgentEnabled,
+  for (const line of sessionStatusLines(
+    sessionStatusEntries(options, trusted, subAgentEnabled),
   )) {
-    console.log(
-      `${chalk.dim("│")} ${chalk.dim(alignLabel(label, STATUS_LABEL_WIDTH))} ${value}`,
-    );
+    console.log(chalk.dim(line));
   }
   console.log(chalk.dim("└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换"));
   console.log("");
@@ -981,6 +1023,8 @@ export function printStatus(
 
 /** `/status` 标签列的最小显示宽度 */
 export const STATUS_LABEL_WIDTH = 12;
+/** 值列的保底宽度：再窄也要能读出内容，宁可溢出也不折成一列一个字 */
+const MIN_STATUS_VALUE_WIDTH = 24;
 
 /**
  * 把标签按**显示宽度**补齐到标签列。
@@ -1367,22 +1411,14 @@ function printHelp() {
   console.log("");
   console.log(chalk.cyan("📖 可用命令（所有命令以 / 开头）:"));
   console.log("");
-  console.log(chalk.white("  /new") + chalk.dim("     - 创建新的会话"));
-  console.log(chalk.white("  /login") + chalk.dim("   - 登录模型服务商（方向键选择服务商，输入apiKey）"));
-  console.log(chalk.white("  /model") + chalk.dim("   - 选择模型供应商和模型"));
-  console.log(chalk.white("  /reload") + chalk.dim("   - 重载配置文件"));
-  console.log(chalk.white("  /skills") + chalk.dim("   - 列出所有可用的 skills"));
-  console.log(chalk.white("  /load <name>") + chalk.dim(" - 加载指定 skill 的完整内容"));
-  console.log(chalk.white("  /trust") + chalk.dim("   - 切换信任模式（跳过写文件/执行命令的确认）"));
-  console.log(chalk.white("  /subagent [on|off]") + chalk.dim(" - 开关子 Agent 委派（默认关闭，不带参数则切换）"));
-  console.log(chalk.white("  /status") + chalk.dim("  - 查看模型、会话文件、上下文与 token 用量、确认模式"));
-  console.log(chalk.white("  /sessions") + chalk.dim(" - 列出当前工作目录的会话"));
-  console.log(chalk.white("  /switch <n>") + chalk.dim(" - 切换到指定会话（恢复其历史上下文）"));
-  console.log(chalk.white("  /last [n]") + chalk.dim(" - 查看上一条工具输出的完整内容（默认 200 行）"));
-  console.log(chalk.white("  /help") + chalk.dim("    - 显示帮助信息"));
-  console.log(chalk.white("  /clear") + chalk.dim("   - 清除对话历史"));
-  console.log(chalk.white("  /exit") + chalk.dim("    - 退出程序"));
-  console.log(chalk.white("  /quit") + chalk.dim("    - 退出程序"));
+  // 命令清单来自 src/cli/commands.ts：/help、启动欢迎语、README 与交互文档
+  // 此前四处各抄一份，新增命令漏改一处就会出现"文档里没有但能用"的命令
+  for (const entry of helpEntries()) {
+    console.log(chalk.white(entry.usage) + chalk.dim(entry.description));
+    if (entry.note) {
+      console.log(chalk.dim(entry.note));
+    }
+  }
   console.log("");
   console.log(chalk.dim("💡 提示:"));
   console.log(chalk.dim("  - 直接输入问题即可开始对话"));

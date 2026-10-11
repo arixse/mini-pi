@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "../provider";
+import { commandDescription } from "./commands";
 import { DEFAULT_TERMINAL_WIDTH } from "./width";
 
 /** 分隔线的宽度上下限：再宽没有信息量，再窄就只剩装饰 */
@@ -87,8 +88,16 @@ export function printWelcome(
   }
   
   console.log();
-  console.log(chalk.dim("  输入 ") + chalk.cyan("/help") + chalk.dim(" 查看所有命令"));
-  console.log(chalk.dim("  输入 ") + chalk.cyan("/new") + chalk.dim(" 创建新会话"));
+  // 提示哪几条命令也来自注册表：手工挑命令容易漏，
+  // 说明文字改了也是同一份，不会与 /help 说辞打架
+  for (const usage of ["/help", "/new", "/status"]) {
+    const description = commandDescription(usage);
+    if (description) {
+      console.log(
+        `${chalk.dim("  ")}${chalk.cyan(usage)} ${chalk.dim(description)}`,
+      );
+    }
+  }
   console.log(chalk.dim("  直接输入问题即可开始对话"));
   console.log();
   rule();

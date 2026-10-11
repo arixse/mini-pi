@@ -10,6 +10,7 @@ import {
   printWelcome,
   separatorLine,
 } from "./ui";
+import { commandDescription } from "./commands";
 import { displayWidth } from "./width";
 
 /** 捕获 printWelcome 的输出（它只写 console.log，没有注入点） */
@@ -56,6 +57,20 @@ describe("printWelcome", () => {
     const text = captured.lines.join("\n");
     assert.ok(text.includes("204800"), `应显示窗口值，实际：${text}`);
     assert.ok(text.includes("推断"), `应说明窗口来源，实际：${text}`);
+  });
+
+  it("启动提示里的命令与说明取自注册表，不再另抄一份", () => {
+    printWelcome("minimax-cn", "MiniMax-M2.7");
+
+    const text = captured.lines.join("\n");
+    for (const usage of ["/help", "/new", "/status"]) {
+      assert.ok(text.includes(usage), `启动画面应给出常用命令：${usage}`);
+      const description = commandDescription(usage);
+      assert.ok(
+        description && text.includes(description),
+        `说明应与 /help 一致：${usage} → ${description}`,
+      );
+    }
   });
 
   it("未配置模型时提示去 /login 与 /model", () => {

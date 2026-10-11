@@ -112,9 +112,18 @@ MINI_PI_LOG_LEVEL=debug pnpm dev:cli
 写文件与执行命令属于危险动作，CLI 会**逐次询问**：
 
 ```
-⚠️  工具调用待确认: bash
-   命令: npm test
-   允许执行? [y/N]
+⚠️  需要确认  bash
+│ 命令: npm test
+└ 允许执行? [y/N/a]   a = 本会话内全部允许
+```
+
+危险命令会先点出后果（`rm -rf`、`sudo`、`git reset --hard` 等）：
+
+```
+⚠️  高危操作待确认  bash
+│ 命令: rm -rf build
+│ ⚠ 高危：递归/强制删除（rm -rf），删除后不可恢复
+└ 允许执行? [y/N/a]   a = 本会话内全部允许
 ```
 
 1. **审批是主要防线**：`write_file` / `edit_file` / `bash` 必须确认；
@@ -300,6 +309,9 @@ MiniMax-CN 提供商使用 Anthropic 兼容接口。
   目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
 
 ### 命令
+
+> 这张表与 `src/cli/commands.ts` 的注册表同源：`/help`、启动欢迎语都从那里渲染，
+> `src/cli/commands.test.ts` 会校验两边没有分叉。
 
 | 命令       | 说明                          |
 | ---------- | ----------------------------- |

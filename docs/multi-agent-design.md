@@ -118,7 +118,8 @@ runAgentLoop  [主 Agent, depth = 0]
 - 新增 `task` 工具（放在 `tools.ts` 旁的新文件 `src/agent/subagentTool.ts`，避免 `tools.ts` 继续膨胀）：
   - 参数：`goal`（必填，字符串）、`context`（可选，文件路径或代码片段数组）、`allowWrite`（可选布尔，默认 false）、`model`（可选，模型名）。
   - **不加入 `READ_ONLY_TOOL_NAMES`**：委派会真实消耗 token 与时间，且可能写文件，必须过审批。提示语由 `approval.ts` 的 `describeToolCall` 扩展，格式：
-    `⚠️  工具调用待确认: task（子 Agent depth=1）\n   目标: <goal 前 120 字>\n   工具: 只读 4 项 / 含写权限`。
+    `⚠️  需要确认  task [子 Agent depth=1]` / `│ 委派目标: <goal 前 120 字>（工具权限：bash / 写工具）`；
+    给子 Agent 放开的 `allowWrite` / `allowBash` 会由 `assessToolRisk` 再提示一条 `elevated` 风险。
   - 结果裁剪：超过 `SUBAGENT_RESULT_MAX_CHARS` 时按现有 `capForModel` 的口径写明"已截断，共 N 字符，请让子 Agent 输出更聚焦的结论"。
 - `src/agent/tools.ts`：
   - `createToolRegistry(workspaceRoot, options?)` 增加可选第二参（子 Agent 工具的依赖），保持单参调用兼容，避免改动现有测试。

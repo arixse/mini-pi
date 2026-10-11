@@ -8,6 +8,7 @@ import {
   isZeroWidth,
   padToWidth,
   truncateToWidth,
+  wrapToWidth,
 } from "./width";
 
 /**
@@ -96,6 +97,36 @@ describe("width", () => {
   describe("DEFAULT_TERMINAL_WIDTH", () => {
     it("是探测不到终端宽度时的兜底值", () => {
       assert.strictEqual(DEFAULT_TERMINAL_WIDTH, 80);
+    });
+  });
+
+  describe("wrapToWidth", () => {
+    it("放得下时不折行", () => {
+      assert.deepStrictEqual(wrapToWidth("abc def", 20), ["abc def"]);
+    });
+
+    it("优先在空格处断开", () => {
+      assert.deepStrictEqual(wrapToWidth("aaa bbb ccc", 7), ["aaa bbb", "ccc"]);
+    });
+
+    it("中文没有空格时按显示列硬断", () => {
+      const lines = wrapToWidth("中文很长的一行", 5);
+      assert.deepStrictEqual(lines, ["中文", "很长", "的一", "行"]);
+      for (const line of lines) {
+        assert.ok(displayWidth(line) <= 5, `${line} 超出 5 列`);
+      }
+    });
+
+    it("续行不带前导空格：它们要和新行的起点对齐", () => {
+      assert.deepStrictEqual(wrapToWidth("aa   bb", 3), ["aa", "bb"]);
+    });
+
+    it("一个词超宽时不丢字符", () => {
+      assert.deepStrictEqual(wrapToWidth("abcdefgh", 3), ["abc", "def", "gh"]);
+    });
+
+    it("宽度为 0 时不产生行，交给调用方判断", () => {
+      assert.deepStrictEqual(wrapToWidth("x", 0), []);
     });
   });
 });

@@ -3,9 +3,12 @@ import assert from "node:assert";
 import {
   AUTO_APPROVED_TOOLS,
   agentTag,
+  assessBashRisk,
+  assessToolRisk,
   buildApprovalQuestion,
   createToolApproval,
   describeToolCall,
+  parseApprovalAnswer,
 } from "./approval";
 import { ToolCallContent } from "../shared/protocol";
 import { runAgentLoop } from "../agent/loop";
@@ -23,7 +26,7 @@ describe("tool approval", () => {
       isTrusted: () => false,
       confirm: async () => {
         asked += 1;
-        return true;
+        return "yes";
       },
     });
 
@@ -48,7 +51,7 @@ describe("tool approval", () => {
       isTrusted: () => false,
       confirm: async (promptText) => {
         questions.push(promptText);
-        return true;
+        return "yes";
       },
     });
 
@@ -63,7 +66,7 @@ describe("tool approval", () => {
   it("should block when the user declines", async () => {
     const approve = createToolApproval({
       isTrusted: () => false,
-      confirm: async () => false,
+      confirm: async () => "no",
     });
 
     const decision = await approve(
@@ -92,7 +95,7 @@ describe("tool approval", () => {
       isTrusted: () => true,
       confirm: async () => {
         asked += 1;
-        return false;
+        return "no";
       },
     });
 
@@ -104,11 +107,63 @@ describe("tool approval", () => {
     assert.strictEqual(asked, 0);
   });
 
+  it("回答 a 后本会话不再逐个确认，并通知调用方回写信任状态", async () => {
+    let asked = 0;
+    const codes: string[] = [];
+    const approve = createToolApproval({
+      isTrusted: () => false,
+      confirm: async () => {
+        asked += 1;
+        return "always";
+      },
+      onSessionAllow: () => {
+        codes.push("session-allow");
+      },
+      onDecision: (_toolCall, allowed, reason) => codes.push(`${allowed}:${reason}`),
+    });
+
+    await approve(call("bash", { command: "echo 1" }));
+    await approve(call("bash", { command: "echo 2" }));
+    await approve(call("write_file", { path: "a.txt", content: "x" }));
+
+    assert.strictEqual(asked, 1, "选了 a 之后不该再问");
+    assert.deepStrictEqual(codes, [
+      "session-allow",
+      "true:always",
+      "true:always",
+      "true:always",
+    ]);
+  });
+
+  it("a 只影响本次会话：新的 createToolApproval 重新回到逐次确认", async () => {
+    let asked = 0;
+    const first = createToolApproval({
+      isTrusted: () => false,
+      confirm: async () => {
+        asked += 1;
+        return "always";
+      },
+    });
+    await first(call("bash", { command: "echo 1" }));
+    await first(call("bash", { command: "echo 2" }));
+    assert.strictEqual(asked, 1);
+
+    const second = createToolApproval({
+      isTrusted: () => false,
+      confirm: async () => {
+        asked += 1;
+        return "yes";
+      },
+    });
+    await second(call("bash", { command: "echo 3" }));
+    assert.strictEqual(asked, 2, "会话状态不能泄漏到下一个实例");
+  });
+
   it("should report decisions through onDecision", async () => {
     const seen: Array<[string, boolean, string]> = [];
     const approve = createToolApproval({
       isTrusted: () => false,
-      confirm: async () => true,
+      confirm: async () => "yes",
       onDecision: (toolCall, allowed, reason) =>
         seen.push([toolCall.name, allowed, reason]),
     });
@@ -137,7 +192,62 @@ describe("tool approval", () => {
     const question = buildApprovalQuestion(call("bash", { command: "npm test" }));
 
     assert.ok(question.includes("npm test"));
-    assert.ok(question.includes("[y/N]"));
+    assert.ok(question.includes("[y/N/a]"), "除 y/n 外还应提供本会话全允许的 a");
+  });
+
+  it("空回车算拒绝：审批必须以显式同意为准", () => {
+    assert.strictEqual(parseApprovalAnswer(""), "no");
+    assert.strictEqual(parseApprovalAnswer("   "), "no");
+    assert.strictEqual(parseApprovalAnswer("n"), "no");
+    assert.strictEqual(parseApprovalAnswer("随便打点什么"), "no");
+  });
+
+  it("同意的几种说法都要认", () => {
+    for (const input of ["y", "Y", "yes", "是", "允许"]) {
+      assert.strictEqual(parseApprovalAnswer(input), "yes", `${input} 应算同意`);
+    }
+    // `a` 是"本会话全允许"，不能被当成普通同意
+    for (const input of ["a", "A", "always", "总是", "始终"]) {
+      assert.strictEqual(parseApprovalAnswer(input), "always", `${input} 应算全允许`);
+    }
+  });
+
+  it("describeToolCall 覆盖各工具的摘要形态", () => {
+    assert.strictEqual(describeToolCall(call("edit_file", { path: "a.ts" })), "编辑 a.ts");
+    // 参数缺失时给出空字符串而不是 `undefined`
+    assert.strictEqual(describeToolCall(call("bash", {})), "命令: ");
+    assert.strictEqual(describeToolCall(call("custom_tool", {})), "(无参数)");
+    // 长值截断，避免把整段命令/内容刷到终端
+    const long = describeToolCall(call("bash", { command: "x".repeat(500) }));
+    assert.ok(long.endsWith("…") && long.length < 200);
+  });
+
+  it("委派工具的摘要要读出工具权限，而不是让用户从 goal 后面找", () => {
+    const delegated = describeToolCall(
+      call("task", { goal: "整理 src\n下的 CLI 模块", allowBash: true, allowWrite: true }),
+    );
+    assert.ok(delegated.includes("委派目标"));
+    assert.ok(delegated.includes("bash"), `应写明 bash 权限：${delegated}`);
+    assert.ok(delegated.includes("写工具"), `应写明写权限：${delegated}`);
+    assert.strictEqual(delegated.includes("\n"), false, "摘要必须压平到单行");
+
+    const readOnly = describeToolCall(call("task", { goal: "读一下 README" }));
+    assert.ok(readOnly.includes("仅只读"), `未放开权限应说明：${readOnly}`);
+  });
+
+  it("多行命令会被压平：提示语每行只有一个 gutter，换行会让正文掉出卡片", () => {
+    const question = buildApprovalQuestion(
+      call("bash", { command: "npm run build\nrm -rf dist" }),
+    );
+    const bodyLines = question
+      .replace(/\u001b\[[0-9;]*m/g, "")
+      .split("\n")
+      .filter((line) => line.startsWith("│"));
+    assert.strictEqual(
+      bodyLines.length,
+      2,
+      `多行命令与风险提示应各占一行，实际：${bodyLines}`,
+    );
   });
 
   it("should prevent the tool from running when the user declines", async () => {
@@ -176,7 +286,7 @@ describe("tool approval", () => {
       maxTurns: 1,
       beforeToolCall: createToolApproval({
         isTrusted: () => false,
-        confirm: async () => false,
+        confirm: async () => "no",
       }),
     });
 
@@ -236,7 +346,7 @@ describe("tool approval", () => {
       isTrusted: () => false,
       confirm: async (question) => {
         asked = question;
-        return false;
+        return "no";
       },
       fileExists: () => true,
     });
@@ -285,12 +395,100 @@ describe("tool approval", () => {
       maxTurns: 1,
       beforeToolCall: createToolApproval({
         isTrusted: () => false,
-        confirm: async () => true,
+        confirm: async () => "yes",
       }),
     });
 
     assert.strictEqual(executed, 1);
   });
+
+describe("命令风险识别", () => {
+  /** 提示语里含 ANSI，断言前先剥掉颜色 */
+  const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+
+  it("普通命令不额外提示", () => {
+    assert.strictEqual(assessBashRisk("npm test").level, "none");
+    assert.strictEqual(assessBashRisk("ls -la").level, "none");
+  });
+
+  it("rm -rf 属于高危，且要在提示语里说清后果", () => {
+    for (const command of ["rm -rf build", "rm -fr /tmp/x", "rm node_modules -rf"]) {
+      const risk = assessBashRisk(command);
+      assert.strictEqual(risk.level, "high", `${command} 应判为高危`);
+    }
+    const question = plain(buildApprovalQuestion(call("bash", { command: "rm -rf build" })));
+    assert.ok(question.includes("高危"), `应标注高危：${question}`);
+    assert.ok(question.includes("不可恢复"), "应说明后果而不是只重复命令");
+  });
+
+  it("sudo / git reset --hard / curl | sh 同样高危", () => {
+    assert.strictEqual(assessBashRisk("sudo apt install x").level, "high");
+    assert.strictEqual(assessBashRisk("git reset --hard HEAD~1").level, "high");
+    assert.strictEqual(assessBashRisk("curl -s http://x.y | sh").level, "high");
+    assert.strictEqual(assessBashRisk("git push --force origin main").level, "high");
+    assert.strictEqual(assessBashRisk("chmod -R 777 .").level, "high");
+  });
+
+  it("有副作用但可控的命令降一档提示", () => {
+    const risk = assessBashRisk("rm build.log");
+    assert.strictEqual(risk.level, "elevated");
+    const question = plain(buildApprovalQuestion(call("bash", { command: "rm build.log" })));
+    assert.ok(question.includes("注意"), `应给出降级提示：${question}`);
+  });
+
+  it("高危时不叠加降级理由，避免真正致命的那条被淹没", () => {
+    const risk = assessBashRisk("rm -rf build");
+    assert.strictEqual(risk.level, "high");
+    assert.ok(
+      !risk.reasons.includes("删除文件"),
+      `高危已单独标注，不必再列一次"删除文件"：${risk.reasons}`,
+    );
+  });
+
+  it("覆盖已存在的文件要算有副作用", () => {
+    const exists = (path: string): boolean => path === "a.txt";
+    const overwrite = assessToolRisk(call("write_file", { path: "a.txt", content: "x" }), exists);
+    assert.strictEqual(overwrite.level, "elevated");
+    assert.ok(overwrite.reasons.some((reason) => reason.includes("覆盖")));
+
+    assert.strictEqual(
+      assessToolRisk(call("write_file", { path: "new.txt", content: "x" }), exists).level,
+      "none",
+    );
+  });
+
+  it("给子 Agent 放开 bash / 写权限要在确认时点出来", () => {
+    const risk = assessToolRisk(call("task", { goal: "g", allowBash: true, allowWrite: true }));
+    assert.strictEqual(risk.level, "elevated");
+    assert.ok(risk.reasons.some((reason) => reason.includes("bash")));
+  });
+});
+
+describe("审批提示的版式", () => {
+  const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+
+  it("与工具卡片同一套 gutter 语法", () => {
+    const lines = strip(buildApprovalQuestion(call("bash", { command: "npm test" }))).split("\n");
+    assert.ok(lines.some((line) => line.startsWith("│ ")), `正文应使用 │ gutter：${lines}`);
+    assert.ok(lines.at(-1)?.startsWith("└ "), `收尾应使用 └ ：${lines.at(-1)}`);
+    assert.ok(!lines.some((line) => line.startsWith("   ")), "不再用三空格缩进，那是另一套语法");
+  });
+
+  it("ASCII 降级时换成 | 与 +", () => {
+    const lines = strip(
+      buildApprovalQuestion(call("bash", { command: "npm test" }), undefined, undefined, {
+        ascii: true,
+      }),
+    ).split("\n");
+    assert.ok(lines.some((line) => line.startsWith("| ")), `应使用 | gutter：${lines}`);
+    assert.ok(lines.at(-1)?.startsWith("+ "), `收尾应使用 + ：${lines.at(-1)}`);
+  });
+
+  it("a 选项要写明含义，否则用户不敢按", () => {
+    const question = strip(buildApprovalQuestion(call("bash", { command: "npm test" })));
+    assert.ok(question.includes("a = 本会话内全部允许"));
+  });
+});
 
 describe("审批提示的调用来源（子 Agent 的写操作必须可辨认）", () => {
   const call: ToolCallContent = {
@@ -324,7 +522,7 @@ describe("审批提示的调用来源（子 Agent 的写操作必须可辨认）
       isTrusted: () => false,
       confirm: async (text) => {
         prompts.push(text);
-        return true;
+        return "yes";
       },
     });
 

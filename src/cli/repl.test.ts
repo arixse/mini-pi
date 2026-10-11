@@ -24,7 +24,9 @@ import {
   printToolInfo,
   resetToolRenderState,
   resolveContextBudget,
+  STATUS_LABEL_WIDTH,
   sessionStatusEntries,
+  sessionStatusLines,
   startNewSession,
   summarizeToolCall,
   switchSession,
@@ -1274,6 +1276,34 @@ describe("session context wiring", () => {
     const aligned = alignLabel("这是一个特别长的标签", 8);
     assert.ok(aligned.endsWith(" "));
     assert.ok(displayWidth(aligned) > 8);
+  });
+
+  it("长值折行时续行缩进到值的起点", () => {
+    const lines = sessionStatusLines([["会话文件", `${"x".repeat(70)} end`]], 60);
+
+    assert.ok(lines.length > 1, "应该折行");
+    for (const line of lines) {
+      assert.ok(
+        displayWidth(line) <= 60,
+        `不该超出终端宽度：${displayWidth(line)} 列 · ${line}`,
+      );
+    }
+    // 续行没有标签，靠缩进保持在同一列，而不是贴着 gutter
+    const valueStart = 2 + STATUS_LABEL_WIDTH + 1;
+    assert.strictEqual(lines[1].indexOf("x"), valueStart);
+    assert.ok(!lines[1].slice(0, valueStart).includes("x"));
+  });
+
+  it("短值不折行，也不产生空续行", () => {
+    const lines = sessionStatusLines([["模型", "gpt"], ["用量", "0"]], 100);
+    assert.strictEqual(lines.length, 2);
+  });
+
+  it("终端再窄也不会把值挤没：保底 24 列", () => {
+    const long = "y".repeat(60);
+    const lines = sessionStatusLines([["会话文件", long]], 10);
+    const text = lines.map((line) => line.slice(15)).join("");
+    assert.ok(text.replace(/\s/g, "").length >= 24, `值应保底可读：${lines}`);
   });
 
   it("切会话与 /clear 应把用量统计清零", async () => {
