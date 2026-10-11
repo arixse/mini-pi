@@ -181,6 +181,22 @@ describe("printResumedSession", () => {
     );
   });
 
+  it("中间的空 assistant（只有工具调用）不挡住更早的正文", () => {
+    const toolCallOnly: AgentMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "read_file", arguments: {} }],
+      stopReason: "toolUse",
+      usage: { input: 1, output: 1, totalTokens: 2 },
+      timestamp: 0,
+    };
+    const text = run([user("第一个问题"), assistant("第一个回答"), toolCallOnly]);
+
+    assert.ok(
+      text.includes("第一个回答"),
+      `跳过没有正文的那条，接着往前找：${text}`,
+    );
+  });
+
   it("历史里没有任何文本时不空喊'最近一轮'", () => {
     const onlyToolResult: AgentMessage = {
       role: "toolResult",

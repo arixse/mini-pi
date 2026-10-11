@@ -171,7 +171,3 @@ function findLastText(
   return "";
 }
 
-export function printSessionInfo(sessionId: string, messageCount: number): void {
-  console.log(chalk.dim(`  Session: ${sessionId} | Messages: ${messageCount}`));
-  console.log();
-}
