@@ -21,7 +21,7 @@ import {
   resolveContextWindow,
 } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
-import { printLogo, printWelcome } from "./ui";
+import { printLogo, printResumedSession, printWelcome } from "./ui";
 import chalk from "chalk";
 
 /**
@@ -226,8 +226,8 @@ export async function main() {
   printLogo();
   printWelcome(providerName, modelName, { window: contextWindow, source: contextWindowSource });
   if (messages.length > 0) {
-    console.log(chalk.dim(`[Session] 已恢复 ${messages.length} 条历史消息`));
-    console.log();
+    // 只报条数时用户认不出这是哪次对话，多会话并行很容易在错误的上下文里继续
+    printResumedSession(messages);
   }
 
   // 会话文件有损坏行时明确告知（加载时已跳过，不影响继续使用）

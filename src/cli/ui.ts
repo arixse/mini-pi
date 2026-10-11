@@ -1,7 +1,9 @@
 import chalk from "chalk";
+import { AgentMessage } from "../shared/protocol";
+import { messageText } from "../agent/message";
 import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "../provider";
 import { commandDescription } from "./commands";
-import { DEFAULT_TERMINAL_WIDTH } from "./width";
+import { DEFAULT_TERMINAL_WIDTH, truncateToWidth } from "./width";
 
 /** 分隔线的宽度上下限：再宽没有信息量，再窄就只剩装饰 */
 export const SEPARATOR_MAX_WIDTH = 100;
@@ -102,6 +104,71 @@ export function printWelcome(
   console.log();
   rule();
   console.log();
+}
+
+/**
+ * 启动时回放**最后一轮**（而不是只报条数）。
+ *
+ * 恢复历史后屏幕上只有一行"已恢复 24 条历史消息"，用户不知道聊到哪了：
+ * 多条会话并行时很容易在错误的上下文里继续提问。这里给出最后一次提问与
+ * 最后一次回答的第一行，够认出"这是哪次对话"就够了。
+ */
+export function printResumedSession(
+  messages: readonly AgentMessage[],
+  width: number = process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
+): void {
+  if (messages.length === 0) {
+    return;
+  }
+  console.log(chalk.dim(`[Session] 已恢复 ${messages.length} 条历史消息`));
+
+  const lastUser = findLastText(messages, "user");
+  const lastAssistant = findLastText(messages, "assistant");
+  if (!lastUser && !lastAssistant) {
+    console.log();
+    return;
+  }
+
+  console.log(chalk.dim("│ 最近一轮："));
+  const bodyWidth = Math.max(width - 6, MIN_STATUS_TEXT_WIDTH);
+  if (lastUser) {
+    console.log(
+      `${chalk.dim("│")} ${chalk.white(`> ${truncateToWidth(oneLine(lastUser), bodyWidth)}`)}`,
+    );
+  }
+  if (lastAssistant) {
+    console.log(
+      `${chalk.dim("│")} ${chalk.dim(truncateToWidth(oneLine(lastAssistant), bodyWidth))}`,
+    );
+  }
+  // 只提示真实存在的命令：此前那句 /history 从来没有被实现过
+  console.log(chalk.dim("└ /new 开启新会话 · /sessions 选择其它会话"));
+  console.log();
+}
+
+/** 正文至少留这么宽，再窄也无法压缩（宁可溢出也不显示成一列） */
+const MIN_STATUS_TEXT_WIDTH = 24;
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** 取某个角色的最后一条消息里的文本（多行会被调用方压平） */
+function findLastText(
+  messages: readonly AgentMessage[],
+  role: AgentMessage["role"],
+): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== role) {
+      continue;
+    }
+    const text = messageText(message).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 export function printSessionInfo(sessionId: string, messageCount: number): void {

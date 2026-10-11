@@ -25,6 +25,8 @@ import {
   resetToolRenderState,
   resolveContextBudget,
   STATUS_LABEL_WIDTH,
+  contextUsage,
+  formatTurnFooter,
   sessionStatusEntries,
   sessionStatusLines,
   startNewSession,
@@ -1294,17 +1296,71 @@ describe("session context wiring", () => {
     assert.ok(!lines[1].slice(0, valueStart).includes("x"));
   });
 
-  it("短值不折行，也不产生空续行", () => {
-    const lines = sessionStatusLines([["模型", "gpt"], ["用量", "0"]], 100);
-    assert.strictEqual(lines.length, 2);
-  });
-
   it("终端再窄也不会把值挤没：保底 24 列", () => {
     const long = "y".repeat(60);
     const lines = sessionStatusLines([["会话文件", long]], 10);
     const text = lines.map((line) => line.slice(15)).join("");
     assert.ok(text.replace(/\s/g, "").length >= 24, `值应保底可读：${lines}`);
   });
+
+  it("短值不折行，也不产生空续行", () => {
+    const lines = sessionStatusLines([["模型", "gpt"], ["用量", "0"]], 100);
+    assert.strictEqual(lines.length, 2);
+  });
+
+describe("formatTurnFooter（回合脚注）", () => {
+  it("给出耗时、本轮花销与上下文刻度", () => {
+    const footer = formatTurnFooter({
+      elapsedMs: 8_600,
+      usage: { input: 1_200, output: 318, totalTokens: 1_518 },
+      context: { used: 3_400, budget: 6_000 },
+    });
+    assert.strictEqual(footer, "↳ 8.6s · ↑1.2k ↓318 · 上下文 3.4k/6.0k");
+  });
+
+  it("提供方没返回 usage 时省略这一段，而不是显示 0", () => {
+    const footer = formatTurnFooter({ elapsedMs: 1_200, usage: null });
+    assert.strictEqual(footer, "↳ 1.2s");
+    assert.ok(!footer.includes("0"), `不该把"没统计到"写成 0：${footer}`);
+  });
+
+  it("未启用会话存储时不显示上下文行", () => {
+    const footer = formatTurnFooter({
+      elapsedMs: 500,
+      usage: { input: 1, output: 1, totalTokens: 2 },
+    });
+    assert.ok(!footer.includes("上下文"));
+    assert.ok(footer.includes("↑1 ↓1"));
+  });
+
+  it("不足 100ms 也显示成可读的秒数", () => {
+    assert.strictEqual(formatTurnFooter({ elapsedMs: 0, usage: null }), "↳ 0.0s");
+  });
+});
+
+describe("contextUsage", () => {
+  it("未启用会话存储时返回 null（/status 显示'未启用'）", () => {
+    const options = createOptions();
+    options.sessionStore = undefined;
+    assert.strictEqual(contextUsage(options), null);
+  });
+
+  it("口径与 /status 的上下文行一致：两处不该各算一遍", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    const options = createOptions({ sessionStore: store });
+
+    const usage = contextUsage(options);
+    assert.ok(usage, "启用会话存储后应能算出占用");
+
+    const entries = new Map(sessionStatusEntries(options, false));
+    const row = entries.get("上下文") ?? "";
+    assert.ok(
+      row.includes(`约 ${usage!.used} tokens`),
+      `/status 应复用同一个数：${row}`,
+    );
+    assert.ok(row.includes(`上限 ${usage!.budget}`));
+  });
+});
 
   it("切会话与 /clear 应把用量统计清零", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);

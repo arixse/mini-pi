@@ -29,7 +29,13 @@ import {
 import { JsonlSessionStore, estimateTextTokens } from "../agent/sessionStore";
 import { SessionManager } from "../agent/sessionManager";
 import { SkillWithSource } from "../agent/skillLoader";
-import { createUsageTracker, formatUsage, UsageTracker } from "../agent/usage";
+import {
+  createUsageTracker,
+  formatTokenCount,
+  formatUsage,
+  sumUsage,
+  UsageTracker,
+} from "../agent/usage";
 import { logger } from "../shared/logger";
 import { promptSelect } from "./select";
 import { createToolApproval, parseApprovalAnswer } from "./approval";
@@ -189,7 +195,7 @@ export function contextWindowInfo(options: ReplOptions): ResolvedContextWindow {
 }
 
 /** 本次会话的压缩阈值与固定开销 */
-function compactionBudget(options: ReplOptions): {
+export function compactionBudget(options: ReplOptions): {
   budget: number;
   overhead: number;
 } {
@@ -203,6 +209,23 @@ function compactionBudget(options: ReplOptions): {
     budget,
     overhead: contextOverheadTokens(options.systemPrompt, definitions),
   };
+}
+
+/**
+ * 当前会话已占用的上下文（含固定开销）与压缩阈值。
+ *
+ * `/status` 与回合脚注都用它：两处若各算一遍，算错的概率翻倍，
+ * 而"用户看到的上下文刻度"不一致本身就是问题（同一刻显示两个数）。
+ */
+export function contextUsage(
+  options: ReplOptions,
+): { used: number; budget: number; overhead: number } | null {
+  const store = options.sessionStore;
+  if (!store) {
+    return null;
+  }
+  const { budget, overhead } = compactionBudget(options);
+  return { used: store.estimateContextTokens() + overhead, budget, overhead };
 }
 
 export type ReplOptions = {
@@ -763,6 +786,8 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       await appendUserMessage(options, createUserMessage(input), run.signal);
 
       status.set({ kind: "thinking", startedAt: Date.now() });
+      // 脚注里的耗时从真正开始干活算起：排队与读输入不算本回合的账
+      const turnStartedAt = Date.now();
 
       // 本回合给模型的工具集：关掉委派时 task 不在列表里，模型就不会试着派
       const turnRegistry = activeToolRegistry(options.toolRegistry, subAgentEnabled);
@@ -808,7 +833,19 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       // 用量在整轮结束后统计一次：newMessages 含本轮全部 assistant 消息
       usageTracker.recordTurn(result.newMessages);
 
+      // 回合脚注：这一轮的耗时、花销与上下文刻度，原地说清楚
+      const turnUsage = sumUsage(result.newMessages);
       console.log("");
+      console.log(
+        chalk.dim(
+          formatTurnFooter({
+            elapsedMs: Date.now() - turnStartedAt,
+            // 没 Statistik usage 就传 null：宁可不显示，也不把 0 说成"没花钱"
+            usage: turnUsage.usage.totalTokens > 0 ? turnUsage.usage : null,
+            context: contextUsage(options) ?? undefined,
+          }),
+        ),
+      );
       printSeparator();
       console.log("");
     } catch (error) {
@@ -902,6 +939,47 @@ export function printTrustNotice(trusted: boolean): void {
   );
 }
 
+/**
+ * 回合脚注的输入。
+ *
+ * 之所以做成纯数据而不是直接读 options：脚注要在立刻 ingest 的那
+ * 一瞬间取值（中途可能有并发工具调用改写了上下文），而且要能单测。
+ */
+export type TurnFooterInput = {
+  /** 本回合耗时（毫秒） */
+  elapsedMs: number;
+  /** 本回合的 token 用量；拿不到时为 null */
+  usage: Usage | null;
+  /** 上下文占用与上限；未启用会话存储时为 undefined */
+  context?: { used: number; budget: number };
+};
+
+/**
+ * 回合脚注：每轮结束时的那一行 dim 小结。
+ *
+ * 此前一轮跑完只剩一条分隔线，花了多久、烧了多少 token、离压缩还有多远
+ * 全靠 `/status` 翻历史；而这三件事恰恰是决定"要不要继续追问 / 该不该 /new"
+ * 的依据，应该在原地就看见。
+ */
+export function formatTurnFooter(input: TurnFooterInput): string {
+  const parts = [`${(input.elapsedMs / 1000).toFixed(1)}s`];
+
+  // 提供方不返回 usage 时不显示 0：用户宁可看不到，
+  // 也不该被引导相信自己没花钱
+  if (input.usage && input.usage.totalTokens > 0) {
+    parts.push(
+      `↑${formatTokenCount(input.usage.input)} ↓${formatTokenCount(input.usage.output)}`,
+    );
+  }
+  if (input.context) {
+    parts.push(
+      `上下文 ${formatTokenCount(input.context.used)}/${formatTokenCount(input.context.budget)}`,
+    );
+  }
+
+  return `↳ ${parts.join(" · ")}`;
+}
+
 /** /status 的条目（纯数据，便于测试） */
 export function sessionStatusEntries(
   options: ReplOptions,
@@ -918,13 +996,13 @@ export function sessionStatusEntries(
     ["上下文窗口", `${window} tokens（${CONTEXT_WINDOW_SOURCE_LABEL[source]}）`],
     [
       "上下文",
-      store
-        ? (() => {
-            const { budget, overhead } = compactionBudget(options);
-            const used = store.estimateContextTokens() + overhead;
-            return `约 ${used} tokens（其中固定开销 ${overhead}，上限 ${budget}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`;
-          })()
-        : "未启用",
+      (() => {
+        const usage = contextUsage(options);
+        if (!usage || !store) {
+          return "未启用";
+        }
+        return `约 ${usage.used} tokens（其中固定开销 ${usage.overhead}，上限 ${usage.budget}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`;
+      })(),
     ],
     ...compactionStatusRow(store),
     // 用量：模型返回的 usage 此前只在消息里躺着，没人累加，/status 也看不到
