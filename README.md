@@ -114,7 +114,7 @@ pnpm build:cli
 pnpm typecheck
 pnpm test
 pnpm test:coverage   # 带覆盖率门槛（行 85% / 分支 85% / 函数 90%），低于门槛即失败
-pnpm check           # typecheck + test:coverage
+pnpm check           # typecheck + test:coverage —— PR 的门禁，CI 只跑这一条
 
 # 诊断日志一律写 stderr（stdout 留给对话正文），级别可用环境变量调整
 MINI_PI_LOG_LEVEL=debug pnpm dev:cli
@@ -122,6 +122,19 @@ MINI_PI_LOG_LEVEL=debug pnpm dev:cli
 
 > 第二阶段（Web 界面 + API 服务）尚未实现，因此 `dev:server` / `dev:web` / `build`
 > 三个脚本暂时移除；详见 [技术方案](docs/technical-solution.md)。
+
+## 持续集成
+
+`.github/workflows/ci.yml` 在 push / PR / 手动触发时跑一条命令：**`pnpm check`**
+（typecheck + 带覆盖率门槛的测试）。不拆成 `typecheck` + `test` 两步——拆开就会
+漏掉覆盖率门槛（行 85% / 分支 85% / 函数 90%），让"覆盖率掉了"拦不住 PR。
+
+运行时版本只在一处声明：pnpm 由 `package.json` 的 `packageManager` 指定，
+Node 由 `.nvmrc` 指定，CI 读同一份。
+
+> 要把 CI 变成真正的门禁，还需在 GitHub 仓库的
+> **Settings → Branches → Branch protection rules** 里把 `CI`（`check` job）
+> 设为 **Required status check**——工作流本身只是"会跑"，不会阻止合并。
 
 ## 安全模型
 

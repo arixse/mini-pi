@@ -6,9 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同一个分支/PR 上的多次推送只保留最新一次：旧的那次跑完也没意义，还占并发
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -16,17 +25,22 @@ jobs:
       # 唯一指定，与本地/CI 保持一致；action-setup 同时读到两处会直接报错。
       - uses: pnpm/action-setup@v4
 
+      # Node 版本同样只在一处声明（.nvmrc），CI 与本地跑同一个大版本。
+      # 此前写死 23 —— 那是 2025-06-01 就 EOL 的奇数版，门禁跑在一个没有
+      # 安全更新的 runtime 上；且它与本地的 22 不一致，"本地过了 CI 挂了"
+      # 会变成常态。
       - uses: actions/setup-node@v4
         with:
-          node-version: 23
+          node-version-file: .nvmrc
           cache: pnpm
 
       # prepare 脚本会顺带执行 build:cli（esbuild 单文件产物）
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Unit tests
-        run: pnpm test
+      # 必须是 check，不能拆成 typecheck + test：
+      # 后者不含覆盖率门槛（行 85% / 分支 85% / 函数 90%），
+      # 于是"覆盖率掉了"从来拦不住 PR——门槛只在 package.json 里躺着。
+      # 跑本地那条同样的命令，才不会出现"本地过、CI 不过"或反过来。
+      - name: Check
+        run: pnpm check

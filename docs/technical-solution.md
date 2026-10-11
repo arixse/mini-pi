@@ -250,8 +250,14 @@ pnpm check
 | --- | --- |
 | 类型检查 | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters` |
 | 单元测试 | `tsx --test "src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖 |
-| 持续集成 | `.github/workflows/ci.yml`：install → typecheck → test（push / PR / 手动触发） |
+| 覆盖率门槛 | 行 85% / 分支 85% / 函数 90%，低于门槛即失败（随 `pnpm check` 一起跑） |
+| 持续集成 | `.github/workflows/ci.yml`：install → **`pnpm check`**（push / PR / 手动触发） |
 | Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策 |
+
+CI 只跑一条命令 `pnpm check`（= `typecheck` + `test:coverage`），不拆成
+typecheck 与 test 两步：拆开就会漏掉覆盖率门槛，让"覆盖率掉了"永远拦不住 PR。
+运行时版本也只在一处声明——pnpm 由 `package.json` 的 `packageManager` 指定，
+Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了"。
 
 未开启 `noUncheckedIndexedAccess`：实测会新增约 184 处报错，
 集中在未参与近期改动的代码上，需要一次专门的、逐个确认的收敛；
