@@ -56,6 +56,7 @@ mini-pi/
 - [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题与分批修复清单
 - [产品设计文档](docs/product-design.md)
 - [技术方案](docs/technical-solution.md)
+- [发布到 npm](docs/publishing.md) - 标签触发的发布流程、包内容与踩过的坑
 
 ## 核心功能
 
@@ -135,6 +136,32 @@ Node 由 `.nvmrc` 指定，CI 读同一份。
 > 要把 CI 变成真正的门禁，还需在 GitHub 仓库的
 > **Settings → Branches → Branch protection rules** 里把 `CI`（`check` job）
 > 设为 **Required status check**——工作流本身只是"会跑"，不会阻止合并。
+
+## 发布到 npm
+
+推 `v*` 标签即发布，版本号**以 tag 为准**（CI 会写回 `package.json`，不用手工改）：
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+首次发布前需在仓库 Settings → Secrets 里配 `NPM_TOKEN`（npm 的 Automation 令牌）。
+包内容由 `package.json` 的 `files` 白名单决定，目前是 `bin/mini-pi-cli.cjs` +
+`README.md` 两个文件（约 333KB）—— CLI 是 esbuild 自包含 bundle，不需要带 `src` 源码。
+
+> 这里有个容易踩的坑：`bin/mini-pi-cli.cjs` 是构建产物、写在 `.gitignore` 里，
+> 而 npm 打包默认读 `.gitignore`；靠 `files` 白名单（优先级更高）才把它捞回包里。
+> 否则发出去的包没有可执行文件，安装后 `mini-pi` 直接 command not found，
+> 而 pipeline 全程绿灯。
+
+详见 [发布到 npm](docs/publishing.md)。
+
+安装使用：
+
+```bash
+npm install -g mini-pi
+mini-pi
+```
 
 ## 安全模型
 

@@ -2,10 +2,27 @@
   "name": "mini-pi",
   "version": "1.0.0",
   "description": "Mini Pi Code Agent - AI编程助手",
-  "main": "index.js",
   "bin": {
     "mini-pi": "./bin/mini-pi-cli.cjs"
   },
+  "files": [
+    "bin/mini-pi-cli.cjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arixse/mini-pi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arixse/mini-pi/issues"
+  },
+  "homepage": "https://github.com/arixse/mini-pi#readme",
   "scripts": {
     "dev": "tsx watch src/cli/entry.ts",
     "dev:cli": "tsx src/cli/entry.ts",

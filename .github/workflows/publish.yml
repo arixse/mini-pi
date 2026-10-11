@@ -1,0 +1,146 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号（形如 1.2.3）；留空则用 package.json 当前版本
+        required: false
+      dry-run:
+        description: 只打包校验，不发布到 registry
+        type: boolean
+        default: false
+
+# 发布是带外部副作用的动作，绝不能像 CI 那样 cancel-in-progress：
+# publish 传到一半被取消，registry 上这个版本号已经被占住，
+# 重跑只会得到 403（npm 不允许覆盖已发布的版本，只能发新版本号）。
+# 所以这里排队，而不是取消。
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # provenance 签名需要 OIDC 令牌换取签名证书
+  id-token: write
+
+env:
+  EVENT_NAME: ${{ github.event_name }}
+  TAG_NAME: ${{ github.ref_name }}
+  INPUT_VERSION: ${{ inputs.version }}
+  DRY_RUN: ${{ inputs.dry-run }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # registry-url 会写入 .npmrc，npm publish 才会读取 NODE_AUTH_TOKEN
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # 门禁。发布不可逆，值得再跑一次：从非 main 分支打的 tag，
+      # CI 从未在上面跑过，这里是唯一一道防线。
+      - name: Check
+        run: pnpm check
+
+      # bin/mini-pi-cli.cjs 在 .gitignore 里（构建产物不入库），
+      # 仓库中并不存在，全靠这一步产出。不把它寄托在 pnpm install 的
+      # prepare 是否触发上——包里少了可执行文件，用户装完就是
+      # command not found，而 pipeline 全程绿灯。
+      - name: Build CLI
+        run: pnpm build:cli
+
+      # 版本号以 tag 为唯一事实来源。否则很容易出现 tag 打的是 v1.2.3、
+      # package.json 还是 1.0.0，于是发出去一个谁都没预料的版本。
+      - name: 确定版本号
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            VERSION="${TAG_NAME#v}"
+          else
+            VERSION="$INPUT_VERSION"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="$(node -p "require('./package.json').version")"
+          fi
+          # 必须是完整 semver：v1.2、release-1.2.3 这类 tag 不该被静默
+          # 转成 npm 能接受但语义不明的东西，直接拦下让人去改 tag。
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号不是合法 semver：'$VERSION'（tag 应为 v1.2.3，预发布用 v1.2.3-beta.1）"
+            exit 1
+          fi
+          # 用 pkg set 而不是 npm version：后者会碰 git（要求工作区干净），
+          # 在 CI 里没这个必要。
+          npm pkg set version="$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "发布版本：$VERSION"
+
+      - name: 预检
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::$PKG@$VERSION 已存在，正式发布会被拒绝"
+            else
+              echo "::error::$PKG@$VERSION 已存在于 registry，不能重复发布，请改用新版本号"
+              exit 1
+            fi
+          fi
+          if [ "$DRY_RUN" != "true" ] && [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::未配置 NPM_TOKEN secret：Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+      - name: 打包并校验产物
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          TARBALL="$RUNNER_TEMP/$PKG-$VERSION.tgz"
+          mkdir -p "$RUNNER_TEMP/smoke"
+          tar -xzf "$TARBALL" -C "$RUNNER_TEMP/smoke"
+          PKG_DIR="$RUNNER_TEMP/smoke/package"
+          CLI="$PKG_DIR/bin/mini-pi-cli.cjs"
+
+          # 最关键的一条：bin 产物被 .gitignore 忽略，靠 package.json 的
+          # files 白名单才进得了包。files 哪天被误删，这里立刻红。
+          test -f "$CLI"
+          # 只能语法检查，不能直接运行：main() 会起 REPL 占住 stdin，
+          # CI 会一直挂到超时。
+          node --check "$CLI"
+          head -1 "$CLI" | grep -q '^#!/usr/bin/env node'
+
+          echo "包内容：$(tar -tzf "$TARBALL" | wc -l) 个文件，$(du -h "$TARBALL" | cut -f1)"
+          tar -tzf "$TARBALL" | grep -E '^package/(bin|README)' | sed 's/^/  /'
+
+      - name: Publish
+        if: ${{ inputs.dry-run != 'true' }}
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: 汇总
+        if: ${{ inputs.dry-run != 'true' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "### mini-pi@$VERSION 已发布" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://www.npmjs.com/package/mini-pi/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"
