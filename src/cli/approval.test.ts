@@ -10,7 +10,11 @@ import {
   describeToolCall,
   describeTaskCall,
   parseApprovalAnswer,
+  workspaceFileExists,
 } from "./approval";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ToolCallContent } from "../shared/protocol";
 import { runAgentLoop } from "../agent/loop";
 import { ToolRegistry, createToolRegistry } from "../agent/tools/registry";
@@ -616,4 +620,32 @@ describe("task 的审批摘要", () => {
     );
   });
 });
+});
+
+describe("workspaceFileExists（审批提示里的覆盖判断）", () => {
+  it("工作区内已存在的文件返回 true", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+    writeFileSync(join(dir, "a.txt"), "x");
+
+    assert.strictEqual(workspaceFileExists(dir, "a.txt"), true);
+    assert.strictEqual(workspaceFileExists(dir, "b.txt"), false);
+  });
+
+  it("逃逸出工作区的路径按不存在处理", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+
+    assert.strictEqual(
+      workspaceFileExists(dir, "../outside.txt"),
+      false,
+      "越界路径不能因为宿主机上恰好存在就报警",
+    );
+    assert.strictEqual(workspaceFileExists(dir, "/etc/passwd"), false);
+  });
+
+  it("空路径或非法输入返回 false 而不是抛错", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mini-pi-exists-"));
+
+    assert.strictEqual(workspaceFileExists(dir, ""), false);
+    assert.strictEqual(workspaceFileExists(dir, "   "), false);
+  });
 });

@@ -141,7 +141,8 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ## 4. 交互主循环
 
-进入 REPL 后，提示符为青色 `> `。`startRepl()`（`src/cli/repl.ts`）对每一行输入的处理逻辑：
+进入 REPL 后，提示符为青色 `> `。`startRepl()`（`src/cli/repl.ts`）对每一行输入的处理逻辑
+（斜杠命令的分派在 `src/cli/dispatch.ts`，一个回合的执行在 `src/cli/turn.ts`）：
 
 1. 读取一行输入并 `trim()`。
 2. **空输入**：直接重新显示提示符，不做任何处理。
@@ -188,8 +189,8 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 > `tool_execution_start` 的 `args`，耗时来自两个事件的时间戳，`edit_file` 的 diff 也依赖
 > start 里的 `oldText`/`newText`。因此事件回调**必须把 start 事件也送进 `printToolInfo`**，
 > 否则卡片会退化成只有工具名、耗时恒为 `0ms`、diff 恒为 `+0 -0`。
-> 该接线由 `createAgentEventHandler`（`src/cli/repl.ts`）承担，并用 `runAgentLoop`
-> 的真实事件流做回归（`src/cli/repl.test.ts`）——手工拼接 start/end 的用例测不到它。
+> 该接线由 `createAgentEventHandler`（`src/cli/toolEvents.ts`）承担，并用 `runAgentLoop`
+> 的真实事件流做回归（`src/cli/toolEvents.test.ts`）——手工拼接 start/end 的用例测不到它。
 
 每条对话开始与结束时都会打印一条分隔线 `────`，宽度跟随终端（上限 100 列、下限 24 列）。
 启动 logo 需要 48 列，窄于此会退化为单行 `mini-pi`，避免被折成乱码。
@@ -473,7 +474,7 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 所有命令以 `/` 开头，需独立一行、完整匹配（`/load` 除外，它需要参数）。
 
 > 这张表必须与 `src/cli/commands.ts` 的注册表一致（`/help` 与启动欢迎语都从那里渲染）。
-> `src/cli/commands.test.ts` 会逐条比对本文档、README 与 `repl.ts` 的分派分支，
+> `src/cli/commands.test.ts` 会逐条比对本文档、README 与 `dispatch.ts` 的分派分支，
 > 新增命令只改注册表会被测试拦下。
 
 | 命令 | 说明 |

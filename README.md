@@ -31,6 +31,14 @@ mini-pi/
 │   │   ├── message.ts  # 消息处理
 │   │   └── sessionStore.ts # 会话存储
 │   ├── cli/            # 命令行交互
+│   │   ├── repl.ts     # 主循环（读一行 / 分派 / 跑一个回合 / 决定退出）
+│   │   ├── dispatch.ts # 斜杠命令分派；turn.ts 一个回合的执行
+│   │   ├── context.ts  # 上下文窗口与压缩阈值的唯一口径
+│   │   ├── session*.ts # 会话读写、/sessions 列表、/status 条目与排版
+│   │   ├── toolEvents.ts # agent 事件 → 状态行 / 工具卡片 / /last
+│   │   ├── approval.ts # 工具调用审批；input.ts 输入串行化；exit.ts 退出协调
+│   │   ├── render.ts / status.ts / width.ts / ui.ts # 终端呈现
+│   │   └── commands.ts / help.ts / login.ts / skills.ts # 命令表与各自实现
 │   ├── provider/       # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
 │   └── shared/         # 共享协议
 ├── docs/               # 文档

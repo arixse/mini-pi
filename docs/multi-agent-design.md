@@ -121,7 +121,7 @@ runAgentLoop  [主 Agent, depth = 0]
     `⚠️  需要确认  task [子 Agent depth=1]` / `│ 委派目标: <goal 前 120 字>（工具权限：bash / 写工具）`；
     给子 Agent 放开的 `allowWrite` / `allowBash` 会由 `assessToolRisk` 再提示一条 `elevated` 风险。
   - 结果裁剪：超过 `SUBAGENT_RESULT_MAX_CHARS` 时按现有 `capForModel` 的口径写明"已截断，共 N 字符，请让子 Agent 输出更聚焦的结论"。
-- `src/agent/tools.ts`：
+- `src/agent/tools/registry.ts`：
   - `createToolRegistry(workspaceRoot, options?)` 增加可选第二参（子 Agent 工具的依赖），保持单参调用兼容，避免改动现有测试。
   - 新增 `subsetRegistry(registry, names)` 或在 `ToolRegistry` 上加 `filter(names)`：子 Agent 注册表由父注册表派生，禁止"子 Agent 拿到父没注册的工具"。
 
@@ -158,7 +158,7 @@ runAgentLoop  [主 Agent, depth = 0]
 
 - `src/cli/render.ts`：处理 `subagent_start/end`，渲染为**缩进一层的嵌套卡片**：
   `  ↳ 子 Agent(depth=1) 已启动： <goal>` / `  ↳ 完成 · 12 轮 · 8.4s · 3.2k tokens`。
-- `src/cli/status.ts` / `repl.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
+- `src/cli/status.ts` / `turn.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
 - 可选落盘：`--trace`（或 settings `subagentTrace: true`）时把子 Agent 的完整消息写到
   `~/.mini-pi/sessions/<工作目录>/<会话>.sub-<agentId>.jsonl`；默认不写，避免磁盘与隐私噪音。
 - `/status` 增加一行：`子 Agent: 本轮 N 次委派 / 累计 M tokens`（只在 N>0 时显示）。
@@ -290,7 +290,7 @@ const childRegistry = parentRegistry.filter(names);         // 派生，不是�
 | M2 | `src/agent/subagent.test.ts`、`src/cli/approval.test.ts` | 审批透传与 depth 前缀、级联取消、监听器不泄漏、block 不崩 |
 | M3 | `src/cli/render.test.ts`、`src/cli/status.test.ts` | 嵌套渲染、token 聚合、spinner 收尾 |
 | M4 | `src/agent/roles.test.ts` | 角色→工具集映射、冲突取严格 |
-| M5 | `src/agent/loop.test.ts`、`src/agent/tools.test.ts` | 并发批次划分、结果顺序一致、预算超限返回错误结果、白名单一致性断言扩展 |
+| M5 | `src/agent/loop.test.ts`、`src/agent/tools/registry.test.ts` | 并发批次划分、结果顺序一致、预算超限返回错误结果、白名单一致性断言扩展 |
 
 每个里程碑收尾跑 `pnpm check`（typecheck + test），并按 `AGENTS.md` 要求提交 commit、同步 README 与 `docs/technical-solution.md`。
 

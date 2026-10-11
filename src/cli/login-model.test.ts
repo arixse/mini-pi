@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { handleLogin, handleModel } from "./repl";
+import { handleLogin, handleModel } from "./login";
 import { ModelProviderService, Provider } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { SettingsStore } from "../provider/settings-store";

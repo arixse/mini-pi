@@ -1,4 +1,6 @@
 import chalk from "chalk";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { BeforeToolCall, ToolCallContext, ToolDecision } from "../agent/loop";
 import { ToolCallContent } from "../shared/protocol";
 import { READ_ONLY_TOOLS } from "../agent/tools/registry";
@@ -11,6 +13,49 @@ import { READ_ONLY_TOOLS } from "../agent/tools/registry";
  * 文件路径校验与 bash 守卫都只是「尽力而为的守卫」，
  * 真正的防线是这里：危险动作执行前必须由用户逐次确认。
  */
+
+/**
+ * 判断相对路径是否指向工作区内**已存在**的文件。
+ *
+ * 只服务于审批提示的展示（决定写文件提示里要不要加"覆盖"），
+ * 因此逃逸出工作区或路径非法一律按"不存在"处理，不影响真正的写入校验
+ * （真正的校验在 `resolveInsideWorkspace`）。
+ */
+export function workspaceFileExists(
+  workspaceRoot: string,
+  relativePath: string,
+): boolean {
+  if (typeof relativePath !== "string" || relativePath.trim() === "") {
+    return false;
+  }
+  try {
+    const root = resolve(workspaceRoot);
+    const target = resolve(root, relativePath);
+    const rel = relative(root, target);
+    if (rel === ".." || rel.startsWith("..") || isAbsolute(rel)) {
+      return false;
+    }
+    return existsSync(target);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 信任模式变更回执。
+ *
+ * `/trust` 与确认时的 `a` 走同一份文案：两者是同一个开关的两条入口，
+ * 分开写迟早会说辞不一致。
+ */
+export function printTrustNotice(trusted: boolean): void {
+  console.log(
+    trusted
+      ? chalk.yellow(
+          "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n",
+        )
+      : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
+  );
+}
 
 /**
  * 只读、无副作用的工具，免确认。

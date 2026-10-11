@@ -75,17 +75,19 @@ describe("helpEntries 排版", () => {
 });
 
 describe("清单不再分叉：注册表、实现与文档必须互相覆盖", () => {
-  const replSource = repoFile(join("src", "cli", "repl.ts"));
+  // 分派分支已从 repl.ts 挪到 dispatch.ts：这里跟到"命令真正被处理的地方"，
+  // 否则挪文件之后这条用例会退化成"repl.ts 里有没有这个字符串"
+  const dispatchSource = repoFile(join("src", "cli", "dispatch.ts"));
   const readme = repoFile("README.md");
   const interactionDoc = repoFile(join("docs", "cli-interaction.md"));
 
-  it("注册表中的每条命令在 repl.ts 里确有分派分支", () => {
-    assert.ok(replSource.length > 0, "应能从仓库读到 repl.ts");
+  it("注册表中的每条命令在 dispatch.ts 里确有分派分支", () => {
+    assert.ok(dispatchSource.length > 0, "应能从仓库读到 dispatch.ts");
     for (const spec of COMMANDS) {
       const token = `"/${commandName(spec.usage)}`;
       assert.ok(
-        replSource.includes(token),
-        `${spec.usage} 在 /help 里列着，但 repl.ts 里找不到处理分支`,
+        dispatchSource.includes(token),
+        `${spec.usage} 在 /help 里列着，但 dispatch.ts 里找不到处理分支`,
       );
     }
   });

@@ -33,7 +33,7 @@
 | A | 正确性：预算突破、取消不感知、失败语义 | `subagent.ts`、`subagentTool.ts` | **立即做** ✅ 已落地 |
 | B | 成本护栏：整体超时、回传总量、token 预算 | `subagent.ts`、`protocol.ts` | **立即做** ✅ B1/B2 已落地 |
 | C | 结论质量：判定口径、提示与能力对齐、注入项目规则 | `subagent.ts`、`index.ts` | 建议做 ✅ C1~C3 已落地 |
-| D | 可观测：卡片层级、审批摘要、trace 落盘 | `render.ts`、`approval.ts`、`repl.ts` | 建议做 ✅ 已落地 |
+| D | 可观测：卡片层级、审批摘要、trace 落盘 | `render.ts`、`approval.ts`、`toolEvents.ts` | 建议做 ✅ 已落地 |
 | E | 一致性与清理：归一口径、删重复实现 | `subagent.ts`、`roles.ts`、`subagentTool.ts` | 可选，但别拖太久 ✅ 已落地 |
 
 ---
@@ -238,7 +238,7 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
 
 1. `protocol.ts` 的 `tool_execution_start` / `tool_execution_end` 追加可选 `identity?: AgentIdentity`（追加字段，不破坏既有 switch）；
 2. `loop.ts` 发事件时带上 `options.identity`；
-3. `ToolCallView` 加可选 `identity`，`repl.ts` 的 `printToolInfo` 从事件透传；
+3. `ToolCallView` 加可选 `identity`，`toolEvents.ts` 的 `printToolInfo` 从事件透传；
 4. `renderToolCall` 用与 `renderSubAgentHeader` 相同的缩进量（`"  ".repeat(depth)`），保持一张卡片的视觉层级一致。
 
 ### D2 `task` 的审批摘要（建议做）
@@ -289,7 +289,7 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
 
 - `SubAgentSupervisor` 的 `onEvent` / `emit` 从未被调用（事件实际由 `runSubAgent` 自己的 emit 发出）：删或接上。
 - `MUTATING_TOOL_NAMES` 导出后无人消费。
-- `SubAgentRuntime.parentId` 恒为 `null`（`repl.ts` 写死）。子再派孙时 parentId 会错记成主 Agent。当前被 `MAX_SUBAGENT_DEPTH = 1` 挡住不可达，但**放开深度之前必须先修**——把 `parentId` 随委派链下传（runtime 每层的 `task` 工具携带自己的 agentId）。
+- `SubAgentRuntime.parentId` 恒为 `null`（`turn.ts` 写死）。子再派孙时 parentId 会错记成主 Agent。当前被 `MAX_SUBAGENT_DEPTH = 1` 挡住不可达，但**放开深度之前必须先修**——把 `parentId` 随委派链下传（runtime 每层的 `task` 工具携带自己的 agentId）。
 
 ---
 

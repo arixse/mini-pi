@@ -12,10 +12,10 @@
 - **新增**: 读取 AGENTS.md 文件作为固定上下文
 
 ### 2. 更新 REPL 命令
-**文件**: `src/cli/repl.ts`
+**文件**: `src/cli/dispatch.ts`（分派）、`src/cli/session.ts`（`/new` 的实现）
 
 - 添加 `/new` 命令处理
-- 更新帮助信息
+- 更新帮助信息（`src/cli/commands.ts` 的注册表 + `src/cli/help.ts`）
 - 添加 `onNewSession` 回调函数
 
 ### 3. 更新 CLI 入口

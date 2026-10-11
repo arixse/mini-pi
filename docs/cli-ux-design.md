@@ -296,7 +296,7 @@ agent 是否基于错误或过期的信息做决策。这是可信度问题，�
 
 ### 6.2 轮次脚注
 
-> **状态：已实现**（`repl.ts` 的 `formatTurnFooter`）。
+> **状态：已实现**（`turn.ts` 的 `formatTurnFooter`）。
 
 每轮结束时打印一行 dim 脚注（成本与压缩预期可见）：
 

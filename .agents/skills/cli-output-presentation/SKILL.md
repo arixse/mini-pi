@@ -122,7 +122,7 @@ pnpm typecheck
 pnpm test
 npx tsx --test src/cli/render.test.ts
 npx tsx --test src/cli/status.test.ts
-npx tsx --test src/cli/repl.test.ts
+npx tsx --test src/cli/toolEvents.test.ts
 ```
 
 验证「测试能抓住回归」的最短路径：把修好的那一处临时改回旧写法

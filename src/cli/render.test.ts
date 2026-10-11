@@ -10,6 +10,7 @@ import {
   ToolCallView,
   createRenderContext,
   diffLines,
+  followTerminalWidth,
   displayWidth,
   formatBytes,
   isFailedCall,
@@ -1078,5 +1079,42 @@ describe("工具卡片的层级缩进", () => {
         `行宽 ${displayWidth(line)} 超过 ${ctx.width}：${JSON.stringify(line)}`,
       );
     }
+  });
+});
+
+describe("followTerminalWidth", () => {
+  it("立即同步一次宽度，并随 resize 事件更新同一份上下文", () => {
+    const listeners = new Map<string, () => void>();
+    const stdout = {
+      columns: 70,
+      on: (event: string, fn: () => void) => {
+        listeners.set(event, fn);
+      },
+      off: (event: string) => {
+        listeners.delete(event);
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    const width = { width: 80, style: {}, ascii: false } as unknown as RenderContext;
+    const unfollow = followTerminalWidth(width, stdout);
+    assert.strictEqual(width.width, 70, "应立刻同步一次，而不是等第一次 resize");
+
+    stdout.columns = 120;
+    listeners.get("resize")?.();
+    assert.strictEqual(width.width, 120);
+
+    unfollow();
+    assert.strictEqual(listeners.size, 0, "取消订阅后不应留下监听器");
+  });
+
+  it("探测不到宽度时回退到 80 列", () => {
+    const stdout = {
+      columns: undefined,
+      on: () => {},
+      off: () => {},
+    } as unknown as NodeJS.WriteStream;
+    const width = { width: 100, style: {}, ascii: false } as unknown as RenderContext;
+    followTerminalWidth(width, stdout);
+    assert.strictEqual(width.width, 80);
   });
 });

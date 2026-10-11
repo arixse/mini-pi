@@ -167,6 +167,6 @@ resolve 后仍在工作区内——守卫放行才是正确行为，断言越界
 pnpm typecheck
 pnpm test
 pnpm check                          # typecheck + test
-npx tsx --test src/agent/tools.test.ts
+npx tsx --test "src/agent/tools/*.test.ts"
 npx tsx --test src/cli/approval.test.ts
 ```
