@@ -1,7 +1,7 @@
 # Day 20 - 修正 NPM_TOKEN 获取方式（传统令牌已下线）
 
 > 日期：**2026-10-12**
-> Commit 范围：`b574175` 起（含本篇日志，共 4 个提交）
+> Commit 范围：`b574175` 起（含本篇日志，共 5 个提交）
 > 相关文档：[发布到 npm](../docs/publishing.md)
 > 上一篇：[Day 19 - 展示层收尾、大文件拆分与工程化收口](./day19.md)
 
@@ -97,6 +97,51 @@ Day 19 里我写了一句"包名可用（404 已验证）"—— **那句话是�
 
 ---
 
+## 追加：启动版本号与 `--version`（commit `f69038a`）
+
+用户提出"输入 mini-pi 的时候打印当前版本号"。听起来是一行 `console.log`，
+真正要决定的只有一件事：**版本号从哪来**。
+
+### 关键取舍：读 package.json，不在代码里抄一份
+
+发布时 CI 的顺序是 `install → pnpm check → build:cli → 定版本 → 发布`
+（见 `docs/publishing.md`）。也就是说门禁跑在"把 tag 的版本号回写 package.json"
+**之前**。若在 `version.ts` 里写死常量，再写一条"常量等于 package.json"的测试——
+那条测试在 CI 里永远绿，而用户装到的 CLI 报的是仓库里的旧号。
+这类"验证跑在被测事实成立之前"的坑，比写错版本号本身更难发现。
+
+所以版本号必须**读**出来：`import pkg from "../../package.json"`，
+esbuild 打包时把 JSON 内联进 bundle，用户机器上看到的就是真正发出的版本。
+
+### 顺手解决了一个已记录在案的痛点
+
+`docs/publishing.md` 踩坑 5 原本写着：CLI 没有 `--version`，`main()` 会起 REPL
+占住 stdin，CI 冒烟只能做 `node --check`。既然版本号已经在手上，
+就让它**在任何初始化之前**命中并返回：
+
+```ts
+export async function main(argv: string[] = process.argv.slice(2)) {
+  if (wantsVersion(argv)) { printVersion(); return; }
+  ...
+}
+```
+
+- `argv` 做成可注入参数：直接读 `process.argv` 的话，测试进程自己的参数会混进来。
+- `printVersion()` **不带 ANSI**：这行要能直接进 CI 日志、贴进 issue。
+- `bin/mini-pi.js`（tsx 免安装入口）原样转发参数，否则它会退化成"只能正常启动"。
+- CI 冒烟从"只看语法"升级为真跑产物并断言 `mini-pi v$VERSION`，
+  顺带验到"定版本 → 构建"的顺序没错。
+
+启动画面则把 `v1.0.0` 放在 logo 下方（窄终端退化成单行时也保留）——
+排障与报 bug 时第一个要问的就是它，只在 `--version` 里给的话日常根本看不到。
+
+### 需要 tsconfig 开一个开关
+
+`resolveJsonModule: true`。之前项目里没有任何 JSON import，
+`tcs --noEmit` 会直接报找不到模块类型。
+
+---
+
 ## 结果 Result
 
 `docs/publishing.md` 与 README 均已指向细粒度令牌并标注四个坑；
@@ -121,6 +166,15 @@ Day 19 里我写了一句"包名可用（404 已验证）"—— **那句话是�
 
 3. **发现方案层面的更优选项，先告知再动手。** npm 官方已推荐 Trusted Publishing
    （OIDC，免令牌免轮换），换与否是用户的决定，不该以"顺手改一下"的名义替他做。
+
+4. **当心"验证跑在被测事实成立之前"。** 版本号若写成常量再断言它等于 package.json，
+   那条测试永远绿而事实永远错 —— CI 的门禁排在"定版本"之前，
+   被验的东西在那一刻还没确定。判断一句断言有没有用，
+   先问它被执行的那一刻，它要验的事实是否已经成立。
+
+5. **CLI 的"问一句就走"参数必须在最前面 return。** `--version` 若排在初始化之后，
+   它会去建 provider、读 settings、加载会话，最后起 REPL 占住 stdin；
+   在 CI 里的表现不是报错，是挂到超时。
 
 ---
 
