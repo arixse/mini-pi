@@ -18,12 +18,44 @@ git push origin v1.0.1
 
 ## 首次配置：NPM_TOKEN
 
-1. npmjs.com → Access Tokens → 生成 **Automation** 类型令牌（Automation 绕过 2FA，
-   适合 CI；Publish 类型带 2FA 会在 CI 卡住）。
-2. GitHub 仓库 → Settings → Secrets and variables → Actions → New repository secret，
-   名字必须叫 `NPM_TOKEN`。
+> **npm 已于 2025 年 11 月移除 Legacy（传统）令牌**，网上大量教程里的
+> 「生成 Automation 类型令牌」已经不存在了。现在唯一可选的是
+> **Granular Access Token（细粒度访问令牌）**。
+
+### 1. 在 npm 生成令牌
+
+登录 https://www.npmjs.com → 右上角头像 → **Access Tokens** →
+**Generate New Token** → **Granular Access Token**，然后：
+
+| 字段 | 怎么填 | 为什么 |
+|------|--------|--------|
+| Token name | 起个名字，如 `mini-pi-gh-actions` | 列表里只显示首尾四位，靠名字认 |
+| **Bypass two-factor authentication** | **必须勾选**（默认不勾） | 不勾的话 CI 里 `npm publish` 会等一个没人能输的动态验证码，直接卡死 |
+| Allowed IP Ranges | **留空** | GitHub Actions 的出口 IP 是动态范围，限制了反而发不出去 |
+| Packages and scopes → Permissions | `Read and write (publish and stage)` | **别选 stage only** —— 那个只能暂存，还要人工在网页点 promote，CI 等于发不出去 |
+| Packages and scopes → Select Packages | `Only select packages...` → 勾 `mini-pi` | 最小权限，别给 All Packages |
+| Expiration | 建议 90 天（最少是"未来 1 天"） | 到期后发布会失败，记得轮换 |
+
+点 **Generate Token** 后**立刻复制** —— 这个串只在生成时完整显示一次，
+之后列表里只有首尾四位，忘了只能重生成。
+
+### 2. 存进 GitHub
+
+仓库 Settings → Secrets and variables → Actions → New repository secret，
+名字必须叫 **`NPM_TOKEN`**（workflow 里读的是这个名字）。
 
 没配这个 secret 时，工作流会在预检阶段报错退出，不会走到 publish。
+
+### 令牌过期或泄露
+
+- **过期**：重新生成一个，覆盖同名 secret 即可（工作流不用改）。
+  建议在日历上给到期日设个提醒，否则表现为某次发布突然 401。
+- **泄露**：立刻在 npm 的 Access Tokens 页面 **Revoke**，然后重生成、
+  覆盖 GitHub secret。撤销即时生效。
+
+> 顺带一提：npm 官方现在推荐 CI 发布改用 **Trusted Publishing**（OIDC），
+> GitHub Actions 已支持 —— 免令牌、免轮换，且自带 provenance。
+> 本项目 workflow 已经带了 `id-token: write`，切换成本主要在 npm 侧的包配置。
 
 ## 版本号规则
 

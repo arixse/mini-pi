@@ -190,7 +190,10 @@ Node 由 `.nvmrc` 指定，CI 读同一份。
 git tag v1.0.1 && git push origin v1.0.1
 ```
 
-首次发布前需在仓库 Settings → Secrets 里配 `NPM_TOKEN`（npm 的 Automation 令牌）。
+首次发布前需在仓库 Settings → Secrets 里配 `NPM_TOKEN`：
+npm 的**细粒度访问令牌**（Granular Access Token，传统令牌已于 2025-11 移除），
+并**务必勾选绕过 2FA**，否则 CI 里会卡在等一个没人能输的动态验证码。
+详见 [发布到 npm](docs/publishing.md)。
 工作流是 `.github/workflows/publish.yml`；包内容由 `package.json` 的 `files`
 白名单决定，目前是 `bin/mini-pi-cli.cjs` + `README.md` 两个文件（约 1.7MB，
 即未压缩的单文件 bundle）—— CLI 是 esbuild 自包含 bundle，不需要带 `src` 源码。
