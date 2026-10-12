@@ -115,7 +115,24 @@ lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled
   3. 断言要覆盖**只有 start 才提供**的信息：标题里的路径/命令、diff 的增删行、
      非零耗时。只断言「出现了某个图标」抓不住这类缺陷。
 
-## 八、验证命令
+## 八、版本号与「问一句就走」的输出
+
+- **启动画面必须带版本号**（`v1.0.0`，紧跟 logo，窄终端退化成单行时也保留）：
+  排障与报 bug 第一个要问的就是「你装的哪个版本」，只在 `--version` 里给的话
+  日常启动根本看不到。
+- **`mini-pi --version` 这类输出不带 ANSI**：它要直接进 CI 日志、贴进 issue、
+  被脚本等号比较。混进颜色码三边都读不了。测试直接断言整行文本相等
+  （并显式断言不含 `\u001b[`），比「包含版本号」更能防住误加 chalk。
+- **`--version` 必须在任何初始化之前 return**：否则它会去建 provider、读 settings、
+  加载会话，最后起 REPL 占住 stdin —— 在 CI 里的表现不是报错，是挂到超时。
+  把 `argv` 做成 `main()` 的可注入参数，这个分支才测得动（直接读 `process.argv`
+  会把测试进程自己的参数混进来）。
+- **版本号从 `package.json` 读，不在代码里抄常量**：CI 顺序是
+  `check → build → 定版本`，门禁跑在定版本**之前**，写死常量 + 「等于 package.json」
+  的断言会永远绿，而用户装到的是仓库里的旧号。测试要用另一条路径
+  （`readFileSync`）读 package.json 比对，跟着被测模块 import 同一份 JSON 就测不出这个错。
+
+## 九、验证命令
 
 ```bash
 pnpm typecheck
