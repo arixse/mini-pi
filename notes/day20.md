@@ -1,7 +1,7 @@
 # Day 20 - 修正 NPM_TOKEN 获取方式（传统令牌已下线）
 
 > 日期：**2026-10-12**
-> Commit 范围：`b574175` 起（含本篇日志，共 2 个提交）
+> Commit 范围：`b574175` 起（含本篇日志，共 4 个提交）
 > 相关文档：[发布到 npm](../docs/publishing.md)
 > 上一篇：[Day 19 - 展示层收尾、大文件拆分与工程化收口](./day19.md)
 
@@ -52,10 +52,58 @@ workflow 不用改；泄露要在 npm 侧 Revoke（即时生效）。
 
 ---
 
+## 追加：发布 403 与包名迁移（commit `3bd88ab`）
+
+按上面的指引配好令牌、真的去发，CI 红了：
+
+```
+npm error 403 Forbidden - PUT https://registry.npmjs.org/mini-pi
+npm error Package name too similar to existing package minipi;
+try renaming your package to '@minipi/mini-pi' and publishing with
+'npm publish --access=public' instead
+```
+
+### 事实
+
+- `minipi` 存在，维护者是 pi0（unjs 作者），2026-01-31 的 0.0.0 空占位包，不是我们的。
+- `mini-pi` 查 registry 是 **404（未被占用）**，npm 照样不让注册。
+- 用户的 npm 用户名恰好是 `minipi`，于是官方建议的 scope 正好落在自己的命名空间里，
+  选这条可以立刻发。
+
+### 行动
+
+包名 `mini-pi` → **`@minipi/mini-pi`**，连带修了三处只有在带 scope 后才成立的地方：
+
+1. **tarball 名不等于包名**：`@minipi/mini-pi` 打包出来是
+   `minipi-mini-pi-<ver>.tgz`（去 `@`、`/` 换 `-`）。原先拿包名拼路径会拼出
+   带斜杠的地址，打包校验那步必然失败。
+2. **scoped 包默认按私有发布**（私有要付费 → 402/403）：除 `publishConfig.access`，
+   publish 命令再显式加 `--access public` 兜一层。
+3. **令牌权限要重来**：细粒度令牌不能改权限，昨天勾的是 `mini-pi`，
+   复用会得到一个新的 403 —— 与名字相似那条长得不像，却容易被当成同一个问题。
+
+已本地复验：打包路径（`minipi-mini-pi-1.0.0.tgz` 正常解包 + `node --check`）、
+预检对该版本号返回 404 放行、`pnpm check` 全绿（87.59 / 91.51 / 92.97）。
+
+### 比"怎么修"更值得写下来的
+
+Day 19 里我写了一句"包名可用（404 已验证）"—— **那句话是错的**。
+404 只能证明没被占用，证明不了允许注册，这两件事 npm 分开判。
+把前者当成后者的证据，等于检查做成了一半还宣称通过。
+
+更深一层：这条规则**只在真正 PUT 时才执行**，本地 `npm pack` / 安装 / dry-run
+全都碰不到它。凡是这类"只有真正执行外部副作用时才生效的规则"，
+本地验证永远不足以证明可行 —— 要么先查它的准入规则，要么就接受第一次会失败。
+
+---
+
 ## 结果 Result
 
-`docs/publishing.md` 与 README 的描述均已指向细粒度令牌并标注四个坑
-（commit `b574175`）。工作流本身未改动。
+`docs/publishing.md` 与 README 均已指向细粒度令牌并标注四个坑；
+包名迁移到 scope 后的三处连带问题已修（commit `b574175` / `3bd88ab`）。
+工作流本身除 tarball 路径、`--access public`、汇总 URL 外未改动。
+
+待执行：重新生成令牌（勾 `@minipi/mini-pi`）→ 覆盖 `NPM_TOKEN` → Actions 手动触发。
 
 ---
 
