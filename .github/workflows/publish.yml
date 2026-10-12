@@ -114,8 +114,12 @@ jobs:
           set -euo pipefail
           PKG="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
+          # tarball 名不等于包名：scoped 包会去掉 @、把 / 换成 -
+          # （@minipi/mini-pi → minipi-mini-pi-<version>.tgz）。直接拿包名拼
+          # 路径会拼出一个带斜杠的地址，tar 必然找不到文件。
+          ARCHIVE="$(node -p "require('./package.json').name.replace(/^@/,'').replace('/','-')")"
           npm pack --pack-destination "$RUNNER_TEMP"
-          TARBALL="$RUNNER_TEMP/$PKG-$VERSION.tgz"
+          TARBALL="$RUNNER_TEMP/$ARCHIVE-$VERSION.tgz"
           mkdir -p "$RUNNER_TEMP/smoke"
           tar -xzf "$TARBALL" -C "$RUNNER_TEMP/smoke"
           PKG_DIR="$RUNNER_TEMP/smoke/package"
@@ -134,7 +138,11 @@ jobs:
 
       - name: Publish
         if: ${{ inputs.dry-run != 'true' }}
-        run: npm publish --provenance
+        # --access public 必须显式给：scoped 包默认按私有发布，
+        # 而私有包要付费，会以 402/403 失败。package.json 的
+        # publishConfig.access 已经配了同一件事，这里再写一遍是双保险 ——
+        # 这一项漏掉的表现是"看起来发出去了、其实是付费墙"。
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -142,5 +150,6 @@ jobs:
         if: ${{ inputs.dry-run != 'true' }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          echo "### mini-pi@$VERSION 已发布" >> "$GITHUB_STEP_SUMMARY"
-          echo "https://www.npmjs.com/package/mini-pi/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          PKG="$(node -p "require('./package.json').name")"
+          echo "### $PKG@$VERSION 已发布" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://www.npmjs.com/package/$PKG/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"

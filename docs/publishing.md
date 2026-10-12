@@ -33,7 +33,7 @@ git push origin v1.0.1
 | **Bypass two-factor authentication** | **必须勾选**（默认不勾） | 不勾的话 CI 里 `npm publish` 会等一个没人能输的动态验证码，直接卡死 |
 | Allowed IP Ranges | **留空** | GitHub Actions 的出口 IP 是动态范围，限制了反而发不出去 |
 | Packages and scopes → Permissions | `Read and write (publish and stage)` | **别选 stage only** —— 那个只能暂存，还要人工在网页点 promote，CI 等于发不出去 |
-| Packages and scopes → Select Packages | `Only select packages...` → 勾 `mini-pi` | 最小权限，别给 All Packages |
+| Packages and scopes → Select Packages | `Only select packages...` → 勾 `@minipi/mini-pi` | 最小权限，别给 All Packages |
 | Expiration | 建议 90 天（最少是"未来 1 天"） | 到期后发布会失败，记得轮换 |
 
 点 **Generate Token** 后**立刻复制** —— 这个串只在生成时完整显示一次，
@@ -77,6 +77,37 @@ git push origin v1.0.1
 `src` 只服务于仓库内开发用的 `bin/mini-pi.js`（走 tsx 跑源码），
 npm 装包的用户用不到，也就没进白名单。
 
+## 包名为什么带 scope
+
+发布到 **`@minipi/mini-pi`**，而不是 `mini-pi`。原因是 npm 的名字保护：
+
+```
+npm error 403 Forbidden - PUT https://registry.npmjs.org/mini-pi
+npm error Package name too similar to existing package minipi;
+try renaming your package to '@minipi/mini-pi' and publishing with
+'npm publish --access=public' instead
+```
+
+要分清两件事：**包没被占用 ≠ 允许注册**。`mini-pi` 在 registry 上查是 404（空的），
+但与已存在的 `minipi` 相似度过高，npm 照样拒绝。那个 `minipi` 是别人（unjs 的 pi0）
+2026-01-31 发的空占位包，动不了。带 scope 后名字落在自己的命名空间里，不再参与这个比较。
+
+几点约束，改包名时要一并注意：
+
+- scope 取的是 **npm 用户名**（本项目恰好与之同名），不能是随便一个前缀。
+- **scoped 包默认按私有发布**，私有要付费 → 会 402/403。
+  所以 `publishConfig.access: "public"` 与 workflow 里的 `--access public` 双保险，
+  两个地方都别删。删掉的后果是"看起来配上了一切，却被付费墙挡住"。
+- **tarball 文件名不等于包名**：`@minipi/mini-pi` 打包出来是
+  `minipi-mini-pi-<version>.tgz`（去掉 `@`、`/` 换成 `-`）。
+  任何拿包名拼 tarball 路径的地方都会因此找不到文件。
+- bin 命令名不受影响，装的仍叫 `mini-pi`：`npm i -g @minipi/mini-pi` → `mini-pi`。
+
+> **已经生成过的令牌要重来一次**：细粒度令牌建好后**不能改权限**，
+> 而之前那个勾的包是 `mini-pi`，现在换成了另一个包名，直接复用会得到
+> 一个新的 403 —— 这次是权限不足，和名字相似那条完全不同，容易看错成"又被名字拦了"。
+> 重新生成一个勾 `@minipi/mini-pi` 的令牌，覆盖 GitHub 上的 `NPM_TOKEN`。
+
 ## 踩过的坑
 
 ### 1. bin 产物被 .gitignore 忽略，却必须进包
@@ -117,7 +148,8 @@ CLI 没有 `--version`，`main()` 会直接起 REPL 占住 stdin。
 
 ## 发布后
 
-- 包页面：https://www.npmjs.com/package/mini-pi
+- 包页面：https://www.npmjs.com/package/@minipi/mini-pi
+  安装：`npm install -g @minipi/mini-pi`，启动：`mini-pi`
 - npm 的 unpublish 只在发布后 72 小时内可用，且限制很多 ——
   发错了版本号就发一个新的修正版本，别指望撤回。
 - 建议同时建 GitHub Release 写变更说明：npm 包页面不会自动带 changelog。

@@ -9,8 +9,8 @@
 完成任务，并在每次写操作前逐次征求确认。
 
 ```bash
-npm install -g mini-pi   # 或从源码跑：pnpm install && pnpm dev:cli
-mini-pi
+npm install -g @minipi/mini-pi   # 或从源码跑：pnpm install && pnpm dev:cli
+mini-pi                          # bin 名不带 scope
 ```
 
 ## 技术栈
@@ -190,6 +190,12 @@ Node 由 `.nvmrc` 指定，CI 读同一份。
 git tag v1.0.1 && git push origin v1.0.1
 ```
 
+包发布为 **`@minipi/mini-pi`**（带 scope），不是 `mini-pi`：npm 判定后者与已存在的
+包 `minipi`（别人的占位包）过于相似，会以 403 拒绝注册。注意这与"包有没有被人占"
+是两回事 —— `mini-pi` 本身是空的（404 查不到），但 npm 仍然不让用。
+scope 取的是 npm 用户名，所以安装命令是 `npm install -g @minipi/mini-pi`，
+而 **bin 命令名保持 `mini-pi`**，不带 scope。
+
 首次发布前需在仓库 Settings → Secrets 里配 `NPM_TOKEN`：
 npm 的**细粒度访问令牌**（Granular Access Token，传统令牌已于 2025-11 移除），
 并**务必勾选绕过 2FA**，否则 CI 里会卡在等一个没人能输的动态验证码。
@@ -208,8 +214,8 @@ npm 的**细粒度访问令牌**（Granular Access Token，传统令牌已于 20
 安装使用：
 
 ```bash
-npm install -g mini-pi
-mini-pi
+npm install -g @minipi/mini-pi
+mini-pi                        # bin 名不带 scope
 ```
 
 ## 安全模型

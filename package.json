@@ -1,5 +1,5 @@
 {
-  "name": "mini-pi",
+  "name": "@minipi/mini-pi",
   "version": "1.0.0",
   "description": "Mini Pi Code Agent - AI编程助手",
   "bin": {
