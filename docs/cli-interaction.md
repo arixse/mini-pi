@@ -48,6 +48,9 @@ pnpm link:cli
 
 # 之后在任意项目目录下执行
 mini-pi
+
+# 只看版本号就退出（不进 REPL，不读配置）
+mini-pi --version      # 或 -v → "mini-pi v1.2.3"
 ```
 
 > `bin/mini-pi-cli.cjs` 属于构建产物，已加入 `.gitignore`；
@@ -61,6 +64,10 @@ mini-pi
 
 CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
+0. **解析启动参数**：命中 `--version` / `-v` 时打印 `mini-pi v<版本>` 并**立即返回**——
+   不建 provider、不读 settings、不加载会话，更不会起 REPL。
+   版本号来自 `package.json`（`src/cli/version.ts`），发布时由 CI 回写后再打包，
+   所以 CLI 报的就是真正发出去的那个版本。
 1. **确定工作目录**：`workspaceRoot = process.cwd()`，后续所有工具操作都被限制在该目录内。
 2. **初始化服务**：
    - `ModelProviderService`：注册模型供应商（`minimax-cn` / `deepseek` / `openai` / `mimo` / `kimi` / `zhipu` / `anthropic`）。
@@ -76,7 +83,8 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览，并在控制台打印已发现的 Skill 名称。
 9. **构建 System Prompt**：基础提示词（含工具使用 / 代码风格 / 错误处理指南）
    + 自动探测的项目技术栈 + 固定上下文 + Skill 摘要。
-10. **打印 Logo 与欢迎信息**：`printLogo()` + `printWelcome(providerName, modelName)`。
+10. **打印 Logo、版本号与欢迎信息**：`printLogo()`（版本号紧跟 logo，窄终端退化成单行时也保留）
+    + `printWelcome(providerName, modelName)`。
 11. **进入 REPL**：`startRepl()`。
 
 ### 3.1 System Prompt 组成
@@ -121,6 +129,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
   ██║╚██╔╝██║██║██║╚██╗██║██║    ██╔═══╝ ██║
   ██║ ╚═╝ ██║██║██║ ╚████║██║    ██║     ██║
   ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝    ╚═╝     ╚═╝
+  v1.2.3
 
 ────────────────────────────────────────────────────────────
   Provider: deepseek
@@ -941,7 +950,7 @@ CLI 使用的回调：
 $ cd ~/my-project
 $ mini-pi
 
-（打印 Logo 与欢迎信息）
+（打印 Logo + 版本号 v1.2.3 与欢迎信息）
 [Skills]
  stock-analysis
 

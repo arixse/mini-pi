@@ -128,10 +128,15 @@ jobs:
           # 最关键的一条：bin 产物被 .gitignore 忽略，靠 package.json 的
           # files 白名单才进得了包。files 哪天被误删，这里立刻红。
           test -f "$CLI"
-          # 只能语法检查，不能直接运行：main() 会起 REPL 占住 stdin，
-          # CI 会一直挂到超时。
           node --check "$CLI"
           head -1 "$CLI" | grep -q '^#!/usr/bin/env node'
+
+          # 真跑一次产物：--version 在任何初始化之前打印并返回，不会起 REPL
+          # 占住 stdin（此前只能做语法检查，包能不能跑全靠推断）。
+          # 同时校验版本号确实是"定版本"那一步写进去的那一个。
+          OUT="$(node "$CLI" --version)"
+          echo "版本输出：$OUT"
+          test "$OUT" = "mini-pi v$VERSION"
 
           echo "包内容：$(tar -tzf "$TARBALL" | wc -l) 个文件，$(du -h "$TARBALL" | cut -f1)"
           tar -tzf "$TARBALL" | grep -E '^package/(bin|README)' | sed 's/^/  /'

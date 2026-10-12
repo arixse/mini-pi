@@ -23,7 +23,8 @@ import {
   resolveContextWindow,
 } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
-import { printLogo, printResumedSession, printWelcome } from "./ui";
+import { printLogo, printResumedSession, printVersion, printWelcome } from "./ui";
+import { wantsVersion } from "./version";
 import chalk from "chalk";
 
 /**
@@ -139,7 +140,24 @@ async function tryCreateDefaultSettings(
   return undefined;
 }
 
-export async function main() {
+/**
+ * CLI 主流程。
+ *
+ * `argv` 可注入是为了让 `--version` 这类"问一句就走"的路径能被单测：
+ * 直接读 `process.argv` 的话，测试进程自己的参数会混进来。
+ */
+export async function main(argv: string[] = process.argv.slice(2)) {
+  /**
+   * `--version` 必须在任何初始化之前处理。
+   *
+   * 它只是问个版本号，不该去建 provider、读 settings、加载历史会话；
+   * 更不能往下走 —— startRepl() 会占住 stdin，CI 里会一直挂到超时。
+   */
+  if (wantsVersion(argv)) {
+    printVersion();
+    return;
+  }
+
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();

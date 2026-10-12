@@ -140,11 +140,15 @@ CI 用 `cancel-in-progress: true` 省并发，发布不能这么干：
 publish 传到一半被取消，registry 上这个版本号已经被占住，重跑只会 403。
 所以发布用固定 concurrency group 排队，不取消。
 
-### 5. 冒烟只能做语法检查
+### 5. 冒烟曾经只能做语法检查
 
-CLI 没有 `--version`，`main()` 会直接起 REPL 占住 stdin。
-在 CI 里真跑它会挂到超时。所以校验是：`node --check` + 检查 shebang +
-断言文件存在，不实际执行。
+CLI 此前没有 `--version`，`main()` 会直接起 REPL 占住 stdin，
+在 CI 里真跑它会挂到超时，只能做 `node --check` + 检查 shebang + 断言文件存在。
+
+现在 `mini-pi --version` 会在**任何初始化之前**打印版本并返回，CI 因此可以
+真的执行一遍产物（`node bin/mini-pi-cli.cjs --version`），而不只是看它的语法。
+这同时顺带验到一件事：版本号是打包时从 `package.json` 内联的，
+"定版本"那一步跑在构建之前，所以冒烟输出的版本就是即将发布的那一个。
 
 ## 发布后
 

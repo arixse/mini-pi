@@ -3,6 +3,7 @@ import { AgentMessage } from "../shared/protocol";
 import { messageText } from "../agent/message";
 import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "../provider";
 import { commandDescription } from "./commands";
+import { APP_VERSION, formatVersion } from "./version";
 import { DEFAULT_TERMINAL_WIDTH, truncateToWidth } from "./width";
 
 /** 分隔线的宽度上下限：再宽没有信息量，再窄就只剩装饰 */
@@ -48,18 +49,35 @@ export const LOGO_LINES: readonly string[] = [
  *
  * 大 logo 需要 48 列，窄终端上会被折成一堆乱码；此时改用单行文字，
  * 宁可朴素也不要把启动画面画坏。
+ *
+ * 版本号紧跟 logo：它是排障（"我装的到底是哪个版本"）与反馈 bug 时
+ * 第一个要问的信息，只在 `--version` 里给的话，日常启动根本看不到。
  */
 export function printLogo(
   width: number = process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
+  version: string = APP_VERSION,
 ): void {
+  const stamp = chalk.dim(`  ${formatVersion(version)}`);
   if (width < MIN_LOGO_WIDTH) {
     console.log(chalk.cyan("  mini-pi"));
+    console.log(stamp);
     return;
   }
   console.log("");
   for (const line of LOGO_LINES) {
     console.log(chalk.cyan(line));
   }
+  console.log(stamp);
+}
+
+/**
+ * `mini-pi --version` 的输出。
+ *
+ * **不带 ANSI**：这一行是给人和脚本直接读取的（`mini-pi --version`
+ * 进 CI 日志、贴进 issue），混进颜色码两边都读不了。
+ */
+export function printVersion(version: string = APP_VERSION): void {
+  console.log(`mini-pi ${formatVersion(version)}`);
 }
 
 export function printWelcome(

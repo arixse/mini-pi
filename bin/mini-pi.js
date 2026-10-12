@@ -7,6 +7,9 @@
  * 而不是 src/cli/index.ts —— 后者只导出函数，直接运行不会有任何输出。
  *
  * 用法：node bin/mini-pi.js
+ *
+ * 命令行参数原样转发（`--version` 等"问一句就走"的参数要靠它传进去），
+ * 不转发的话这里会退化成"只能正常启动"而参数被静默丢掉。
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -25,7 +28,7 @@ if (!existsSync(tsxPath)) {
 }
 
 try {
-  execFileSync(process.execPath, [tsxPath, cliPath], {
+  execFileSync(process.execPath, [tsxPath, cliPath, ...process.argv.slice(2)], {
     stdio: "inherit",
     cwd: process.cwd(),
   });

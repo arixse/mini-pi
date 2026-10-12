@@ -8,10 +8,12 @@ import {
   printLogo,
   printResumedSession,
   printSeparator,
+  printVersion,
   printWelcome,
   separatorLine,
 } from "./ui";
 import { commandDescription } from "./commands";
+import { APP_VERSION } from "./version";
 import { displayWidth } from "./width";
 import { AgentMessage } from "../shared/protocol";
 
@@ -272,5 +274,62 @@ describe("printLogo", () => {
         `logo 行超出声明宽度：${displayWidth(line)}`,
       );
     }
+  });
+
+  it("启动画面带版本号：排障与报 bug 第一个要问的就是它", () => {
+    const captured = captureConsoleLog();
+    try {
+      printLogo(100, "1.2.3");
+    } finally {
+      captured.restore();
+    }
+    const text = captured.lines.join("\n");
+    assert.ok(text.includes("v1.2.3"), `宽终端应显示版本号：${text}`);
+  });
+
+  it("窄终端退化为单行后仍然带版本号", () => {
+    const captured = captureConsoleLog();
+    try {
+      printLogo(MIN_LOGO_WIDTH - 1, "1.2.3");
+    } finally {
+      captured.restore();
+    }
+    const text = captured.lines.join("\n");
+    assert.ok(text.includes("mini-pi"));
+    assert.ok(text.includes("v1.2.3"), `窄终端也该显示版本号：${text}`);
+  });
+
+  it("不传版本时取当前版本", () => {
+    const captured = captureConsoleLog();
+    try {
+      printLogo(100);
+    } finally {
+      captured.restore();
+    }
+    assert.ok(captured.lines.join("\n").includes(`v${APP_VERSION}`));
+  });
+});
+
+describe("printVersion", () => {
+  it("输出不带 ANSI：这行要能直接进 CI 日志与脚本", () => {
+    const captured = captureConsoleLog();
+    try {
+      printVersion("1.2.3");
+    } finally {
+      captured.restore();
+    }
+    const text = captured.lines.join("\n");
+    assert.strictEqual(text, "mini-pi v1.2.3");
+    assert.ok(!text.includes("\u001b["), `不该带颜色：${JSON.stringify(text)}`);
+  });
+
+  it("不传版本时取当前版本", () => {
+    const captured = captureConsoleLog();
+    try {
+      printVersion();
+    } finally {
+      captured.restore();
+    }
+    assert.strictEqual(captured.lines.join("\n"), `mini-pi v${APP_VERSION}`);
   });
 });

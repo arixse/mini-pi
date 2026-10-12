@@ -1,6 +1,10 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { createModelFromSettings, resolveContextWindowFromSettings } from "./index";
+import {
+  createModelFromSettings,
+  main,
+  resolveContextWindowFromSettings,
+} from "./index";
 import { ModelProviderService } from "../provider";
 import { ProviderStore } from "../provider/provider-store";
 import { SettingsStore } from "../provider/settings-store";
@@ -8,6 +12,7 @@ import { existsSync } from "node:fs";
 import { unlink, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { APP_VERSION } from "./version";
 
 describe("createModelFromSettings", () => {
   let testDir: string;
@@ -139,5 +144,40 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(result.model, null);
     assert.strictEqual(result.providerName, null);
     assert.strictEqual(result.modelName, null);
+  });
+});
+
+describe("main --version", () => {
+  /** 捕获打印（main 只写 console.log） */
+  function capture(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    return { lines, restore: () => void (console.log = original) };
+  }
+
+  it("只打印版本就返回，不初始化任何服务、不起 REPL", async () => {
+    const captured = capture();
+    try {
+      // 起 REPL 会占住 stdin，这个用例会直接挂死 —— 所以它同时也是
+      // "版本分支必须在最前面 return" 的回归
+      await main(["--version"]);
+    } finally {
+      captured.restore();
+    }
+    const text = captured.lines.join("\n");
+    assert.strictEqual(text, `mini-pi v${APP_VERSION}`);
+  });
+
+  it("-v 与 --version 等价", async () => {
+    const captured = capture();
+    try {
+      await main(["-v"]);
+    } finally {
+      captured.restore();
+    }
+    assert.strictEqual(captured.lines.join("\n"), `mini-pi v${APP_VERSION}`);
   });
 });
