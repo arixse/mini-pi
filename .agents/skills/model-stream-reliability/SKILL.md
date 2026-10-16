@@ -143,8 +143,14 @@ res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "半句" } }] 
 ```bash
 pnpm typecheck
 pnpm test
-npx tsx --test src/agent/model.test.ts
-npx tsx --test src/agent/model.streaming.test.ts
+npx tsx --test "src/agent/model/*.test.ts"
+
+# 拆分后按职责分文件，排障时可直接单跑对应的一块：
+#   errors.test.ts  取消 / 上游静默 / 已外发正文 的判定
+#   retry.test.ts   退避与 Retry-After
+#   stream.test.ts  看门狗与分片拼装
+#   openai.streaming.test.ts  真 SDK + 本地 SSE 的端到端流式
+# 改动 model/ 下任一文件后，整块一起跑（子模块间是相互依赖的判定链）
 ```
 
 **测试隔离提醒**：涉及临时目录的用例不要只用 `Date.now()` 命名。

@@ -2,8 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import { createOpenAIModel, DEFAULT_MAX_TOKENS } from "./model";
-import { createTextContent } from "./message";
+import { createOpenAIModel } from "./openai";
+import { DEFAULT_MAX_TOKENS } from "./config";
+import { createTextContent } from "../message";
 
 /**
  * OpenAI 兼容路径的流式集成测试。

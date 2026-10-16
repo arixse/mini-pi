@@ -40,7 +40,7 @@
 | 既有资产 | 位置 | 复用方式 |
 | --- | --- | --- |
 | Agent 主循环 | `src/agent/loop.ts` → `runAgentLoop(options)` | **直接复用**：子 Agent 就是一次新的 `runAgentLoop` 调用，传不同的 `systemPrompt` / `messages` / `tools` / `maxTurns`，不写第二套循环 |
-| 模型接口 | `src/agent/model.ts` → `LlmModel.complete()` | 子 Agent 可注入不同模型（便宜模型做探索） |
+| 模型接口 | `src/agent/model/` → `LlmModel.complete()` | 子 Agent 可注入不同模型（便宜模型做探索） |
 | 工具注册表 | `src/agent/tools/registry.ts` → `ToolRegistry` / `createToolRegistry()` | 子 Agent 用**过滤后的子集**；只读常量 `READ_ONLY_TOOL_NAMES` 仍是唯一事实来源 |
 | 审批钩子 | `src/cli/approval.ts` → `createToolApproval()` 产出 `BeforeToolCall` | 子 Agent 的工具调用走**同一个** `beforeToolCall`，不另开后门 |
 | 事件协议 | `src/shared/protocol.ts` → `AgentEvent` | 新增子 Agent 事件（追加可选字段，不改现有字段） |

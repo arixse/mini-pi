@@ -19,7 +19,7 @@ mini-pi/
 ├── src/
 │   ├── agent/           # AI 代理核心逻辑
 │   │   ├── loop.ts      # 主循环
-│   │   ├── model.ts     # 模型封装
+│   │   ├── model/       # 模型封装（index.ts 汇总导出；config / types / errors / retry / stream / response / openai / anthropic / factory）
 │   │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
 │   │   └── sessionStore.ts # 会话存储
 │   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）

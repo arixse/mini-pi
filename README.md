@@ -35,7 +35,16 @@ mini-pi/
 ├── src/
 │   ├── agent/          # AI 代理核心逻辑
 │   │   ├── loop.ts     # 主循环（Agent Loop）
-│   │   ├── model.ts    # 模型封装（OpenAI/Anthropic 双协议、超时与重试、流式看门狗）
+│   │   ├── model/      # 模型封装（OpenAI/Anthropic 双协议、超时与重试、流式看门狗）
+│   │   │   ├── config.ts    # 时限与输出上限（以及非法值的回落）
+│   │   │   ├── types.ts     # CompleteInput / ModelConfig / LlmModel 契约
+│   │   │   ├── errors.ts    # 取消 / 上游静默 / 已外发正文 三类失败的识别与重试判定
+│   │   │   ├── retry.ts     # 指数退避重试（读 Retry-After + 抖动）
+│   │   │   ├── stream.ts    # 静默看门狗与 OpenAI 兼容分片的拼装
+│   │   │   ├── response.ts  # 失败 → 统一 AssistantMessage
+│   │   │   ├── openai.ts / anthropic.ts # 两条 SDK 实现
+│   │   │   └── factory.ts   # 按 provider 的 sdkType 挑实现
+│   │   │   # 外部仍从 "../agent/model" 导入，index.ts 只做汇总导出
 │   │   ├── usage.ts    # token 用量累计（主会话与子 Agent 分开记账）
 │   │   ├── patterns.ts # 检索时忽略的目录规则（node_modules 等）
 │   │   ├── skillLoader.ts # Skill 扫描与渐进式披露
