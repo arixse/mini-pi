@@ -209,7 +209,9 @@ export async function handleSlashCommand(
     return true;
   }
 
-  if (input.startsWith("/load ")) {
+  // 与 /last、/subagent、/update 同形：裸命令也要命中，否则 "/load" 会被
+  // 当成普通提问发给模型，而下面"请指定 skill 名称"的提示永远走不到
+  if (input === "/load" || input.startsWith("/load ")) {
     const skillName = input.slice(6).trim();
     if (skillName) {
       await handleLoadSkill(options.sessionManager, skillName, options);
