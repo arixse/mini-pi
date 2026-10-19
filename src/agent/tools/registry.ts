@@ -9,6 +9,8 @@ import { ToolCallContent, ToolDefinition, ToolResult } from "../../shared/protoc
 import { bashTool } from "./bash";
 import { editFileTool, readFileTool, writeFileTool } from "./files";
 import { globTool, grepTool, listFilesTool } from "./search";
+import { emptySkillSource, loadSkillTool } from "./skill";
+import type { SkillContentSource } from "./skill";
 import type { ConcurrencyRule, RegisteredTool } from "./types";
 
 export type { ConcurrencyRule, RegisteredTool };
@@ -29,6 +31,7 @@ export const READ_ONLY_TOOL_NAMES: readonly string[] = [
   "glob",
   "grep",
   "read_file",
+  "load_skill",
 ];
 
 /** {@link READ_ONLY_TOOL_NAMES} 的集合形式，供审批策略做 O(1) 判定 */
@@ -135,6 +138,17 @@ export class ToolRegistry {
  */
 export type CreateToolRegistryOptions = {
   extraTools?: ReadonlyArray<RegisteredTool>;
+  /**
+   * Skill 全文来源，`load_skill` 工具靠它取全文。
+   *
+   * 缺省时注册{@link emptySkillSource}：工具在册但查无 skill。这样做的原因是
+   * 只读集合必须与 {@link READ_ONLY_TOOL_NAMES} 时时一致——没传 loader 就
+   * 不注册的话，免确认白名单会少一项，与并发判定分叉。
+   *
+   * 传入的实例应当与 `SessionManager` 共用同一个：两处各建一份的话，
+   * `/skills` 清了缓存而工具还读着旧的那份，模型就会 load 不到新建的 skill。
+   */
+  skillLoader?: SkillContentSource;
 };
 
 /**
@@ -157,6 +171,7 @@ export function createToolRegistry(
     globTool(workspaceRoot),
     grepTool(workspaceRoot),
     readFileTool(workspaceRoot),
+    loadSkillTool(options?.skillLoader ?? emptySkillSource),
     writeFileTool(workspaceRoot),
     editFileTool(workspaceRoot),
     bashTool(workspaceRoot),

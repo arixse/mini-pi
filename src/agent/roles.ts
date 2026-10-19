@@ -67,13 +67,26 @@ const GENERAL_INSTRUCTIONS = [
   "做完的部分和没做完的部分要分开说清楚，不要把半截结论说成已完成。",
 ].join("\n");
 
+/**
+ * 可委派给子 Agent 的只读工具。
+ *
+ * `load_skill` 被排除在外，尽管它在主 Agent 的注册表里：子 Agent 的系统提示词
+ * 没有 skill 元数据，给它这个工具只会让模型凭名字乱猜；何况 skill 全文可能来自
+ * 工作区之外（`~/.agents/skills`），子 Agent 的读取面应保持最小。
+ * 技能加载是主会话的能力——模型在主提示词里看到清单，自己决定加载哪一个。
+ *
+ * 必须声明在 {@link SUBAGENT_ROLE_PRESETS} 之前：预设对象在模块求值时就引用它。
+ */
+export const DELEGATABLE_READ_ONLY_TOOLS: readonly string[] =
+  READ_ONLY_TOOL_NAMES.filter((name) => name !== "load_skill");
+
 export const SUBAGENT_ROLE_PRESETS: Record<
   SubAgentRole,
   SubAgentRolePreset
 > = {
   explore: {
     label: "explore",
-    tools: READ_ONLY_TOOL_NAMES,
+    tools: DELEGATABLE_READ_ONLY_TOOLS,
     maxTurns: 20,
     // 纯读取，最容易被大范围检索拖长：给得比 implement 短
     timeoutMs: 120_000,
@@ -82,7 +95,7 @@ export const SUBAGENT_ROLE_PRESETS: Record<
   },
   implement: {
     label: "implement",
-    tools: [...READ_ONLY_TOOL_NAMES, "write_file", "edit_file"],
+    tools: [...DELEGATABLE_READ_ONLY_TOOLS, "write_file", "edit_file"],
     maxTurns: 40,
     // 要改文件还要自述验证（通常含一次测试/构建），最慢
     timeoutMs: 300_000,
@@ -92,7 +105,7 @@ export const SUBAGENT_ROLE_PRESETS: Record<
   },
   review: {
     label: "review",
-    tools: READ_ONLY_TOOL_NAMES,
+    tools: DELEGATABLE_READ_ONLY_TOOLS,
     maxTurns: 10,
     timeoutMs: 60_000,
     canEscalate: false,
@@ -100,7 +113,7 @@ export const SUBAGENT_ROLE_PRESETS: Record<
   },
   general: {
     label: "general",
-    tools: READ_ONLY_TOOL_NAMES,
+    tools: DELEGATABLE_READ_ONLY_TOOLS,
     maxTurns: 30,
     timeoutMs: 180_000,
     canEscalate: true,

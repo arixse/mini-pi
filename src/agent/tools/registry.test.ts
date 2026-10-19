@@ -271,7 +271,13 @@ describe("工具注册表（登记、派生与并发/只读标记）", () => {
       const registry = createToolRegistry(testDir);
       const names = registry.readOnlyToolNames().sort();
 
-      assert.deepStrictEqual(names, ["glob", "grep", "list_files", "read_file"]);
+      assert.deepStrictEqual(names, [
+        "glob",
+        "grep",
+        "list_files",
+        "load_skill",
+        "read_file",
+      ]);
       assert.strictEqual(registry.isReadOnly("read_file"), true);
       assert.strictEqual(registry.isReadOnly("write_file"), false);
       assert.strictEqual(registry.isReadOnly("bash"), false);

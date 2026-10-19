@@ -14,6 +14,7 @@ import {
 import { createTextContent } from "./message";
 import { CompleteInput, LlmModel } from "./model";
 import { READ_ONLY_TOOL_NAMES, ToolRegistry, createToolRegistry } from "./tools/registry";
+import { DELEGATABLE_READ_ONLY_TOOLS } from "./roles";
 import { BeforeToolCall, runAgentLoop } from "./loop";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -1083,12 +1084,14 @@ describe("subagent", () => {
       assert.strictEqual(model.calls.length, 1);
     });
 
-    it("工具集是父表的子集，且默认只有只读四项", async () => {
+    it("工具集是父表的子集，且默认只有可委派的只读工具", async () => {
       const { registry, model } = setup();
       await registry.execute("task", { goal: "g" });
 
       const toolNames = model.calls[0].tools.map((t) => t.name).sort();
-      assert.deepStrictEqual(toolNames, [...READ_ONLY_TOOL_NAMES].sort());
+      assert.deepStrictEqual(toolNames, [...DELEGATABLE_READ_ONLY_TOOLS].sort());
+      // load_skill 是主会话能力：子 Agent 的提示词里没有 skill 元数据
+      assert.ok(!toolNames.includes("load_skill"));
     });
 
     it("子注册表不含 task：递归在结构上被阻断", async () => {
@@ -1110,12 +1113,12 @@ describe("subagent", () => {
       assert.ok(!toolNames.includes("bash"));
     });
 
-    it("role=explore 只有只读四项", async () => {
+    it("role=explore 只有可委派的只读工具", async () => {
       const { registry, model } = setup();
       await registry.execute("task", { goal: "g", role: "explore" });
 
       const toolNames = model.calls[0].tools.map((t) => t.name).sort();
-      assert.deepStrictEqual(toolNames, [...READ_ONLY_TOOL_NAMES].sort());
+      assert.deepStrictEqual(toolNames, [...DELEGATABLE_READ_ONLY_TOOLS].sort());
     });
 
     it("role=review 即使 allowWrite:true 也只读（冲突取更严格者）", async () => {

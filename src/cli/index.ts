@@ -23,6 +23,7 @@ import {
   resolveContextWindow,
 } from "../provider";
 import { SessionManager } from "../agent/sessionManager";
+import { SkillLoader } from "../agent/skillLoader";
 import { printLogo, printResumedSession, printVersion, printWelcome } from "./ui";
 import { wantsVersion } from "./version";
 import chalk from "chalk";
@@ -164,6 +165,14 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
 
   /**
+   * SkillLoader 提前单建：`load_skill` 工具与 SessionManager 共用同一个实例。
+   *
+   * 两处各建一份的话，`/skills` 清了缓存而工具还读着旧的那份，
+   * 模型就会 load 不到会话中新建的 skill——缓存必须只有一份。
+   */
+  const skillLoader = new SkillLoader(workspaceRoot);
+
+  /**
    * 委派工具 `task` 的运行时容器。
    *
    * 注册表是一次性构建的，而运行时每轮都新建（预算按回合计、取消信号连本轮），
@@ -172,6 +181,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
    */
   const subAgentRuntime = new SubAgentRuntimeProvider();
   const toolRegistry = createToolRegistry(workspaceRoot, {
+    skillLoader,
     extraTools: [
       createSubAgentTool({
         workspaceRoot,
@@ -198,8 +208,8 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // trace 落盘同样默认关闭：它是磁盘上额外的敏感数据副本
   const subAgentTrace = await settingsStore.getSubagentTrace();
 
-  // 创建 sessionManager
-  const sessionManager = new SessionManager(workspaceRoot);
+  // 创建 sessionManager（与 load_skill 工具共用同一个 SkillLoader）
+  const sessionManager = new SessionManager(workspaceRoot, { skillLoader });
   if(model) {
     sessionManager.setModel(model);
   }

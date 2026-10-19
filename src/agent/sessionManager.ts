@@ -18,6 +18,13 @@ import { SkillLoader, SkillSource, SkillWithSource } from "./skillLoader";
 export interface SessionManagerOptions {
   /** 自定义 skill 目录列表（用于测试） */
   customSkillDirs?: Array<{ path: string; source: SkillSource }>;
+  /**
+   * 注入 SkillLoader；缺省时自建。
+   *
+   * 注入的意义是**共用同一份缓存**：`load_skill` 工具与这里必须看到同一实例，
+   * 否则 `/skills` 清了缓存而工具还读着旧的那份，模型 load 不到新建的 skill。
+   */
+  skillLoader?: SkillLoader;
   /** 会话存储目录，默认 ~/.mini-pi/sessions */
   sessionsDir?: string;
   /** 全局 AGENTS.md 路径，默认 ~/.mini-pi/AGENTS.md */
@@ -126,7 +133,8 @@ export class SessionManager {
     this.globalAgentsPath =
       options?.globalAgentsPath ?? join(homedir(), ".mini-pi", "AGENTS.md");
     this.projectAgentsPath = join(workspaceRoot, "AGENTS.md");
-    this.skillLoader = new SkillLoader(workspaceRoot, options?.customSkillDirs);
+    this.skillLoader =
+      options?.skillLoader ?? new SkillLoader(workspaceRoot, options?.customSkillDirs);
     this.ensureSessionsDir();
   }
 

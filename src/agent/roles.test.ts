@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { READ_ONLY_TOOL_NAMES, createToolRegistry } from "./tools/registry";
 import {
+  DELEGATABLE_READ_ONLY_TOOLS,
   DEFAULT_SUBAGENT_ROLE,
   SUBAGENT_ROLE_NAMES,
   SUBAGENT_ROLE_PRESETS,
@@ -49,8 +50,19 @@ describe("角色预设", () => {
           `${name} 不应包含 ${forbidden}`,
         );
       }
-      assert.deepStrictEqual([...tools], [...READ_ONLY_TOOL_NAMES]);
+      assert.deepStrictEqual([...tools], [...DELEGATABLE_READ_ONLY_TOOLS]);
     }
+  });
+
+  it("任何角色都拿不到 load_skill：子 Agent 的提示词里没有 skill 元数据", () => {
+    for (const name of SUBAGENT_ROLE_NAMES) {
+      assert.ok(
+        !SUBAGENT_ROLE_PRESETS[name].tools.includes("load_skill"),
+        `${name} 不应包含 load_skill（技能加载是主会话的能力）`,
+      );
+    }
+    // 被排除的前提是它确实存在于只读全集里，否则这条断言会空转
+    assert.ok(READ_ONLY_TOOL_NAMES.includes("load_skill"));
   });
 
   it("implement 默认带写工具但默认不带 bash：执行能力要单独申请", () => {
@@ -169,7 +181,7 @@ describe("角色与显式开关的冲突消解", () => {
       });
       assert.deepStrictEqual(
         tools,
-        [...READ_ONLY_TOOL_NAMES],
+        [...DELEGATABLE_READ_ONLY_TOOLS],
         `${role} 必须保持只读`,
       );
     }
