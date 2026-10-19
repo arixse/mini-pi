@@ -85,7 +85,11 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
    + 自动探测的项目技术栈 + 固定上下文 + Skill 摘要。
 10. **打印 Logo、版本号与欢迎信息**：`printLogo()`（版本号紧跟 logo，窄终端退化成单行时也保留）
     + `printWelcome(providerName, modelName)`。
-11. **进入 REPL**：`startRepl()`。
+11. **版本更新检测**：`updateChecker.checkOnStartup()`（见 5.12）——非交互终端、
+    环境变量 `MINI_PI_SKIP_UPDATE_CHECK`、settings.json 的 `updateCheck: false`
+    均跳过；有缓存且未满 24h 则不联网。**只在发现新版本时打印提示**，
+    其余状态（已最新 / 检查失败 / 已关闭）保持安静：用户没问，就不解释网络状况。
+12. **进入 REPL**：`startRepl()`。
 
 ### 3.1 System Prompt 组成
 
@@ -143,7 +147,9 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ────────────────────────────────────────────────────────────
 
-> 
+⬆️  发现新版本 v1.3.0（当前 v1.2.0）
+    更新命令：npm install -g @minipi/mini-pi
+
 ```
 
 欢迎语里的命令与说明取自 `src/cli/commands.ts`（与 `/help` 同一份注册表）。
@@ -522,6 +528,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
 | `/subagent [on\|off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；状态写入 settings.json |
+| `/update [on\|off]` | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（写入 settings.json，缺省开启） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
 | `/sessions` | 列出**当前工作目录**的会话（标注当前会话与大小，标题下打印工作目录） |
 | `/switch <序号\|文件名>` | 切换到当前工作目录的指定会话并恢复其历史上下文 |
@@ -546,6 +553,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
   /trust             - 切换信任模式（跳过写文件/执行命令的确认）
         y = 允许本次 / n = 拒绝 / a = 本会话全部允许
   /subagent [on|off] - 开关子 Agent 委派（默认关闭，不带参数则切换）
+  /update [on|off]   - 检查新版本（不带参数立即检查）；on/off 开关启动检测
   /status            - 查看模型、会话文件、上下文与 token 用量、确认模式
   /sessions          - 列出当前工作目录的会话
   /switch <n>        - 切换到指定会话（恢复其历史上下文）
@@ -730,6 +738,34 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 - `/status` 里单列一行：关闭时显示「🚫 已关闭（/subagent 开启）」，
   避免用户看到"本会话未委派"误以为是模型不想用。
 
+### 5.12 `/update` —— 版本更新检测
+
+```
+> /update
+⬆️  发现新版本 v1.3.0（当前 v1.2.0）
+    更新命令：npm install -g @minipi/mini-pi
+> /update off
+🚫 已关闭启动时的版本更新检测（/update on 重新开启）
+```
+
+- **不带参数立即检查**：忽略开关与缓存，直接联网——用户显式敲了命令，
+  就没有"已关闭"可言；`on` / `off`（也认「开」「关闭」）只影响**启动时**的自动检测；
+- **默认开启**：检测结果按 24h 缓存（`~/.mini-pi/update-check.json`），
+  启动路径每天因此最多多一次网络请求，且带 5s 超时；
+- **三种跳过方式**：settings.json 的 `updateCheck: false`（`/update off` 写入）、
+  环境变量 `MINI_PI_SKIP_UPDATE_CHECK`（CI / 离线环境）、非交互终端
+  （管道里没有可提示的对象，只会白等一个超时）；
+- **取数**：`{registry}/<包名>/latest`，registry 跟随 `npm_config_registry`
+  （镜像用户不必改配置）；超时、非 2xx、非 JSON 一律当作"取不到"；
+- **缓存是易耗品**：读不出来当没有、写不进去静默——不值得为它备份或拒绝写入
+  （与 settings.json 的损坏策略相反，见 8.5）；
+- **检查失败保持安静**：离线、镜像故障只在 `/update` 手动检查时告知，
+  启动画面不会每次开终端都解释一遍网络状况；
+- **比较语义**：见 `src/cli/versionCompare.ts`，按 semver 主/次/修订号逐段比较，
+  遵守第 11 条 prerelease 规则——`1.0.0` 比 `1.0.0-beta` 新（同核号的预发布版
+  不会把正式版用户吓去升级），但 `1.0.1-beta` 仍算比 `1.0.0` 新；
+  registry 返回怪值（非版本号形状）时按"取不到"处理，绝不提示一个没发布过的版本号。
+
 ---
 
 ## 6. 会话存储与上下文压缩
@@ -873,6 +909,7 @@ skill 是"踩坑即沉淀"的产物，会话中途新建很常见，读到旧缓
 | 供应商凭据 | `~/.mini-pi/auth.json` | 各供应商的 `apiKey` / `baseUrl` / `model` |
 | 默认模型 | `~/.mini-pi/settings.json` | `{ "defaultModel": "供应商/模型名" }` |
 | 会话记录 | `~/.mini-pi/sessions/--<工作目录路径铺平>/*.jsonl` | 每个工作目录一个子目录（如 `--D--workspace-mini-pi--`），每个会话一个文件 |
+| 更新检测缓存 | `~/.mini-pi/update-check.json` | `{ "checkedAt": <epoch ms>, "latestVersion": "1.2.3" }`，24h 过期；**易耗品**，读不出来当没有、写不进去静默（见 5.12） |
 | 全局规则 | `~/.mini-pi/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | 项目规则 | `<workspaceRoot>/AGENTS.md` | 注入到 System Prompt 的固定上下文 |
 | Skills | `~/.agents/skills/`、`~/.mini-pi/skills/`、`<workspaceRoot>/.mini-pi/skills/`、`<workspaceRoot>/.pi/skills/`、`<workspaceRoot>/.agents/skills/` | 每个 Skill 为一个目录，含 `SKILL.md` |
@@ -901,6 +938,7 @@ skill 是"踩坑即沉淀"的产物，会话中途新建很常见，读到旧缓
 | `defaultModel` | 默认模型，格式 `供应商/模型名` | 启动时按已配置的 provider 自动推导 |
 | `contextWindow` | 模型上下文窗口（token），用于推导压缩阈值 `max(8000, 窗口 × 0.6)` | 按当前模型名推断，推断不到才用 128000（阈值 76800） |
 | `maxTokens` | 单次输出上限（OpenAI 与 Anthropic 两条路径都用；推理型模型会转成 `max_completion_tokens`） | 8192 |
+| `updateCheck` | 启动时的版本更新检测（见 5.12）；`/update off` 写入 `false` | 开启（仅布尔 `false` 算关闭，其余值按开启处理） |
 
 > `contextWindow` 请填**你所用模型的真实窗口**：填大了会在压缩触发前就把请求发过窗口上限（直接 400），
 > 填小了只是多压缩几次（每次压缩都要调一次摘要模型，花钱且加延迟）。

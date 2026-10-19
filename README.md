@@ -65,6 +65,7 @@ mini-pi/
 │   │   ├── toolEvents.ts # agent 事件 → 状态行 / 工具卡片 / /last
 │   │   ├── approval.ts # 工具调用审批；input.ts 输入串行化；exit.ts 退出协调
 │   │   ├── commands.ts # 命令的单一注册表（/help 与启动欢迎语同源）
+│   │   ├── updateCheck.ts / versionCompare.ts # 版本更新检测（registry 取数、24h 缓存、启动提示与 /update）
 │   │   ├── render.ts / status.ts / width.ts / ui.ts # 终端呈现
 │   │   └── select.ts / options.ts / login.ts / skills.ts / subagentCommand.ts # 交互与命令实现
 │   ├── provider/       # 模型供应商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
@@ -151,6 +152,10 @@ mini-pi/
 21. **版本号可见** - 启动画面在 logo 下显示 `v1.0.0`（窄终端退化成单行时也保留）；
     `mini-pi --version` / `-v` 只打印版本就退出，不读配置、不起 REPL
     —— 版本号来自 `package.json`，发布时由 CI 回写后再打包，报的就是实际发布的那一个
+22. **更新检测** - 交互式启动时询问 npm registry（结果按 24h 缓存，每天最多多一次请求、
+    最多 5s 超时），发现新版本就在启动画面后提示一行与更新命令；`/update` 手动检查，
+    `/update off` 关闭自动检测，`MINI_PI_SKIP_UPDATE_CHECK` 环境变量可整体跳过；
+    检查失败保持安静——取不到就当没有，绝不让 CLI 起不来
 
 ## 运行方式
 
@@ -471,6 +476,7 @@ MiniMax-CN 使用 Anthropic 兼容接口，Base URL 是 `https://api.minimax.cn/
 | `/load <name>`                          | 加载指定 Skill 的完整内容                                                                                                                                                |
 | `/trust`                                | 切换信任模式（跳过写文件/执行命令的确认）；提示里 `y` = 允许本次、`n` = 拒绝、`a` = 本会话全部允许                                                                              |
 | `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on\|off` 单独开关子 Agent trace 落盘（**默认关闭**）。两者状态都写入 settings.json |
+| `/update [on\|off]`                    | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（**缺省开启**，写入 settings.json） |
 | `/status`                               | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关、trace 开关与累计用量                                                                          |
 | `/sessions`                             | 列出当前工作目录的会话                                                                                                                                                   |
 | `/switch <序号>`                        | 切换到指定会话并恢复其历史上下文                                                                                                                                         |
@@ -513,8 +519,15 @@ mini-pi --version    # → mini-pi v1.0.0
 
 ────────────────────────────────────────────────────────────
 
-> 
+⬆️  发现新版本 v1.0.1（当前 v1.0.0）
+    更新命令：npm install -g @minipi/mini-pi
+
 ```
+
+> 最后两行是版本更新检测的提示：交互式启动时最多每天问一次 registry
+> （结果缓存 24h、请求带 5s 超时），只在发现新版本时出现；
+> `/update` 可手动检查，`/update off` 关闭自动检测，
+> `MINI_PI_SKIP_UPDATE_CHECK` 环境变量可整体跳过。
 
 > 未配置模型时（`~/.mini-pi/settings.json` 里没有可用的 `defaultModel`），
 > `Provider / Model / Context` 区块不显示，改为提示先执行 `/login` 与 `/model`。
