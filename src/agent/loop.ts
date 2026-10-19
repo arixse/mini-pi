@@ -1,7 +1,12 @@
 import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { logger } from "../shared/logger";
 import { createTextContent } from "./message";
-import { createBlockedToolResult, executeToolCall } from "./toolDispatch";
+import {
+    MAX_CONCURRENT_TOOL_CALLS,
+    createBlockedToolResult,
+    executeToolCall,
+    mapWithConcurrency,
+} from "./toolDispatch";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools/registry";
 
@@ -371,10 +376,16 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
             })
 
             const executed = new Map<number,ToolResultMessage>()
-            await Promise.all(
-                [...executables.entries()].map(async ([index,executable]) => {
-                    executed.set(index, await executeToolCall(executable, options.toolRegistry, signal))
-                }),
+            // 有并发上限：一批 30 个只读调用同时起跑会把 fd 打满（见 mapWithConcurrency）
+            await mapWithConcurrency(
+                [...executables.entries()],
+                MAX_CONCURRENT_TOOL_CALLS,
+                async ([index, executable]) => {
+                    executed.set(
+                        index,
+                        await executeToolCall(executable, options.toolRegistry, signal),
+                    )
+                },
             )
 
             for(const index of indices) {

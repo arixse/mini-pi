@@ -9,6 +9,7 @@ import {
 } from "../shared/protocol";
 import { BeforeToolCall, runAgentLoop } from "./loop";
 import { LlmModel } from "./model";
+import { alignCompactionStart, estimateTokens } from "./sessionStore";
 import { ToolRegistry } from "./tools/registry";
 import { createUserMessage } from "./message";
 
@@ -531,6 +532,84 @@ export function judgeSubAgentOutcome(
   };
 }
 
+/**
+ * 子 Agent 上下文的默认预算（token）。
+ *
+ * 子 Agent 不落盘、也不走会话压缩，读十几个大文件就能把上下文撑爆——
+ * 而撑爆的表现是请求直接 400，整次委派白跑（父 Agent 只看到一次失败）。
+ * 调用方（委派工具）会按当前模型的窗口算出真实预算传进来；
+ * 这个常量只在没有窗口信息时兜底，取一个保守值。
+ */
+export const DEFAULT_SUBAGENT_CONTEXT_TOKENS = 32_000;
+
+/** 裁剪时保留的最近消息条数：与主会话的压缩保留量同量级 */
+const SUBAGENT_KEEP_RECENT_MESSAGES = 8;
+
+/**
+ * 上下文超预算时裁掉较早的消息，返回替换用的新上下文；未超则返回 undefined。
+ *
+ * 三条约束：
+ * - **第一条 user 消息（goal）必须保留**：它是这次委派的全部指令，丢了子 Agent
+ *   就不知道自己要干什么了。裁剪说明与它合并进同一条消息，而不是再补一条
+ *   user——Anthropic 要求 user/assistant 交替，连续两条 user 会被直接拒绝。
+ * - **不得切断 toolCall / toolResult 配对**：起点借用会话压缩同一套对齐逻辑，
+ *   否则留下的 toolResult 变成孤儿，请求同样 400。
+ * - **裁掉的内容要说明**：模型看到"上下文被裁过、期间调用过哪些工具"，
+ *   才知道该重新读文件，而不是凭空猜测。
+ *
+ * 这里用规则摘要而非模型摘要：子 Agent 本来就是为省成本而存在的，
+ * 为压缩再调一次模型会把它省下的钱花回去，还多一次可能失败的请求。
+ */
+export function compactSubAgentMessages(
+  messages: readonly AgentMessage[],
+  budgetTokens: number,
+): AgentMessage[] | undefined {
+  if (messages.length <= SUBAGENT_KEEP_RECENT_MESSAGES + 1) {
+    return undefined;
+  }
+  if (estimateTokens(messages as AgentMessage[]) <= budgetTokens) {
+    return undefined;
+  }
+
+  const head = messages[0];
+  const start = alignCompactionStart(
+    messages.map((message) => message.role),
+    SUBAGENT_KEEP_RECENT_MESSAGES,
+  );
+  if (start <= 1) {
+    // 最近的这一整段必须与 goal 连在一起才能保持配对，此时压缩只会把上下文清空
+    return undefined;
+  }
+
+  const dropped = messages.slice(1, start);
+  const tools = new Set<string>();
+  for (const message of dropped) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "toolCall") {
+        tools.add(block.name);
+      }
+    }
+  }
+  const toolNote =
+    tools.size > 0 ? `期间调用过 ${[...tools].join("、")}` : "期间没有工具调用";
+
+  const goalText = head.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .filter((text) => text !== "")
+    .join("\n");
+
+  const merged = createUserMessage(
+    `${goalText}\n\n[上下文已裁剪] 为控制长度，省略了较早的 ${
+      dropped.length
+    } 条消息（${toolNote}）。如果其中的内容仍然需要，请重新读取相关文件或重新检索，不要依赖推测。`,
+  );
+
+  return [merged, ...messages.slice(start)];
+}
+
 export type RunSubAgentInput = {
   agentId: string;
   identity: AgentIdentity;
@@ -539,6 +618,13 @@ export type RunSubAgentInput = {
   context?: string[];
   systemPrompt: string;
   maxTurns: number;
+  /**
+   * 上下文预算（token）；超了就在每轮结束时裁掉较早的消息。
+   *
+   * 缺省用 {@link DEFAULT_SUBAGENT_CONTEXT_TOKENS}。调用方应按当前模型的
+   * 窗口给真实值——小窗口模型用默认值同样会超窗。
+   */
+  contextBudgetTokens?: number;
   model: LlmModel;
   toolRegistry: ToolRegistry;
   beforeToolCall?: BeforeToolCall;
@@ -650,6 +736,14 @@ export async function runSubAgent(
   const signal = linked.signal;
 
   let result: { newMessages: AgentMessage[]; events: AgentEvent[] };
+  /**
+   * 循环内部的上下文副本：`onTurnEnd` 每轮把增量交回来，这里累积后判断是否超预算。
+   *
+   * runAgentLoop 只在回调返回新数组时才替换它的 context，所以裁剪必须基于
+   * "到目前为止的全部消息"，而不是单轮的增量。
+   */
+  let liveContext: AgentMessage[] = messages;
+  const budgetTokens = input.contextBudgetTokens ?? DEFAULT_SUBAGENT_CONTEXT_TOKENS;
   try {
     result = await runAgentLoop({
       systemPrompt: input.systemPrompt,
@@ -664,6 +758,15 @@ export async function runSubAgent(
       identity: input.identity,
       signal,
       onEvent: emit,
+      /**
+       * 子 Agent 不落盘（历史以 toolCall/toolResult 的形态留在主会话），
+       * 但**必须**在这里管上下文：不压缩的话，读十几个文件就会把请求撑到 400，
+       * 而失败信息回到父 Agent 只剩一句"委派失败"，之前读到的全白费。
+       */
+      onTurnEnd: async (turnMessages) => {
+        liveContext = [...liveContext, ...turnMessages];
+        return compactSubAgentMessages(liveContext, budgetTokens);
+      },
     });
   } finally {
     if (timeoutTimer) {

@@ -177,6 +177,9 @@ export async function runAgentTurn(
         // trace 需要主会话路径落地；没有会话存储时自动失效
         sessionFilePath: options.sessionStore?.getFilePath() ?? null,
         traceEnabled: deps.subAgentTrace,
+        // 子 Agent 独立成一条上下文，不落盘也没有压缩：预算必须一起下发，
+        // 否则它读满十几个文件后请求直接 400，父 Agent 只看到"委派失败"
+        contextBudgetTokens: budget,
       });
     }
 

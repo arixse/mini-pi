@@ -70,7 +70,8 @@ runAgentLoop  [主 Agent, depth = 0]
         │  toolRegistry: 子集（默认只读，allowWrite 时补写工具）
         │  signal: 链接到父 controller 的子 controller
         │  maxTurns: 独立上限（默认 30）
-        │  onTurnEnd: 不落主会话（可选 trace 落盘）
+        │  onTurnEnd: 不落主会话（可选 trace 落盘），只做**上下文裁剪**：
+        │             超过 contextBudgetTokens 就丢掉较早的消息并保留 goal
         ▼
     runAgentLoop  [子 Agent, depth = 1]   （depth >= maxDepth 时不注册 task 工具 → 结构上不可再委派）
         │
@@ -81,7 +82,9 @@ runAgentLoop  [主 Agent, depth = 0]
 
 三条硬边界：
 
-1. **上下文边界**：子 Agent 的 `messages` 只含一条 user 消息（goal + 显式素材），不含父历史。
+1. **上下文边界**：子 Agent 的 `messages` 初始只含一条 user 消息（goal + 显式素材），不含父历史；
+   之后读到的工具结果只留在它自己那条上下文里，超预算时按 `compactSubAgentMessages`
+   裁掉较早的部分（goal 永远保留，裁剪点不切断 toolCall/toolResult 配对）。
 2. **权限边界**：子 Agent 的工具集是父集的子集；写操作仍逐次询问，提示带上 `[子 Agent depth=1]`。
 3. **深度边界**：`depth >= maxDepth` 时注册表里**根本没有** `task` 工具，模型想递归也调不到（不是靠 system prompt 自觉）。
 

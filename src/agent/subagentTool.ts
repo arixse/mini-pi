@@ -77,6 +77,13 @@ export type SubAgentRuntime = {
   sessionFilePath?: string | null;
   /** 是否记录 trace（settings.json 的 `subagentTrace`，默认关） */
   traceEnabled?: boolean;
+  /**
+   * 子 Agent 的上下文预算（token）：按当前模型的窗口算出来的压缩阈值。
+   *
+   * 子 Agent 不落盘也不走会话压缩，读十几个大文件就能把请求撑到 400；
+   * 把主会话的预算同时下发给它，才能让"委派失败"退回成"裁掉早期消息继续干"。
+   */
+  contextBudgetTokens?: number;
 };
 
 /**
@@ -340,6 +347,7 @@ export function createSubAgentTool(
           ),
           // 墙钟上限按角色下发；父 Agent 不能为单次委派无限延长
           timeoutMs: preset.timeoutMs,
+          contextBudgetTokens: runtime.contextBudgetTokens,
           model: runtime.model,
           toolRegistry: childRegistry,
           beforeToolCall: runtime.beforeToolCall,
