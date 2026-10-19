@@ -37,31 +37,31 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 
 配置与会话都在 `~/.mini-pi/` 下：
 
-| 路径 | 内容 |
-| --- | --- |
-| `auth.json` | 各供应商的 `apiKey` / `baseUrl` / `model`，按 0600 写盘 |
-| `settings.json` | 默认模型、上下文窗口、输出上限、子 Agent 开关 |
-| `AGENTS.md` | 全局规则，与项目根目录的 `AGENTS.md` 一起注入 System Prompt |
-| `sessions/` | 会话记录，每个工作目录一个子目录 |
-| `skills/` | 全局 Skills |
+| 路径              | 内容                                                         |
+| ----------------- | ------------------------------------------------------------ |
+| `auth.json`     | 各供应商的`apiKey` / `baseUrl` / `model`，按 0600 写盘 |
+| `settings.json` | 默认模型、上下文窗口、输出上限、子 Agent 开关                |
+| `AGENTS.md`     | 全局规则，与项目根目录的`AGENTS.md` 一起注入 System Prompt |
+| `sessions/`     | 会话记录，每个工作目录一个子目录                             |
+| `skills/`       | 全局 Skills                                                  |
 
 字段含义与存储格式见 [cli-config.md](docs/cli-config.md)。
 
 ## 常用命令
 
-| 命令 | 作用 |
-| --- | --- |
-| `/help` | 列出全部命令（清单的唯一注册表） |
-| `/login` · `/model` | 配置供应商与模型 |
-| `/new` · `/sessions` · `/switch <n>` | 新建 / 列出 / 切换会话 |
-| `/status` | 模型、会话文件、上下文占用与 token 用量 |
-| `/last [n]` | 回看上一条工具输出的完整内容 |
-| `/reload` | 重载配置、`AGENTS.md` 与 Skills |
-| `/skills` · `/load <name>` | 列出 / 手动加载 Skill 全文 |
-| `/trust` | 本会话内跳过写文件与执行命令的确认 |
-| `/subagent [on\|off\|trace on\|trace off]` | 子 Agent 委派及排障落盘（默认关闭） |
-| `/update [on\|off]` | 立即检查新版本 / 开关启动检测 |
-| `/clear` · `/exit` · `/quit` | 清空历史 / 退出 |
+| 命令                                         | 作用                                    |
+| -------------------------------------------- | --------------------------------------- |
+| `/help`                                    | 列出全部命令（清单的唯一注册表）        |
+| `/login` · `/model`                     | 配置供应商与模型                        |
+| `/new` · `/sessions` · `/switch <n>` | 新建 / 列出 / 切换会话                  |
+| `/status`                                  | 模型、会话文件、上下文占用与 token 用量 |
+| `/last [n]`                                | 回看上一条工具输出的完整内容            |
+| `/reload`                                  | 重载配置、`AGENTS.md` 与 Skills       |
+| `/skills` · `/load <name>`              | 列出 / 手动加载 Skill 全文              |
+| `/trust`                                   | 本会话内跳过写文件与执行命令的确认      |
+| `/subagent [on\|off\|trace on\|trace off]`    | 子 Agent 委派及排障落盘（默认关闭）     |
+| `/update [on\|off]`                         | 立即检查新版本 / 开关启动检测           |
+| `/clear` · `/exit` · `/quit`         | 清空历史 / 退出                         |
 
 每条命令的交互细节与边界见 [cli-commands.md](docs/cli-commands.md)。
 
@@ -71,17 +71,17 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 `y`（本次）、`n`（拒绝）、`a`（本会话全部允许）。高危命令（`rm -rf`、`sudo` 等）
 会额外点出后果。
 
-| 防线 | 说明 |
-| --- | --- |
-| 审批 | `write_file` / `edit_file` / `bash` / `verify_command` / `task` 执行前必须确认；拒绝时把「被拒绝」结果交回模型 |
-| 信任模式 | `/trust` 或确认时按 `a`，本会话内不再逐次确认；**只在内存里，重开即恢复** |
-| 非交互终端 | 无法询问时一律按拒绝处理，不静默放行 |
-| 只读工具免确认 | `list_files` / `glob` / `grep` / `read_file` / `load_skill` 免确认且同批并发执行 |
-| 受限验证 | `verify_command` 只接受测试 / 构建 / 检查类命令，网络与删除类命令进不来 |
-| 路径限制 | 所有操作限制在工作区内，symlink 指向外部同样被拒绝 |
-| 凭据保护 | `.env*`、`.npmrc`、私钥、`*.pem` / `*.key`、`.git-credentials` 等默认禁止读写 |
-| 可中断 | Ctrl+C 立即取消当前任务；120s 超时（连接）+ 120s 静默看门狗（正文读取） |
-| 压缩不丢历史 | 摘要调用失败时不写降级摘要，历史保持完整 |
+| 防线           | 说明                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 审批           | `write_file` / `edit_file` / `bash` / `verify_command` / `task` 执行前必须确认；拒绝时把「被拒绝」结果交回模型 |
+| 信任模式       | `/trust` 或确认时按 `a`，本会话内不再逐次确认；**只在内存里，重开即恢复**                                      |
+| 非交互终端     | 无法询问时一律按拒绝处理，不静默放行                                                                                     |
+| 只读工具免确认 | `list_files` / `glob` / `grep` / `read_file` / `load_skill` 免确认且同批并发执行                               |
+| 受限验证       | `verify_command` 只接受测试 / 构建 / 检查类命令，网络与删除类命令进不来                                                |
+| 路径限制       | 所有操作限制在工作区内，symlink 指向外部同样被拒绝                                                                       |
+| 凭据保护       | `.env*`、`.npmrc`、私钥、`*.pem` / `*.key`、`.git-credentials` 等默认禁止读写                                  |
+| 可中断         | Ctrl+C 立即取消当前任务；120s 超时（连接）+ 120s 静默看门狗（正文读取）                                                  |
+| 压缩不丢历史   | 摘要调用失败时不写降级摘要，历史保持完整                                                                                 |
 
 > 路径守卫只是尽力而为的静态检查，**审批与信任模式的选择才是真正的防线**。
 
@@ -108,7 +108,6 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 4. **上下文窗口自动推断** — 按模型名推断压缩阈值，`settings.json` 可显式覆盖
 5. **子 Agent 委派** — `task` 工具（默认关闭），成本护栏：墙钟超时、单回合回传上限
 6. **Skills 渐进式披露** — 名称+描述常驻提示词，模型自行判断加载全文
-7. **经验沉淀成 Skill** — 踩过的坑写进 `.agents/skills/`，下次按需加载
 
 ## 工作原理
 
@@ -126,12 +125,12 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 
 ## 环境变量
 
-| 变量 | 作用 |
-| --- | --- |
-| `NO_COLOR` | 关闭 ANSI 着色（非 TTY 时也自动关闭） |
-| `MINI_PI_ASCII` | 图标降级为 `[list]` / `[read]` 这类文本标记，适配不显示 emoji 的终端 |
-| `MINI_PI_LOG_LEVEL` | 诊断日志级别：`debug` / `info` / `warn` / `error`（默认 `info`，写 stderr） |
-| `MINI_PI_SKIP_UPDATE_CHECK` | 跳过启动时的版本检测 |
+| 变量                          | 作用                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `NO_COLOR`                  | 关闭 ANSI 着色（非 TTY 时也自动关闭）                                                 |
+| `MINI_PI_ASCII`             | 图标降级为`[list]` / `[read]` 这类文本标记，适配不显示 emoji 的终端               |
+| `MINI_PI_LOG_LEVEL`         | 诊断日志级别：`debug` / `info` / `warn` / `error`（默认 `info`，写 stderr） |
+| `MINI_PI_SKIP_UPDATE_CHECK` | 跳过启动时的版本检测                                                                  |
 
 ## 开发
 
@@ -145,34 +144,30 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 
 源码分层（`src/`）：
 
-| 目录 | 职责 |
-| --- | --- |
-| `cli/` | REPL、命令分派、审批、渲染、会话切换、启动编排 |
-| `agent/` | Agent 循环、消息协议、会话读写与压缩、子 Agent、Skill 加载 |
-| `agent/model/` | 两家 SDK 的流式实现、重试、错误分类、静默看门狗 |
+| 目录             | 职责                                                           |
+| ---------------- | -------------------------------------------------------------- |
+| `cli/`         | REPL、命令分派、审批、渲染、会话切换、启动编排                 |
+| `agent/`       | Agent 循环、消息协议、会话读写与压缩、子 Agent、Skill 加载     |
+| `agent/model/` | 两家 SDK 的流式实现、重试、错误分类、静默看门狗                |
 | `agent/tools/` | 工具注册表与实现（文件 / 搜索 / bash / verify / skill / task） |
-| `provider/` | 7 家供应商注册、凭据与设置的原子读写、上下文窗口推断 |
-| `shared/` | 协议类型与日志出口 |
-
-改动约定：每个改动配对应的单测；改完同步更新相关文档（`src/docs.test.ts`
-会校验文档里的路径、链接、章节号与关键数值，防止文档漂移）；
-单个 `.ts` 文件不超过 1000 行。踩过的坑沉淀成 [.agents/skills](./.agents/skills) 下的 Skill。
+| `provider/`    | 7 家供应商注册、凭据与设置的原子读写、上下文窗口推断           |
+| `shared/`      | 协议类型与日志出口                                             |
 
 ## 相关文档
 
-| 文档 | 用途 |
-| --- | --- |
-| [CLI 交互文档](docs/cli-interaction.md) | **CLI 行为的唯一权威来源**：启动、命令、对话、工具调用与审批的完整流程 |
-| [CLI 命令参考](docs/cli-commands.md) | 每条斜杠命令的用法、输出与边界（命令清单的唯一去处） |
-| [CLI 配置与存储](docs/cli-config.md) | 配置文件、会话存储、供应商清单、事件类型与 Skill 目录 |
-| [技术方案](docs/technical-solution.md) | 核心模块设计（模型层 / 工具层 / 会话层 / 循环 / 审批 / 子 Agent） |
-| [模型供应商对接](docs/providers.md) | 7 家供应商的默认模型、上下文窗口、接入细节与踩坑记录 |
-| [Session 管理功能](docs/session-management.md) | 会话存储层实现（目录推导、写盘语义、压缩协议） |
-| [多 Agent 实现方案](docs/multi-agent-design.md) | 委派架构与里程碑（已全部落地，口径以技术方案 §3.6 为准） |
-| [CLI 交互体验设计稿](docs/cli-ux-design.md) | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
-| [产品设计文档](docs/product-design.md) | 产品愿景与用户目标 |
-| [发布到 npm](docs/publishing.md) | 标签触发的发布流程、包内容、踩过的坑 |
-| [开发日志索引](notes/README.md) | day1 ~ day24，按真实提交日期编排 |
+| 文档                                           | 用途                                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| [CLI 交互文档](docs/cli-interaction.md)         | **CLI 行为的唯一权威来源**：启动、命令、对话、工具调用与审批的完整流程 |
+| [CLI 命令参考](docs/cli-commands.md)            | 每条斜杠命令的用法、输出与边界（命令清单的唯一去处）                         |
+| [CLI 配置与存储](docs/cli-config.md)            | 配置文件、会话存储、供应商清单、事件类型与 Skill 目录                        |
+| [技术方案](docs/technical-solution.md)          | 核心模块设计（模型层 / 工具层 / 会话层 / 循环 / 审批 / 子 Agent）            |
+| [模型供应商对接](docs/providers.md)             | 7 家供应商的默认模型、上下文窗口、接入细节与踩坑记录                         |
+| [Session 管理功能](docs/session-management.md)  | 会话存储层实现（目录推导、写盘语义、压缩协议）                               |
+| [多 Agent 实现方案](docs/multi-agent-design.md) | 委派架构与里程碑（已全部落地，口径以技术方案 §3.6 为准）                    |
+| [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
+| [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
+| [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
+| [开发日志索引](notes/README.md)                 | day1 ~ day24，按真实提交日期编排                                             |
 
 ## 范围与许可
 
