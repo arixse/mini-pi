@@ -1,4 +1,5 @@
 import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
+import { logger } from "../shared/logger";
 import { createTextContent } from "./message";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools/registry";
@@ -294,7 +295,11 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
      * 单轮内可能跑很多次工具调用，上下文会在一轮里持续增长；
      * 只靠"用户回合开始时压缩一次"不足以兜住，因此这里每轮都给一次机会。
      * 调用方返回新上下文表示已压缩，循环会用它替换内部上下文。
-     * 钩子抛错不中断本次运行：持久化与压缩是调用方的职责，它自己会记录。
+     *
+     * 钩子抛错**不中断本次运行**（持久化与压缩是调用方的职责），但游标必须停在
+     * 失败的位置：此前是先推进 `syncedCount` 再 await，一旦落盘失败，这批消息
+     * 既不会被重投、也不会被补写——调用方按自己的计数切片补写时还会把后面
+     * 已经落盘的消息再写一遍，于是"漏一条、重一条"。
      */
     const syncTurn = async (): Promise<void> => {
         if (!options.onTurnEnd) {
@@ -304,15 +309,16 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         if (delta.length === 0) {
             return
         }
-        syncedCount = newMessages.length
         try {
             const compacted = await options.onTurnEnd(delta)
+            // 写成功之后才推进游标：失败时下一轮会连同新消息一起重投
+            syncedCount = newMessages.length
             if (compacted) {
                 context.length = 0
                 context.push(...compacted)
             }
-        } catch {
-            // 忽略：不影响本轮回合继续
+        } catch (error) {
+            logger.warn("onTurnEnd failed; turn messages not persisted, will retry next turn", error)
         }
     }
 

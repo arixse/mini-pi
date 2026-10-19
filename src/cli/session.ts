@@ -68,6 +68,10 @@ export async function appendUserMessage(
 
 /**
  * 把 Agent 本轮产生的消息写入会话存储，并同步上下文。
+ *
+ * 整批一次写入（而不是逐条 await）：一轮里几十条消息本来就是一批，
+ * 逐条写既多花系统调用，也会把失败点摊在中间——写到第 k 条时失败，
+ * 调用方无法知道到底落了几条，重试必然"漏的漏、重的重"。
  */
 export async function appendAgentMessages(
   options: ReplOptions,
@@ -78,9 +82,11 @@ export async function appendAgentMessages(
     options.messages.push(...messages);
     return;
   }
-  for (const message of messages) {
-    await store.appendMessage(message);
+  if (messages.length === 0) {
+    return;
   }
+  // 写失败时这里抛出，且 store 的内存状态保持不变：调用方按"整批未落盘"重试
+  await store.appendMessages(messages);
   store.syncContext(options.messages);
 }
 

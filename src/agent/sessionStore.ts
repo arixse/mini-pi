@@ -422,17 +422,52 @@ export class JsonlSessionStore {
   }
 
   async appendMessage(message: AgentMessage): Promise<string> {
-    const id = this.nextId();
-    const entry: MessageEntry = {
-      type: "message",
-      id,
-      parentId: this.leafId,
-      timestamp: new Date().toISOString(),
-      message,
-    };
-    await this.appendEntry(entry);
-    this.leafId = id;
+    const [id] = await this.appendMessages([message]);
     return id;
+  }
+
+  /**
+   * 批量追加消息：**一次 appendFile 写完**，返回写入的 entry id（同序）。
+   *
+   * 逐条 await 写有两个问题：
+   * 1. 一轮里几十条消息就是几十次系统调用，而它们本来就该一起落盘；
+   * 2. 写到第 k 条失败时，前 k-1 条已经进磁盘、内存也已推进 leafId，
+   *    调用方无从知道"到底落了几条"——重试要么漏、要么重复。
+   *
+   * 因此这里先写盘再改内存：写失败时内存保持原样，调用方按"整批未落盘"重试；
+   * 最坏情况是磁盘上留下半行 JSON，而这正是加载时按行容错能处理的情形。
+   */
+  async appendMessages(messages: AgentMessage[]): Promise<string[]> {
+    if (messages.length === 0) {
+      return [];
+    }
+
+    const entries: MessageEntry[] = [];
+    let parentId = this.leafId;
+    for (const message of messages) {
+      const id = this.nextId();
+      entries.push({
+        type: "message",
+        id,
+        parentId,
+        timestamp: new Date().toISOString(),
+        message,
+      });
+      parentId = id;
+    }
+
+    await appendFile(
+      this.filePath,
+      entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""),
+      "utf8",
+    );
+
+    for (const entry of entries) {
+      this.entries.push(entry);
+      this.byId.set(entry.id, entry);
+    }
+    this.leafId = parentId;
+    return entries.map((entry) => entry.id);
   }
 
   async appendEntry(entry: SessionEntry): Promise<void> {

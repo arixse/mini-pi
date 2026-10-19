@@ -220,6 +220,45 @@ describe("JsonlSessionStore", () => {
       assert.strictEqual(store.getLeafId(), id2);
     });
 
+    it("appendMessages 批量写：一次落盘，父链与内存状态都对", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      const ids = await store.appendMessages([
+        { role: "user", content: [createTextContent("一")], timestamp: 1 },
+        { role: "user", content: [createTextContent("二")], timestamp: 2 },
+      ]);
+
+      assert.deepStrictEqual(ids, ["entry_1", "entry_2"]);
+      assert.strictEqual(store.getLeafId(), "entry_2");
+
+      const lines = readFileSync(sessionFile, "utf8").split("\n").filter(Boolean);
+      assert.strictEqual(lines.length, 3, "头行 + 两条消息");
+      assert.strictEqual(JSON.parse(lines[2]).parentId, "entry_1", "父链要连上");
+      assert.strictEqual(store.buildContext().length, 2);
+    });
+
+    it("落盘失败时内存状态不得推进（否则重试会漏写）", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("先写一条")],
+        timestamp: 1,
+      });
+      const entriesBefore = store.getEntries().length;
+      const leafBefore = store.getLeafId();
+
+      // 删掉会话目录 → appendFile 必然 ENOENT
+      rmSync(testDir, { recursive: true, force: true });
+
+      await assert.rejects(() =>
+        store.appendMessages([
+          { role: "user", content: [createTextContent("会失败")], timestamp: 2 },
+        ]),
+      );
+
+      assert.strictEqual(store.getEntries().length, entriesBefore, "内存不该多出没落盘的条目");
+      assert.strictEqual(store.getLeafId(), leafBefore, "leafId 不该指向没落盘的消息");
+    });
+
     it("should track entries", async () => {
       const store = new JsonlSessionStore(sessionFile, testDir);
       await store.appendMessage({

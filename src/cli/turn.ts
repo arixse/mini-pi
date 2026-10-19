@@ -201,8 +201,17 @@ export async function runAgentTurn(
     });
 
     status.stop();
-    // 只补写尚未落盘的部分（例如到达最大轮次时的 guardrail 消息）
-    await appendAgentMessages(options, result.newMessages.slice(syncedMessages));
+    // 只补写尚未落盘的部分：既包括到达最大轮次时的 guardrail 消息，
+    // 也包括某一轮落盘失败后循环重投过来的那批（见 runAgentLoop.syncTurn）
+    const pending = result.newMessages.slice(syncedMessages);
+    if (pending.length > 0) {
+      try {
+        await appendAgentMessages(options, pending);
+      } catch (error) {
+        // 不能静默：用户会以为这一轮的历史已经保存，实际上没写进会话文件
+        logger.error("❌ 会话落盘失败，本轮消息未能写入会话文件:", error);
+      }
+    }
     // 用量在整轮结束后统计一次：newMessages 含本轮全部 assistant 消息
     deps.usageTracker.recordTurn(result.newMessages);
 

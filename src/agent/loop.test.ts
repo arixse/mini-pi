@@ -629,8 +629,9 @@ describe("loop", () => {
       assert.deepStrictEqual(seen[1], compacted, "第二次调用应使用压缩后的上下文");
     });
 
-    it("回调抛错不应中断本次运行", async () => {
+    it("回调抛错不应中断本次运行，且失败的那批会在下一轮重投", async () => {
       let call = 0;
+      const batches: AgentMessage[][] = [];
       const model: LlmModel = {
         async complete() {
           call += 1;
@@ -646,13 +647,25 @@ describe("loop", () => {
         tools: [],
         model,
         toolRegistry: createMockToolRegistry(),
-        onTurnEnd: async () => {
-          throw new Error("落盘失败");
+        onTurnEnd: async (turnMessages) => {
+          batches.push(turnMessages);
+          if (batches.length === 1) {
+            throw new Error("落盘失败");
+          }
+          return undefined;
         },
       });
 
       assert.strictEqual(call, 2, "运行应继续到结束");
       assert.ok(result.newMessages.length >= 3);
+
+      // 游标必须先于失败点停住：旧实现先推进 syncedCount 再 await，
+      // 第一批既不会被重投、也不会被补写，等于静默丢历史
+      assert.deepStrictEqual(
+        batches[1].map((message) => message.role),
+        ["assistant", "toolResult", "assistant"],
+        "第一轮失败的增量必须原样重投，而不是只投新消息",
+      );
     });
 
     it("未提供回调时行为不变", async () => {
