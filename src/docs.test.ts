@@ -183,6 +183,51 @@ describe("README 作为文档入口", () => {
   });
 });
 
+describe("许可声明", () => {
+  it("package.json 的 license 指向的许可文件确实存在", () => {
+    // "SEE LICENSE IN LICENSE" 是 SPDX 对非标准许可的标准写法：
+    // 它把条款外置到文件里，于是 meta 与文件必须成对存在，缺一个就等于没有许可
+    const pkg = JSON.parse(repoFile("package.json")) as { license?: string };
+    assert.strictEqual(pkg.license, "SEE LICENSE IN LICENSE");
+    assert.ok(existsSync("LICENSE"), "license 字段指向 LICENSE，但文件不存在");
+  });
+
+  it("许可文本必须写明商业使用需授权，并且不是 ISC", () => {
+    // 这是本项目唯一的差异化条款：只在 README 里口头声明、许可正文里不写，
+    // 拿到 LICENSE 的人就看不到限制，等于没有限制
+    const text = repoFile("LICENSE");
+    assert.ok(text.length > 0, "应能读到 LICENSE");
+    for (const keyword of ["商业使用", "书面授权", "保留所有权利"]) {
+      assert.ok(text.includes(keyword), `LICENSE 应写明「${keyword}」`);
+    }
+    assert.ok(
+      !/ISC License|MIT License|Apache License/i.test(text),
+      "LICENSE 不应混入其它标准许可的正文",
+    );
+  });
+
+  it("README 的许可章节链接到 LICENSE，并说明它不是 OSI 开源许可", () => {
+    const text = repoFile("README.md");
+    assert.ok(text.includes("[LICENSE](LICENSE)"), "README 应链接到 LICENSE 全文");
+    // 限制商业使用就不是 OSI 认可的开源：README 必须说清，否则会误导下游选型
+    assert.ok(
+      text.includes("source-available"),
+      "README 应说明本项目属于 source-available 而非开源许可",
+    );
+  });
+
+  it("发布文档登记的包内容里必须有 LICENSE", () => {
+    // LICENSE 不在 files 白名单里（靠 npm 自动带上），最容易在改白名单、
+    // 换打包方式或加 .npmignore 时被顺手排除，而文档是唯一能提前发现的地方
+    const doc = repoFile(join("docs", "publishing.md"));
+    assert.ok(doc.length > 0, "应能读到 docs/publishing.md");
+    assert.ok(
+      doc.includes("- `LICENSE`"),
+      "docs/publishing.md 的「包里有什么」应登记 LICENSE",
+    );
+  });
+});
+
 describe("docs 数值与实现对得上", () => {
   it("各角色超时秒数与 roles.ts 一致", () => {
     const doc = repoFile(join("docs", "multi-agent-design.md"));

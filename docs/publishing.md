@@ -74,11 +74,18 @@ git push origin v1.0.1
 
 ## 包里有什么
 
-`package.json` 的 `files` 白名单决定，目前是 3 个文件、约 347KB（未压缩 1.8MB）：
+`package.json` 的 `files` 白名单决定，目前是 4 个文件、约 345KB（未压缩 1.7MB）：
 
 - `bin/mini-pi-cli.cjs`（esbuild 单文件 bundle，1.7MB 未压缩）
 - `README.md`
+- `LICENSE`
 - `package.json`
+
+`LICENSE` 并不在 `files` 白名单里，是 npm 自动带上的（它和 `README` 同属 npm
+的固定保留文件）。这点不能想当然：`package.json` 的 `license` 写的是
+`SEE LICENSE IN LICENSE`，条款全在那个文件里，一旦它没进包，用户装完就只剩
+一句指向虚空的声明。发布 workflow 因此在预检里加了 `test -f "$PKG_DIR/LICENSE"`
+把它钉死。
 
 **不带 `src`**：`mini-pi-cli.cjs` 是自包含 bundle，运行时不需要 TypeScript 源码。
 `src` 只服务于仓库内开发用的 `bin/mini-pi.js`（走 tsx 跑源码），
@@ -86,7 +93,7 @@ npm 装包的用户用不到，也就没进白名单。
 
 **也不带 dependencies**：`chalk` / `openai` / `@anthropic-ai/sdk` 全部被 bundle 进去，
 所以 `package.json` 的 `dependencies` 是空的，它们只在 `devDependencies` 里
-（开发、测试、构建时解析）。效果是 `npm i -g` 只下载一个 347KB 的 tarball，
+（开发、测试、构建时解析）。效果是 `npm i -g` 只下载一个 345KB 的 tarball，
 不再连带 45MB 的依赖树。
 
 验证方式很简单，改完打包后跑一次：

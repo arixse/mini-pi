@@ -153,7 +153,10 @@ jobs:
           test "$META_VERSION" = "$VERSION"
 
           echo "包内容：$(tar -tzf "$TARBALL" | wc -l) 个文件，$(du -h "$TARBALL" | cut -f1)"
-          tar -tzf "$TARBALL" | grep -E '^package/(bin|README)' | sed 's/^/  /'
+          tar -tzf "$TARBALL" | grep -E '^package/(bin|README|LICENSE)' | sed 's/^/  /'
+          # 许可文件必须在包里：npm 会自动带上 LICENSE，但 meta 里写的是
+          # "SEE LICENSE IN LICENSE"，文件一旦改名，用户装完就无从得知条款
+          test -f "$PKG_DIR/LICENSE"
 
       - name: Publish
         if: ${{ inputs.dry-run != 'true' }}
