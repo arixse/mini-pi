@@ -1,8 +1,10 @@
 # CLI 交互体验设计稿
 
 > 状态：**第一~四档全部已实现**（进度与偏差见第 0 节）。
-> 本文是设计稿，保留设计原则、分档进度与偏差记录；**终端呈现的终态格式以
-> [cli-interaction.md](./cli-interaction.md) 第 4 节为唯一权威来源**，两处不一致时以后者为准。
+> 本文是设计稿，只保留**设计理由**：目标与原则、分档进度与偏差、实现结构、
+> 测试策略与已定下的设计决策。终端呈现的终态格式（卡片 / 状态行 / 审批 / 降级 /
+> `/status`）以 [cli-interaction.md](./cli-interaction.md) 第 4、5 节为唯一权威来源，
+> 两处不一致时以后者为准，本文不再重复那些规范。
 > 本文只描述终端呈现与交互，不改动会话存储、工具安全与审批的既有语义。
 
 ## 0. 实现进度
@@ -13,7 +15,7 @@
 | 2 | 工具卡片重排（标题行合并、diff 展示、失败显示 exit code/stderr） | ✅ 已实现（`src/cli/render.ts`） |
 | 3 | 结果逐行缩进、规模提示、`/last` 回看 | ✅ 已实现（`/last [n]` 带行号查看完整输出，行号跟随分页读取的真实行号；卡片缩进与规模提示随第 2 档落地；被省略时页脚提示 `/last 查看全部`，失败时正文改为显示尾部） |
 | 4 | `render.ts` 收口、`NO_COLOR`/ASCII/窄终端降级 | ✅ 已实现（渲染收口到 `render.ts`；宽度工具抽到 `width.ts`，状态行、`/status` 标签一并按显示宽度计算；终端 resize 会同步给渲染上下文） |
-| — | `read_file` 分页与上限（12.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
+| — | `read_file` 分页与上限（§7.1）、`/exit` 等本轮收尾后退出 | ✅ 已实现（独立于第 2~4 档） |
 | — | bash 输出上限、`list_files` 忽略规则与上限、循环内压缩、会话文件容错 | ✅ 已实现 |
 | — | `glob` / `grep` 工具、只读工具并发、`/status` `/sessions` `/switch` | ✅ 已实现 |
 
@@ -59,311 +61,27 @@
 5. **能力降级**：非 TTY / `NO_COLOR` / 窄终端 / 无 emoji 字体时都有可用形态。
 6. **纯函数渲染**：所有渲染输出为字符串，便于单元测试（与本项目"每次改动配单测"的纪律一致）。
 
-## 2. 视觉语法
+## 2. 视觉语法与工作状态（终态格式以 cli-interaction 为准）
 
-### 2.1 三类块
+三类块的视觉区分、标题行模板、颜色表、宽度与截断、各状态渲染，均以
+[cli-interaction.md](./cli-interaction.md) §4.1~§4.3 为唯一权威来源，本文不重复。
+定这条语法只为解决第 1 节的三个问题（长回答静默 / 工具执行静默 / 多行结果塌陷），
+可沿用的一条原则：**任何超过 200ms 的等待都必须有可见反馈**。
 
-```
-用户输入     分隔线 + 青色提示符 `> `（readline 回显）
-助手正文     无前缀，正常换行（流式逐字写入）
-工具块       `│ ` 左侧竖线 gutter + 标题行 + 页脚行 `└ `
-```
+## 3. 工具卡片与结果回看（终态格式以 cli-interaction 为准）
 
-工具块用 gutter 包住，是为了让"这段是工具输出"在长转录里始终可辨，且换行不会串到正文。
+逐工具的标题参数 / 正文 / 页脚规范、卡片示例、diff 折叠、分层截断与 `/last`，
+均以 [cli-interaction.md](./cli-interaction.md) §4.2 与第 5 节命令表为唯一权威来源，
+本文不重复。设计稿阶段"卡片所需的 `details` 元数据取不到"已不成立——
+行数 / 大小 / exit code 在实现期全部就位，第 3 档的规模提示与 `/last` 都建在它上面。
 
-### 2.2 标题行模板
+## 4. 会话展示与审批（终态格式以 cli-interaction 为准）
 
-```
-<图标> <工具名> <关键参数>                    <状态> · <耗时> [· <附加>]
-```
+启动恢复、轮次脚注、`/status` 的排版见 [cli-interaction.md](./cli-interaction.md)
+§3.2、§4 与 §5.13；审批交互（`[y/N/a]`、风险分级、非交互式按拒绝处理）见 §4.5。
+本文不重复。
 
-- 左半部分是**标识**：`图标 + 工具名 + 关键参数`（参数按工具定制，见 §4）。
-- 右半部分是**结果**：`✅ / ❌ / ⏹️` + 耗时 + 附加信息（`exit 0`、`+12 -3`、`5.0 KB`）。
-- 右对齐到终端宽度（`process.stdout.columns`），窄终端（< 60 列）时右半部分另起一行并缩进。
-
-### 2.3 颜色
-
-| 元素 | 颜色 |
-| --- | --- |
-| 工具名 | 沿用现有按工具区分（list 蓝 / read 青 / write 品红 / edit 黄 / bash 绿） |
-| ✅ / ❌ | 绿 / 红（加粗） |
-| 耗时、gutter、页脚 | dim |
-| diff 删除行 `-` | 红 |
-| diff 新增行 `+` | 绿 |
-| stderr | 黄 |
-| 审批提示 | 黄（`⚠️` 前缀） |
-| 用量脚注 | dim |
-
-### 2.4 宽度与截断
-
-- 一律按 `columns` 计算，超出用 `…` 截断。
-- 截断必须**按显示宽度**计算（CJK 与 emoji 占 2 列），不能按字符串长度，否则中英混排会错位。
-- 最小可用宽度 40 列；更窄时退化为 `| ` gutter 且不做右对齐。
-
-## 3. 工作状态
-
-### 3.1 状态机
-
-```
-IDLE ──用户回车──▶ THINKING ──首个 token──▶ STREAMING ──工具调用──▶ TOOL_RUNNING
-  ▲                   │                        │                      │
-  │                   │                     无工具                     │
-  │                   ├──────────────▶ IDLE ◀──┴──────────────────────┤
-  │                   │                                               │
-  │              COMPACTING（压缩上下文，可能先于 THINKING）           │
-  └───────────────────┴─────────────── CANCELLED ◀────────────────────┘
-```
-
-### 3.2 各状态渲染
-
-**IDLE**
-
-```
-────────────────────────────────────────────────────────────────
-> 帮我看看测试为什么失败
-```
-
-**COMPACTING**（`appendUserMessage` 触发压缩时会调用模型生成摘要，可能静默数秒）
-
-```
-⠋ 压缩上下文…（12.4k → 2.1k tokens，保留最近 10 条）
-```
-
-**THINKING**（模型请求已发出，尚未返回首个 token；spinner 每 100ms 更新）
-
-```
-⠋ 思考中… 1.4s
-```
-
-**STREAMING**（逐 delta 写入，无 spinner；行内不打断）
-
-```
-测试失败的原因是 sessionStore 的 parentId 回溯只走了一层：
-```
-
-**TOOL_RUNNING**（标题行立即出现，状态位原地刷新）
-
-```
-💻 npm test                                             ⠋ 4.1s
-```
-
-完成后原地改写为终态，再打印正文：
-
-```
-💻 npm test                                    ✅ 3.2s · exit 0
-```
-
-**CANCELLED**
-
-```
-⏹️  已取消（8.6s）· 已保留已完成的内容
-```
-
-## 4. 工具调用卡片（终态）
-
-### 4.1 逐工具规范
-
-| 工具 | 标题行关键参数 | 正文 | 页脚 |
-| --- | --- | --- | --- |
-| `bash` | **完整命令**（不再截到 40 字符） | stdout 前置、stderr 随后（黄） | `exit <code>` + 行数/大小 |
-| `read_file` | 路径 | 前 N 行（带行号） | `共 529 行 · 18.6 KB` |
-| `write_file` | 路径 | —— | `新增/覆盖 · 42 行 · 2.1 KB` |
-| `edit_file` | 路径 | **unified diff** | `+12 -3` |
-| `list_files` | 路径 | 前 10 项 | `42 项（12 目录 / 30 文件）` |
-
-### 4.2 示例：bash 成功
-
-```
-💻 npm test                                    ✅ 3.2s · exit 0
-│ > mini-pi@1.0.0 test
-│ > tsx --test "src/**/*.test.ts"
-│
-│ ℹ tests 296
-│ ℹ pass 293
-│ ℹ fail 0
-└ 21 行 · 1.2 KB
-```
-
-### 4.3 示例：bash 失败（stderr 区分 + 退出码）
-
-```
-💻 npm run build                                ❌ 0.4s · exit 1
-│ npm error Missing script: "build"
-│ npm error
-│ npm error To see a list of scripts, run:
-│ npm error   npm run
-└ 4 行 · 168 B · stderr
-```
-
-### 4.4 示例：edit_file 显示 diff
-
-```
-🔧 src/agent/model.ts                                         ✅ 12ms
-│ @@ -118,3 +118,3 @@
-│ - const REQUEST_TIMEOUT_MS = 30_000;
-│ + const REQUEST_TIMEOUT_MS = 120_000;
-│
-│   function isAbortError(error: unknown): boolean {
-└ 1 处修改 · +1 -1
-```
-
-规则：对 `oldText` / `newText` 做**前后缀折叠**，得到"变更行 + 各一行上下文"的
-单个 hunk（`edit_file` 的语义就是一次替换，不需要通用 LCS）；diff 正文超过
-20 行（`MAX_DIFF_LINES`）时折叠（见第 0 节的偏差说明）。
-
-### 4.5 示例：read_file（带行号与规模）
-
-```
-📖 src/agent/model.ts                              ✅ 8ms · 529 行
-│   1 │ import OpenAI from "openai";
-│   2 │ import Anthropic from "@anthropic-ai/sdk";
-│   3 │
-│   4 │ /** 单次模型请求的超时时间（毫秒） */
-│   …
-└ 529 行 · 18.6 KB · 显示前 4 行，/last 查看全部
-```
-
-### 4.6 示例：list_files（折叠）
-
-```
-📂 .                                            ✅ 6ms · 42 项
-│ AGENTS.md  README.md  package.json  tsconfig.json
-│ docs/          （7 个文件）
-│ src/           （25 个文件）
-│ …
-└ 42 项（12 目录 / 30 文件）· /last 查看完整列表
-```
-
-### 4.7 工具 `details` 契约（实现前提）
-
-稿面里的"行数 / 大小 / exit code"目前**取不到**，需要工具在 `details` 里补充元数据。
-`edit_file` 的 diff 例外——`oldText` / `newText` 本就在调用参数里，渲染层可直接取用。
-
-| 工具 | `details` 现状 |
-| --- | --- |
-| `bash` | ✅ `command`, `exitCode`（数字）, `stdout`, `stderr`, `errorCode` |
-| `read_file` | ✅ `path`, `totalLines`, `totalBytes`, `returnedFrom`, `returnedTo`, `returnedLines`, `truncated` |
-| `write_file` | ✅ `path`, `bytesWritten`, `lines`, `created` |
-| `edit_file` | ✅ `path`, `replacements`, `oldTextLength`, `newTextLength`, `lineNumber` |
-| `list_files` | ✅ `entries`, `dirCount`, `fileCount` |
-
-卡片所需的元数据已全部就位，第 3 档的 `/last` 也可直接复用。
-
-耗时由渲染层用 `tool_execution_start` / `end` 的时间戳计算，不需要工具返回。
-
-## 5. 工具结果：分层截断与可回看
-
-**截断策略（三档）**
-
-1. **卡片内**：默认最多 8 行或 1 KB，超出以 `…` 收尾并在页脚注明省略量，
-   并提示 `· /last 查看全部`。
-   **失败时窗口移到末尾**（`… 已省略前 N 行` + 末尾 N 行）：报错几乎总在最后，
-   从头截等于把原因留在屏幕外。
-2. **`/last [n]`**：打印上一条工具输出的完整内容（默认前 200 行，`n` 可调），带行号。
-   行号跟随 `read_file` 的 `returnedFrom`——分页读取时结果从文件中部开始，
-   编号从 1 起会让用户照着错误行号去编辑器里找。
-   完整内容本就在会话消息里，无需新增存储。
-3. **会话文件**：原始记录，随时可查。
-
-**`/last` 示例**
-
-```
-📖 上一条工具输出：read_file src/agent/model.ts          529 行 · 18.6 KB
-│   1 │ import OpenAI from "openai";
-│   2 │ import Anthropic from "@anthropic-ai/sdk";
-│   …
-│ 200 │ }
-└ 显示 1–200 行 · /last 400 查看后续
-```
-
-**为什么必须做**：现在用户看到 100 字符、模型看到 1800 字符，二者视图不一致，用户无法判断
-agent 是否基于错误或过期的信息做决策。这是可信度问题，不只是美观问题。
-
-## 6. 会话与状态展示
-
-### 6.1 启动时恢复历史
-
-> **状态：已实现**（`ui.ts` 的 `printResumedSession`）。
-> 只打印条数改为回放**最后一轮**（dim）+ 计数：多条会话并行时，
-> 用户靠条数认不出这是哪次对话，很容易在错误的上下文里继续提问。
-
-```
-[Session] 已恢复 24 条历史消息
-│ 最近一轮：
-│ > 上次我们改到哪了？
-│ 已经修好 sessionStore 的 parentId 回溯，下一步做 CLI 展示层。
-└ /new 开启新会话 · /sessions 选择其它会话
-```
-
-多行内容压平到一行、按终端宽度截断；历史里没有任何文本时不空喊"最近一轮"。
-只提示真实存在的命令——原稿里的 `/history` 从未实现过。
-
-### 6.2 轮次脚注
-
-> **状态：已实现**（`turn.ts` 的 `formatTurnFooter`）。
-
-每轮结束时打印一行 dim 脚注（成本与压缩预期可见）：
-
-```
-↳ 8.6s · ↑1.2k ↓318 · 上下文 3.4k/6.0k
-```
-
-耗时从"开始干活"起算（排队与读输入不算本回合的账）；提供方没返回 usage 时
-省略用量段而不是显示 `0`；上下文刻度与 `/status` 共用 `contextUsage`，
-两处各算一遍必然出现同一刻两个数的荒唐现象。
-
-### 6.3 `/status`
-
-```
-📊 会话状态
-│ 模型       deepseek/deepseek-flash（deepseek）
-│ 会话文件   ~/.mini-pi/sessions/--D--workspace-mini-pi--/2026-10-02T15-01-42.jsonl
-│ 上下文     3.4k / 6.0k tokens（保留最近 10 条）
-│ 工具确认   🔒 需确认（/trust 切换）
-│ 工作目录   D:\workspace\mini-pi
-└ 消息 24 条 · 含 1 条压缩摘要
-```
-
-## 7. 审批交互
-
-> **状态：已实现**（见 `src/cli/approval.ts`）。机制未变（仍是 `beforeToolCall` 前的
-> 一次询问），变化的只有呈现：`[y/N/a]` 三个选项 + 风险分级着色 + 与卡片一致的 `│ └` 版式。
-
-在现有 `[y/N]` 基础上增加第三个选项 `a`，并给风险点着色：
-
-```
-⚠️  需要确认  bash
-│ npm test -- --grep "session"
-└ 允许执行? [y/N/a]   a = 本会话内全部允许
-```
-
-- `y` 允许 / `n` 拒绝（含直接回车）/ `a` 本会话全部允许（等价于 `/trust`，但由上下文触发，更顺手）。
-- 选择 `a` 时额外提示一次：`🔓 已开启信任模式（/trust 可关闭）`，并回写 `/status` 的「工具确认」行。
-- 风险评估（`assessToolRisk`）在提示语里先行一步：`rm -rf`、`sudo`、`git reset --hard`、
-  `git push --force`、`curl | sh`、`chmod -R 777`、`npm publish` 等判为 `high`（红），
-  `rm` / `mv` / `git push` / 装包 / 网络请求判为 `elevated`（黄）；
-  `write_file` 覆盖已有文件、`task` 给子 Agent 放开写/执行权限同样计入 `elevated`。
-  高危时不叠加降级理由，避免致命的那条被淹没。
-- 版式复用卡片的 gutter：正文 `│ `、收尾 `└ `，`MINI_PI_ASCII=1` 时退化为 `| ` / `+ `。
-- 非交互式终端：
-
-```
-⚠️  非交互式终端，已自动拒绝写操作（bash）
-└ 如需放开：在真实终端运行，或启动后执行 /trust
-```
-
-## 8. 降级与可达性
-
-| 条件 | 行为 |
-| --- | --- |
-| 非 TTY（管道/重定向） | 关闭 spinner（改为静态 `… 思考中`）、关闭颜色、关闭原地刷新 |
-| `NO_COLOR` 环境变量 | 关闭全部颜色，保留结构与图标 |
-| `--no-emoji` / `MINI_PI_ASCII=1` | 图标替换为 ASCII 标签：`[bash] [read] [write] [edit] [list] [ok] [fail]` |
-| 终端宽度 < 60 | 右对齐取消，状态另起一行；gutter 用 `| ` |
-| 终端宽度**中途变化** | 监听 `resize` 更新渲染上下文宽度，之后的卡片按新列数排版 |
-| 无 CJK 字体 / 宽度不可测 | 回退为按码点计数（并在 `/status` 提示可能错位） |
-
-## 9. 实现结构
+## 5. 实现结构
 
 **新增 `src/cli/render.ts`（纯函数，便于单测）**
 
@@ -410,7 +128,7 @@ export function renderStatus(state: RunState, ctx): string;
 - `model.ts` 增加流式路径（`stream: true`），`loop.ts` 转发增量 delta；`message_update` 事件语义不变。
 - 轮次用量：`turn_end.message.usage` 已带单轮用量，直接渲染即可；整轮合计在 `loop.ts` 内累加后随 `turn_end` 交回 REPL。
 
-## 10. 测试策略
+## 6. 测试策略
 
 | 目标 | 用例 |
 | --- | --- |
@@ -422,18 +140,7 @@ export function renderStatus(state: RunState, ctx): string;
 | 降级 | `color:false` 输出不含 ANSI；`emoji:false` 输出为 ASCII 标签 |
 | 非 TTY | 不出现 `\r` 与光标控制序列 |
 
-## 11. 分期落地建议
-
-| 阶段 | 内容 | 价值 | 风险 |
-| --- | --- | --- | --- |
-| 1 | A1 流式 + A2 spinner + A3 耗时 | 体感提升最大，消除"卡住"错觉 | 中（`model.ts` 调用方式 + 输出层互斥） |
-| 2 | B 卡片重排 + edit diff | 信息密度与可读性 | 低（纯渲染） |
-| 3 | C 结果缩进 + `/last` | 可审计性 | 低 |
-| 4 | D `render.ts` 收口 + 降级开关 | 可维护性、CI 友好 | 低 |
-
-阶段 1 不触碰会话、审批与工具安全逻辑，可独立提交与回滚。
-
-## 12. 待你确认的设计决策
+## 7. 待你确认的设计决策
 
 > 以下决策在落地时已全部定下：轮次脚注**默认常显**、`read_file` **默认带行号**、
 > 取消时写入一条 `模型调用已取消` 占位（不污染历史）、`list_files` 按宽度紧凑排布
@@ -445,7 +152,7 @@ export function renderStatus(state: RunState, ctx): string;
 4. **`list_files` 折叠阈值**（默认 10 项是否合适）
 5. **是否保留每轮首尾的 60 字符分隔线**？（工具块已有 gutter，连续多轮时分隔线可能冗余）
 
-### 12.1 工具结果完整性 vs 上下文预算（已实施）
+### 7.1 工具结果完整性 vs 上下文预算（已实施）
 
 `544738b`「保留完整toolResult结果」取消了 `read_file` 的 1800 字符截断，好处是模型能看到完整内容，
 代价是**单次读取可能撑爆上下文**（读一个 200KB 的文件 ≈ 十万字符进 context），
@@ -463,6 +170,6 @@ export function renderStatus(state: RunState, ctx): string;
 
 ## 相关文档
 
-- [CLI 交互文档](./cli-interaction.md)
+- [CLI 交互文档](./cli-interaction.md) - 终端呈现与交互行为的唯一权威来源
 - [产品设计文档](./product-design.md)
 - [技术方案](./technical-solution.md)
