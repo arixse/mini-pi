@@ -119,7 +119,7 @@
 M5 之后回头通读 `subagent.ts` / `subagentTool.ts` / `roles.ts` / `loop.ts` /
 `repl.ts` / `approval.ts` / `render.ts`，先用临时脚本实测再改代码，落 3 个提交：
 
-- `37dd1fc` 修复方案 `docs/multi-agent-fix-plan.md`：按 A~E 五批给出改动清单与验收标准；
+- `37dd1fc` 修复方案（后并入 `docs/multi-agent-design.md` 第 10 节）：按 A~E 五批给出改动清单与验收标准；
 - `f1c1e27` **A 批正确性**（`acquire()` 一处收口）：
   - 预算检查原本在 `await` 之前，排队的等待者正是从 `await` 处醒来的，
     于是同一批并发申请会先后通过同一个 `if`——实测 `maxDelegations=8` 却发出 12 个名额。
@@ -145,7 +145,7 @@ M5 之后回头通读 `subagent.ts` / `subagentTool.ts` / `roles.ts` / `loop.ts`
   设计稿里留了这个开关（写 `*.sub-<id>.jsonl`），尚未实现；
 - **深度 >1**：当前 `MAX_SUBAGENT_DEPTH = 1`（Agent 不能再生 Agent）。
   放开之前需要先修 `SubAgentRuntime.parentId` 恒为 `null`（孙级会错记成主 Agent）；
-- **未做的批次**（见 `docs/multi-agent-fix-plan.md`）：B 整体超时与回传总量预算、
+- **未做的批次**（清单已并入 `docs/multi-agent-design.md` 第 10 节）：B 整体超时与回传总量预算、
   C 判定口径与提示对齐、D 卡片层级与审批摘要、E 重复实现清理。
 
 ---

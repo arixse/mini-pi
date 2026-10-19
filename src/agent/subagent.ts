@@ -402,7 +402,8 @@ export class SubAgentSupervisor {
    * 并行名额满时会等待，直到有子 Agent 结束——保证 toolResult 的顺序不受影响
    * （顺序由 loop 的 slots 保证，这里只负责限流）。
    *
-   * 三步的顺序是被两个真实缺陷倒逼出来的，改动前请先读 docs/multi-agent-fix-plan.md：
+   * 三步的顺序是被两个真实缺陷倒逼出来的，改动前请先读 docs/multi-agent-design.md
+   * 第 10 节（批次 A）：
    * 1. **等待必须与取消竞速**（A2），否则 Ctrl+C 之后排队者要等运行中的子 Agent 自己收尾；
    * 2. **预算检查必须在等待之后**（A1），因为等待者正是从这里醒来的——
    *    放在排队之前，同一批并发申请会先后通过同一个检查，预算可被无限突破。

@@ -5,6 +5,12 @@
 Mini Pi 现在支持多会话管理功能，每个会话都独立存储，且**按工作目录隔离**：
 在 A 目录看不到、也切不到 B 目录的会话。
 
+本文只覆盖**存储层的实现细节**（目录推导、隔离判定、写盘语义、类接口）。
+用户可见的命令行为（`/new` / `/clear` / `/sessions` / `/switch`）与上下文压缩的
+完整口径以 [cli-interaction.md](./cli-interaction.md) 第 5、6 节为唯一权威来源，
+本文不重复；确需细节时以代码 `src/agent/sessionManager.ts` 与
+`src/agent/sessionStore.ts` 为准。
+
 ## 存储位置
 
 - **会话存储根目录**: `~/.mini-pi/sessions/`
@@ -30,83 +36,19 @@ Mini Pi 现在支持多会话管理功能，每个会话都独立存储，且**�
 
 ## 命令
 
-### `/new` - 创建新会话
+`/new`、`/clear`、`/sessions`、`/switch` 的行为（输出文案、上下文重建、会话文件切换）
+见 [cli-interaction.md](./cli-interaction.md) §5.2 / §5.8 / §5 命令表，本文不重复。
+与本存储层相关的两条约束：
 
-使用 `/new` 命令可以创建一个新的会话：
-
-```
-You: /new
-✅ 已创建新会话
-You:
-```
-
-创建新会话后：
-
-1. 当前对话历史会被清空（内存上下文依据新会话重建）
-2. 新的会话文件会自动创建
-3. 所有后续消息都会保存到新会话中（旧会话文件保留在磁盘上，不再写入）
-
-### `/clear` - 清除对话历史
-
-与 `/new` 不同，`/clear` 不新建文件，而是**重置当前会话文件**（只保留新的会话头）并清空内存上下文。
-
-因为会话文件是上下文的唯一事实来源，只清空内存会让历史在下一轮重建上下文时被重新加载回来，
-所以 `/clear` 必须同时清空两者。若希望保留旧会话记录，请使用 `/new`。
-
-### 其他相关命令
-
-所有命令都以 `/` 开头：
-
-- `/new` - 创建新的会话
-- `/login` - 登录模型服务商（输入 apiKey，不回显）
-- `/model` - 选择模型供应商和模型
-- `/help` - 显示帮助信息
-- `/clear` - 清除对话历史
-- `/exit` - 退出程序
-- `/quit` - 退出程序
+- 会话文件是上下文的**唯一事实来源**：REPL 每轮都依据会话文件重建内存上下文，
+  因此 `/new`、`/clear`、压缩三者的行为彼此一致；
+- `/last` 与工具卡片缓存是**会话级**状态：`/new`、`/clear`、`/switch` 之后都会被重置。
 
 ## 上下文恢复与压缩
 
-- **启动恢复**：`main()` 会用 `JsonlSessionStore.syncContext()` 把最近会话的历史消息
-  （含压缩摘要）恢复进内存上下文，并在欢迎信息后打印 `[Session] 已恢复 N 条历史消息`。
-- **压缩生效**：每轮对话调用 `compactIfNedded(budget, 10, overhead)`，压缩结果会立即作用于内存上下文，
-  而不仅仅是写入文件。`keepRecentMessages` 最小按 1 处理。阈值 `budget` 由模型窗口推导
-  （`max(8000, 窗口 × 0.6)`），并把系统提示与工具定义作为固定开销计入。
-  窗口按「`settings.json` 的 `contextWindow` → 当前模型名推断 → 默认 128000」依次取值，
-  启动时、`/reload`、`/model` 之后都会重算（详见 `docs/cli-interaction.md` 6.2）。
-- **压缩窗口不切断工具配对**：窗口起点不能落在 `toolResult` 上，否则它对应的
-  assistant `toolCall` 会被摘要吞掉，还原上下文时就成了引用不存在 `tool_call_id`
-  的孤儿结果（OpenAI 会直接 400，且非法序列已落盘，该会话之后每轮都会失败）。
-  因此 `alignCompactionStart()` 会把起点向前回退到第一个非 `toolResult` 的消息，
-  保证 `assistant + 它的全部工具结果` 同进同出；若回退到链首（整段历史都要保留），
-  本次压缩直接放弃，不会写出一条把上下文清空的空摘要。
-- **压缩可取消**：压缩要调一次摘要模型（可能静默数秒），会带上当前的取消信号，
-  Ctrl+C 能一并中止它；被取消时**不写任何压缩条目**——回退到"共 N 条消息"
-  这类降级摘要等于把真实历史换成一句废话。已取消时也会直接跳过，
-  不白调一次摘要模型。
-- **唯一事实来源**：REPL 每轮都依据会话文件重建内存上下文，因此 `/new`、`/clear`、
-  压缩三者的行为彼此一致。
-
-## 损坏行的容错
-
-会话文件是上下文的唯一事实来源，所以**一行坏数据不能让整份会话打不开**
-（进程被强杀在写一半、磁盘错误都会留下半行 JSON）：
-
-- 逐行 `JSON.parse` 包 try/catch；
-- 通过 `validateSessionEntry()` 校验结构：`session` 需 `version`/`id`，
-  `message` 需 `id`/`parentId`/`message.role`，`compaction` 需
-  `id`/`parentId`/`summary`/`firstKeptEntryId`，**未知 `type` 一律拒绝**。
-
-  只校验 `type` 是字符串是不够的：`loadOrCreate` 随后会访问 `entry.id.replace(...)`，
-  一行 `{"type":"message"}`（缺 id）就会让**构造函数**抛 `TypeError`——不是跳过该行，
-  而是整个 CLI 起不来。这类行能通过 `JSON.parse`，所以 try/catch 兜不住。
-- 坏行跳过并记录行号，其余记录照常加载；
-- CLI 启动时明确提示「有 N 行损坏，已跳过：第 x、y 行」；
-- **会话头缺失或损坏时只补写头行**：把新头行插到最前面，其余原始行原样保留，
-  并走「临时文件 + rename」原子写回。旧实现在这里清空内存后 `"w"` 重写，
-  等于把头行之后的全部历史就地截断——用户看到的是"会话凭空清空"；
-- 补头时唯一被丢掉的是**确认损坏的第 1 行**（它的位置已被新头行占据），
-  其它无法解析的行一律保留：宁可下次加载再报一次，也不静默删用户数据。
+恢复与压缩的完整口径（阈值推导、窗口表、可取消、不写降级摘要、压缩窗口不断工具配对）
+见 [cli-interaction.md](./cli-interaction.md) §6.2 与 §4.6，本文不重复。
+存储层只保证一件事：压缩结果以 `compaction` 条目落盘，并随会话文件一并恢复。
 
 ## 写盘失败的重试语义
 
@@ -168,85 +110,10 @@ workspaceSessionDirName(workspaceRoot); // "--D--workspace-mini-pi--"
 
 ## 固定上下文（AGENTS.md）
 
-### 功能说明
-
-创建会话时，Mini Pi 会自动读取以下位置的 AGENTS.md 文件作为固定上下文：
-
-1. **全局 AGENTS.md**: `~/.mini-pi/AGENTS.md`
-2. **项目 AGENTS.md**: `<项目目录>/AGENTS.md`
-
-这些文件的内容会被添加到系统提示中，作为 AI 助手必须遵循的规则。
-
-### AGENTS.md 文件格式
-
-AGENTS.md 文件使用 Markdown 格式，示例：
-
-```markdown
-# 项目代理规则
-
-## 1. 代码版本管理
-
-- 每次改动都需要创建 git commit
-- commit 信息应清晰描述改动内容
-
-## 2. 测试要求
-
-- 每次改动完成后都需要创建或更新对应的单元测试用例
-- 交付给用户的成果物必须是完全通过单元测试用例的
-```
-
-### 固定上下文生成
-
-固定上下文会自动包含：
-
-- 全局 AGENTS.md 内容（如果存在）
-- 项目 AGENTS.md 内容（如果存在）
-
-生成的固定上下文格式：
-
-```markdown
-# 固定上下文
-
-以下是来自 AGENTS.md 的规则，请在回答时遵循这些规则：
-
-## 全局代理规则
-
-[全局 AGENTS.md 内容]
-
----
-
-## 项目代理规则
-
-[项目 AGENTS.md 内容]
-```
-
-### 使用方法
-
-1. 创建全局 AGENTS.md（可选）：
-
-   ```bash
-   echo "# 全局规则" > ~/.mini-pi/AGENTS.md
-   ```
-2. 创建项目 AGENTS.md（可选）：
-
-   ```bash
-   echo "# 项目规则" > ./AGENTS.md
-   ```
-3. 启动 Mini Pi，固定上下文会自动加载
-
-### 技术实现
-
-```typescript
-const sessionManager = new SessionManager(workspaceRoot);
-
-// 获取固定上下文
-const fixedContext = sessionManager.getFixedContext();
-
-// 固定上下文会被添加到系统提示中
-const systemPrompt = `你是一个有用的AI编程助手...
-
-${fixedContext}`;
-```
+创建会话时会读取全局（`~/.mini-pi/AGENTS.md`）与项目（`<项目目录>/AGENTS.md`）
+两份规则，注入 System Prompt 的「固定上下文」段（组装顺序见
+[cli-interaction.md](./cli-interaction.md) §3.1）。规则经 `sessionManager.getFixedContext()`
+取出，用惰性函数注入，`/reload` 之后能拿到最新的那份。
 
 ## 测试
 

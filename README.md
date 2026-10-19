@@ -88,8 +88,7 @@ mini-pi/
 - [CLI 交互体验设计稿](docs/cli-ux-design.md) - 终端呈现的分档设计与实现进度（设计稿；现行格式以 cli-interaction.md 为准）
 - [模型供应商对接](docs/providers.md) - 新增厂商的实现步骤清单（含各家踩坑）
 - [Session 管理功能](docs/session-management.md)
-- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑（M0~M5 已落地，现行口径见技术方案 §3.6）
-- [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题的分批修复清单（A~E 已全部落地）
+- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑，含落地后 A~E 修复批次的结论与实施记录（全部已落地，现行口径见技术方案 §3.6）
 - [产品设计文档](docs/product-design.md)
 - [技术方案](docs/technical-solution.md)
 - [发布到 npm](docs/publishing.md) - 标签触发的发布流程、包内容与踩过的坑
@@ -331,131 +330,6 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 
 > 各供应商的默认模型列表、上下文窗口与接入细节见 [模型供应商对接](docs/providers.md)（唯一来源）；本节只保留注册概览。
 
-### OpenAI
-
-OpenAI 提供商使用官方 OpenAI 接口，base_url 为 `https://api.openai.com/v1`。
-
-支持的模型（默认列表）：
-
-- `gpt-4o` - 旗舰多模态模型
-- `gpt-4o-mini` - 高性价比模型
-- `gpt-4-turbo` - 高速模型
-- `o1` / `o1-mini` - 推理模型
-- `gpt-3.5-turbo` - 经典对话模型
-
-使用方法：
-
-1. 在 Mini Pi 中使用 `/login` 命令配置 OpenAI API Key
-2. 使用 `/model` 命令选择 OpenAI 提供商与模型
-
-（配置不再从环境变量读取，请使用 `/login` 和 `/model` 命令进行配置）
-
-OpenAI API 文档：https://platform.openai.com/docs/api-reference/models/list
-
-### DeepSeek
-
-DeepSeek 提供商支持 OpenAI 兼容的 Responses API 格式，base_url 为 `https://api.deepseek.com`。
-
-支持的模型：
-
-- `deepseek-flash` - 快速响应模型
-- `deepseek-v4-pro` - 专业版模型
-
-使用方法：
-
-1. 在 Mini Pi 中选择 DeepSeek 作为模型提供商
-2. 输入 DeepSeek API Key
-3. 选择要使用的模型
-
-DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
-
-### Anthropic
-
-Anthropic 提供商使用官方 Messages API，base_url 为 `https://api.anthropic.com`
-（SDK 请求时自行拼 `/v1`，模型列表接口是 `/v1/models`）。
-鉴权与其它提供商不同：官方用 `x-api-key` 头而不是 `Authorization: Bearer`。
-
-支持的模型（默认列表）：
-
-| 模型                  | 说明                                                       |
-| --------------------- | ---------------------------------------------------------- |
-| `claude-opus-5-5`   | 长程 Agent 编码与知识工作（1M 上下文），官方推荐的默认选择 |
-| `claude-sonnet-5-5` | 速度与智能最均衡（1M 上下文）                              |
-| `claude-haiku-4-5`  | 最快、成本最低（200K 上下文）                              |
-| `claude-fable-5-1`  | 最强推理与超长程 Agent（1M 上下文）                        |
-
-> Claude Opus 4.x / Sonnet 4.x 的 1M 上下文需要额外的 beta 头才能启用，
-> 未开启时窗口是 200K，因此上下文窗口推断表把它们登记为 200K
-> （估大会让请求在压缩触发前超窗 400）。若确已开启，可在 `settings.json`
-> 显式配置 `contextWindow`。
-
-Anthropic 文档：https://platform.claude.com/docs
-
-### Kimi（月之暗面）
-
-Kimi 使用 OpenAI 兼容接口，base_url 为 `https://api.moonshot.cn/v1`
-（国际站为 `https://api.moonshot.ai/v1`，两端账号与余额不互通，可在配置里覆盖 Base URL）。
-
-支持的模型（默认列表，均为官方在售模型）：
-
-- `kimi-k3` - 旗舰模型（2.8T 参数，1M 上下文，原生视觉理解）
-- `kimi-k2.7-code` - Coding 模型（256K 上下文）
-- `kimi-k2.7-code-highspeed` - Coding 高速版（约 180 Tokens/s）
-- `kimi-k2.6` - 通用模型（256K 上下文，支持思考/非思考模式）
-
-> `kimi-k2.5`、`moonshot-v1` 系列与 `kimi-k2` 系列官方已分别于 2026.08.31 / 2026.05.25 下线
-> （调用返回 404），已不再列入默认列表。Kimi API 同时兼容 Anthropic 格式，
-> 这里统一走 OpenAI 兼容端点。
-
-Kimi 文档：https://platform.kimi.com/docs
-
-### 智谱（Zhipu）
-
-智谱开放平台提供三种协议端点，这里走 **OpenAI 兼容（Chat Completion）** 端点
-`https://open.bigmodel.cn/api/paas/v4`（官方 GLM-5.3 文档注明：订阅过 GLM Coding Plan
-的用户暂时只能走这一协议，覆盖面最广）。鉴权是标准的 `Authorization: Bearer`
-（API Key 形如 `id.secret`），模型列表与请求同源（`{baseUrl}/models`）。
-
-支持的模型（默认列表，只列文本/编码类在售模型）：
-
-| 模型        | 说明                                                       |
-| ----------- | ---------------------------------------------------------- |
-| `glm-5.3` | 旗舰模型，编程与智能体能力对标 Claude Fable 5（1M 上下文） |
-| `glm-5.2` | 复杂长程任务，Coding 能力强（1M 上下文）                   |
-| `glm-5.1` | Coding 能力对齐 Claude Opus 4.6（200K 上下文）             |
-| `glm-4.7` | 通用对话、推理与智能体（200K 上下文）                      |
-| `glm-4.6` | 擅长高级编码、复杂推理与工具调用（200K 上下文）            |
-
-> 平台的视觉/图像/音视频/向量模型（GLM-5V、CogView、CogVideoX、Embedding 等）
-> 走各自专属接口，因此不在对话模型的默认列表里。
-
-智谱文档：https://docs.bigmodel.cn/cn/guide/start/model-overview
-
-### MiMo（小米）
-
-MiMo 使用 OpenAI 兼容接口，base_url 为 `https://api.xiaomimimo.com/v1`
-（Token Plan 订阅用户请改用控制台给出的专属 Base URL，同为 OpenAI 兼容协议）。
-
-支持的模型（默认列表，均为 V2.6 系列）：
-
-- `mimo-v2.6-pro` - 旗舰推理模型
-- `mimo-v2.6-flash` - 高效推理模型
-- `mimo-v2.6-pro-ultraspeed` - Pro 的超高速版本
-
-> MiMo 也提供 Anthropic 兼容端点，但其文档指出：Anthropic 协议下含工具调用的
-> 多轮会话缺 `reasoning_content` 会被判 400，因此这里统一走 OpenAI 兼容端点。
-> `mimo-v2.5-pro` / `mimo-v2.5` 官方公告 2026.10.21 下线，已不再列入默认列表。
-
-MiMo 文档：https://platform.xiaomimimo.com/docs
-
-### MiniMax-CN
-
-MiniMax-CN 使用 Anthropic 兼容接口，Base URL 是 `https://api.minimax.cn/anthropic`。
-与其它提供商不同，它的**模型列表在 `/v1/models`** 而不是 `{baseUrl}/models`，
-因此实现里单独提供了 `getModelsUrl()`（这是 `Provider` 接口里那个可选方法的唯一使用者）。
-
-默认模型即当前的主力型号（启动时按模型名推断上下文窗口，见上文"上下文窗口"）。
-
 ## 会话管理
 
 ### 存储位置
@@ -466,6 +340,9 @@ MiniMax-CN 使用 Anthropic 兼容接口，Base URL 是 `https://api.minimax.cn/
 - **文件命名**: 使用时间戳，格式为 `YYYY-MM-DDTHH-mm-ss.jsonl`（同一秒创建多个会话时追加 `-2`、`-3`）
 - **工作目录隔离**: `/sessions`、`/switch`、启动恢复都只认当前工作目录的会话；
   目录经 `resolve` + `realpath` 归一化（Windows 统一小写），软链接与大小写差异不会另起一串
+
+> 工作目录隔离的判定细节、损坏行容错与写盘语义见
+> [Session 管理功能](docs/session-management.md)。
 
 ### 命令
 
@@ -560,6 +437,16 @@ mini-pi --version    # → mini-pi v1.0.0
 - **项目 AGENTS.md**: `<项目目录>/AGENTS.md`
 
 这些文件的内容会被添加到系统提示中，作为 AI 助手必须遵循的规则。
+
+使用方法（两份都可选，放项目库里随代码走）：
+
+```bash
+echo "# 全局规则" > ~/.mini-pi/AGENTS.md     # 全局
+echo "# 项目规则" > ./AGENTS.md              # 项目级
+```
+
+启动时自动加载，`/reload` 之后会读取最新内容；组装进系统提示词的顺序见
+[CLI 交互文档](docs/cli-interaction.md) §3.1。
 
 ### 系统提示词
 

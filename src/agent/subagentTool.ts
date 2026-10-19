@@ -35,7 +35,7 @@ import {
  *
  * 两种原因必须说不同的话：预算用完是"你派多了，合并任务"；回合被取消是
  * "用户按了 Ctrl+C，别重试"。在此之前两者共用一句"本回合的委派次数已用完"，
- * 模型在取消后会误以为是自己派多了而收缩目标（docs/multi-agent-fix-plan.md A3）。
+ * 模型在取消后会误以为是自己派多了而收缩目标（docs/multi-agent-design.md §10 批次 A）。
  */
 export function describeDelegationDenied(reason: AcquireDeniedReason): string {
   if (reason === "cancelled") {

@@ -2,7 +2,7 @@
 
 > 日期：**2026-10-11**
 > Commit 范围：`8182dfa` ~ `976e77b`（16 个提交）
-> 相关文档：[发布到 npm](../docs/publishing.md) · [CI](../.github/workflows/ci.yml) · [多 Agent 修复方案](../docs/multi-agent-fix-plan.md)
+> 相关文档：[发布到 npm](../docs/publishing.md) · [CI](../.github/workflows/ci.yml) · [多 Agent 实现方案](../docs/multi-agent-design.md)（第 10 节即本日修复记录）
 > 上一篇：[Day 18 - 多 Agent 委派](./day18.md)
 
 ---
@@ -49,7 +49,7 @@ Day 18 把多 Agent 委派这条主链路打通后，剩下的都是"能用但�
 
 ### 二、多 Agent 修复 B~E 批（`5d3b759`）
 
-一次性做完 `docs/multi-agent-fix-plan.md` 的 B/C/D/E 四批：
+一次性做完修复方案（已并入 `docs/multi-agent-design.md` 第 10 节）的 B/C/D/E 四批：
 
 - **B 成本护栏**：角色级墙钟超时（`linkSignals([父signal, timeoutGuard.signal])`）、
   单回合回传总量 24000 字符闸。

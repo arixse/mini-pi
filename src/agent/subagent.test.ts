@@ -374,7 +374,7 @@ describe("subagent", () => {
      * 此前有一条同名用例（"不会挤爆预算"）只申请了 3 次、上限 8，
      * 恰好停在安全的一侧，于是缺陷一直是绿的。
      *
-     * @see docs/multi-agent-fix-plan.md §A1
+     * @see docs/multi-agent-design.md §10 批次 A（A1）
      */
     it("并发申请数超过预算时，预算不再被突破", async () => {
       const supervisor = new SubAgentSupervisor({
