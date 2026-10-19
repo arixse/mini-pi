@@ -22,6 +22,10 @@ export function handleSkills(sessionManager?: SessionManager): void {
     return;
   }
 
+  // 每次全量重扫：skill 是"踩坑即沉淀"的产物，会话中途新建很常见，
+  // 缓存会让 /skills 看不到刚落地的那个，用户只会以为功能坏了
+  sessionManager.getSkillLoader().clearCache();
+
   const metadata = sessionManager.loadSkillMetadata();
 
   if (metadata.length === 0) {

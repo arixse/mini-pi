@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { configureLogger, createMemorySink, resetLogger } from "../shared/logger";
 import { SkillLoader } from "./skillLoader";
 
 describe("SkillLoader", () => {
@@ -101,6 +102,31 @@ Use this skill when you need to test.`;
       
       const metadata = skillLoader.loadAllMetadata();
       assert.strictEqual(metadata.length, 0);
+    });
+
+    it("跳过无法解析的 skill 时留下告警，不静默", () => {
+      const invalidDir = join(skillDir, "invalid-skill");
+      mkdirSync(invalidDir, { recursive: true });
+      writeFileSync(join(invalidDir, "SKILL.md"), "# 没有 frontmatter", "utf8");
+
+      const { entries, sink } = createMemorySink();
+      configureLogger({ level: "warn", sink });
+      let metadata: ReturnType<SkillLoader["loadAllMetadata"]> = [];
+      try {
+        metadata = skillLoader.loadAllMetadata();
+      } finally {
+        resetLogger();
+      }
+
+      assert.strictEqual(metadata.length, 0);
+      assert.ok(
+        entries.some(
+          (entry) =>
+            entry.level === "warn" &&
+            String(entry.message).includes("invalid-skill"),
+        ),
+        "解析失败必须留告警：否则'写了 skill 却列表里没有'成了玄学问题",
+      );
     });
   });
 

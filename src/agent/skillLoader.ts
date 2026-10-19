@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { logger } from "../shared/logger";
+import { parseFrontmatter } from "./skillFrontmatter";
 
 /**
  * Skill 元数据（从 SKILL.md frontmatter 解析）
@@ -38,34 +39,10 @@ export interface SkillWithSource extends SkillMetadata {
 }
 
 /**
- * 从 YAML frontmatter 解析元数据
- */
-function parseFrontmatter(content: string): { name: string; description: string } | null {
-  // 匹配 YAML frontmatter 块
-  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!frontmatterMatch) {
-    return null;
-  }
-
-  const frontmatter = frontmatterMatch[1];
-  
-  // 简单解析 name 和 description 字段
-  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
-  const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
-
-  if (!nameMatch) {
-    return null;
-  }
-
-  return {
-    name: nameMatch[1].trim(),
-    description: descMatch ? descMatch[1].trim() : "",
-  };
-}
-
-/**
- * Skill 加载器
- * 支持渐进式披露：先加载元数据，按需加载完整内容
+ * Skill 加载器。
+ *
+ * 渐进式披露：系统提示词里只有元数据（名称 + 描述），全文由模型通过
+ * `load_skill` 工具按需取用——每次请求的固定开销就只有那一份清单。
  */
 export class SkillLoader {
   private readonly skillDirs: Array<{ path: string; source: SkillSource }>;
@@ -137,6 +114,12 @@ export class SkillLoader {
               skillFile,
               source,
             });
+          } else {
+            // 静默跳过会让"写了 skill 却列表里没有"变成玄学问题：
+            // 没有 name 就无法 /load，必须留一句告知用户
+            logger.warn(
+              `跳过无法解析的 skill：${skillFile}（缺少 name 字段或 frontmatter 格式不受支持）`,
+            );
           }
         } catch (error) {
           // 跳过无法读取的 skill

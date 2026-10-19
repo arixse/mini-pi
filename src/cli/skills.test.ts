@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../agent/sessionManager";
-import { composeLoadedSkillSections, handleLoadSkill } from "./skills";
+import { composeLoadedSkillSections, handleLoadSkill, handleSkills } from "./skills";
 import type { ReplOptions } from "./options";
 
 /**
@@ -95,6 +95,31 @@ describe("skills 命令", () => {
 
       assert.ok(sections.includes("## 已加载 Skill: alpha"));
       assert.ok(!sections.includes("gone"));
+    });
+  });
+
+  describe("handleSkills", () => {
+    it("会话中途新建的 skill，/skills 立刻能看到（每次重扫）", () => {
+      const first = captureConsole();
+      try {
+        handleSkills(sessionManager);
+      } finally {
+        first.restore();
+      }
+      assert.ok(first.lines.some((line) => line.includes("没有找到")));
+
+      createSkill("late-skill", "后来才建的");
+      const second = captureConsole();
+      try {
+        handleSkills(sessionManager);
+      } finally {
+        second.restore();
+      }
+
+      assert.ok(
+        second.lines.some((line) => line.includes("late-skill")),
+        "skill 是踩坑即沉淀的产物，新建后必须立刻可见，否则用户以为功能坏了",
+      );
     });
   });
 

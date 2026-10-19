@@ -294,6 +294,10 @@ export async function main(argv: string[] = process.argv.slice(2)) {
       sessionManager.setModel(newModel);
     }
 
+    // skill 与 AGENTS.md 同等待遇：重载就重新扫。不清缓存的话，
+    // 会话中新建的 skill 进不了摘要，模型的 load_skill 也取不到它
+    sessionManager.getSkillLoader().clearCache();
+
     // 重新构建 systemPrompt（获取最新的固定上下文与技术栈）。
     // 已加载的 skill 不能跟着丢：名单仍在册，就把它们的段落重组回去
     const newBasePrompt = buildPrompt();
