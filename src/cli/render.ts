@@ -944,6 +944,39 @@ export function renderSubAgentHeader(
 }
 
 /**
+ * 把子 Agent 的工具调用序列压成一行"用了什么"。
+ *
+ * 存在的意义是让**委派结束时就能判定它到底做了什么**：卡片原本只有轮次与
+ * token 数，于是"review 说 FAIL，但它真的跑过验证吗"在屏幕上无从回答，
+ * 只能事后翻 trace。
+ *
+ * 两条取舍：
+ * - **按首次调用顺序、不按次数排序**：调用顺序本身就是信息
+ *   （先读代码再跑测试 vs 上来就跑），排序会把它抹掉。
+ * - **不同工具超上限就截断**而不是全列：一行放不下八个工具名时，
+ *   全量列表只会让真正要找的那个（通常是 `verify_command`）被挤到行尾之外。
+ */
+export function formatToolCallTally(
+  toolCalls: readonly string[],
+  maxNames = 4,
+): string {
+  if (toolCalls.length === 0) {
+    return "未调用任何工具";
+  }
+  const counts = new Map<string, number>();
+  for (const name of toolCalls) {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const names = [...counts.keys()];
+  const shown = names.slice(0, maxNames).map((name) => {
+    const count = counts.get(name) ?? 1;
+    return count > 1 ? `${name}×${count}` : name;
+  });
+  const hidden = names.length - shown.length;
+  return hidden > 0 ? `${shown.join("、")} 等 ${names.length} 项` : shown.join("、");
+}
+
+/**
  * 委派卡片的尾：结果 + 轮次 / token / 耗时。
  *
  * 失败（`ok === false`）必须比成功更显眼：
@@ -964,12 +997,20 @@ export function renderSubAgentFooter(
     ? `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 完成`
     : `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 未完成`;
 
-  return [
+  const lines = [
     "",
     event.ok ? ctx.style.green(heading) : ctx.style.red(heading),
     `  ${indent}${ctx.style.dim(stats)}`,
-    "",
   ];
+  // "它到底动了什么"与耗时同等重要：只读评审和真的跑过验证是两回事，
+  // 而两者在轮次与 token 上可能长得一模一样
+  if (event.toolCalls !== undefined) {
+    const tally = formatToolCallTally(event.toolCalls);
+    const width = Math.max(10, ctx.width - displayWidth(indent) - 4);
+    lines.push(`  ${indent}${ctx.style.dim(truncateToWidth(`用了 ${tally}`, width))}`);
+  }
+  lines.push("");
+  return lines;
 }
 
 /** 把多行文本压成单行，便于塞进标题 */

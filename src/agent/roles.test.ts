@@ -4,9 +4,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { READ_ONLY_TOOL_NAMES, createToolRegistry } from "./tools/registry";
+import { VERIFY_TOOL_NAME } from "./tools/verify";
 import {
   DELEGATABLE_READ_ONLY_TOOLS,
   DEFAULT_SUBAGENT_ROLE,
+  MUTATING_TOOL_NAMES,
   SUBAGENT_ROLE_NAMES,
   SUBAGENT_ROLE_PRESETS,
   SubAgentRole,
@@ -41,17 +43,50 @@ describe("角色预设", () => {
     }
   });
 
-  it("explore / review 只读：工具集里没有任何写类工具", () => {
-    for (const name of ["explore", "review"] as SubAgentRole[]) {
-      const tools = SUBAGENT_ROLE_PRESETS[name].tools;
-      for (const forbidden of ["write_file", "edit_file", "bash"]) {
-        assert.ok(
-          !tools.includes(forbidden),
-          `${name} 不应包含 ${forbidden}`,
-        );
-      }
-      assert.deepStrictEqual([...tools], [...DELEGATABLE_READ_ONLY_TOOLS]);
+  it("explore 严格只读：只有检索类工具", () => {
+    const tools = SUBAGENT_ROLE_PRESETS.explore.tools;
+    for (const forbidden of ["write_file", "edit_file", "bash", "verify_command"]) {
+      assert.ok(
+        !tools.includes(forbidden),
+        `explore 不应包含 ${forbidden}`,
+      );
     }
+    assert.deepStrictEqual([...tools], [...DELEGATABLE_READ_ONLY_TOOLS]);
+  });
+
+  /**
+   * 本次改动的核心契约：review 从"只能读"变成"能读 + 能跑验证"，
+   * 但**依然改不了代码**。前一条（能验证）是它产出可信结论的前提，
+   * 后一条（不能改）是它的输出契约，两者缺一个都不成立。
+   */
+  it("review 只读 + 受限验证：能跑测试，但改不了代码", () => {
+    const tools = SUBAGENT_ROLE_PRESETS.review.tools;
+    assert.ok(
+      tools.includes(VERIFY_TOOL_NAME),
+      "review 必须能跑验证，否则评审只能凭读代码猜",
+    );
+    for (const forbidden of ["write_file", "edit_file", "bash"]) {
+      assert.ok(
+        !tools.includes(forbidden),
+        `review 不应包含 ${forbidden}——评审的输出契约是「不改代码」`,
+      );
+    }
+    assert.deepStrictEqual(
+      [...tools],
+      [...DELEGATABLE_READ_ONLY_TOOLS, VERIFY_TOOL_NAME],
+    );
+  });
+
+  it("review 拿不到完整 bash：验证只能用受限工具，不能顺带获得执行任意命令的能力", () => {
+    // 给 review 完整 bash 等于让"我不改代码"这个承诺退回成模型的自觉
+    const tools = resolveSubAgentTools({
+      role: "review",
+      allowWrite: true,
+      allowBash: true,
+      parentRegistry: makeRegistry(),
+    });
+    assert.ok(!tools.includes("bash"));
+    assert.ok(tools.includes(VERIFY_TOOL_NAME));
   });
 
   it("任何角色都拿不到 load_skill：子 Agent 的提示词里没有 skill 元数据", () => {
@@ -172,7 +207,7 @@ describe("角色与显式开关的冲突消解", () => {
   });
 
   it("只读角色即使被要求加权限也拿不到写工具", () => {
-    for (const role of ["explore", "review"] as const) {
+    for (const role of ["explore"] as const) {
       const tools = resolveSubAgentTools({
         role,
         allowWrite: true,
@@ -185,6 +220,17 @@ describe("角色与显式开关的冲突消解", () => {
         `${role} 必须保持只读`,
       );
     }
+    // review 多一项受限验证，但仍然拿不到写工具与 bash
+    const reviewTools = resolveSubAgentTools({
+      role: "review",
+      allowWrite: true,
+      allowBash: true,
+      parentRegistry: registry,
+    });
+    assert.deepStrictEqual(
+      reviewTools,
+      [...DELEGATABLE_READ_ONLY_TOOLS, VERIFY_TOOL_NAME],
+    );
   });
 });
 
@@ -203,11 +249,40 @@ describe("角色轮次与墙钟预算", () => {
 
   it("写权限越重的角色给的墙钟越长", () => {
     // implement 要改文件还要自述验证（通常含一次测试/构建），最慢；
-    // review 只读且轮次最少，最快。
+    // review 虽然能跑验证，但轮次最少、读的范围也小，仍短于 explore。
     const byTimeout = (a: SubAgentRole, b: SubAgentRole): number =>
       rolePreset(a).timeoutMs - rolePreset(b).timeoutMs;
     assert.ok(byTimeout("implement", "general") > 0);
     assert.ok(byTimeout("general", "explore") > 0);
     assert.ok(byTimeout("explore", "review") > 0);
+  });
+
+  it("review 的墙钟够跑一次验证，轮次也留出了跑命令的位置", () => {
+    // 给验证能力而不给时间，等于让它跑一半被超时打断——
+    // 那样它会把"超时"当成"没跑"，又退回成凭读代码猜
+    assert.ok(rolePreset("review").timeoutMs >= 90_000);
+    // 比只读时期（10 轮）多：读代码 → 跑验证 → 看输出 → 下结论
+    assert.ok(rolePreset("review").maxTurns > 10);
+  });
+});
+
+describe("验证能力与并发安全是两个维度", () => {
+  it("verify_command 算「会起进程」：拿到它的委派不可并发", () => {
+    // 两个 checker 同时跑同一个测试套件会互相干扰（产物目录 / 端口 / 临时文件），
+    // 结果与调度顺序有关。这与它"不能改代码"并不矛盾。
+    assert.ok(
+      MUTATING_TOOL_NAMES.includes(VERIFY_TOOL_NAME),
+      "verify_command 必须计入并发判定，否则 review 委派会被判成可并发",
+    );
+  });
+
+  it("verify_command 不在只读白名单里：白名单是结构性边界，但审批仍不可省", () => {
+    // 它跑的是测试/构建，可能写产物目录；免确认等于默认放行一次未知副作用
+    assert.ok(!READ_ONLY_TOOL_NAMES.includes(VERIFY_TOOL_NAME));
+    assert.ok(!DELEGATABLE_READ_ONLY_TOOLS.includes(VERIFY_TOOL_NAME));
+  });
+
+  it("主注册表里确实注册了受限验证工具，否则角色要了也拿不到", () => {
+    assert.ok(makeRegistry().has(VERIFY_TOOL_NAME));
   });
 });

@@ -163,12 +163,18 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- `src/cli/render.ts`：处理 `subagent_start/end`，渲染为**缩进一层的嵌套卡片**：
-  `  ↳ 子 Agent(depth=1) 已启动： <goal>` / `  ↳ 完成 · 12 轮 · 8.4s · 3.2k tokens`。
-- `src/cli/status.ts` / `turn.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
-- 可选落盘：`--trace`（或 settings `subagentTrace: true`）时把子 Agent 的完整消息写到
-  `~/.mini-pi/sessions/<工作目录>/<会话>.sub-<agentId>.jsonl`；默认不写，避免磁盘与隐私噪音。
-- `/status` 增加一行：`子 Agent: 本轮 N 次委派 / 累计 M tokens`（只在 N>0 时显示）。
+- `src/cli/render.ts`：处理 `subagent_start/end`，渲染为**缩进一层的嵌套卡片**
+  （缩进表达 depth，而不是只写在文案里）：开始是
+  `🤖 委派 explore #a1b2c3d4` + 缩进一行的 goal；结束时
+  `✅ 子 Agent explore #a1b2c3d4 完成` + 缩进一行的 `12 轮 · 3200 tokens · 8.4s`，
+  再补一行 `用了 read_file、grep、verify_command`（没有工具调用时写"未调用任何工具"）。
+- `src/cli/repl.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
+- 可选落盘：`/subagent trace on`（写 `settings.json` 的 `subagentTrace: true`，没有同名的 CLI 开关）
+  时把子 Agent 的完整消息写到
+  `~/.mini-pi/sessions/--<工作目录路径铺平>--/<会话>.sub-<agentId>.jsonl`；默认不写，避免磁盘与隐私噪音。
+- `/status` 的子 Agent 行：关闭时固定显示 `🚫 已关闭（/subagent 开启）`，开启后显示
+  `已委派 N 次 · 累计 M tokens（入 x / 出 y）`（还没委派时写"本会话未委派"）——
+  关闭状态也占一行，否则用户会以为是模型不想用。
 
 验收：`pnpm dev:cli` 里一次委派至少有"启动/结束"两行可见输出，Ctrl+C 后无残留 spinner（沿用 `status.stop()` 的既有约定）。
 测试：`render.test.ts` 补两个事件的快照；`status` 聚合逻辑单测。
@@ -180,7 +186,7 @@ runAgentLoop  [主 Agent, depth = 0]
 - 新增 `src/agent/roles.ts`：内置角色预设（纯数据，不新增依赖）
   - `explore`：只读工具、`maxTurns=20`、提示词要求输出"文件路径 + 关键符号 + 结论"，适合代码检索。
   - `implement`：含写工具、`maxTurns=40`、提示词要求"先复述改动点再动手，改完自述验证方式"。
-  - `review`：只读、`maxTurns=10`、输出"问题清单 + 严重级别 + 位置"，不改代码。
+  - `review`：只读 + `verify_command`（可跑测试/类型检查，但仍不能改文件）、`maxTurns=12`、输出"问题清单 + 严重级别 + 位置"。
 - `task` 工具新增 `role` 参数：`role` 决定默认工具集、默认 `maxTurns` 与提示词骨架；`allowWrite` 与 `role` 冲突时以**更严格的为准**（`review` + `allowWrite:true` → 仍然只读）。
 - 产物交接：子 Agent 需要把大段内容（如整份报告）交回父级时，约定写到工作区内 `artifacts/` 目录并只回传路径（`context` 参数支持"文件路径"就是为了这个）。注意这会产生文件，需走 `write_file` 审批且受 `assertNotCredentialFile` / `resolveInsideWorkspace` 约束——**不额外开口子**。
 
@@ -293,7 +299,7 @@ const childRegistry = parentRegistry.filter(names);         // 派生，不是�
 | 里程碑 | 新增/修改的测试文件 | 关键用例 |
 | --- | --- | --- |
 | M0 | `src/agent/subagent.test.ts` | 常量与类型收窄 |
-| M1 | `src/agent/subagent.test.ts`、`src/agent/subagentTool.test.ts` | 上下文隔离、无 `task` 自递归、父上下文不变、maxTurns 降级、结果截断标注 |
+| M1 | `src/agent/subagent.test.ts` | 上下文隔离、无 `task` 自递归、父上下文不变、maxTurns 降级、结果截断标注 |
 | M2 | `src/agent/subagent.test.ts`、`src/cli/approval.test.ts` | 审批透传与 depth 前缀、级联取消、监听器不泄漏、block 不崩 |
 | M3 | `src/cli/render.test.ts`、`src/cli/status.test.ts` | 嵌套渲染、token 聚合、spinner 收尾 |
 | M4 | `src/agent/roles.test.ts` | 角色→工具集映射、冲突取严格 |
@@ -343,7 +349,7 @@ const childRegistry = parentRegistry.filter(names);         // 派生，不是�
 
 ### B~E：要点
 
-- **B1 整体墙钟超时**按角色给默认值（`review` 60s / `explore` 120s /
+- **B1 整体墙钟超时**按角色给默认值（`review` 100s / `explore` 120s /
   `implement` 300s / `general` 180s），`timedOut` 与"用户取消"必须在结果里可区分；
   **B2 回合级回传总量** `MAX_TURN_RESULT_CHARS`（24k）——只有单条上限时，
   8 次 × 8k 会把委派省下的上下文加倍吃回去，多 Agent 设计就失去意义。

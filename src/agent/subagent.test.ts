@@ -700,6 +700,82 @@ describe("subagent", () => {
       assert.ok(end.elapsedMs >= 0);
     });
 
+    it("委派结果记录它实际调用过的工具：判定有没有真 check 只能靠这一层", async () => {
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "c1",
+        name: "glob",
+        arguments: { pattern: "*.ts" },
+      };
+      const model = createSpyModel([
+        assistant([toolCall], "toolUse"),
+        assistant([createTextContent("done")]),
+      ]);
+
+      const events: AgentEvent[] = [];
+      const result = await runSubAgent({
+        agentId: "a5",
+        identity: { agentId: "a5", parentId: null, depth: 1 },
+        goal: "g",
+        systemPrompt: "s",
+        maxTurns: 5,
+        model,
+        toolRegistry: createToolRegistry(workspace),
+        onEvent: (event) => events.push(event),
+      });
+
+      assert.deepStrictEqual(result.toolCalls, ["glob"]);
+      // 事件出口也得带：终端卡片靠它当场显示"用了什么"，
+      // 只有结果对象里有而事件里没有，屏幕上依然看不出来
+      const end = events.find((e) => e.type === "subagent_end");
+      assert.deepStrictEqual(
+        end && "toolCalls" in end ? end.toolCalls : undefined,
+        ["glob"],
+      );
+    });
+
+    it("被拦截的调用也要记下来：想跑却被挡回 ≠ 压根没想跑", async () => {
+      const toolCall: ToolCallContent = {
+        type: "toolCall",
+        id: "c1",
+        name: "verify_command",
+        arguments: { command: "rm -rf ." },
+      };
+      const model = createSpyModel([
+        assistant([toolCall], "toolUse"),
+        assistant([createTextContent("没法验证")]),
+      ]);
+
+      const result = await runSubAgent({
+        agentId: "a6",
+        identity: { agentId: "a6", parentId: null, depth: 1 },
+        goal: "g",
+        systemPrompt: "s",
+        maxTurns: 5,
+        model,
+        toolRegistry: createToolRegistry(workspace),
+        beforeToolCall: async () => ({ action: "block", reason: "测试用拒绝" }),
+      });
+
+      // 工具没跑成，但"它试图验证过"这个事实不能丢——
+      // 否则排障时看到的是"一次工具都没调用"，会误判成模型偷懒
+      assert.deepStrictEqual(result.toolCalls, ["verify_command"]);
+    });
+
+    it("一次工具都没调用时不带 toolCalls：空数组与没观测到要能区分", async () => {
+      const result = await runSubAgent({
+        agentId: "a7",
+        identity: { agentId: "a7", parentId: null, depth: 1 },
+        goal: "g",
+        systemPrompt: "s",
+        maxTurns: 5,
+        model: createSpyModel([assistant([createTextContent("直接下结论")])]),
+        toolRegistry: createToolRegistry(workspace),
+      });
+
+      assert.strictEqual(result.toolCalls, undefined);
+    });
+
     it("到达轮次上限时 ok=false，但阶段性结论照旧带回来", async () => {
       const toolCall: ToolCallContent = {
         type: "toolCall",
@@ -881,6 +957,25 @@ describe("subagent", () => {
       };
       assert.strictEqual(formatSubAgentResult(result), "最终结论");
       assert.ok(subAgentResultDetails(result).error);
+    });
+
+    it("结果详情透传工具清单，但正文不带：观测不能污染上下文", () => {
+      const result: SubAgentResult = {
+        ok: true,
+        summary: "最终结论",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        turns: 2,
+        aborted: false,
+        truncated: false,
+        toolCalls: ["read_file", "verify_command"],
+      };
+      assert.deepStrictEqual(subAgentResultDetails(result).toolCalls, [
+        "read_file",
+        "verify_command",
+      ]);
+      // 模型看到的正文里不该出现工具名：每次委派都塞一串工具名是纯成本，
+      // 而它需要看的是结论
+      assert.ok(!formatSubAgentResult(result).includes("verify_command"));
     });
 
     /**
@@ -1134,6 +1229,46 @@ describe("subagent", () => {
       for (const name of ["write_file", "edit_file", "bash"]) {
         assert.ok(!toolNames.includes(name), `review 不应拿到 ${name}`);
       }
+    });
+
+    /**
+     * Maker + Checker 的关键：checker 必须能**亲自验证**，否则它只能凭读代码猜
+     * "能不能编译 / 测试过不过"，评审意见可能整段建立在错误前提上。
+     */
+    describe("Maker + Checker：评审必须能亲自验证", () => {
+      it("review 拿到受限验证工具，而不是完整 bash", async () => {
+        const { registry, model } = setup();
+        await registry.execute("task", { goal: "评审这次改动", role: "review" });
+
+        const toolNames = model.calls[0].tools.map((t) => t.name);
+        assert.ok(
+          toolNames.includes("verify_command"),
+          "评审必须能跑验证——否则评审只是读代码的读后感",
+        );
+        // 给 bash 等于把"我不改代码"的承诺退回成模型的自觉
+        assert.ok(!toolNames.includes("bash"));
+        assert.ok(!toolNames.includes("write_file"));
+      });
+
+      it("system prompt 明确告知能跑验证：提示词与工具表不能互相矛盾", async () => {
+        const { registry, model } = setup();
+        await registry.execute("task", { goal: "评审", role: "review" });
+        assert.match(model.calls[0].systemPrompt, /verify_command/);
+      });
+
+      it("没有验证工具的角色不会被说成能验证（提示词只写真有的能力）", async () => {
+        const { registry, model } = setup();
+        await registry.execute("task", { goal: "查代码", role: "explore" });
+        assert.doesNotMatch(model.calls[0].systemPrompt, /verify_command/);
+      });
+
+      it("review 的输出契约要求可判定的 PASS / FAIL，而不是一段感想", async () => {
+        // 判定含糊就等于把"要不要重改"的判断成本推回给父 Agent
+        const { registry, model } = setup();
+        await registry.execute("task", { goal: "评审", role: "review" });
+        assert.match(model.calls[0].systemPrompt, /PASS/);
+        assert.match(model.calls[0].systemPrompt, /FAIL/);
+      });
     });
 
     it("role=implement 自带写工具，allowBash 才能再加 bash", async () => {
@@ -1594,9 +1729,12 @@ describe("subagent", () => {
         registry.canRunConcurrently(call({ goal: "g", role: "explore" })),
         true,
       );
+      // review 自带受限验证工具（会起进程）：两个 checker 同时跑同一个测试套件
+      // 会在产物目录 / 端口 / 临时文件上互相踩，结果取决于调度顺序。
+      // 此前它纯只读所以可并发，拿到 verify_command 后不再成立。
       assert.strictEqual(
         registry.canRunConcurrently(call({ goal: "g", role: "review" })),
-        true,
+        false,
       );
       // implement 自带写工具：两个同时改同一个文件就看运气了
       assert.strictEqual(

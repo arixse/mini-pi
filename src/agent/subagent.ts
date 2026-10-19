@@ -127,6 +127,13 @@ export function linkSignals(
 export function buildSubAgentSystemPrompt(input: {
   workspaceRoot: string;
   canWrite: boolean;
+  /**
+   * 实际是否拿到受限验证工具 `verify_command`。
+   *
+   * 与 {@link canWrite} 同一条原则：提示词里说出来的能力必须与工具列表一致，
+   * 两者互相矛盾时模型要么犹豫不动手，要么去调一个它根本没有的工具。
+   */
+  canVerify?: boolean;
   instructions?: string;
   /**
    * 项目规则（`AGENTS.md` 固定上下文）。
@@ -156,6 +163,16 @@ export function buildSubAgentSystemPrompt(input: {
     parts.push(
       "",
       "本次委派**没有写权限**：只能读取与分析，需要修改时请在结论里写清改哪里、怎么改。",
+    );
+  }
+
+  if (input.canVerify) {
+    parts.push(
+      "",
+      "你可以用 verify_command 跑验证（测试 / 类型检查 / lint / 构建 / 只读 git 查看）。",
+      "凡是能靠运行回答的问题（能不能编译、测试过不过），跑一次再下结论，",
+      "不要凭读代码推断。它只接受验证类命令：被拒绝时换一条白名单内的命令，",
+      "不要因此改用别的工具。",
     );
   }
 
@@ -534,6 +551,33 @@ export function judgeSubAgentOutcome(
 }
 
 /**
+ * 从子 Agent 的消息里还原它实际调用过的工具（按调用顺序、含重复）。
+ *
+ * 只看 `toolCall` 块、不看 toolResult：一次调用可能因为被拦截而没有结果
+ * （审批拒绝 / 白名单拒绝），**被拒绝的调用同样是"它做了什么"的证据**——
+ * review 试图跑 `pnpm test` 却被白名单挡回，和它压根没想跑，是两回事。
+ *
+ * 抽成纯函数是因为它要在没有真实循环的场合被断言：
+ * 委派结束后结果层是唯一能回答"它到底 check 了没有"的地方。
+ */
+export function collectSubAgentToolCalls(
+  messages: readonly AgentMessage[],
+): string[] {
+  const calls: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "toolCall") {
+        calls.push(block.name);
+      }
+    }
+  }
+  return calls;
+}
+
+/**
  * 子 Agent 上下文的默认预算（token）。
  *
  * 子 Agent 不落盘、也不走会话压缩，读十几个大文件就能把上下文撑爆——
@@ -789,6 +833,7 @@ export async function runSubAgent(
   const turns = result.newMessages.filter(
     (message): message is AssistantMessage => message.role === "assistant",
   ).length;
+  const toolCalls = collectSubAgentToolCalls(result.newMessages);
 
   /**
    * `ok` 只看**最后一条** assistant（批次 C1）。
@@ -863,6 +908,8 @@ export async function runSubAgent(
     aborted,
     truncated,
     error: errorText,
+    // 只在真的调用过时才带：空数组会让"一次工具都没用"与"没观测到"混为一谈
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(timedOut ? { timedOut: true } : {}),
   };
 
@@ -877,6 +924,9 @@ export async function runSubAgent(
     turns,
     usage,
     elapsedMs,
+    // 与 turns/usage 同批回传：卡片要能在委派结束时就说清"它到底动了什么"，
+    // 否则"有没有真的验证过"只能事后翻 trace
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   });
 
   return outcome;
@@ -924,6 +974,9 @@ export function subAgentResultDetails(
     // 只有超时时才带这个字段：它要与 aborted 分开看，不能靠"没写 aborted"推断
     ...(result.timedOut ? { timedOut: true } : {}),
     ...(result.error ? { error: result.error } : {}),
+    ...(result.toolCalls && result.toolCalls.length > 0
+      ? { toolCalls: result.toolCalls }
+      : {}),
   };
 }
 

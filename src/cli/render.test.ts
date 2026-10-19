@@ -18,6 +18,7 @@ import {
   packItems,
   renderLastToolOutput,
   selectBodyWindow,
+  formatToolCallTally,
   renderSubAgentFooter,
   renderSubAgentHeader,
   renderToolCall,
@@ -917,6 +918,56 @@ describe("子 Agent 委派卡片", () => {
     assert.ok(joined.includes("4 轮"));
     assert.ok(joined.includes("120 tokens"));
     assert.ok(joined.includes("2.3s"));
+  });
+
+  it("结束卡片带工具清单：只读评审和真跑过验证必须能当场分清", () => {
+    const lines = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: true,
+        goal: "g",
+        turns: 4,
+        usage: { input: 100, output: 20, totalTokens: 120 },
+        elapsedMs: 2345,
+        toolCalls: ["read_file", "read_file", "verify_command"],
+        ...identity,
+      },
+      ctx,
+    );
+    const joined = lines.join("\n");
+    assert.ok(joined.includes("verify_command"), `应列出验证工具：${joined}`);
+    assert.ok(joined.includes("read_file×2"), `次数要聚合：${joined}`);
+  });
+
+  it("没有 toolCalls 时不编造一行：空数组与字段缺失是两回事", () => {
+    const lines = renderSubAgentFooter(
+      {
+        type: "subagent_end",
+        ok: true,
+        goal: "g",
+        turns: 1,
+        usage: { input: 10, output: 2, totalTokens: 12 },
+        elapsedMs: 100,
+        ...identity,
+      },
+      ctx,
+    );
+    assert.ok(!lines.join("\n").includes("用了"), "不该出现工具行");
+  });
+
+  it("工具清单超限截断，避免真正要找的那个被挤出行尾", () => {
+    const tally = formatToolCallTally([
+      "read_file",
+      "grep",
+      "glob",
+      "list_files",
+      "verify_command",
+    ]);
+    assert.ok(tally.includes("等 5 项"), `应说明被截掉了多少：${tally}`);
+  });
+
+  it("工具清单为空时明确说没调用，而不是留白", () => {
+    assert.ok(formatToolCallTally([]).includes("未调用"));
   });
 
   it("未完成与完成是两种文案：父 Agent 拿到半截结论时必须看得出来", () => {

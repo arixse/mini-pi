@@ -2,13 +2,13 @@
 
 ## 1. 技术栈
 
-| 类别     | 技术选型           | 说明               |
-| -------- | ------------------ | ------------------ |
-| 运行时   | Node.js 22+        | CLI 运行环境       |
-| 语言     | TypeScript 7.0     | 类型安全           |
-| 包管理   | pnpm 10.17         | 快速、节省磁盘空间 |
-| 打包     | esbuild            | CLI 打成自包含单文件 |
-| AI SDK   | OpenAI / Anthropic | 模型调用           |
+| 类别   | 技术选型           | 说明                 |
+| ------ | ------------------ | -------------------- |
+| 运行时 | Node.js 22+        | CLI 运行环境         |
+| 语言   | TypeScript 7.0     | 类型安全             |
+| 包管理 | pnpm 10.17         | 快速、节省磁盘空间   |
+| 打包   | esbuild            | CLI 打成自包含单文件 |
+| AI SDK | OpenAI / Anthropic | 模型调用             |
 
 > Web / Server（Express + React + Vite）属第二阶段，**尚未实现**，依赖也未引入。
 > 实现时应复用 `src/agent` 的内核，而不是在 CLI 之上再包一层。
@@ -68,17 +68,8 @@ mini-pi/
 
 - 通过 `Provider` 接口统一抽象各模型服务商（`getProviderName` / `getSdkType` / `getBaseUrl` / `getModelList`）
 - `ModelProviderService` 负责提供商注册、配置存储（apiKey/baseUrl/model）与模型列表获取
-- 当前已注册的提供商：
-
-| 名称         | SDK 类型  | Base URL                           |
-| ------------ | --------- | ---------------------------------- |
-| `openai`     | OpenAI    | `https://api.openai.com/v1`        |
-| `deepseek`   | OpenAI    | `https://api.deepseek.com`         |
-| `minimax-cn` | Anthropic | `https://api.minimax.cn/anthropic` |
-| `mimo`       | OpenAI    | `https://api.xiaomimimo.com/v1`    |
-| `kimi`       | OpenAI    | `https://api.moonshot.cn/v1`       |
-| `zhipu`      | OpenAI    | `https://open.bigmodel.cn/api/paas/v4` |
-| `anthropic`  | Anthropic | `https://api.anthropic.com`        |
+- 当前已注册的提供商：7 家，名称 / SDK 类型 / 默认 Base URL 见
+  [cli-config.md](./cli-config.md) §3（配置视角的唯一一张表）。
 
 > 新增供应商时除了实现 `Provider` 接口，还要同步 `src/provider/context-window.ts`
 > 的推断表：窗口小于 128k 的模型若不登记，会在压缩触发前就超窗（400）。
@@ -89,17 +80,18 @@ mini-pi/
 
 CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `workspaceRoot` 内）：
 
-| 工具 | 只读 | 说明 |
-| --- | --- | --- |
-| `list_files` | ✅ | 递归列举；跳过依赖/产物目录与 `.gitignore` 命中项，最多 300 项 / 5 层 |
-| `glob` | ✅ | glob 找文件（`*` `?` `**` `{a,b}`），最多 200 个 |
-| `grep` | ✅ | 正则搜内容，返回 `<文件>:<行号>: <内容>`，最多 100 处；跳过二进制与 >1MB 文件 |
-| `read_file` | ✅ | 分页读取（`offset`/`limit`），单次上限 2000 行 / 20000 字符并显式标注；拒绝二进制文件与 >5MB 文件 |
-| `load_skill` | ✅ | 按名称加载 skill 全文（仅接受系统提示词「可用 Skills」清单里的名字，不接受路径，可读工作区外的 skill 目录） |
-| `write_file` | — | 写入文件 |
-| `edit_file` | — | 精确文本替换（返回 `lineNumber` 供卡片标注 diff 位置） |
-| `bash` | — | 执行命令；单次输出上限 20000 字符并显式标注，超时可配（默认 30s，上限 10min），超时会结束整棵进程树 |
-| `task` | — | 委派子 Agent（见 3.6）；读着头绪独立的一件事时用它换 isolation，代价是一次 toolCall |
+| 工具               | 只读 | 说明                                                                                                                                |
+| ------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `list_files`     | ✅   | 递归列举；跳过依赖/产物目录与`.gitignore` 命中项，最多 300 项 / 5 层                                                              |
+| `glob`           | ✅   | glob 找文件（`*` `?` `**` `{a,b}`），最多 200 个                                                                            |
+| `grep`           | ✅   | 正则搜内容，返回`<文件>:<行号>: <内容>`，最多 100 处；跳过二进制与 >1MB 文件                                                      |
+| `read_file`      | ✅   | 分页读取（`offset`/`limit`），单次上限 2000 行 / 20000 字符并显式标注；拒绝二进制文件与 >5MB 文件                               |
+| `load_skill`     | ✅   | 按名称加载 skill 全文（仅接受系统提示词「可用 Skills」清单里的名字，不接受路径，可读工作区外的 skill 目录）                         |
+| `write_file`     | —   | 写入文件                                                                                                                            |
+| `edit_file`      | —   | 精确文本替换（返回`lineNumber` 供卡片标注 diff 位置）                                                                             |
+| `bash`           | —   | 执行命令；单次输出上限 20000 字符并显式标注，超时可配（默认 30s，上限 10min），超时会结束整棵进程树                                 |
+| `verify_command` | —   | **受限验证**：只接受测试 / 构建 / lint / 类型检查 / 只读 git 的白名单命令，其余一律拒绝且不执行；禁管道与重定向，默认超时 60s |
+| `task`           | —   | 委派子 Agent（见 3.6）；读着头绪独立的一件事时用它换 isolation，代价是一次 toolCall                                                 |
 
 - 路径统一走**词法 + 真实路径**两层校验（symlink/junction 逃逸会被拒绝），
   检索类工具遍历时还会逐个解析链接、跳过指向工作区外的条目（入口校验只覆盖起点）；
@@ -109,6 +101,10 @@ CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `wor
   可用性安全性（能不能和别的调用同时跑）由 `RegisteredTool.concurrent` /
   `ToolRegistry.canRunConcurrently(call)` 单独表达。两者混用过一次，就会出现"能并发却要确认"或"免确认却不该并发"。
   循环的批次划分只看 `canRunConcurrently`：只读工具恒 true；
+- `verify_command` 是 `bash` 的**受限版本**，而不是第三个执行通道：实际执行仍委托给
+  `bash`（超时、进程树终止、路径与凭据守卫都只有那一套实现），
+  只在前面加一道白名单。它**不在** `READ_ONLY_TOOL_NAMES` 里——跑测试与构建会写产物，
+  因此仍要逐次确认；"它能做什么"则由白名单结构性收窄（见下）。
 - `write_file` 的结果会区分新建与覆盖（覆盖时带出原有行数），
   审批提示在覆盖已存在文件时明确标注"原内容将被替换"；
 - 输出上限一律遵循"要么完整返回，要么明确告知被截断以及如何收窄"，
@@ -122,6 +118,8 @@ CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `wor
 - **压缩只在摘要真正拿到时才写入**：摘要请求被取消或失败一律放弃本次压缩，
   绝不回退到"共 N 条消息"的降级摘要——那等于把真实历史换成一句废话且不可恢复；
   失败原因由 `getLastCompactionError()` 暴露，`/status` 据此提示用户。
+  （"根本没配置模型"是另一回事：那时没有可调的摘要模型，只能退到统计摘要，
+  见 [cli-config.md](./cli-config.md) §2。）
 - **摘要输入按预算截断**：只保留最近的条目（预算 `max(4000, 压缩阈值)` token），
   更早的标注"最早的 N 条消息已省略"。压缩本就只在上下文超限才触发，
   不截断的话摘要请求自己就会超窗，形成"失败 → 不压缩 → 更超窗"的死锁。
@@ -156,22 +154,22 @@ CLI 侧由 `createInputScheduler` 保证**任意时刻只有一个回合在跑**
 `task` 工具把一件相对独立的事交给子 Agent。**委派是一次工具调用，不是另一套运行时**：
 一次 `runAgentLoop`，只是换了 system prompt / messages / 工具集 / 轮次上限 / 取消信号。
 
-| 约束 | 落地方式 |
-| --- | --- |
-| 上下文隔离 | 子 Agent 的 `messages` 只有一条 goal（+ 显式 `context` 素材），不继承父历史；只回传裁剪后的结论（8000 字符上限并显式标注截断） |
-| 权限隔离 | 工具集由父注册表 `filter` 派生，不可能拿到父级没有的能力；写操作仍走同一个 `beforeToolCall`，提示带 `[子 Agent depth=N <id>]` |
-| 递归闸门 | `depth` 到顶时子注册表**不注册 `task`**——模型想递归也没有工具可调，不靠提示词自觉 |
-| 取消 | 每轮一个 `SubAgentSupervisor`，是取消树的根：父 signal → slot.signal → 子 Agent 循环，Ctrl+C 一次中断整棵子树 |
-| 落盘 | 委派本身以 toolCall/toolResult 形态随主会话落盘，子 Agent 的内部来回不进父上下文 |
+| 约束       | 落地方式                                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 上下文隔离 | 子 Agent 的`messages` 只有一条 goal（+ 显式 `context` 素材），不继承父历史；只回传裁剪后的结论（8000 字符上限并显式标注截断）  |
+| 权限隔离   | 工具集由父注册表`filter` 派生，不可能拿到父级没有的能力；写操作仍走同一个 `beforeToolCall`，提示带 `[子 Agent depth=N <id>]` |
+| 递归闸门   | `depth` 到顶时子注册表**不注册 `task`**——模型想递归也没有工具可调，不靠提示词自觉                                      |
+| 取消       | 每轮一个`SubAgentSupervisor`，是取消树的根：父 signal → slot.signal → 子 Agent 循环，Ctrl+C 一次中断整棵子树                   |
+| 落盘       | 委派本身以 toolCall/toolResult 形态随主会话落盘，子 Agent 的内部来回不进父上下文                                                   |
 
 #### 成本护栏：三道闸，缺一不可
 
-| 闸 | 常量 | 管什么 |
-| --- | --- | --- |
-| 次数 | `MAX_DELEGATIONS_PER_TURN = 8` | 单回合委派次数 |
-| 总量 | `MAX_TURN_RESULT_CHARS = 24000` | 单回合**所有**结论回传字符数 |
-| 单条 | `SUBAGENT_RESULT_MAX_CHARS = 8000` | 单条结论字符数 |
-| 墙钟 | 各角色 `timeoutMs`（60s~ 300s） | 单次委派整体超时 |
+| 闸   | 常量                                 | 管什么                             |
+| ---- | ------------------------------------ | ---------------------------------- |
+| 次数 | `MAX_DELEGATIONS_PER_TURN = 8`     | 单回合委派次数                     |
+| 总量 | `MAX_TURN_RESULT_CHARS = 24000`    | 单回合**所有**结论回传字符数 |
+| 单条 | `SUBAGENT_RESULT_MAX_CHARS = 8000` | 单条结论字符数                     |
+| 墙钟 | 各角色`timeoutMs`（100s~ 300s）    | 单次委派整体超时                   |
 
 总量闸不可省：预算允许一回合 8 次委派，8×8k 灌回主上下文，
 委派省下的上下文被加倍吃回去，多 Agent 设计就失去意义了。
@@ -199,22 +197,51 @@ Node 18 基线时期，当前基线已是 22，实现未做切换）。
 
 #### 可观测
 
-| 能力 | 落地 |
-| --- | --- |
+| 能力     | 落地                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 卡片层级 | `tool_execution_start/end` 事件带 `identity`，`ToolCallView` 一路透传到 `/last`；`depthIndent` 是卡片与委派头尾**唯一**的缩进算法 |
-| 审批摘要 | `task` 有专属两行摘要（目标 / 角色+权限），"会不会动我的文件"必须第一眼可见 |
-| trace | `/subagent trace on` 时每次委派写 `<会话>.sub-<id>.jsonl`（JSON Lines，含工具参数）；**默认关闭**，写失败只记 warning 不影响委派 |
+| 审批摘要 | `task` 有专属两行摘要（目标 / 角色+权限），"会不会动我的文件"必须第一眼可见                                                                     |
+| trace    | `/subagent trace on` 时每次委派写 `<会话>.sub-<id>.jsonl`（JSON Lines，含工具参数）；**默认关闭**，写失败只记 warning 不影响委派        |
 
 角色（`src/agent/roles.ts`）把**工具集 + 轮次预算 + 输出契约**绑在一起下发：
 `explore` 只读、`review` 只读且即使传 `allowWrite:true` 也不放开（契约依赖边界）、
 `implement` 带写工具且必须自述验证、`general` 为默认白板。
 
+> `review` 是唯一自带**验证手段**的只读角色：它拿 `verify_command`（受限白名单），
+> 不拿 `bash`。给完整 bash 会让它能跑 `rm` / `git push` / `npm run deploy`，
+> 等于把"我不改代码"这个承诺退回成模型的自觉；而完全不给执行能力，
+> 它又只能凭读代码猜"能不能编译、测试过不过"——评审看着专业，
+> 却可能整段建立在错误前提上。受限工具是这两难之间唯一稳的落点。
+
 > 并发：只读委派可并发（顺序仍由 `slots` 保证与 toolCall 一致），会改磁盘的一律串行——
 > 两个子 Agent 同时写同一文件时都返回成功，谁的改动生效取决于调度顺序。
+> `review` 虽然改不了代码，但会起进程跑验证：两个 checker 同时跑同一个测试套件会在
+> 产物目录 / 端口 / 临时文件上互相踩，因此同样判为不可并发。
 >
 > 判据是**最终过滤后的工具集**，不是角色的名义能力：父注册表没有写工具时，
 > `implement` 实际拿到的工具集与 `explore` 完全一致，不该被白白串行化。
 > 详见 [多 Agent 实现方案](multi-agent-design.md)。
+
+#### Maker + Checker：让评审有事实依据
+
+一次"改完还得真的能跑"的任务，链路是 `implement` → `review`：
+
+| 环节    | 做什么                                                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------- |
+| Maker   | `role=implement` 落地改动，并自述验证方式                                                                   |
+| Checker | `role=review` 复查，**必须实际跑验证**（测试 / 类型检查 / 构建 / 只读 git），输出 `PASS` / `FAIL` |
+| 回退    | `FAIL` 的结论里带阻塞项（位置 + 该改什么），父 Agent 据此再派 `implement`                                 |
+
+两条刻意的选择：
+
+- **闭环靠结论契约，不靠 loop 层状态机**。判定权留在父 Agent（模型）手里：
+  它拿到 `FAIL` 与阻塞项后，可以自己决定重改、收缩目标还是转问用户。
+  做成强制 gate 要在 loop 层新增"回退 maker + 最大迭代轮数"的状态机，
+  这会破坏"执行顺序只有 `runAgentLoop` 这一个实现"的约定，
+  也让一次改动的确认次数再翻一倍——不划算。
+  （没有强制闭环的 checker 仍可能被父 Agent 忽略，这是**有意接受的**代价。）
+- **委派次数是共享的**：`MAX_DELEGATIONS_PER_TURN = 8` 对 implement 与 review
+  一视同仁，一条链占两次，因此一回合实际只够跑 4 组。这是预算，不是缺陷。
 
 ## 4. 数据流
 
@@ -252,13 +279,13 @@ pnpm check
 
 ### 5.1 工程基线
 
-| 项目 | 现状 |
-| --- | --- |
-| 类型检查 | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters` |
-| 单元测试 | `tsx --test "src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖 |
-| 覆盖率门槛 | 行 85% / 分支 85% / 函数 90%，低于门槛即失败（随 `pnpm check` 一起跑） |
-| 持续集成 | `.github/workflows/ci.yml`：install → **`pnpm check`**（push / PR / 手动触发） |
-| Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策 |
+| 项目             | 现状                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| 类型检查         | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters`           |
+| 单元测试         | `tsx --test "src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖          |
+| 覆盖率门槛       | 行 85% / 分支 85% / 函数 90%，低于门槛即失败（随`pnpm check` 一起跑）                   |
+| 持续集成         | `.github/workflows/ci.yml`：install → **`pnpm check`**（push / PR / 手动触发） |
+| Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策                 |
 
 CI 只跑一条命令 `pnpm check`（= `typecheck` + `test:coverage`），不拆成
 typecheck 与 test 两步：拆开就会漏掉覆盖率门槛，让"覆盖率掉了"永远拦不住 PR。

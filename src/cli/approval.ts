@@ -214,6 +214,10 @@ export function assessBashRisk(command: string): RiskAssessment {
 
 /**
  * 评估一次工具调用的风险（当前只有 bash / write_file / task 有额外信息可挖）。
+ *
+ * `verify_command` 刻意不参与：它的命令已被白名单结构性收窄，
+ * 高危模式（删除、网络、凭据）根本进不来，再评估一遍只会给出恒为 none 的分支。
+ * 风险维度的边界在这里是**白名单**，不在正则匹配。
  */
 export function assessToolRisk(
   call: ToolCallContent,
@@ -314,6 +318,10 @@ export function describeToolCall(
   switch (call.name) {
     case "bash":
       return `命令: ${truncateValue(args.command)}`;
+    case "verify_command":
+      // 必须写出"受限"：光看"命令: pnpm test"用户无法判断它能干什么，
+      // 而"只接受验证类白名单"恰恰是这次放行该不该点的依据
+      return `验证: ${truncateValue(args.command)}（受限白名单：测试 / 构建 / 检查）`;
     case "write_file": {
       const path = truncateValue(args.path);
       // 覆盖已有文件必须显式标注：原有内容会被整份替换且无法撤销
