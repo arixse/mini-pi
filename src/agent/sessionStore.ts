@@ -239,6 +239,19 @@ export class JsonlSessionStore {
   private readonly loadWarnings: Array<{ line: number; reason: string }> = [];
   /** 最近一次压缩失败的原因（成功后清空）；供 /status 展示 */
   private lastCompactionError: string | null = null;
+
+  /**
+   * 上下文 token 数的缓存。
+   *
+   * 一次用户回合里"要不要压缩"会被问 3~4 次（回合前的提示、真正开始时、
+   * `compactIfNedded` 内部、压缩前取 before 值），每次都是对全部消息
+   * 逐字符扫描 + `buildContext()` 复制一遍数组。长会话下这部分开销与
+   * 消息总量成正比，而它在同一回合内只可能变一次——缓存一次就够。
+   *
+   * 缓存键取 `leafId`：消息只追加不改写，leafId 不变就意味着上下文没变。
+   * 追加、压缩、reset 都会移动 leafId 或显式清空，缓存随之失效。
+   */
+  private tokenCache: { leafId: string | null; tokens: number } | null = null;
   
   constructor(
     private readonly filePath: string,
@@ -383,7 +396,24 @@ export class JsonlSessionStore {
 
   /** 当前上下文的近似 token 数（与压缩判定同一套估算） */
   estimateContextTokens(): number {
-    return estimateTokens(this.buildContext());
+    return this.contextTokens();
+  }
+
+  /**
+   * 当前上下文的 token 数，按 leafId 记忆化（见 {@link tokenCache}）。
+   *
+   * 所有需要"上下文有多大"的地方都必须走这里，包括压缩判定与压缩前的
+   * `tokensBefore`：各处自己调 `estimateTokens(buildContext())` 不但重复扫描，
+   * 还可能出现两次读到的数不一致（中间插入了消息）。
+   */
+  private contextTokens(): number {
+    const cached = this.tokenCache;
+    if (cached && cached.leafId === this.leafId) {
+      return cached.tokens;
+    }
+    const tokens = estimateTokens(this.buildContext());
+    this.tokenCache = { leafId: this.leafId, tokens };
+    return tokens;
   }
 
   /**
@@ -397,6 +427,7 @@ export class JsonlSessionStore {
     this.byId = new Map();
     this.leafId = null;
     this.counter = 0;
+    this.tokenCache = null;
     this.writeHeader();
   }
 
@@ -501,7 +532,7 @@ export class JsonlSessionStore {
       return false;
     }
     return (
-      estimateTokens(this.buildContext()) + normalizeOverheadTokens(overheadTokens) >
+      this.contextTokens() + normalizeOverheadTokens(overheadTokens) >
       maxApproxTokens
     );
   }
@@ -548,7 +579,7 @@ export class JsonlSessionStore {
     }
 
     // 压缩前真实的请求规模：消息历史 + 固定开销
-    const tokensBefore = estimateTokens(this.buildContext()) + overhead;
+    const tokensBefore = this.contextTokens() + overhead;
     const kept = messageEntries.slice(startIndex);
     const summarized = messageEntries.slice(0, startIndex);
 
@@ -595,20 +626,24 @@ export class JsonlSessionStore {
    *
    * 必须是循环：只回溯一层会让 buildContext() 永远只返回最后一条消息，
    * 历史上下文和压缩定位（firstKeptEntryId）全部失效。
+   *
+   * 回溯方向是 leaf -> root，所以要先 push 再 reverse。原来的写法是
+   * `path.unshift(current)`——每个元素都要把整个数组后移一格，n 条消息就是
+   * O(n²)：一场长会话（几百条）每次重建上下文都要白搬几万次引用。
    */
   private pathToLeaf(): SessionEntry[] {
-    const path: SessionEntry[] = [];
+    const reversed: SessionEntry[] = [];
     let current: SessionEntry | undefined = this.leafId
       ? this.byId.get(this.leafId)
       : undefined;
     while (current) {
-      path.unshift(current);
+      reversed.push(current);
       current =
         "parentId" in current && current.parentId
           ? this.byId.get(current.parentId)
           : undefined;
     }
-    return path;
+    return reversed.reverse();
   }
 
   buildContext(): AgentMessage[] {

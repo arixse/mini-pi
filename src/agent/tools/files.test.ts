@@ -295,6 +295,30 @@ describe("文件类工具（read_file / write_file / edit_file）", () => {
       assert.ok(result.content[0].text.includes("offset/limit"));
     });
 
+    it("窗口取满后仍要数清全文行数（流式读取的截断分支）", async () => {
+      // 3000 行、limit 只有 10：窗口在中途就满了，之后只剩"数换行"这条路径，
+      // 统计错了会让分页提示直接失真（"共 10 行"→ 用户以为读完了）
+      writeLines(
+        "long.txt",
+        Array.from({ length: 3_000 }, (_, i) => `row-${i + 1}`),
+      );
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("read_file", {
+        path: "long.txt",
+        offset: 1_500,
+        limit: 10,
+      });
+      const details = result.details as Record<string, unknown>;
+
+      assert.strictEqual(details.totalLines, 3_000);
+      assert.strictEqual(details.returnedFrom, 1_500);
+      assert.strictEqual(details.returnedTo, 1_509);
+      assert.strictEqual(details.truncated, true);
+      assert.ok(result.content[0].text.startsWith("row-1500\nrow-1501"));
+      assert.ok(result.content[0].text.includes("文件共 3000 行"));
+    });
+
     it("应接受字符串形式的 offset/limit（模型常这么传）", async () => {
       writeLines("str.txt", ["a", "b", "c", "d"]);
       const registry = createToolRegistry(testDir);
