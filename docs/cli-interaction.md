@@ -56,7 +56,7 @@ mini-pi --version      # 或 -v → "mini-pi v1.2.3"
 > `bin/mini-pi-cli.cjs` 属于构建产物，已加入 `.gitignore`；
 > `pnpm install` 会通过 `prepare` 脚本自动生成它，因此 `pnpm link:cli` 之前无需手动打包。
 
-**运行要求**：Node.js 18+，并在工作目录下执行（工作目录将被作为 `workspaceRoot`）。
+**运行要求**：Node.js 22+（`engines` 与 `.nvmrc` 同一份声明），并在工作目录下执行（工作目录将被作为 `workspaceRoot`）。
 
 ---
 

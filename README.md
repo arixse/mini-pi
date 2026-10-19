@@ -23,10 +23,14 @@ mini-pi                          # bin 名不带 scope
 | 测试        | `node:test` + tsx（带覆盖率门槛：行 85% / 分支 85% / 函数 90%）         |
 | 打包        | esbuild（CLI 打成自包含单文件）                                           |
 | AI SDK      | `openai` / `@anthropic-ai/sdk`（两种协议，7 家供应商共用）            |
-| Web（预留） | React 19.2 + Vite 8 / Express 5.2 —— 第二阶段，**尚未实现**       |
+| Web（预留） | 第二阶段，**尚未实现**；当前仓库不含任何 Web / Server 代码     |
 
-> Web 相关的依赖之所以还留在 `package.json` 里：CLI 的 esbuild 打包会把它们声明为
-> external，依赖缺失会让构建报错。真正做第二阶段时直接启用即可，不用再装一遍。
+> **运行时零依赖**：`bin/mini-pi-cli.cjs` 是 esbuild 打出的自包含单文件，
+> `chalk` / `openai` / `@anthropic-ai/sdk` 只在开发与构建时需要，因此都在
+> `devDependencies` 里，`npm i -g` 不会额外拉一棵依赖树。
+> 此前 `package.json` 还挂着 react / react-dom / vite / express 等 8 个包与 3 个
+> `@types`，理由是"esbuild 把它们声明成 external"——实际 `build:cli` 是 `--bundle`
+> 且早已没有 external，`src` 里也从未 import 过它们。
 
 ## 项目结构
 

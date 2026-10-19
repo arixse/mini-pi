@@ -11,7 +11,14 @@ git push origin v1.0.1
 ```
 
 工作流：`.github/workflows/publish.yml`，依次执行
-`install → pnpm check → build:cli → 定版本 → 预检 → 打包校验 → publish`。
+`install → pnpm check → 定版本 → build:cli → 预检 → 打包校验 → publish`。
+
+> **定版本必须在 build 之前**：`src/cli/version.ts` 是
+> `import pkg from "../../package.json"`，esbuild 会把 `version` 字段内联进 bundle。
+> 顺序反过来时，发出去的 CLI 报的是仓库里的旧号而不是 tag 上的号——
+> 过去靠 `npm pack` 隐式重跑 `prepare` 才碰巧修好，加 `--ignore-scripts` 就会翻车。
+> 打包校验里因此有两条断言：`node <cli> --version` 与 `$VERSION` 逐字相等，
+> 且 tarball 内 `package.json` 的 version 也等于它（升级检测靠这两者一致）。
 
 也可以在 Actions 页面手动触发（workflow_dispatch），可填版本号、可勾 dry-run
 只打包不发布。**手动触发不会跳过门禁**。
@@ -67,7 +74,7 @@ git push origin v1.0.1
 
 ## 包里有什么
 
-`package.json` 的 `files` 白名单决定，目前是 3 个文件、约 333KB：
+`package.json` 的 `files` 白名单决定，目前是 3 个文件、约 347KB（未压缩 1.8MB）：
 
 - `bin/mini-pi-cli.cjs`（esbuild 单文件 bundle，1.7MB 未压缩）
 - `README.md`
@@ -76,6 +83,18 @@ git push origin v1.0.1
 **不带 `src`**：`mini-pi-cli.cjs` 是自包含 bundle，运行时不需要 TypeScript 源码。
 `src` 只服务于仓库内开发用的 `bin/mini-pi.js`（走 tsx 跑源码），
 npm 装包的用户用不到，也就没进白名单。
+
+**也不带 dependencies**：`chalk` / `openai` / `@anthropic-ai/sdk` 全部被 bundle 进去，
+所以 `package.json` 的 `dependencies` 是空的，它们只在 `devDependencies` 里
+（开发、测试、构建时解析）。效果是 `npm i -g` 只下载一个 347KB 的 tarball，
+不再连带 45MB 的依赖树。
+
+验证方式很简单，改完打包后跑一次：
+
+```bash
+mkdir /tmp/smoke && cp bin/mini-pi-cli.cjs /tmp/smoke/ && cd /tmp/smoke
+node mini-pi-cli.cjs --version   # 目录里没有 node_modules，能跑就是真自包含
+```
 
 ## 包名为什么带 scope
 

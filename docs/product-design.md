@@ -68,7 +68,7 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 
 ## 6. 配置要求
 
-- Node.js 18+
+- Node.js 22+
 - API 密钥（OpenAI 或 Anthropic，通过 `/login` 命令配置）
 - 模型选择（通过 `/model` 命令配置）
 

@@ -4,13 +4,14 @@
 
 | 类别     | 技术选型           | 说明               |
 | -------- | ------------------ | ------------------ |
-| 运行时   | Node.js 18+        | 服务端运行环境     |
+| 运行时   | Node.js 22+        | CLI 运行环境       |
 | 语言     | TypeScript 7.0     | 类型安全           |
 | 包管理   | pnpm 10.17         | 快速、节省磁盘空间 |
-| 后端框架 | Express 5.2        | API 服务           |
-| 前端框架 | React 19.2         | UI 组件            |
-| 构建工具 | Vite 8.2           | 快速开发构建       |
+| 打包     | esbuild            | CLI 打成自包含单文件 |
 | AI SDK   | OpenAI / Anthropic | 模型调用           |
+
+> Web / Server（Express + React + Vite）属第二阶段，**尚未实现**，依赖也未引入。
+> 实现时应复用 `src/agent` 的内核，而不是在 CLI 之上再包一层。
 
 ## 2. 项目结构
 
@@ -177,7 +178,8 @@ CLI 侧由 `createInputScheduler` 保证**任意时刻只有一个回合在跑**
 
 **超时与取消必须分开**：两者给模型的建议完全相反（"收窄目标重试" vs "别再重试"），
 所以用独立的 `timeoutGuard` 记录超时，只看合并后的 `signal.aborted` 等于什么都不知道。
-合并信号用手写 `linkSignals` 而非 `AbortSignal.any`（Node 20+ 才有，本项目基线 Node 18+）。
+合并信号用手写 `linkSignals` 而非 `AbortSignal.any`（后者要 Node 20+；此处结论写于
+Node 18 基线时期，当前基线已是 22，实现未做切换）。
 
 `ok` 只看**最后一条** assistant（`judgeSubAgentOutcome`）：中途某次请求报错、
 后续成功时，父 Agent不该重派一次完全相同的任务。中间错误折进 `error` 字段作附注。
