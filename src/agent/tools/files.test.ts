@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MAX_READ_BYTES, MAX_READ_CHARS, MAX_READ_LINES } from "./files";
 import { createToolRegistry } from "./registry";
@@ -74,6 +74,24 @@ describe("文件类工具（read_file / write_file / edit_file）", () => {
       assert.strictEqual(
         readFileSync(join(testDir, "output.txt"), "utf8"),
         "new content",
+      );
+    });
+
+    it("写入走临时文件 + rename，不留下 .tmp", async () => {
+      const registry = createToolRegistry(testDir);
+
+      await registry.execute("write_file", { path: "atomic.txt", content: "v1" });
+      await registry.execute("edit_file", {
+        path: "atomic.txt",
+        oldText: "v1",
+        newText: "v2",
+      });
+
+      assert.strictEqual(readFileSync(join(testDir, "atomic.txt"), "utf8"), "v2");
+      assert.deepStrictEqual(
+        readdirSync(testDir).filter((name) => name.endsWith(".tmp")),
+        [],
+        "原子写的临时文件必须被 rename 走，不能留在工作区里",
       );
     });
 

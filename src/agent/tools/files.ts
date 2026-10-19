@@ -6,7 +6,7 @@
  */
 
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 import { createTextContent } from "../message";
 import { numberArg, stringArg } from "./args";
@@ -184,6 +184,29 @@ async function readLineWindow(
   return { lines, totalLines, cutByChars };
 }
 
+/**
+ * 原子写：先写同目录的临时文件，再 rename 覆盖目标。
+ *
+ * `writeFile` 直接写目标文件时，进程被杀（Ctrl+C、OOM、断电）会留下**半截
+ * 源码**——用户下次打开就是一个既编译不过、又不知道丢了哪一段的文件。
+ * rename 在同一分区上是原子的：要么还是旧文件，要么已经是完整的新文件。
+ *
+ * 临时文件必须和目标同目录（跨分区的 rename 会退化成复制，失去原子性），
+ * 失败时尽力清掉，不留垃圾。
+ */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const temporary = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  try {
+    await writeFile(temporary, content, "utf8");
+    await rename(temporary, filePath);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {
+      /* 清理失败不掩盖原始错误 */
+    });
+    throw error;
+  }
+}
+
 export function readFileTool(workspaceRoot: string): RegisteredTool {
   return {
     name: "read_file",
@@ -309,7 +332,7 @@ export function writeFileTool(workspaceRoot: string): RegisteredTool {
         }
       }
       await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, content, "utf8");
+      await writeFileAtomic(filePath, content);
 
       const lines = content === "" ? 0 : content.split("\n").length;
       const changeLabel = created
@@ -413,7 +436,7 @@ export function editFileTool(workspaceRoot: string): RegisteredTool {
       }
 
       // 写入文件
-      await writeFile(filePath, newContent, "utf8");
+      await writeFileAtomic(filePath, newContent);
 
       // 第一次替换所在的行号（1 起），供卡片标注 @@ 位置
       const firstIndex = content.indexOf(oldText);
