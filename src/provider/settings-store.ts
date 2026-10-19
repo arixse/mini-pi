@@ -28,6 +28,15 @@ type Settings = {
    * 打开后每次委派写一个 `<会话>.sub-<agentId>.jsonl`。
    */
   subagentTrace?: boolean;
+  /**
+   * 启动时是否检测新版本（`/update` 开关，缺省 true）。
+   *
+   * 与 subagentEnabled 相反，这里默认开：检测每天最多一次网络请求
+   * （结果有 24h 缓存），代价可控，而"永远用着旧版本"对用户是隐性损失。
+   * 显式写过 false 才关闭；`/update off` 或环境变量
+   * `MINI_PI_SKIP_UPDATE_CHECK` 也能关。
+   */
+  updateCheck?: boolean;
 };
 
 export class SettingsStore {
@@ -229,6 +238,28 @@ export class SettingsStore {
   async setSubagentTrace(enabled: boolean): Promise<void> {
     await this.initialize();
     this.settings.subagentTrace = enabled;
+    await this.persist();
+  }
+
+  /**
+   * 启动时是否检测新版本（`/update` 开关）。
+   *
+   * **默认开启**：与委派不同，更新检测的代价是"每天最多一次带超时的
+   * 请求"，而收益（不永远用旧版本）对每个用户都成立。想安静的人
+   * `/update off` 一次即可，也不必先知道 settings.json 有这个字段。
+   */
+  async getUpdateCheckEnabled(): Promise<boolean> {
+    await this.initialize();
+    return this.settings.updateCheck !== false;
+  }
+
+  /**
+   * 开关启动时的版本更新检测。
+   * @throws settings.json 处于损坏状态时拒绝写入
+   */
+  async setUpdateCheckEnabled(enabled: boolean): Promise<void> {
+    await this.initialize();
+    this.settings.updateCheck = enabled;
     await this.persist();
   }
 

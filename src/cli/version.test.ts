@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { APP_VERSION, formatVersion, wantsVersion } from "./version";
+import { APP_VERSION, PACKAGE_NAME, formatVersion, wantsVersion } from "./version";
 
 /**
  * 独立于被测模块读一次 package.json：
@@ -10,7 +10,7 @@ import { APP_VERSION, formatVersion, wantsVersion } from "./version";
  */
 const packageJson = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf-8"),
-) as { version?: unknown };
+) as { version?: unknown; name?: unknown };
 
 describe("APP_VERSION", () => {
   it("取自 package.json，不在代码里另写一份", () => {
@@ -20,6 +20,18 @@ describe("APP_VERSION", () => {
 
   it("是形如 1.2.3 的非空串", () => {
     assert.match(APP_VERSION, /^\d+\.\d+\.\d+/);
+  });
+});
+
+describe("PACKAGE_NAME", () => {
+  it("取自 package.json，不在代码里另写一份", () => {
+    // 更新检测用它拼 registry 路径与安装提示；抄一份就会在包名迁移后
+    // 悄悄指向旧包（npm 上已经因"与 minipi 相似"迁过一次）
+    assert.strictEqual(PACKAGE_NAME, packageJson.name);
+  });
+
+  it("是形如 @scope/name 的非空串", () => {
+    assert.match(PACKAGE_NAME, /^@[^/]+\/[^/]+$/);
   });
 });
 

@@ -195,6 +195,49 @@ describe("SettingsStore", () => {
     });
   });
 
+  /**
+   * 更新检测与两个子 Agent 开关的默认值刻意相反：代价是"每天最多一次
+   * 带超时的请求"，收益是"不永远用旧版本"，对每个用户都成立。
+   */
+  describe("版本更新检测开关", () => {
+    it("未配置时默认开启", async () => {
+      assert.strictEqual(await store.getUpdateCheckEnabled(), true);
+    });
+
+    it("关掉之后重新读出 false（重开终端仍然关着）", async () => {
+      await store.setUpdateCheckEnabled(false);
+      assert.strictEqual(await store.getUpdateCheckEnabled(), false);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getUpdateCheckEnabled(), false);
+    });
+
+    it("再开回 true", async () => {
+      await store.setUpdateCheckEnabled(false);
+      await store.setUpdateCheckEnabled(true);
+      assert.strictEqual(await store.getUpdateCheckEnabled(), true);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getUpdateCheckEnabled(), true);
+    });
+
+    it("手改配置写成非布尔 false 的值时保持开启", async () => {
+      for (const value of ["false", 0, null, "no"]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ updateCheck: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getUpdateCheckEnabled(),
+          true,
+          `updateCheck=${JSON.stringify(value)} 不该关掉检测`,
+        );
+      }
+    });
+  });
+
   describe("getDefaultModel", () => {
     it("should return undefined when no default model is set", async () => {
       const defaultModel = await store.getDefaultModel();
