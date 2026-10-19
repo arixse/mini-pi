@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkBashCommand, findCredentialMentions, tokenizeCommand } from "./workspace";
+import { checkBashCommand, findCredentialMentions, isCredentialFile, tokenizeCommand } from "./workspace";
 import { createToolRegistry } from "./registry";
 import { IS_WIN32, OUTSIDE_ABSOLUTE_FILE, createTempWorkspace } from "./testWorkspace";
 
@@ -45,6 +45,65 @@ describe("工作区守卫（路径、凭据与 symlink 逃逸）", () => {
     it("凭据守卫不得影响普通命令", () => {
       assert.doesNotThrow(() => checkBashCommand("cat .env.example", testDir));
       assert.doesNotThrow(() => checkBashCommand("ls -la", testDir));
+    });
+  });
+
+  describe("凭据文件名单（isCredentialFile）", () => {
+    it("覆盖常见凭据文件与大小写变体", () => {
+      const credentials = [
+        ".env",
+        ".ENV",
+        ".env.local",
+        ".env.production",
+        ".npmrc",
+        ".yarnrc",
+        ".pypirc",
+        ".netrc",
+        "_netrc",
+        ".git-credentials",
+        "credentials",
+        "id_rsa",
+        "id_ed25519",
+        "server.pem",
+        "server.key",
+        "bundle.p12",
+        "app.pfx",
+        "app.jks",
+        "release.keystore",
+        "secrets.yml",
+        "secret.json",
+      ];
+
+      for (const name of credentials) {
+        assert.strictEqual(isCredentialFile(name), true, `${name} 应被判定为凭据文件`);
+      }
+    });
+
+    it("不误伤模板、普通代码与同形名字", () => {
+      const allowed = [
+        ".env.example",
+        ".env.sample",
+        ".env.template",
+        "foo.env",
+        "dotenv",
+        "environment.ts",
+        "key.ts",
+        "keys.ts",
+        "credentials.md",
+        "README.md",
+      ];
+
+      for (const name of allowed) {
+        assert.strictEqual(isCredentialFile(name), false, `${name} 不应被误伤`);
+      }
+    });
+
+    it("bash 命令里的新名单同样生效（含大小写变体）", () => {
+      assert.throws(() => checkBashCommand("cat .ENV", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("cat .npmrc", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("cat config/credentials", testDir), /credential file/);
+      assert.throws(() => checkBashCommand("openssl x509 -in server.key", testDir), /credential file/);
+      assert.doesNotThrow(() => checkBashCommand("cat keys.ts", testDir));
     });
   });
 

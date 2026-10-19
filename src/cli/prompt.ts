@@ -99,8 +99,8 @@ export function buildSystemPrompt(input: BuildSystemPromptInput): string {
 
 - 当前工作目录：\`${workspaceRoot}\`
 - 路径一律相对它给出；**禁止**读取或操作该目录以外的文件
-- 禁止读取凭据类文件（\`.env\`、\`*.pem\`、\`id_rsa\`、\`.git-credentials\` 等），
-  即使它们就落在工作区内`,
+- 禁止读取凭据类文件（\`.env\`、\`.npmrc\`、\`*.pem\`、\`*.key\`、\`id_rsa\`、
+  \`.git-credentials\` 等），即使它们就落在工作区内；检索工具会跳过它们`,
 
     TOOL_GUIDE,
     CODE_STYLE,

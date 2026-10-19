@@ -265,9 +265,11 @@ mini-pi                        # bin 名不带 scope
      不会与新建混为一谈。
 2. **文件访问限制**：所有文件操作被限制在工作区内，并做真实路径校验
    （工作区内的软链接指向外部同样会被拒绝）。
-3. **凭据保护**：`.env*`、私钥、`*.pem`、`.git-credentials` 默认禁止读写，
-   `read_file` / `write_file` / `edit_file` 与 `bash` 四条路径都生效
-   （bash 侧是静态检查，`cat .env` 这类相对路径同样被拦；
+3. **凭据保护**：`.env*`、`.npmrc`、私钥、`*.pem` / `*.key`、证书库、
+   `credentials`（AWS）、`.git-credentials` 默认禁止读写，
+   `read_file` / `write_file` / `edit_file`、`bash`、`list_files` / `glob` / `grep`
+   全部生效（bash 侧是静态检查，`cat .env` 这类相对路径同样被拦；
+   检索侧跳过同一份名单并报告跳过数量，显式点名凭据文件则直接报错；
    它拦不住 `node -e "..."` 之类的构造，最终防线仍是执行前的用户审批）；
    `auth.json` / `settings.json` 以 0600 权限落盘（Windows 需自行设置目录权限）。
 4. **可中断、可恢复**：执行期间按 Ctrl+C 取消当前任务；模型请求 120 秒超时

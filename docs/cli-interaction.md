@@ -408,8 +408,15 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 
 文件类工具会做两层路径校验（词法 + 真实路径），工作区内的 symlink/junction
 指向外部时同样会被拒绝；`read_file` / `write_file` / `edit_file` 还会拒绝访问
-凭据类文件（`.env*`、SSH 私钥、`*.pem`、`.git-credentials`，模板文件
+凭据类文件（`.env*`、`.npmrc`、`.pypirc`、`.netrc`、SSH 私钥、`*.pem` / `*.key`、
+证书库（`.p12` / `.pfx` / `.jks` / `.keystore`）、`credentials`（AWS）、
+`.git-credentials`、`secret(s).{json,yml,toml,env}`；模板文件
 `.env.example` / `.sample` / `.template` 除外）。
+
+检索类工具（`list_files` / `glob` / `grep`）在遍历时跳过同一份名单，
+包括 `.ENV` 这类大小写变体与指向凭据文件的软链接；结果末尾会写明
+「已跳过 N 个凭据类文件」，避免模型把「读不到」误判成「不存在」。
+显式把 `path` 或 `include` 指向凭据文件时直接报错，而不是静默返回空结果。
 
 ### 4.5 工具调用审批
 

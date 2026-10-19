@@ -69,20 +69,36 @@ function realpathAllowMissing(target: string): string {
 }
 
 /**
- * 凭据类文件名：默认禁止 read_file / write_file / edit_file 访问。
+ * 凭据类文件名：默认禁止 read_file / write_file / edit_file 访问，
+ * 检索类工具（list_files / glob / grep）也不列举、不读取。
  *
  * 系统提示词里已经写了「禁止读取 .env」，但此前只是提示，模型仍可直接读到；
  * 这里把它落到工具层强制生效。模板文件（.env.example 等）本身不含真实凭据，允许访问。
+ *
+ * 匹配一律带 `i`：Windows 文件系统大小写不敏感，`read_file(".ENV")` 实际打开的
+ * 就是 `.env`，不带 i 的规则等于留了一个只在该平台成立的洞。
  */
 const CREDENTIAL_FILE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^\.env$/,                       // .env
-  /^\.env\./i,                     // .env.local / .env.production ...
-  /^id_(rsa|dsa|ecdsa|ed25519)$/i, // SSH 私钥
-  /\.pem$/i,
+  /^\.env$/i,                        // .env / .ENV
+  /^\.env\./i,                       // .env.local / .env.production ...
+  /^\.npmrc$/i,                      // //registry/:_authToken=...
+  /^\.yarnrc(\.yml)?$/i,
+  /^\.pypirc$/i,                     // PyPI token
+  /^\.netrc$/i,
+  /^_netrc$/i,                       // Windows 上的 .netrc
   /^\.git-credentials$/i,
+  /^credentials$/i,                  // ~/.aws/credentials
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,   // SSH 私钥
+  /\.pem$/i,
+  /\.key$/i,                         // TLS 私钥
+  /\.(p12|pfx|jks|keystore)$/i,      // 证书库
+  /^secrets?\.(json|ya?ml|toml|env)$/i,
 ];
 
 const CREDENTIAL_TEMPLATE_PATTERN = /^\.env\.(example|sample|template)$/i;
+
+/** 给报错信息用的名单说明：只列最常见的几类，避免错误提示随规则增长而变长 */
+const CREDENTIAL_EXAMPLES = ".env / .npmrc / *.pem / *.key / id_rsa / .git-credentials";
 
 export function isCredentialFile(filePath: string): boolean {
   const name = basename(filePath);
@@ -99,7 +115,7 @@ export function assertNotCredentialFile(filePath: string, workspaceRoot: string)
   }
   throw new Error(
     `Refusing to access credential file: ${relative(workspaceRoot, filePath)}. ` +
-      `凭据类文件（.env、私钥等）默认禁止读写；如确需处理，请先向用户说明并取得同意。`,
+      `凭据类文件（${CREDENTIAL_EXAMPLES}）默认禁止读写；如确需处理，请先向用户说明并取得同意。`,
   );
 }
 
@@ -319,7 +335,7 @@ export function checkBashCommand(command: string, workspaceRoot: string): void {
   if (credentials.length > 0) {
     throw new Error(
       `Bash command touches credential file(s): ${credentials.join(", ")}. ` +
-        `凭据类文件（.env、私钥、*.pem、.git-credentials）默认禁止读写；` +
+        `凭据类文件（${CREDENTIAL_EXAMPLES}）默认禁止读写；` +
         `如确需处理，请先向用户说明并取得同意。`,
     );
   }

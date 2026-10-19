@@ -5,7 +5,7 @@
  * 因此放在一起：新增一个检索工具时不至于漏掉某一侧的约束。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { createTextContent } from "../message";
@@ -17,7 +17,11 @@ import {
   parseIgnorePatterns,
 } from "../patterns";
 import { stringArg } from "./args";
-import { resolveInsideWorkspace } from "./workspace";
+import {
+  assertNotCredentialFile,
+  isCredentialFile,
+  resolveInsideWorkspace,
+} from "./workspace";
 import type { RegisteredTool } from "./types";
 
 /** 单次 list_files 返回的最大条目数 */
@@ -63,14 +67,42 @@ type WalkOptions = {
 type WalkResult = {
   visited: number;
   truncated: boolean;
+  /**
+   * 因凭据保护被跳过的文件数。
+   * 必须回传给调用方：静默跳过会让模型把「有文件但读不到」误判成「不存在」。
+   */
+  skippedCredentials: number;
 };
+
+/**
+ * 是否为不能进入检索的条目。
+ *
+ * 除按文件名判定外，还解析符号链接的真实名字：`notes.txt -> .env` 这类
+ * 别名在只看 basename 时与普通文件无异，但读出来就是凭据。
+ */
+function isCredentialEntry(absolutePath: string, name: string, isSymbolicLink: boolean): boolean {
+  if (isCredentialFile(name)) {
+    return true;
+  }
+  if (!isSymbolicLink) {
+    return false;
+  }
+  try {
+    return isCredentialFile(realpathSync(absolutePath));
+  } catch {
+    // 断链等解析失败的情况交给后续读取去失败
+    return false;
+  }
+}
 
 /**
  * 按忽略规则在工作区内遍历（list_files / glob / grep 共用）。
  *
  * - 目录与文件都会回调，便于调用方自行取舍；
  * - 单个目录读不动时跳过，不让整次遍历失败；
- * - 条目数与深度到顶时置 truncated 并停止。
+ * - 条目数与深度到顶时置 truncated 并停止；
+ * - 凭据类文件在这里统一拦截：三条检索路径共用同一个遍历，守卫放在这里
+ *   才不会出现「grep 能读、list_files 不显示」这种只在一条路径上成立的承诺。
  */
 async function walkEntries(
   startDir: string,
@@ -84,6 +116,7 @@ async function walkEntries(
 ): Promise<WalkResult> {
   let visited = 0;
   let truncated = false;
+  let skippedCredentials = 0;
 
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (truncated) {
@@ -118,6 +151,14 @@ async function walkEntries(
         continue;
       }
 
+      if (
+        !isDirectory &&
+        isCredentialEntry(absolute, dirent.name, dirent.isSymbolicLink())
+      ) {
+        skippedCredentials += 1;
+        continue;
+      }
+
       visited += 1;
       await visit(relativePath, absolute, isDirectory);
 
@@ -128,7 +169,12 @@ async function walkEntries(
   };
 
   await walk(startDir, 1);
-  return { visited, truncated };
+  return { visited, truncated, skippedCredentials };
+}
+
+/** 被凭据守卫挡下的文件数：附在结果尾部，避免"读不到"被误当成"不存在" */
+function credentialSkipNotice(count: number): string {
+  return `[已跳过 ${count} 个凭据类文件（.env、私钥、.npmrc 等），其内容不参与检索]`;
 }
 
 export function listFilesTool(workspaceRoot: string): RegisteredTool {
@@ -137,6 +183,7 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
     description:
       "List files inside the workspace (recursive, sorted). " +
       "Dependency and build directories (.git, node_modules, dist, build, ...) and .gitignore entries are skipped. " +
+      "Credential files (.env, private keys, .npmrc) are never listed. " +
       `Returns at most ${MAX_LIST_ENTRIES} entries and ${MAX_LIST_DEPTH} levels below the given path; ` +
       "the result says so explicitly when it is cut, in which case list a more specific subdirectory.",
     parameters: {
@@ -150,6 +197,7 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
     },
     async execute(args) {
       const dir = resolveInsideWorkspace(workspaceRoot, stringArg(args.path, "."));
+      assertNotCredentialFile(dir, workspaceRoot);
       const ignore = createWorkspaceIgnore(workspaceRoot);
       const entries: string[] = [];
 
@@ -165,9 +213,14 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
       entries.sort();
       const dirCount = entries.filter((entry) => entry.endsWith("/")).length;
       const body = entries.length > 0 ? entries.join("\n") : "(empty)";
-      const text = result.truncated
-        ? `${body}\n\n${listTruncationNotice()}`
-        : body;
+      const notices: string[] = [];
+      if (result.truncated) {
+        notices.push(listTruncationNotice());
+      }
+      if (result.skippedCredentials > 0) {
+        notices.push(credentialSkipNotice(result.skippedCredentials));
+      }
+      const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
         content: [createTextContent(text)],
@@ -177,6 +230,7 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
           dirCount,
           fileCount: entries.length - dirCount,
           truncated: result.truncated,
+          skippedCredentials: result.skippedCredentials,
         },
       };
     },
@@ -196,7 +250,8 @@ export function globTool(workspaceRoot: string): RegisteredTool {
     description:
       "Find files by glob pattern under the workspace (supports *, ?, ** and {a,b}; " +
       'a pattern without "/" matches the file name at any depth, e.g. "*.test.ts"). ' +
-      "Dependency/build directories and .gitignore entries are skipped. Returns files only, " +
+      "Dependency/build directories and .gitignore entries are skipped, and credential files " +
+      "(.env, private keys, .npmrc) are never matched. Returns files only, " +
       `at most ${MAX_GLOB_RESULTS} of them.`,
     parameters: {
       type: "object",
@@ -218,6 +273,7 @@ export function globTool(workspaceRoot: string): RegisteredTool {
         throw new Error("pattern cannot be empty");
       }
       const root = resolveInsideWorkspace(workspaceRoot, stringArg(args.path, "."));
+      assertNotCredentialFile(root, workspaceRoot);
       const ignore = createWorkspaceIgnore(workspaceRoot);
       const matches: string[] = [];
       let truncated = false;
@@ -242,9 +298,16 @@ export function globTool(workspaceRoot: string): RegisteredTool {
       matches.sort();
       const cut = truncated || result.truncated;
       const body = matches.length > 0 ? matches.join("\n") : "(no match)";
-      const text = cut
-        ? `${body}\n\n...[已截断：最多返回 ${MAX_GLOB_RESULTS} 个文件，请用更精确的模式或指定子目录]`
-        : body;
+      const notices: string[] = [];
+      if (cut) {
+        notices.push(
+          `...[已截断：最多返回 ${MAX_GLOB_RESULTS} 个文件，请用更精确的模式或指定子目录]`,
+        );
+      }
+      if (result.skippedCredentials > 0) {
+        notices.push(credentialSkipNotice(result.skippedCredentials));
+      }
+      const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
         content: [createTextContent(text)],
@@ -254,6 +317,7 @@ export function globTool(workspaceRoot: string): RegisteredTool {
           matches,
           count: matches.length,
           truncated: cut,
+          skippedCredentials: result.skippedCredentials,
         },
       };
     },
@@ -267,7 +331,8 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
       "Search file contents with a JavaScript regular expression under the workspace. " +
       "Returns matches as <path>:<line>: <text>. Dependency/build directories and .gitignore " +
       "entries are skipped, as are files larger than 1 MB and binary files. " +
-      `At most ${MAX_GREP_MATCHES} matches are returned.`,
+      "Credential files (.env, private keys, .npmrc) are never searched; the result reports " +
+      `how many were skipped. At most ${MAX_GREP_MATCHES} matches are returned.`,
     parameters: {
       type: "object",
       properties: {
@@ -306,7 +371,15 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
       }
 
       const root = resolveInsideWorkspace(workspaceRoot, stringArg(args.path, "."));
+      assertNotCredentialFile(root, workspaceRoot);
       const include = stringArg(args.include, "");
+      // 显式点名要搜凭据文件时直接报错：静默返回 "(no match)" 会让模型以为文件不存在
+      if (include && isCredentialFile(include)) {
+        throw new Error(
+          `Refusing to search credential file: ${include}. ` +
+            `凭据类文件（.env / 私钥 / .npmrc 等）默认不参与检索。`,
+        );
+      }
       const ignore = createWorkspaceIgnore(workspaceRoot);
       const matches: Array<{ path: string; line: number; text: string }> = [];
       const searchedFiles = new Set<string>();
@@ -363,9 +436,16 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
         matches.length > 0
           ? matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n")
           : "(no match)";
-      const text = cut
-        ? `${body}\n\n...[已截断：匹配过多，仅返回前 ${MAX_GREP_MATCHES} 处。请用更精确的正则或叠加 include]`
-        : body;
+      const notices: string[] = [];
+      if (cut) {
+        notices.push(
+          `...[已截断：匹配过多，仅返回前 ${MAX_GREP_MATCHES} 处。请用更精确的正则或叠加 include]`,
+        );
+      }
+      if (result.skippedCredentials > 0) {
+        notices.push(credentialSkipNotice(result.skippedCredentials));
+      }
+      const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
         content: [createTextContent(text)],
@@ -376,6 +456,7 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
           count: matches.length,
           files: searchedFiles.size,
           truncated: cut,
+          skippedCredentials: result.skippedCredentials,
         },
       };
     },

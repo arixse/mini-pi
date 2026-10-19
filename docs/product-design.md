@@ -80,5 +80,6 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
   （`/trust` 可在当前会话内跳过），非交互式终端按拒绝处理
 - **文件访问边界**：所有文件操作限制在工作区内，并做真实路径校验，
   工作区内的软链接指向外部同样会被拒绝
-- **凭据保护**：`.env*`、SSH 私钥、`*.pem`、`.git-credentials` 默认禁止读写
+- **凭据保护**：`.env*`、SSH 私钥、`*.pem` / `*.key`、`.npmrc`、`credentials`（AWS）、
+  `.git-credentials` 等默认禁止读写；检索工具遍历时跳过同一份名单
 - **可中断**：Ctrl+C 取消当前任务，模型请求 120 秒超时

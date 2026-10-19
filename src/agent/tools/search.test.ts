@@ -270,4 +270,117 @@ describe("检索类工具（list_files / glob / grep）", () => {
       assert.strictEqual(result.content[0].text, "(no match)");
     });
   });
+
+  describe("凭据守卫（检索路径）", () => {
+    it("grep 不得读到 .env 的内容，并说明跳过了几个文件", async () => {
+      writeFileSync(join(testDir, ".env"), "OPENAI_API_KEY=sk-secret\n");
+      writeFileSync(join(testDir, "app.ts"), "const key = process.env.OPENAI_API_KEY;\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("grep", { pattern: "sk-secret" });
+      const text = result.content[0].text;
+      const details = result.details as Record<string, unknown>;
+
+      assert.ok(!text.includes("sk-secret"), "凭据内容不能进入工具输出");
+      assert.strictEqual(details.count, 0);
+      assert.strictEqual(details.skippedCredentials, 1);
+      assert.ok(text.includes("已跳过 1 个凭据类文件"), "要说明跳过，否则会被误判成文件不存在");
+    });
+
+    it("grep 仍能搜索普通文件里的 process.env", async () => {
+      writeFileSync(join(testDir, ".env"), "OPENAI_API_KEY=sk-secret\n");
+      writeFileSync(join(testDir, "app.ts"), "const key = process.env.OPENAI_API_KEY;\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("grep", { pattern: "process\\.env" });
+
+      assert.deepStrictEqual(
+        (result.details as Record<string, unknown>).matches,
+        [{ path: "app.ts", line: 1, text: "const key = process.env.OPENAI_API_KEY;" }],
+      );
+    });
+
+    it("list_files 不列举凭据文件", async () => {
+      writeFileSync(join(testDir, ".env"), "A=1\n");
+      writeFileSync(join(testDir, "server.key"), "PRIVATE\n");
+      writeFileSync(join(testDir, "keep.txt"), "x\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("list_files", { path: "." });
+      const details = result.details as Record<string, unknown>;
+
+      assert.deepStrictEqual(details.entries, ["keep.txt"]);
+      assert.strictEqual(details.skippedCredentials, 2);
+    });
+
+    it("glob 不会把凭据文件当作匹配结果", async () => {
+      writeFileSync(join(testDir, "server.key"), "PRIVATE\n");
+      writeFileSync(join(testDir, "main.ts"), "x\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("glob", { pattern: "*.key" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.deepStrictEqual(details.matches, []);
+      assert.strictEqual(details.skippedCredentials, 1);
+      assert.ok(result.content[0].text.includes("已跳过"));
+    });
+
+    it("大小写变体同样拦截（Windows 上 .ENV 就是 .env）", async () => {
+      writeFileSync(join(testDir, ".ENV"), "SECRET=1\n");
+      writeFileSync(join(testDir, "server.KEY"), "PRIVATE\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("list_files", { path: "." });
+      const details = result.details as Record<string, unknown>;
+
+      assert.deepStrictEqual(details.entries, []);
+      assert.strictEqual(details.skippedCredentials, 2);
+    });
+
+    it("显式把 path 指向凭据文件时直接报错", async () => {
+      writeFileSync(join(testDir, ".env"), "A=1\n");
+      writeFileSync(join(testDir, ".npmrc"), "_authToken=x\n");
+      const registry = createToolRegistry(testDir);
+
+      for (const tool of ["list_files", "glob", "grep"]) {
+        await assert.rejects(
+          () => registry.execute(tool, { path: ".env", pattern: "x" }),
+          { message: /Refusing to access credential file/ },
+          `${tool} 不能静默返回空结果`,
+        );
+      }
+      await assert.rejects(
+        () => registry.execute("grep", { pattern: "x", path: ".npmrc" }),
+        { message: /Refusing to access credential file/ },
+      );
+    });
+
+    it("include 点名凭据文件时报错，而不是返回 (no match)", async () => {
+      writeFileSync(join(testDir, ".env"), "A=1\n");
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(
+        () => registry.execute("grep", { pattern: "A", include: ".env" }),
+        { message: /Refusing to search credential file/ },
+      );
+      await assert.rejects(
+        () => registry.execute("grep", { pattern: "PRIVATE", include: "*.key" }),
+        { message: /Refusing to search credential file/ },
+      );
+    });
+
+    it("模板文件仍然可以被检索", async () => {
+      writeFileSync(join(testDir, ".env.example"), "OPENAI_API_KEY=\n");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("grep", { pattern: "OPENAI_API_KEY" });
+      const details = result.details as Record<string, unknown>;
+
+      assert.deepStrictEqual(details.matches, [
+        { path: ".env.example", line: 1, text: "OPENAI_API_KEY=" },
+      ]);
+      assert.strictEqual(details.skippedCredentials, 0);
+    });
+  });
 });

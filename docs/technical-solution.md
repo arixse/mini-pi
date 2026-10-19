@@ -100,7 +100,8 @@ CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `wor
 | `task` | — | 委派子 Agent（见 3.6）；读着头绪独立的一件事时用它换 isolation，代价是一次 toolCall |
 
 - 路径统一走**词法 + 真实路径**两层校验（symlink/junction 逃逸会被拒绝），
-  凭据类文件（`.env*`、私钥、`*.pem`）默认禁止读写；
+  凭据类文件（`.env*`、私钥、`*.pem` / `*.key`、`.npmrc`、`credentials`）默认禁止读写，
+  检索类工具遍历时同样跳过；
 - **只读与并发是两个维度**：`READ_ONLY_TOOL_NAMES` 只表达"不修改 + 免确认"这唯一事实，
   可用性安全性（能不能和别的调用同时跑）由 `RegisteredTool.concurrent` /
   `ToolRegistry.canRunConcurrently(call)` 单独表达。两者混用过一次，就会出现"能并发却要确认"或"免确认却不该并发"。
