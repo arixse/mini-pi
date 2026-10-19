@@ -120,6 +120,16 @@ export type SubAgentResult = {
    * 两者都表现为「没做完」，但该给模型的建议完全相反。
    */
   timedOut?: boolean;
+  /**
+   * 子 Agent 实际调用过的工具名，**按调用顺序、含重复**。
+   *
+   * 存在的唯一理由是"委派到底干了什么"在结果层此前不可见：委派对父会话
+   * 只是一条 toolCall/toolResult，卡片只有轮次与 token 数——于是
+   * "review 说 FAIL 但它真的跑过验证吗"这个问题在委派结束后无法回答，
+   * 只能去翻 trace。它是观测字段，**不进模型可见的 summary**
+   * （每次委派都往上下文里塞一串工具名是纯成本）。
+   */
+  toolCalls?: string[];
 };
 
 export type AgentEvent = 
@@ -162,7 +172,7 @@ export type AgentEvent =
      * 追加在联合类型末尾，不改动已有成员，既有的 switch 不会漏分支。
      */
     | ({type:"subagent_start";goal:string;role?:string} & AgentIdentity)
-    | ({type:"subagent_end";ok:boolean;goal:string;role?:string;turns:number;usage:Usage;elapsedMs:number} & AgentIdentity)
+    | ({type:"subagent_end";ok:boolean;goal:string;role?:string;turns:number;usage:Usage;elapsedMs:number;toolCalls?:string[]} & AgentIdentity)
 
 export type SessionResponse = {
     sessionId:string
