@@ -28,6 +28,16 @@ function assistantText(text: string): AgentMessage {
   return createAssistantMessage([createTextContent(text)]);
 }
 
+/** 捕获 console.log：工具卡片带中文与 ANSI，按项目约定不能进测试进程的 stdout */
+function captureConsole(): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  return { lines, restore: () => void (console.log = original) };
+}
+
 describe("session context wiring", () => {
   let testDir: string;
   let sessionFile: string;
@@ -272,6 +282,7 @@ describe("session context wiring", () => {
   it("切会话与 /clear 后 /last 不应再翻出旧会话的工具输出", async () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     const options = createOptions({ sessionStore: store });
+    const firstCard = captureConsole();
 
     printToolInfo(
       {
@@ -286,11 +297,13 @@ describe("session context wiring", () => {
       },
       PLAIN_CONTEXT,
     );
+    firstCard.restore();
     assert.ok(getLastToolCall(), "先制造一条旧的工具输出");
 
     await clearSession(options);
     assert.strictEqual(getLastToolCall(), null, "/clear 后不应有上一条工具输出");
 
+    const secondCard = captureConsole();
     printToolInfo(
       {
         type: "tool_execution_end",
@@ -301,10 +314,15 @@ describe("session context wiring", () => {
       },
       PLAIN_CONTEXT,
     );
+    secondCard.restore();
     options.onSwitchSession = () => new JsonlSessionStore(sessionFile, testDir);
     assert.strictEqual(switchSession(options, "1"), true);
     assert.strictEqual(getLastToolCall(), null, "/switch 后不应有上一条工具输出");
 
+    // 捕获到的内容同时充当断言依据：先确认卡片真的渲染了结果，再确认 /clear 后
+    // 新卡片不会把旧会话的结果文本带出来（旧输出只能经由 /last 重放，不该混进新卡片）
+    assert.match(firstCard.lines.join("\n"), /read_file[\s\S]*old session content/);
+    assert.doesNotMatch(secondCard.lines.join("\n"), /old session content/);
     resetToolRenderState();
   });
 
