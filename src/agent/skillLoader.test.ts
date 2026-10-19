@@ -130,37 +130,6 @@ Use this skill when you need to test.`;
     });
   });
 
-  describe("findMatchingSkills", () => {
-    beforeEach(() => {
-      createTestSkill("stock-analysis", "stock-analysis", "Analyze stocks and cryptocurrencies using Yahoo Finance data");
-      createTestSkill("web-scraper", "web-scraper", "Scrape data from websites using cheerio");
-      createTestSkill("pdf-reader", "pdf-reader", "Read and extract text from PDF files");
-    });
-
-    it("应该根据名称匹配", () => {
-      const matches = skillLoader.findMatchingSkills("I want to analyze stocks");
-      assert.ok(matches.length > 0);
-      assert.strictEqual(matches[0].name, "stock-analysis");
-    });
-
-    it("应该根据描述关键词匹配", () => {
-      const matches = skillLoader.findMatchingSkills("help me scrape a website");
-      assert.ok(matches.length > 0);
-      assert.strictEqual(matches[0].name, "web-scraper");
-    });
-
-    it("应该返回多个匹配并按相关性排序", () => {
-      const matches = skillLoader.findMatchingSkills("analyze and scrape data");
-      assert.ok(matches.length >= 2);
-    });
-
-    it("应该返回空数组当没有匹配时", () => {
-      // 使用一个不太可能匹配到 skill 描述的输入
-      const matches = skillLoader.findMatchingSkills("zzzxyzabc 12345");
-      assert.strictEqual(matches.length, 0);
-    });
-  });
-
   describe("generateSkillSummary", () => {
     it("应该返回空字符串当没有 skill 时", () => {
       const summary = skillLoader.generateSkillSummary();
@@ -181,6 +150,15 @@ Use this skill when you need to test.`;
       
       const summary = skillLoader.generateSkillSummary();
       assert.ok(summary.includes("项目 Skills"));
+    });
+
+    it("应该指示模型用 load_skill 工具自行加载全文", () => {
+      createTestSkill("guided-skill", "guided-skill", "Guided skill");
+
+      const summary = skillLoader.generateSkillSummary();
+      // 渐进式披露的收口：模型自己决定、自己加载，不把动作推回给用户
+      assert.ok(summary.includes("load_skill"), "应指引模型调用 load_skill");
+      assert.ok(!summary.includes("询问是否需要加载"), "不应再要求模型询问用户");
     });
   });
 

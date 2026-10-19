@@ -207,50 +207,6 @@ export class SkillLoader {
   }
 
   /**
-   * 检查用户输入是否匹配某个 skill
-   * 基于 skill 名称和描述中的关键词进行匹配
-   */
-  findMatchingSkills(userInput: string): SkillWithSource[] {
-    const metadata = this.loadAllMetadata();
-    const inputLower = userInput.toLowerCase();
-    const matches: Array<{ skill: SkillWithSource; score: number }> = [];
-
-    for (const skill of metadata) {
-      let score = 0;
-
-      // 精确名称匹配（最高优先级）
-      if (inputLower.includes(skill.name.toLowerCase())) {
-        score += 100;
-      }
-
-      // 名称中的单词匹配
-      const nameWords = skill.name.toLowerCase().split(/[-_\s]+/);
-      for (const word of nameWords) {
-        if (word.length > 2 && inputLower.includes(word)) {
-          score += 30;
-        }
-      }
-
-      // 描述中的关键词匹配
-      const descWords = skill.description.toLowerCase().split(/\s+/);
-      for (const word of descWords) {
-        if (word.length > 3 && inputLower.includes(word)) {
-          score += 5;
-        }
-      }
-
-      if (score > 0) {
-        matches.push({ skill, score });
-      }
-    }
-
-    // 按分数排序，返回最高分的匹配
-    return matches
-      .sort((a, b) => b.score - a.score)
-      .map((m) => m.skill);
-  }
-
-  /**
    * 清除缓存（用于重新加载）
    */
   clearCache(): void {
@@ -260,7 +216,9 @@ export class SkillLoader {
 
   /**
    * 生成 skill 摘要列表（用于注入 system prompt）
-   * 这是渐进式披露的核心：只暴露轻量级元数据
+   *
+   * 渐进式披露：系统提示词里只放轻量元数据，全文由模型通过 `load_skill`
+   * 工具按需取用——每次请求的固定开销就只有这一份清单。
    */
   generateSkillSummary(): string {
     const metadata = this.loadAllMetadata();
@@ -272,7 +230,7 @@ export class SkillLoader {
     const lines: string[] = [
       "## 可用 Skills",
       "",
-      "以下是你可用的 skills。当用户的请求匹配某个 skill 时，你应该加载并参考该 skill 的完整内容来指导你的回答。",
+      "以下是你可用的 skills。当用户的请求与某个 skill 相关时，你应该加载并参考该 skill 的完整内容来指导你的回答。",
       "",
     ];
 
@@ -307,7 +265,9 @@ export class SkillLoader {
     }
 
     lines.push("---");
-    lines.push("当用户请求匹配某个 skill 时，请告知用户你可以加载该 skill 来提供更专业的帮助，并询问是否需要加载。");
+    lines.push(
+      "当用户的请求与某个 skill 相关时，调用 load_skill 工具加载它的完整内容，然后按其中的规则执行；不要询问用户，直接加载。",
+    );
 
     return lines.join("\n");
   }

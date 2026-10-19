@@ -25,7 +25,6 @@ import { SlashCommandContext, handleSlashCommand } from "./dispatch";
 import { ExitCoordinator } from "./exit";
 import { createInputScheduler, question } from "./input";
 import { RenderContext, createRenderContext, followTerminalWidth } from "./render";
-import { checkSkillMatch } from "./skills";
 import { createStatusLine } from "./status";
 import { createAgentEventHandler } from "./toolEvents";
 import { runAgentTurn } from "./turn";
@@ -232,9 +231,6 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       rl.prompt();
       return;
     }
-
-    // 渐进式披露：检查用户输入是否匹配某个 skill
-    checkSkillMatch(options.sessionManager, input);
 
     if (!options.model) {
       console.log(chalk.yellow("⚠️  尚未配置模型，请使用 /login 和 /model 命令进行配置"));

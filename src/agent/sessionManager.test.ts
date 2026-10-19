@@ -503,13 +503,13 @@ describe("SessionManager", () => {
       assert.strictEqual(content, null);
     });
 
-    it("should find matching skills based on input", () => {
-      createTestSkill("stock-analysis", "stock-analysis", "Analyze stocks and cryptocurrencies");
-      createTestSkill("web-scraper", "web-scraper", "Scrape data from websites");
+    it("注入的 SkillLoader 被原样采用：与 load_skill 工具共用一份缓存", () => {
+      const shared = new SkillLoader(testRoot, [
+        { path: skillDir, source: "project" },
+      ]);
+      const manager = createSessionManager({ skillLoader: shared });
 
-      const matches = isolatedSessionManager.findMatchingSkills("I want to analyze stocks");
-      assert.ok(matches.length > 0);
-      assert.strictEqual(matches[0].name, "stock-analysis");
+      assert.strictEqual(manager.getSkillLoader(), shared);
     });
 
     it("should get skill summary for system prompt", () => {

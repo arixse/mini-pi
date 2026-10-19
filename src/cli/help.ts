@@ -26,6 +26,6 @@ export function printHelp(): void {
   console.log(chalk.dim("  - 直接输入问题即可开始对话"));
   console.log(chalk.dim("  - 支持多轮对话，上下文会自动保持"));
   console.log(chalk.dim("  - 输入编程问题或文件操作请求"));
-  console.log(chalk.dim("  - 当匹配到 skill 时会自动提示，使用 /load 加载完整内容"));
+  console.log(chalk.dim("  - 需要某个 skill 时模型会自行加载，也可用 /load 手动加载"));
   console.log("");
 }

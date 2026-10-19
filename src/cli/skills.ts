@@ -1,8 +1,13 @@
 /**
- * Skills 的三条入口：`/skills` 列表、`/load <name>` 注入、输入时的渐进式提示。
+ * Skills 的两条入口：`/skills` 列表与 `/load <name>` 注入。
  *
- * 三者共用 `SessionManager` 的元数据：列表按来源分组，提示只取最相关的前 3 条，
- * 全部加载才写进 system prompt——避免每条提问都把 skill 全文灌进上下文。
+ * 发现 skill 靠**模型自己**：系统提示词里全量注入元数据（名称 + 描述），
+ * 模型判断该用哪个后调用 `load_skill` 工具取全文（见 `agent/tools/skill.ts`）。
+ * 这里的两条命令是用户侧的手动入口——确定要用哪个时，比等模型判断更快。
+ *
+ * 此前还有第三条"输入时的渐进式提示"（按用户输入做关键词匹配后提示），
+ * 已删除：描述按空白切分时中文整句成一个"词"，中文查询几乎永远匹配不上，
+ * 提示通道对中文用户形同虚设；模型驱动不依赖任何切分规则。
  */
 
 import chalk from "chalk";
@@ -89,23 +94,4 @@ export async function handleLoadSkill(
   options.systemPrompt = options.systemPrompt + skillSection;
   console.log(chalk.green(`\n✅ 已加载 skill: ${skillName}\n`));
   console.log(chalk.dim("该 skill 的内容已注入到上下文中，后续对话将参考此 skill。\n"));
-}
-
-/** 检查用户输入是否匹配某个 skill，并提示用户 */
-export function checkSkillMatch(sessionManager: SessionManager | undefined, userInput: string): void {
-  if (!sessionManager) return;
-
-  const matches = sessionManager.findMatchingSkills(userInput);
-
-  if (matches.length > 0) {
-    // 只显示前3个最相关的匹配
-    const topMatches = matches.slice(0, 3);
-    console.log("");
-    console.log(chalk.cyan("💡 发现匹配的 Skills:"));
-    for (const skill of topMatches) {
-      console.log(chalk.white(`  - ${skill.name}`) + chalk.dim(`: ${skill.description}`));
-    }
-    console.log(chalk.dim(`\n使用 /load <name> 加载 skill 获取更专业的帮助`));
-    console.log("");
-  }
 }

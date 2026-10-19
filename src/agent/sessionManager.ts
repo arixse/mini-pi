@@ -275,15 +275,6 @@ export class SessionManager {
   }
 
   /**
-   * 根据用户输入查找匹配的 skills
-   * @param userInput 用户输入
-   * @returns 匹配的 skill 列表
-   */
-  findMatchingSkills(userInput: string): SkillWithSource[] {
-    return this.skillLoader.findMatchingSkills(userInput);
-  }
-
-  /**
    * 生成 skill 摘要（用于注入 system prompt）
    */
   getSkillSummary(): string {
