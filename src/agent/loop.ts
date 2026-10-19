@@ -1,6 +1,7 @@
 import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { logger } from "../shared/logger";
 import { createTextContent } from "./message";
+import { createBlockedToolResult, executeToolCall } from "./toolDispatch";
 import { LlmModel } from "./model";
 import { ToolRegistry } from "./tools/registry";
 
@@ -57,21 +58,6 @@ async function decideToolCall(
   context?: ToolCallContext,
 ): Promise<ToolDecision> {
     return beforeToolCall ? await beforeToolCall(toolCall, context):{action:"allow"}
-}
-
-function createBlockedToolResult(
-  toolCall: ToolCallContent,
-  reason?: string,
-): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    content: [createTextContent(`Tool call blocked:${reason}`)],
-    details: { blocked: true, reason },
-    isError: true,
-    timestamp: Date.now(),
-  };
 }
 
 /**
@@ -210,40 +196,6 @@ async function completeAssistantMessage(
   return message;
 }
 
-
-async function executeToolCall(
-  toolCall: ToolCallContent,
-  toolRegistry: ToolRegistry,
-  signal?: AbortSignal,
-): Promise<ToolResultMessage> {
-  try {
-    const result = await toolRegistry.execute(
-      toolCall.name,
-      toolCall.arguments,
-      signal,
-    );
-    return {
-      role: "toolResult",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      content: result.content,
-      details: result.details,
-      // 工具自己判定失败时（命令非零退出/超时）必须如实带出，
-      // 否则卡片会显示 ✅，与"Error: ..."的正文自相矛盾
-      isError: result.isError === true,
-      timestamp: Date.now(),
-    };
-  } catch (error) {
-    return {
-      role: "toolResult",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      content: [createTextContent(error instanceof Error ? error.message : String(error))],
-      isError: true,
-      timestamp: Date.now(),
-    };
-  }
-}
 
 function createLoopGuardrailMessage(maxTurns:number):AssistantMessage {
     return {
