@@ -121,6 +121,68 @@ describe("docs 链路完整性", () => {
   });
 });
 
+describe("README 作为文档入口", () => {
+  it("相对链接都指向存在的文件", () => {
+    const text = repoFile("README.md");
+    assert.ok(text.length > 0, "应能读到 README.md");
+    // README 是用户看到的第一个文件，链接断了没人会去点第二次
+    for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = match[1];
+      if (/^(?:https?:|mailto:|#)/.test(target)) {
+        continue;
+      }
+      const path = target.split("#")[0];
+      assert.ok(existsSync(path), `README.md 里的链接 ${target} 指向不存在的文件`);
+    }
+  });
+
+  it("每份 docs/*.md 都能从 README 找到入口", () => {
+    // 与上面「没有孤立文档」互补：那条只要求"被某份文档引用"，
+    // 结果是新文档只要被任意一篇旧文档提一句就算过关，用户却找不到它
+    const text = repoFile("README.md");
+    for (const file of docFiles()) {
+      const name = file.split(/[\\/]/).pop() ?? file;
+      assert.ok(text.includes(`docs/${name}`), `README.md 的文档表漏了 ${name}`);
+    }
+  });
+
+  it("README 里写的 pnpm 脚本都真实存在", () => {
+    // 此前 README 写「CI 只跑 pnpm typecheck && pnpm test」，而 CI 实际跑的是
+    // pnpm check（含覆盖率门槛）：照着 README 自检能过、推到 CI 才挂。
+    // 脚本名一律以 package.json 为准，README 不再有自己的一套说法。
+    const pkg = JSON.parse(repoFile("package.json")) as {
+      scripts?: Record<string, string>;
+    };
+    const scripts = pkg.scripts ?? {};
+    // pnpm 自己的内置命令，不是项目脚本
+    const builtin = new Set([
+      "install",
+      "add",
+      "remove",
+      "update",
+      "link",
+      "unlink",
+      "exec",
+      "dlx",
+      "publish",
+      "run",
+    ]);
+    let checked = 0;
+    for (const match of repoFile("README.md").matchAll(/pnpm\s+([a-z][\w:-]*)/g)) {
+      const name = match[1];
+      if (builtin.has(name)) {
+        continue;
+      }
+      assert.ok(
+        name in scripts,
+        `README.md 写了 pnpm ${name}，但 package.json 没有这个脚本`,
+      );
+      checked += 1;
+    }
+    assert.ok(checked >= 3, `应校验到 README 里的 3 个以上脚本，实际 ${checked} 个`);
+  });
+});
+
 describe("docs 数值与实现对得上", () => {
   it("各角色超时秒数与 roles.ts 一致", () => {
     const doc = repoFile(join("docs", "multi-agent-design.md"));
