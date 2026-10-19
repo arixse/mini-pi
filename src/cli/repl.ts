@@ -23,7 +23,7 @@ import {
 } from "./approval";
 import { SlashCommandContext, handleSlashCommand } from "./dispatch";
 import { ExitCoordinator } from "./exit";
-import { createInputScheduler, question } from "./input";
+import { createInputScheduler, question, releasePendingQuestion } from "./input";
 import { RenderContext, createRenderContext, followTerminalWidth } from "./render";
 import { createStatusLine } from "./status";
 import { createAgentEventHandler } from "./toolEvents";
@@ -160,6 +160,9 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       if (!turnInFlight) {
         return false;
       }
+      // 先放掉挂起的提问（审批 / 登录），否则 abort 之后本轮仍卡在 await 上，
+      // 只能等 3s 超时被强制杀掉
+      releasePendingQuestion(rl);
       activeRun?.abort();
       return true;
     },
@@ -179,6 +182,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   // Ctrl+C：本轮执行中 -> 取消本轮；空闲时 -> 退出
   rl.on("SIGINT", () => {
     if (turnInFlight) {
+      // 取消要"立刻生效"：如果这一轮正停在审批提示上，只 abort 不会结束
+      // 那个 `await question()`，用户还得再敲一次回车。先模拟回车把它放掉，
+      // 审批按"未确认"（拒绝）收尾，本轮随即结束。
+      releasePendingQuestion(rl);
       activeRun?.abort();
       console.log(chalk.yellow("\n⏹️  已请求取消当前任务\n"));
       return;

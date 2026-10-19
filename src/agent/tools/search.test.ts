@@ -382,5 +382,25 @@ describe("检索类工具（list_files / glob / grep）", () => {
       ]);
       assert.strictEqual(details.skippedCredentials, 0);
     });
+
+    it("取消信号一路传到遍历层，已取消就不再把整棵树走完", async () => {
+      writeFileSync(join(testDir, "a.txt"), "x\n");
+      const registry = createToolRegistry(testDir);
+      const controller = new AbortController();
+      controller.abort();
+
+      for (const [tool, args] of [
+        ["list_files", {}],
+        ["glob", { pattern: "*" }],
+        // grep 的 pattern 是正则，"*" 会先在参数校验阶段失败，测不到取消
+        ["grep", { pattern: "x" }],
+      ] as Array<[string, Record<string, unknown>]>) {
+        await assert.rejects(
+          () => registry.execute(tool, args, controller.signal),
+          { message: /cancelled/i },
+          `${tool} 必须响应取消信号`,
+        );
+      }
+    });
   });
 });

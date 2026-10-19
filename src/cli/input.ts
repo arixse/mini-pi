@@ -14,6 +14,22 @@ export function question(rl: readline.Interface, prompt: string): Promise<string
 }
 
 /**
+ * 放掉当前挂起的 `question()`。
+ *
+ * 取消一次运行只 `abort()` 是不够的：轮到审批时，本轮正卡在
+ * `await question()` 上，而 abort 不会让 readline 的挂起提问自己结束——
+ * 用户按了 Ctrl+C，还得再敲一次回车才能看到"已取消"。
+ *
+ * 这里模拟一次回车：挂起的提问以空串解决（审批把空串当拒绝），
+ * 没有挂起提问时只是一行空输入（`handleLine` 会直接重新 prompt）。
+ * 用 `write(null, { name: "return" })` 而不是往 stdin 塞字节，
+ * 是为了让 readline 自己走"按了回车"的那条路径，键位绑定无需关心。
+ */
+export function releasePendingQuestion(rl: readline.Interface): void {
+  rl.write(null, { name: "return" });
+}
+
+/**
  * 把用户输入串成一条队列，保证任意时刻只有一个回合在跑。
  *
  * readline 的 `line` 回调是 async 的，而 readline **不会**等它结束才收下一行：

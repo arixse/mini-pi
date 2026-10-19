@@ -1,6 +1,39 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { createInputScheduler } from "./input";
+import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
+import { createInputScheduler, question, releasePendingQuestion } from "./input";
+
+/** 假终端：terminal: true 才能复现 readline 的提问/回车路径 */
+function createFakeTerminal() {
+  const input = new PassThrough() as PassThrough & {
+    isTTY?: boolean;
+    setRawMode?: (raw: boolean) => void;
+  };
+  input.isTTY = true;
+  input.setRawMode = () => {};
+  const output = new PassThrough();
+  const rl = createInterface({ input, output, terminal: true });
+  return { rl, close: () => rl.close() };
+}
+
+describe("releasePendingQuestion（Ctrl+C 放掉挂起的提问）", () => {
+  it("挂起的 question 会以空串解决（审批把空串当拒绝）", async () => {
+    const { rl, close } = createFakeTerminal();
+    const pending = question(rl, "approve? ");
+
+    releasePendingQuestion(rl);
+
+    assert.strictEqual(await pending, "", "必须立刻以空串收尾，而不是等用户再敲回车");
+    close();
+  });
+
+  it("没有挂起提问时不抛错", () => {
+    const { rl, close } = createFakeTerminal();
+    assert.doesNotThrow(() => releasePendingQuestion(rl));
+    close();
+  });
+});
 
 describe("createInputScheduler（回合串行化）", () => {
   const tick = (ms = 0): Promise<void> =>
