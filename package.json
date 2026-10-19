@@ -1,6 +1,6 @@
 {
   "name": "@minipi/mini-pi",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Mini Pi Code Agent - AI编程助手",
   "bin": {
     "mini-pi": "./bin/mini-pi-cli.cjs"
