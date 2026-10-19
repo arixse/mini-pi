@@ -1,6 +1,7 @@
 # Mini Pi CLI 交互文档
 
-本文档是 CLI 行为的**唯一权威来源**。详细命令参考见 [cli-commands.md](./cli-commands.md)，配置文件与存储见 [cli-config.md](./cli-config.md)。
+本文档是 CLI 行为的**唯一权威来源**。详细命令参考见 [cli-commands.md](./cli-commands.md)，配置文件与存储见 [cli-config.md](./cli-config.md)；当初把终端呈现从"糊成一片"改成"卡片 + 状态行"的目标、分档进度与设计决策记录见
+[cli-ux-design.md](./cli-ux-design.md)（已归档，只作历史参考，不描述现状）。
 
 ---
 
@@ -226,20 +227,11 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 4.4 可用工具
 
-| 工具 | 只读 | 说明 |
-| ---- | ---- | ---- |
-| `list_files` | ✅ | 递归列出目录（最多 300 项 / 5 层） |
-| `glob` | ✅ | glob 找文件（最多 200 个） |
-| `grep` | ✅ | 正则搜索（最多 100 处） |
-| `read_file` | ✅ | 分页读取；拒绝二进制与 >5MB 文件 |
-| `load_skill` | ✅ | 按名称加载 skill 全文（可读工作区外） |
-| `task` | — | 委派子 Agent（默认关闭，需审批） |
-| `write_file` | — | 写入文件 |
-| `edit_file` | — | 精确文本替换 |
-| `bash` | — | 执行命令（默认 30s 超时） |
-| `verify_command` | — | 受限验证：只接受白名单命令 |
+工具清单（各自的上限、只读标记与并发规则）见 [technical-solution.md](./technical-solution.md) §3.2，
+这里只写用户在终端能感知到的两条：
 
-**只读工具免确认且同批并发执行**；写工具按调用顺序串行。
+- **只读工具免确认且同批并发执行**；写工具按调用顺序串行。
+- `verify_command` 与 `bash` 一样要逐次确认（跑测试会写产物），只是被白名单限制了能跑什么。
 
 **路径安全**：
 

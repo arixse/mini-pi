@@ -66,6 +66,7 @@ pnpm typecheck && pnpm test   # 提交前自检（CI 只跑这一条）
 | 文档 | 用途 |
 | --- | --- |
 | [CLI 交互文档](docs/cli-interaction.md) | **CLI 行为的唯一权威来源**：启动、命令、对话、工具调用与审批的完整流程 |
+| [CLI 命令参考](docs/cli-commands.md) | 每条斜杠命令的用法、输出与边界（命令清单的唯一去处） |
 | [技术方案](docs/technical-solution.md) | 核心模块设计（模型层 / 工具层 / 会话层 / 循环 / 审批 / 子 Agent） |
 | [模型供应商对接](docs/providers.md) | 7 家供应商的默认模型、上下文窗口、接入细节与踩坑记录 |
 | [Session 管理功能](docs/session-management.md) | 会话存储层实现（目录推导、写盘语义、压缩协议） |

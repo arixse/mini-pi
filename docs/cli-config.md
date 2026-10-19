@@ -90,28 +90,40 @@
 | -------------- | ----- | ---- |
 | `gpt-3.5-turbo` | 16384 | OpenAI |
 | `gpt-4-32k` | 32768 | OpenAI |
+| `gpt-4`（裸 gpt-4，8k） | 8192 | OpenAI |
 | `gpt-4o*` / `gpt-4-turbo` / `o1-mini` | 128000 | OpenAI |
 | `o1` / `o3` / `o4-mini` | 200000 | OpenAI |
 | `deepseek-*` | 128000 | DeepSeek |
-| `MiniMax-M2*` | 204800 | MiniMax |
 | `MiniMax-M3` | 1000000 | MiniMax |
-| `mimo-v2.6-*` | 1000000 | 小米 MiMo |
+| `MiniMax-M2-her` | 65536 | MiniMax |
+| `MiniMax-M2*` | 204800 | MiniMax |
+| `MiniMax-*`（其它） | 204800 | MiniMax |
+| `mimo-v2.6*` / `mimo-v2.5` / `mimo-v2.5-pro` | 1000000 | 小米 MiMo |
+| `mimo-v2.5-omni` / `mimo-v2-flash` | 131072 | 小米 MiMo |
+| `mimo-7b*` | 32768 | 小米 MiMo |
 | `kimi-k3` | 1000000 | Kimi |
-| `kimi-k2.6` / `kimi-k2.7-code*` | 262144 | Kimi |
-| `glm-5.3` / `glm-5.2` | 1000000 | 智谱 |
+| `kimi-k2.6` / `kimi-k2.7*` | 262144 | Kimi |
+| `glm-5.3` / `glm-5.2` / `glm-4-long` | 1000000 | 智谱 |
 | `glm-5.1` / `glm-5` / `glm-4.7` / `glm-4.6` | 200000 | 智谱 |
-| `glm-4.5-air*` / `glm-4*` | 128000 | 智谱 |
-| `glm-4-long` | 1000000 | 智谱 |
+| `glm-4.6v` / `glm-4.5*` / `glm-4`（其它） | 128000 | 智谱 |
+| `glm-4.1v-thinking*` | 65536 | 智谱 |
+| `glm-4v-flash` | 16384 | 智谱 |
 | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 |
+| `claude-opus-5` / `claude-sonnet-5` | 1000000 | Claude 5 |
 | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5 |
+| `claude-opus-4*` / `claude-sonnet-4*` / `claude-haiku-4*` | 200000 | Claude 4.x |
 | `claude-3*` / 其它 `claude*` | 200000 | Claude 3 与兜底 |
+
+> 「最长前缀优先」不是装饰：`glm-4-long`（1M）要是被 `glm-4`（128K）先匹配到，
+> 压缩会在远未超窗时就触发；反过来 `MiniMax-M2-her`（64K）被 `MiniMax-M2*`（204.8K）
+> 吞掉，请求会在压缩之前就 400。改表时逐条对照 `src/provider/context-window.ts`。
 
 > 窗口小于 128k 的模型**必须登记**，否则请求会在压缩触发前就超窗（400）。
 
 - **压缩触发**：当「消息历史 + 固定开销」超过 `budget` 且消息数超过保留数 10 时触发
 - **保留最近 10 条消息**，较早的用模型生成摘要
-- **未配置模型**时用「共 N 条消息」的简单摘要兜底
-- **摘要调用失败或被取消**时放弃本次压缩，历史保持完整
+- **配了模型却摘要失败或被取消**时放弃本次压缩，历史保持完整
+- **根本没有可用模型**（未配置）时才用「共 N 条消息」的简单摘要兜底——否则历史就没法压了
 - **压缩窗口起点向前回退**，不与工具结果断链
 
 ### 会话文件容错

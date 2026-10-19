@@ -93,6 +93,9 @@ describe("清单不再分叉：注册表、实现与文档必须互相覆盖", (
   const dispatchSource = repoFile(join("src", "cli", "dispatch.ts"));
   const readme = repoFile("README.md");
   const interactionDoc = repoFile(join("docs", "cli-interaction.md"));
+  // 命令表本身住在 cli-commands.md：文档精简后 README 与 cli-interaction.md
+  // 只保留入口与流程，逐条清单集中在一处，比对对象也就跟着挪了
+  const commandsDoc = repoFile(join("docs", "cli-commands.md"));
 
   it("注册表中的每条命令在 dispatch.ts 里确有分派分支", () => {
     assert.ok(dispatchSource.length > 0, "应能从仓库读到 dispatch.ts");
@@ -105,39 +108,26 @@ describe("清单不再分叉：注册表、实现与文档必须互相覆盖", (
     }
   });
 
-  it("README 的命令表覆盖全部命令", () => {
-    for (const spec of COMMANDS) {
-      const token = `\`/${commandName(spec.usage)}`;
-      assert.ok(
-        readme.includes(token),
-        `README 缺 ${spec.usage}：新增命令后要同步命令表`,
-      );
-    }
-  });
-
-  it("docs/cli-interaction.md 的命令表覆盖全部命令", () => {
-    for (const spec of COMMANDS) {
-      const token = `\`/${commandName(spec.usage)}`;
-      assert.ok(
-        interactionDoc.includes(token),
-        `cli-interaction.md 缺 ${spec.usage}：它是 CLI 行为的唯一权威来源`,
-      );
-    }
-  });
-
-  it("README 的命令表与注册表一一对应：不许多，也不许少", () => {
+  it("docs/cli-commands.md 的命令表与注册表一一对应：不许多，也不许少", () => {
+    assert.ok(commandsDoc.length > 0, "应能从仓库读到 cli-commands.md");
     assert.deepStrictEqual(
-      docCommandTableNames(readme).sort(),
+      docCommandTableNames(commandsDoc).sort(),
       COMMANDS.map((spec) => commandName(spec.usage)).sort(),
-      "README 命令表与注册表不一致（文档多出或缺少命令）",
+      "cli-commands.md 命令表与注册表不一致（文档多出或缺少命令）",
     );
   });
 
-  it("docs/cli-interaction.md 的命令表与注册表一一对应：不许多，也不许少", () => {
-    assert.deepStrictEqual(
-      docCommandTableNames(interactionDoc).sort(),
-      COMMANDS.map((spec) => commandName(spec.usage)).sort(),
-      "cli-interaction.md 命令表与注册表不一致（文档多出或缺少命令）",
-    );
+  it("README 与 cli-interaction.md 都指向命令表，不让用户找不到清单", () => {
+    // 命令表既然只剩一份，两处入口就必须都指过去；否则"改了一处漏一处"
+    // 会退化成"用户根本不知道还有一份清单"
+    for (const [name, doc] of [
+      ["README.md", readme],
+      ["docs/cli-interaction.md", interactionDoc],
+    ] as const) {
+      assert.ok(
+        doc.includes("cli-commands.md"),
+        `${name} 没有指向 cli-commands.md：命令清单的唯一去处不可达`,
+      );
+    }
   });
 });
