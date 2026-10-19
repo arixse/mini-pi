@@ -100,6 +100,7 @@ CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `wor
 | `task` | — | 委派子 Agent（见 3.6）；读着头绪独立的一件事时用它换 isolation，代价是一次 toolCall |
 
 - 路径统一走**词法 + 真实路径**两层校验（symlink/junction 逃逸会被拒绝），
+  检索类工具遍历时还会逐个解析链接、跳过指向工作区外的条目（入口校验只覆盖起点）；
   凭据类文件（`.env*`、私钥、`*.pem` / `*.key`、`.npmrc`、`credentials`）默认禁止读写，
   检索类工具遍历时同样跳过；
 - **只读与并发是两个维度**：`READ_ONLY_TOOL_NAMES` 只表达"不修改 + 免确认"这唯一事实，

@@ -279,6 +279,26 @@ describe("工作区守卫（路径、凭据与 symlink 逃逸）", () => {
       );
     });
 
+    it("遍历时跳过指向工作区外的符号链接，并如实报告数量", async () => {
+      // 入口路径有守卫，但遍历途中遇到的链接需要单独判定：
+      // 否则从工作区根发起 list_files / grep 就能穿过链接读到外部文件
+      writeFileSync(join(testDir, "keep.txt"), "top secret\n");
+      const registry = createToolRegistry(testDir);
+
+      const listed = await registry.execute("list_files", { path: "." });
+      const listDetails = listed.details as Record<string, unknown>;
+      assert.deepStrictEqual(listDetails.entries, ["keep.txt"]);
+      assert.strictEqual(listDetails.skippedExternalLinks, 1);
+      assert.ok(listed.content[0].text.includes("指向工作区之外"));
+
+      const grepped = await registry.execute("grep", { pattern: "top secret" });
+      const grepDetails = grepped.details as Record<string, unknown>;
+      assert.deepStrictEqual(grepDetails.matches, [
+        { path: "keep.txt", line: 1, text: "top secret" },
+      ]);
+      assert.strictEqual(grepDetails.skippedExternalLinks, 1);
+    });
+
     it("should allow names that merely start with dots", async () => {
       // 回归：旧实现用 rel.startsWith("..") 判断逃逸，会误伤 ..name 这类合法名字
       writeFileSync(join(testDir, "..config.json"), '{"ok":true}');

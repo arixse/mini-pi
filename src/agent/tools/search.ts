@@ -5,7 +5,7 @@
  * 因此放在一起：新增一个检索工具时不至于漏掉某一侧的约束。
  */
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { createTextContent } from "../message";
@@ -20,7 +20,10 @@ import { stringArg } from "./args";
 import {
   assertNotCredentialFile,
   isCredentialFile,
+  isRealPathInside,
+  realpathOrNull,
   resolveInsideWorkspace,
+  workspaceRealPath,
 } from "./workspace";
 import type { RegisteredTool } from "./types";
 
@@ -72,27 +75,21 @@ type WalkResult = {
    * 必须回传给调用方：静默跳过会让模型把「有文件但读不到」误判成「不存在」。
    */
   skippedCredentials: number;
+  /** 因指向工作区之外被跳过的符号链接数（读取即等于越界） */
+  skippedExternalLinks: number;
 };
 
 /**
  * 是否为不能进入检索的条目。
  *
- * 除按文件名判定外，还解析符号链接的真实名字：`notes.txt -> .env` 这类
+ * 除按文件名判定外，还看符号链接指向的真实名字：`notes.txt -> .env` 这类
  * 别名在只看 basename 时与普通文件无异，但读出来就是凭据。
  */
-function isCredentialEntry(absolutePath: string, name: string, isSymbolicLink: boolean): boolean {
+function isCredentialEntry(name: string, linkTarget: string | null): boolean {
   if (isCredentialFile(name)) {
     return true;
   }
-  if (!isSymbolicLink) {
-    return false;
-  }
-  try {
-    return isCredentialFile(realpathSync(absolutePath));
-  } catch {
-    // 断链等解析失败的情况交给后续读取去失败
-    return false;
-  }
+  return linkTarget !== null && isCredentialFile(linkTarget);
 }
 
 /**
@@ -102,7 +99,10 @@ function isCredentialEntry(absolutePath: string, name: string, isSymbolicLink: b
  * - 单个目录读不动时跳过，不让整次遍历失败；
  * - 条目数与深度到顶时置 truncated 并停止；
  * - 凭据类文件在这里统一拦截：三条检索路径共用同一个遍历，守卫放在这里
- *   才不会出现「grep 能读、list_files 不显示」这种只在一条路径上成立的承诺。
+ *   才不会出现「grep 能读、list_files 不显示」这种只在一条路径上成立的承诺；
+ * - **指向工作区外的符号链接同样在这里拦截**：`resolveInsideWorkspace` 只校验
+ *   调用方给出的入口路径，遍历途中遇到的每个条目都要单独判定，否则
+ *   `ln -s ~/.ssh x` 之后 grep 就能读到工作区外的文件。
  */
 async function walkEntries(
   startDir: string,
@@ -117,6 +117,8 @@ async function walkEntries(
   let visited = 0;
   let truncated = false;
   let skippedCredentials = 0;
+  let skippedExternalLinks = 0;
+  const realRoot = workspaceRealPath(workspaceRoot);
 
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (truncated) {
@@ -151,11 +153,16 @@ async function walkEntries(
         continue;
       }
 
-      if (
-        !isDirectory &&
-        isCredentialEntry(absolute, dirent.name, dirent.isSymbolicLink())
-      ) {
+      // 软链接只解析一次真实路径，凭据判定与越界判定共用这次结果
+      const linkTarget = dirent.isSymbolicLink() ? realpathOrNull(absolute) : null;
+
+      if (!isDirectory && isCredentialEntry(dirent.name, linkTarget)) {
         skippedCredentials += 1;
+        continue;
+      }
+
+      if (linkTarget !== null && !isRealPathInside(realRoot, linkTarget)) {
+        skippedExternalLinks += 1;
         continue;
       }
 
@@ -169,12 +176,25 @@ async function walkEntries(
   };
 
   await walk(startDir, 1);
-  return { visited, truncated, skippedCredentials };
+  return { visited, truncated, skippedCredentials, skippedExternalLinks };
 }
 
-/** 被凭据守卫挡下的文件数：附在结果尾部，避免"读不到"被误当成"不存在" */
-function credentialSkipNotice(count: number): string {
-  return `[已跳过 ${count} 个凭据类文件（.env、私钥、.npmrc 等），其内容不参与检索]`;
+/**
+ * 把两类跳过计数追加到提示区（三个检索工具共用同一份措辞）。
+ *
+ * 必须显式说明：静默跳过会让模型把「有文件但读不到」误判成「不存在」，
+ * 进而开始猜内容。
+ */
+function pushSkipNotices(notices: string[], result: WalkResult): void {
+  const { skippedCredentials, skippedExternalLinks } = result;
+  if (skippedCredentials > 0) {
+    notices.push(
+      `[已跳过 ${skippedCredentials} 个凭据类文件（.env、私钥、.npmrc 等），其内容不参与检索]`,
+    );
+  }
+  if (skippedExternalLinks > 0) {
+    notices.push(`[已跳过 ${skippedExternalLinks} 个指向工作区之外的符号链接]`);
+  }
 }
 
 export function listFilesTool(workspaceRoot: string): RegisteredTool {
@@ -183,7 +203,8 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
     description:
       "List files inside the workspace (recursive, sorted). " +
       "Dependency and build directories (.git, node_modules, dist, build, ...) and .gitignore entries are skipped. " +
-      "Credential files (.env, private keys, .npmrc) are never listed. " +
+      "Credential files (.env, private keys, .npmrc) are never listed, " +
+      "nor are symlinks pointing outside the workspace. " +
       `Returns at most ${MAX_LIST_ENTRIES} entries and ${MAX_LIST_DEPTH} levels below the given path; ` +
       "the result says so explicitly when it is cut, in which case list a more specific subdirectory.",
     parameters: {
@@ -217,9 +238,7 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
       if (result.truncated) {
         notices.push(listTruncationNotice());
       }
-      if (result.skippedCredentials > 0) {
-        notices.push(credentialSkipNotice(result.skippedCredentials));
-      }
+      pushSkipNotices(notices, result);
       const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
@@ -231,6 +250,7 @@ export function listFilesTool(workspaceRoot: string): RegisteredTool {
           fileCount: entries.length - dirCount,
           truncated: result.truncated,
           skippedCredentials: result.skippedCredentials,
+          skippedExternalLinks: result.skippedExternalLinks,
         },
       };
     },
@@ -251,7 +271,8 @@ export function globTool(workspaceRoot: string): RegisteredTool {
       "Find files by glob pattern under the workspace (supports *, ?, ** and {a,b}; " +
       'a pattern without "/" matches the file name at any depth, e.g. "*.test.ts"). ' +
       "Dependency/build directories and .gitignore entries are skipped, and credential files " +
-      "(.env, private keys, .npmrc) are never matched. Returns files only, " +
+      "(.env, private keys, .npmrc) as well as symlinks pointing outside the workspace are " +
+      "never matched. Returns files only, " +
       `at most ${MAX_GLOB_RESULTS} of them.`,
     parameters: {
       type: "object",
@@ -304,9 +325,7 @@ export function globTool(workspaceRoot: string): RegisteredTool {
           `...[已截断：最多返回 ${MAX_GLOB_RESULTS} 个文件，请用更精确的模式或指定子目录]`,
         );
       }
-      if (result.skippedCredentials > 0) {
-        notices.push(credentialSkipNotice(result.skippedCredentials));
-      }
+      pushSkipNotices(notices, result);
       const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
@@ -318,6 +337,7 @@ export function globTool(workspaceRoot: string): RegisteredTool {
           count: matches.length,
           truncated: cut,
           skippedCredentials: result.skippedCredentials,
+          skippedExternalLinks: result.skippedExternalLinks,
         },
       };
     },
@@ -331,8 +351,9 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
       "Search file contents with a JavaScript regular expression under the workspace. " +
       "Returns matches as <path>:<line>: <text>. Dependency/build directories and .gitignore " +
       "entries are skipped, as are files larger than 1 MB and binary files. " +
-      "Credential files (.env, private keys, .npmrc) are never searched; the result reports " +
-      `how many were skipped. At most ${MAX_GREP_MATCHES} matches are returned.`,
+      "Credential files (.env, private keys, .npmrc) are never searched; symlinks pointing " +
+      "outside the workspace are skipped too, and the result reports how many were skipped. " +
+      `At most ${MAX_GREP_MATCHES} matches are returned.`,
     parameters: {
       type: "object",
       properties: {
@@ -442,9 +463,7 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
           `...[已截断：匹配过多，仅返回前 ${MAX_GREP_MATCHES} 处。请用更精确的正则或叠加 include]`,
         );
       }
-      if (result.skippedCredentials > 0) {
-        notices.push(credentialSkipNotice(result.skippedCredentials));
-      }
+      pushSkipNotices(notices, result);
       const text = notices.length > 0 ? `${body}\n\n${notices.join("\n")}` : body;
 
       return {
@@ -457,6 +476,7 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
           files: searchedFiles.size,
           truncated: cut,
           skippedCredentials: result.skippedCredentials,
+          skippedExternalLinks: result.skippedExternalLinks,
         },
       };
     },

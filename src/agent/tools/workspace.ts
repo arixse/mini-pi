@@ -38,11 +38,36 @@ export function resolveInsideWorkspace(workspaceRoot: string, input: string): st
 }
 
 function assertInsideRoot(root: string, target: string, input: string): void {
-  const rel = relative(root, target);
-  const escapes = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
-  if (escapes) {
+  if (!isRealPathInside(root, target)) {
     throw new Error(`Path escapes workspace:${input}`);
   }
+}
+
+/**
+ * 真实路径是否仍在工作区内（不抛错）。
+ *
+ * 与 {@link assertInsideRoot} 同一套判定，区别只是返回值而非异常。
+ * 供遍历层使用：遍历中遇到的**每个** symlink / junction 都需要判定，
+ * 命中工作区外时只跳过该条目，不该让整次检索失败。
+ */
+export function isRealPathInside(realRoot: string, realTarget: string): boolean {
+  const rel = relative(realRoot, realTarget);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** 解析真实路径；断链等情况返回 null（不抛错），由调用方决定如何处理 */
+export function realpathOrNull(target: string): string | null {
+  try {
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+/** 工作区的真实路径；工作区本身解析失败时退回词法路径 */
+export function workspaceRealPath(workspaceRoot: string): string {
+  const root = resolve(workspaceRoot);
+  return realpathOrNull(root) ?? root;
 }
 
 /**
