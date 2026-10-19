@@ -83,6 +83,31 @@ CLI 只需要回答一个是/否问题，而发布包是 esbuild 打的 bin 单�
 - `commands.test.ts` 的"注册表 ↔ 实现 ↔ 文档"一致性检查自动兜住了文档分叉：
   注册表加了 `/update` 而 README / cli-interaction 没同步时，测试先红。
 
+### 插曲：门禁自身的两类假失败（与功能无关，同日报了）
+
+功能落地后跑全量 `pnpm check`，约一成概率**整个测试文件假失败**。排查确认
+是 node:test 在**本机默认 19 路并发**下的负载敏感问题，且**父提交
+（`1f94197`，本功能之前）就有**： detached checkout 基线 2/10 失败，
+签名是 `StreamIdleTimeoutError: 流式响应 60ms 内没有收到任何数据`——
+60ms 空闲超时的流式用例在 19 个子进程抢 CPU 时被饿死。本分支上还观察到
+另外两种签名：
+
+1. `Unable to deserialize cloned data`（文件级 uncaughtException）：
+   node:test 把子进程 stdout 复用到 V8 序列化事件流，**多字节写入破坏
+   IPC 分帧**。全仓唯一没被捕获的 stdout 写入是 `index.test.ts` 触发的
+   「已自动创建默认配置」中文 chalk 行——按该文件 `main --version` 块的
+   既有约定捕获后消除（提交 `6d64a9e`）；
+2. `cancelledByParent` + "Promise resolution is still pending but the
+   event loop has already resolved"：`subagent.test.ts` 的计时敏感用例
+   （20ms 墙钟、40ms 并发探测）事件 loop 先 drain，node:test 把该文件
+   后续用例全部取消。该文件 `createHangingModel` 的注释里就记着这个坑。
+
+处置：`--test-concurrency=4`（提交 `3027820`）——收敛并发后全量套件
+**15/15 通过**（此前默认并发约 4/35 中招），单次约 20s（19 路约 15s），
+门禁代价可接受；CI 机器核数少时默认并发本就低于 4，上限不拖慢它们。
+三种签名全是基础设施负载问题，**没有一条是断言错误**：涉事文件单独跑
+20/20 通过。
+
 ---
 
 ## 经验总结 Lessons
@@ -98,3 +123,9 @@ CLI 只需要回答一个是/否问题，而发布包是 esbuild 打的 bin 单�
 4. **注入时钟与 fetch 让"每天一次"变成可断言的**。缓存逻辑的坑全在时间上
    （时钟回拨、跨天边界、缓存未来值），用固定时钟的单测比等真实的 24 小时
    便宜得多，也更容易发现"来自未来的缓存"这种永远不会自己浮现的 bug。
+5. **门禁偶发红要先怀疑基础设施，再怀疑自己**。这次三种假失败签名
+   （IPC 反序列化、pending-promise 取消、流式空闲超时饿死）全都指向
+   19 路并发下的负载，没有一条是断言错误；detached checkout 跑父提交
+   拿到 2/10 的基线，才把"我引入的回归"和"早就存在的抖动"分开。
+   修复顺序也应是先消触发源（捕获多字节 stdout）、再收敛并发，
+   而不是给断言加宽限期——那是把随机性写进门禁。
