@@ -45,6 +45,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     usage: "/subagent [on|off|trace on|trace off]",
     description: "开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘",
   },
+  {
+    usage: "/update [on|off]",
+    description: "检查是否有新版本（不带参数立即检查）；on/off 开关启动检测",
+  },
   { usage: "/status", description: "查看模型、会话文件、上下文与 token 用量、确认模式" },
   { usage: "/sessions", description: "列出当前工作目录的会话" },
   { usage: "/switch <n>", description: "切换到指定会话（恢复其历史上下文）" },

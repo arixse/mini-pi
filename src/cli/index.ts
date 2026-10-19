@@ -27,6 +27,7 @@ import { SessionManager } from "../agent/sessionManager";
 import { SkillLoader } from "../agent/skillLoader";
 import { printLogo, printResumedSession, printVersion, printWelcome } from "./ui";
 import { wantsVersion } from "./version";
+import { createUpdateChecker, printUpdateNotice } from "./updateCheck";
 import chalk from "chalk";
 
 /**
@@ -163,6 +164,13 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   const workspaceRoot = process.cwd();
   const providerService = new ModelProviderService();
   const settingsStore = new SettingsStore();
+  /**
+   * 版本更新检测器：启动提示与 `/update` 共用同一份缓存与编排。
+   *
+   * 放在这里而不是 startRepl 里创建：启动画面（下方）就要用它，
+   * 而 REPL 只通过 options 拿到同一个实例。
+   */
+  const updateChecker = createUpdateChecker({ settingsStore });
   const { model, providerName, modelName } = await createModelFromSettings(providerService, settingsStore);
 
   /**
@@ -267,6 +275,17 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     console.log();
   }
 
+  /**
+   * 版本更新检测：放在全部启动信息之后、REPL 之前。
+   *
+   * 代价上限是"每天一次、每次最多 5s 超时"（结果有 24h 缓存），
+   * 换来的是不会有人永远用着旧版本；非交互终端、环境变量
+   * `MINI_PI_SKIP_UPDATE_CHECK`、settings.json 的 `updateCheck: false`
+   * 都会跳过，检查失败保持安静——用户没问，就不解释网络状况。
+   */
+  const updateResult = await updateChecker.checkOnStartup();
+  printUpdateNotice(updateResult);
+
   // 创建新会话的回调函数：返回新的 store，由 REPL 切换并重建上下文
   const onNewSession = () => {
     return sessionManager.createNewSession();
@@ -363,6 +382,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     workspaceRoot,
     providerService,
     settingsStore,
+    updateChecker,
     sessionStore,
     sessionManager,
     contextWindow,

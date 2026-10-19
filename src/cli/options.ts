@@ -18,6 +18,7 @@ import type {
 import type { JsonlSessionStore } from "../agent/sessionStore";
 import type { SessionManager } from "../agent/sessionManager";
 import type { UsageTracker } from "../agent/usage";
+import type { UpdateChecker } from "./updateCheck";
 import type { AgentMessage, Usage } from "../shared/protocol";
 
 export type ReplOptions = {
@@ -116,4 +117,12 @@ export type ReplOptions = {
    * 所以与委派开关一样默认关，用 `/subagent trace on` 主动打开。
    */
   subAgentTrace?: boolean;
+  /**
+   * 版本更新检测器：启动提示与 `/update` 共用同一份编排与缓存。
+   *
+   * 缺省时 `/update` 明确回复"未配置"而不是假装检查过——
+   * 与 `subAgentRuntime` 缺省时模型看不到 `task` 同一思路：
+   * 没有能力就说没有，不要留一个静默失败的空壳。
+   */
+  updateChecker?: UpdateChecker;
 };

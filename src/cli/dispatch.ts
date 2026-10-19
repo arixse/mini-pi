@@ -22,6 +22,10 @@ import {
   applySubAgentCommand,
   printSubAgentCommandResult,
 } from "./subagentCommand";
+import {
+  applyUpdateCommand,
+  printUpdateOutcome,
+} from "./updateCheck";
 import { printLastToolOutput } from "./toolEvents";
 import type { ReplOptions } from "./options";
 import type { RenderContext } from "./render";
@@ -212,6 +216,21 @@ export async function handleSlashCommand(
     } else {
       console.log(chalk.red("\n❌ 请指定 skill 名称，例如: /load stock-analysis\n"));
     }
+    return true;
+  }
+
+  if (input === "/update" || input.startsWith("/update ")) {
+    // 与 /subagent 同形：不带参数立即检查，on/off 只开关"启动时"的自动检测
+    const checker = ctx.options.updateChecker;
+    const enabled = checker ? await checker.isEnabled() : false;
+    const outcome = await applyUpdateCommand({
+      argument: input.slice("/update".length).trim(),
+      enabled,
+      persist: checker ? (value) => checker.setEnabled(value) : undefined,
+      // 手动检查忽略开关与缓存：用户显式敲了命令，就没有"已关闭"可言
+      check: checker ? () => checker.checkNow() : undefined,
+    });
+    printUpdateOutcome(outcome, enabled);
     return true;
   }
 
