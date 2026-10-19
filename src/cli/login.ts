@@ -10,7 +10,7 @@ import * as readline from "node:readline";
 import chalk from "chalk";
 import { ModelProviderService, SettingsStore } from "../provider";
 import { promptSelect } from "./select";
-import { question } from "./input";
+import { questionHidden } from "./hiddenPrompt";
 
 export async function handleLogin(
   providerService: ModelProviderService | undefined,
@@ -41,7 +41,16 @@ export async function handleLogin(
   }
 
   const selectedProvider = providers[index];
-  const apiKey = await question(rl, chalk.cyan(`\n请输入 ${selectedProvider} 的 API Key: `));
+  // Key 不进终端回显：否则会被 scrollback、录屏、共享屏幕一并带走
+  const apiKey = await questionHidden(
+    rl,
+    chalk.cyan(`\n请输入 ${selectedProvider} 的 API Key（输入不回显）: `),
+  );
+
+  if (apiKey === null) {
+    console.log(chalk.dim("\n已取消登录\n"));
+    return;
+  }
 
   if (!apiKey.trim()) {
     console.log(chalk.red("❌ API Key不能为空"));

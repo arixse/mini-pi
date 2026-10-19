@@ -164,26 +164,32 @@ describe("handleLogin / handleModel 交互", () => {
   });
 
   it("handleLogin: 选择服务商并输入 API Key 后保存", async () => {
-    const rl = createFakeRl("key-123");
+    const rl = createFakeRl();
 
     const logs = await captureLog(async () => {
       const p = handleLogin(providerService, rl as any);
       rl.input.send("\r"); // 选中第一个服务商 minimax-cn
+      rl.input.send("key-123\r"); // 然后输入 API Key（不回显）
       await p;
     });
 
     assert.ok(logs.join("\n").includes("已保存 minimax-cn 的 API Key"));
+    assert.ok(
+      !rl.output.text.includes("key-123"),
+      "API Key 不能出现在终端输出里，否则会被 scrollback / 录屏带走",
+    );
 
     const config = await providerService.getProviderConfig("minimax-cn");
     assert.strictEqual(config.apiKey, "key-123");
   });
 
   it("handleLogin: 空 API Key 不保存并提示", async () => {
-    const rl = createFakeRl("   ");
+    const rl = createFakeRl();
 
     const logs = await captureLog(async () => {
       const p = handleLogin(providerService, rl as any);
       rl.input.send("\r");
+      rl.input.send("   \r");
       await p;
     });
 

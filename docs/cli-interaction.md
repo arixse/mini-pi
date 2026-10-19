@@ -521,7 +521,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 | ---- | ---- |
 | `/help` | 显示所有可用命令与使用提示 |
 | `/new` | 创建一个新会话（清空当前对话历史并新建会话文件） |
-| `/login` | 登录模型服务商（方向键选择服务商，输入 API Key） |
+| `/login` | 登录模型服务商（方向键选择服务商，输入 API Key 时不回显） |
 | `/model` | 选择模型供应商和模型，写入默认模型配置并立即生效（含上下文窗口重算） |
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
@@ -545,7 +545,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 📖 可用命令（所有命令以 / 开头）:
 
   /new               - 创建新的会话
-  /login             - 登录模型服务商（方向键选择服务商，输入 apiKey）
+  /login             - 登录模型服务商（方向键选择服务商，输入 apiKey 不回显）
   /model             - 选择模型供应商和模型
   /reload            - 重载配置文件
   /skills            - 列出所有可用的 skills
@@ -588,7 +588,9 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 交互流程（`handleLogin`）：
 
 1. 列出所有已注册的供应商，用键盘方向键进行选择；
-2. 输入所选供应商的 API Key（不能为空）；
+2. 输入所选供应商的 API Key：**输入不回显**（每个字符显示为 `*`，`questionHidden`；
+   API Key 因此不会留在终端 scrollback、录屏或共享屏幕里），不能为空；
+   退格逐字删除，Esc / Ctrl+C / Ctrl+D 取消；
 3. 调用 `providerService.saveProviderConfig()` 保存到 `~/.mini-pi/auth.json`；
 4. 提示使用 `/reload` 使其生效。
 5. 使用ESC键退出该命令，回到聊天交互窗口
@@ -597,6 +599,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 
 - Provider 服务未初始化 → `❌ Provider服务未初始化`
 - 无可用供应商 → `❌ 没有可用的模型服务商`
+- 取消输入 → `已取消登录`（不写入 auth.json）
 - API Key 为空 → `❌ API Key不能为空`
 - 保存失败 → `❌ 保存失败: <原因>`
 
