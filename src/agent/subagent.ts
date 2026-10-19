@@ -127,6 +127,13 @@ export function linkSignals(
 export function buildSubAgentSystemPrompt(input: {
   workspaceRoot: string;
   canWrite: boolean;
+  /**
+   * 实际是否拿到受限验证工具 `verify_command`。
+   *
+   * 与 {@link canWrite} 同一条原则：提示词里说出来的能力必须与工具列表一致，
+   * 两者互相矛盾时模型要么犹豫不动手，要么去调一个它根本没有的工具。
+   */
+  canVerify?: boolean;
   instructions?: string;
   /**
    * 项目规则（`AGENTS.md` 固定上下文）。
@@ -156,6 +163,16 @@ export function buildSubAgentSystemPrompt(input: {
     parts.push(
       "",
       "本次委派**没有写权限**：只能读取与分析，需要修改时请在结论里写清改哪里、怎么改。",
+    );
+  }
+
+  if (input.canVerify) {
+    parts.push(
+      "",
+      "你可以用 verify_command 跑验证（测试 / 类型检查 / lint / 构建 / 只读 git 查看）。",
+      "凡是能靠运行回答的问题（能不能编译、测试过不过），跑一次再下结论，",
+      "不要凭读代码推断。它只接受验证类命令：被拒绝时换一条白名单内的命令，",
+      "不要因此改用别的工具。",
     );
   }
 

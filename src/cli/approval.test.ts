@@ -227,6 +227,20 @@ describe("tool approval", () => {
     assert.ok(long.endsWith("…") && long.length < 200);
   });
 
+  it("受限验证的摘要要写明「白名单」：光看命令判断不出这次放行意味着什么", () => {
+    const summary = describeToolCall(
+      call("verify_command", { command: "pnpm test" }),
+    );
+    assert.ok(summary.includes("pnpm test"), `应给出命令：${summary}`);
+    assert.ok(
+      summary.includes("白名单"),
+      `必须标明受限——用户要知道它能跑什么、不能跑什么：${summary}`,
+    );
+    // 与 bash 的摘要必须能一眼区分，否则"跑个测试"和"随便跑"长得一样
+    const bashSummary = describeToolCall(call("bash", { command: "pnpm test" }));
+    assert.notStrictEqual(summary, bashSummary);
+  });
+
   it("委派工具的摘要要读出工具权限，而不是让用户从 goal 后面找", () => {
     const delegated = describeToolCall(
       call("task", { goal: "整理 src\n下的 CLI 模块", allowBash: true, allowWrite: true }),

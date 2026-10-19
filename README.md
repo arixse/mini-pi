@@ -5,8 +5,8 @@
 ## 项目概述
 
 **Mini Pi** 是一个轻量级的 **AI 编程助手**。它理解用户指令，通过调用工具
-（`list_files` / `glob` / `grep` / `read_file` / `write_file` / `edit_file` / `bash`）
-完成任务，并在每次写操作前逐次征求确认。
+（`list_files` / `glob` / `grep` / `read_file` / `write_file` / `edit_file` / `bash` /
+`verify_command`）完成任务，并在每次写操作前逐次征求确认。
 
 ```bash
 npm install -g @minipi/mini-pi   # 或从源码跑：pnpm install && pnpm dev:cli
@@ -257,11 +257,14 @@ mini-pi                        # bin 名不带 scope
 └ 允许执行? [y/N/a]   a = 本会话内全部允许
 ```
 
-1. **审批是主要防线**：`write_file` / `edit_file` / `bash` 必须确认；
+1. **审批是主要防线**：`write_file` / `edit_file` / `bash` / `verify_command` 必须确认；
    拒绝时工具不会执行，而是把「被拒绝」的结果交回模型。
    `/trust` 可在当前会话内跳过确认（详见 [CLI 交互文档](docs/cli-interaction.md)）。
    - 只读工具（`list_files` / `glob` / `grep` / `read_file`）免确认，白名单与
      注册表的只读标记、并发调度共用同一份常量；
+   - `verify_command` 是 `bash` 的**受限版本**：只接受测试 / 构建 / lint /
+     类型检查 / 只读 git 的白名单命令，其余一律拒绝且不执行，仍需逐次确认。
+     评审角色靠它"跑一遍再说"，而不必拿到能跑任意命令的完整 `bash`；
    - `write_file` 覆盖已存在的文件时，确认提示会明确写出「原内容将被替换」，
      不会与新建混为一谈。
 2. **文件访问限制**：所有文件操作被限制在工作区内，并做真实路径校验

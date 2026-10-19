@@ -6,6 +6,7 @@ import {
 import { BeforeToolCall } from "./loop";
 import { LlmModel } from "./model";
 import { RegisteredTool, ToolRegistry } from "./tools/registry";
+import { VERIFY_TOOL_NAME } from "./tools/verify";
 import { createTextContent } from "./message";
 import { createSubAgentTraceWriter } from "./subagentTrace";
 import {
@@ -180,8 +181,12 @@ export function createSubAgentTool(
       "Pick `role` to get a preset toolset and output contract instead of tuning knobs: " +
       "`explore` = read-only reconnaissance (paths + symbols + findings), " +
       "`implement` = may write and must report how it verified, " +
-      "`review` = read-only critique (issues + severity + location). " +
+      "`review` = read-only critique that can also run verification commands " +
+      "(tests, type checks, builds) and returns a PASS/FAIL verdict. " +
       "A role's limits are never loosened by allowWrite/allowBash. " +
+      "For a change that has to actually work, chain them: `implement` first, " +
+      "then `review` to verify it — review's FAIL verdict lists what still must change, " +
+      "so feed those items back to implement. " +
       "Requires confirmation before it starts.",
     parameters: {
       type: "object",
@@ -204,8 +209,9 @@ export function createSubAgentTool(
           enum: SUBAGENT_ROLE_NAMES,
           description:
             "Preset that fixes the toolset, turn budget and output shape. " +
-            "Defaults to `general`. pick `explore`/`review` when you only need answers, " +
-            "`implement` when something has to change on disk.",
+            "Defaults to `general`. Pick `explore` when you only need answers, " +
+            "`implement` when something has to change on disk, " +
+            "`review` when a change must be checked (it can run tests and builds).",
         },
         allowWrite: {
           type: "boolean",
@@ -311,6 +317,9 @@ export function createSubAgentTool(
           // 以最终工具集为准，而不是入参：角色自带写权限时也要如实告诉它"能写"，
           // 否则 prompt 与工具列表互相矛盾，模型会犹豫不动手
           canWrite: childRegistry.has("write_file"),
+          // 同理：review 拿到 verify_command 后必须知道"能跑验证"，
+          // 否则它只会读代码，评审又退回成凭印象猜
+          canVerify: childRegistry.has(VERIFY_TOOL_NAME),
           projectRules:
             typeof options.projectRules === "function"
               ? options.projectRules()

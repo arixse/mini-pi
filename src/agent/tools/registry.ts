@@ -12,6 +12,7 @@ import { globTool, grepTool, listFilesTool } from "./search";
 import { emptySkillSource, loadSkillTool } from "./skill";
 import type { SkillContentSource } from "./skill";
 import type { ConcurrencyRule, RegisteredTool } from "./types";
+import { verifyCommandTool } from "./verify";
 
 export type { ConcurrencyRule, RegisteredTool };
 
@@ -175,6 +176,9 @@ export function createToolRegistry(
     writeFileTool(workspaceRoot),
     editFileTool(workspaceRoot),
     bashTool(workspaceRoot),
+    // 受限验证：不在 READ_ONLY_TOOL_NAMES 里（验证命令可能写构建产物），
+    // 因此仍走审批；它靠自身白名单把"能做什么"结构性收窄
+    verifyCommandTool(workspaceRoot),
   ]) {
     registry.register({
       ...tool,
