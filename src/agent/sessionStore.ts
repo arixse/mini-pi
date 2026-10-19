@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { AgentMessage, SessionEntry } from "../shared/protocol";
 import { appendFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -11,6 +11,29 @@ type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
 /** 摘要输入的最小 token 预算：阈值配得很小时也不要把输入砍成空 */
 export const MIN_SUMMARY_INPUT_TOKENS = 4_000;
+
+/**
+ * 原子写入：先写同目录临时文件，再 rename 覆盖。
+ *
+ * 会话文件是唯一的历史来源，不能像普通配置文件那样直接 `"w"` 截断重写——
+ * 进程在写到一半时被强杀，留下的就是"头部行在、后面的消息全没了"。
+ * rename 在同一文件系统内是原子的，最坏情况是留下一个 `.tmp` 残骸。
+ */
+function writeFileAtomicSync(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tempPath, content, "utf8");
+    renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // 临时文件清不掉不影响主流程，下次写入会覆盖同名临时文件
+    }
+    throw error;
+  }
+}
 
 /**
  * 让模型把一段历史压成摘要。
@@ -283,9 +306,33 @@ export class JsonlSessionStore {
     });
 
     if (!this.entries.some((entry) => entry.type === "session")) {
-      this.entries.length = 0;
-      this.writeHeader();
+      // 第 1 行解析失败，说明坏的就是头行本身——它马上会被新头行替代，
+      // 留着只会让之后每次加载都重复报同一条警告。
+      const firstLineBroken = this.loadWarnings.some((warning) => warning.line === 1);
+      this.repairHeader(lines, firstLineBroken);
     }
+  }
+
+  /**
+   * 头部缺失时的修复：**补写头行，不重建文件**。
+   *
+   * 旧实现在这里清空 `entries` 后调 `writeHeader()`，而 `writeHeader` 用的是
+   * `"w"` 模式——头部行一旦损坏（进程在写第一行时被杀、手工编辑出错、迁移脚本
+   * 漏写），刚解析出来的几十条消息会被整份截断，用户看到的是"会话凭空清空"。
+   *
+   * 头行只承载 version / cwd 这类语境，缺了它不影响消息行本身可用：
+   * 把新头行插到最前面、其余原始行原样保留，并原子写回。
+   * 唯一被丢掉的是确认损坏的第 1 行（`dropFirstLine`），因为它的位置已被新头行占据；
+   * 其它无法解析的行一律保留，宁可下次加载再报一次，也不静默删用户的数据。
+   */
+  private repairHeader(rawLines: string[], dropFirstLine: boolean): void {
+    const header = this.buildHeader();
+    this.entries.unshift(header);
+    const keptLines = dropFirstLine ? rawLines.slice(1) : rawLines;
+    writeFileAtomicSync(
+      this.filePath,
+      [JSON.stringify(header), ...keptLines].join("\n") + "\n",
+    );
   }
 
   /** 解析单行；JSON 非法或结构不合法时记录警告并返回 null */
@@ -353,17 +400,21 @@ export class JsonlSessionStore {
     this.writeHeader();
   }
 
-  private writeHeader(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const header: SessionEntry = {
+  /** 头行内容；`cwd` 记录会话创建时的工作区，便于跨机定位 */
+  private buildHeader(): SessionEntry {
+    return {
       type: "session",
       version: 1,
       id: this.sessionId,
       timestamp: new Date().toISOString(),
       cwd: this.cwd,
     };
+  }
+
+  private writeHeader(): void {
+    const header = this.buildHeader();
     this.entries.push(header);
-    writeFileSync(this.filePath, `${JSON.stringify(header)}\n`, "utf8");
+    writeFileAtomicSync(this.filePath, `${JSON.stringify(header)}\n`);
   }
   private nextId(): string {
     this.counter += 1;

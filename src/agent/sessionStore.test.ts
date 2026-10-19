@@ -417,6 +417,64 @@ describe("JsonlSessionStore", () => {
       assert.strictEqual(store.getLoadWarnings().length, 2);
     });
 
+    it("头部损坏时只补写头行，消息行必须保住（旧实现会整份截断）", () => {
+      // 进程在写第一行时被杀：头行半截，后面几十条消息都是好的。
+      // 旧实现走 entries.length = 0 + writeHeader()（"w" 模式），
+      // 等于把用户的历史就地清空——这是这里最贵的一种失败。
+      const first = JSON.stringify({
+        type: "message",
+        id: "entry_1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("一")], timestamp: 1 },
+      });
+      const second = JSON.stringify({
+        type: "message",
+        id: "entry_2",
+        parentId: "entry_1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent("二")], timestamp: 2 },
+      });
+      writeFileSync(
+        sessionFile,
+        ['{"type":"session","version":1,"id":"mini-pi-ses', first, second].join("\n") + "\n",
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.getEntries()[0].type, "session", "头行应补在最前");
+      assert.strictEqual(store.getLeafId(), "entry_2");
+      assert.strictEqual(store.buildContext().length, 2, "两条消息都要还在");
+      assert.deepStrictEqual(
+        store.getLoadWarnings().map((warning) => warning.line),
+        [1],
+      );
+
+      // 磁盘上同样必须是"补头"，不是"重建"：原始消息行一字不动
+      const onDisk = readFileSync(sessionFile, "utf8").split("\n").filter(Boolean);
+      assert.strictEqual(onDisk.length, 3);
+      assert.strictEqual(JSON.parse(onDisk[0]).type, "session");
+      assert.ok(onDisk.includes(first), "原消息行不得丢失");
+      assert.ok(onDisk.includes(second), "原消息行不得丢失");
+      assert.ok(!existsSync(`${sessionFile}.${process.pid}.tmp`), "不得留下临时文件");
+
+      // 修好之后再加载不能重复报同一条警告（坏头行已被新头行替代）
+      const reloaded = new JsonlSessionStore(sessionFile, testDir);
+      assert.deepStrictEqual(reloaded.getLoadWarnings(), []);
+      assert.strictEqual(reloaded.buildContext().length, 2);
+    });
+
+    it("空文件也补一个头行", () => {
+      writeFileSync(sessionFile, "", "utf8");
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.getEntries().length, 1);
+      assert.strictEqual(store.getEntries()[0].type, "session");
+      assert.deepStrictEqual(store.getLoadWarnings(), []);
+    });
+
     it("合法 JSON 但结构不合法的行也应跳过（回归：旧实现会抛 TypeError 让 CLI 起不来）", () => {
       const header = JSON.stringify({
         type: "session",
