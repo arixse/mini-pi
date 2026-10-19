@@ -14,6 +14,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { APP_VERSION } from "./version";
 
+/** 捕获打印（main 与 createModelFromSettings 只写 console.log） */
+function capture(): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  return { lines, restore: () => void (console.log = original) };
+}
+
 describe("createModelFromSettings", () => {
   let testDir: string;
   let providerFilePath: string;
@@ -21,6 +31,7 @@ describe("createModelFromSettings", () => {
   let store: ProviderStore;
   let providerService: ModelProviderService;
   let settingsStore: SettingsStore;
+  let restoreLog: () => void = () => {};
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `mini-pi-cli-test-${Date.now()}`);
@@ -34,9 +45,20 @@ describe("createModelFromSettings", () => {
     store = new ProviderStore(providerFilePath);
     providerService = new ModelProviderService(store);
     settingsStore = new SettingsStore(settingsFilePath);
+    /**
+     * 自动创建默认配置时会往 stdout 写一行带中文的 chalk 提示。
+     *
+     * node:test 把子进程 stdout 复用到 V8 序列化事件流里，多字节写入
+     * 在并发下有已知的 IPC 分帧竞争，表现为整个测试文件
+     * `Unable to deserialize cloned data` 假失败（本文件单独跑 20/20
+     * 通过，全量套件里偶发）。这些用例不断言输出，按本文件既有约定
+     * （见下方 `main --version`）捕获后静默。
+     */
+    restoreLog = capture().restore;
   });
 
   afterEach(async () => {
+    restoreLog();
     try {
       if (existsSync(providerFilePath)) {
         await unlink(providerFilePath);
@@ -148,16 +170,6 @@ describe("createModelFromSettings", () => {
 });
 
 describe("main --version", () => {
-  /** 捕获打印（main 只写 console.log） */
-  function capture(): { lines: string[]; restore: () => void } {
-    const lines: string[] = [];
-    const original = console.log;
-    console.log = (...args: unknown[]) => {
-      lines.push(args.map(String).join(" "));
-    };
-    return { lines, restore: () => void (console.log = original) };
-  }
-
   it("只打印版本就返回，不初始化任何服务、不起 REPL", async () => {
     const captured = capture();
     try {
