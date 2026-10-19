@@ -27,7 +27,8 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 ### 3.1 智能对话
 
 - 支持多轮对话，理解上下文
-- 支持 OpenAI 和 Anthropic 模型切换
+- 支持 7 家供应商的模型切换（OpenAI / Anthropic / DeepSeek / MiniMax-CN /
+  MiMo / Kimi / 智谱，见 `docs/providers.md`）
 - 流式响应输出
 
 ### 3.2 文件操作
@@ -50,6 +51,8 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 
 ## 4. 技术架构
 
+第二阶段的目标形态（Web 界面 + API 服务器，**尚未实现**，见 2.2）：
+
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   前端界面       │    │   API 服务器     │    │   AI 模型       │
@@ -57,6 +60,10 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 │                 │    │                 │    │    Anthropic)   │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
+
+当前仓库只实现了第一阶段的 CLI：用户直接与终端 REPL 对话，Agent Loop、
+工具执行与会话存储都在同一进程内（详见 `docs/technical-solution.md`）。
+AI 模型一侧现已支持 7 家供应商，不止图中两家（见 `docs/providers.md`）。
 
 ## 5. 用户交互流程
 
@@ -69,7 +76,7 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 ## 6. 配置要求
 
 - Node.js 22+
-- API 密钥（OpenAI 或 Anthropic，通过 `/login` 命令配置）
+- API 密钥（任一家已注册供应商，通过 `/login` 命令配置）
 - 模型选择（通过 `/model` 命令配置）
 
 ## 7. 安全考虑

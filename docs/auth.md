@@ -1,4 +1,0 @@
-1. 命令行cd到工作所在目录，运行 mini-pi
-2. 在mini-pi的界面中输入/login 命令后，读取provider目录中已注册的模型提供商，使用键盘方向键（↑/↓）选择模型服务商，按 Enter 确认，按 Esc 取消
-3. 用户输入模型提供商的apiKey（输入不回显，每个字符显示为 `*`，Esc / Ctrl+C 取消）
-4. apiKey存入 用户系统目录/.mini-pi/auth.json中

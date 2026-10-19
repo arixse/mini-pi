@@ -347,6 +347,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 | `grep` | 按正则搜索内容，返回 `<文件>:<行号>: <内容>`；支持 `include` 与 `ignoreCase`，最多 100 处 |
 | `read_file` | 读取文件，支持 `offset` / `limit` 分页；拒绝二进制与 >5MB 文件 |
 | `load_skill` | 按名称加载 skill 的完整内容（仅接受系统提示词「可用 Skills」清单里的名字，不接受路径） |
+| `task` | 委派子 Agent：把一件相对独立的事交给独立上下文里的子 Agent（`goal` / `context` / `role` / `allowWrite` / `maxTurns`），只回传裁剪后的结论；需审批，且默认关闭（见 5.11） |
 | `write_file` | 写入文件 |
 | `edit_file` | 按精确文本匹配编辑文件 |
 | `bash` | 执行命令（`cwd` 为工作区；超时可配，默认 30s，超时/SIGKILL 会结束整棵进程树） |
@@ -454,7 +455,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 - **只读工具自动放行**：`list_files`、`glob`、`grep`、`read_file`、`load_skill` 不询问
   （白名单取自 `tools/registry.ts` 的 `READ_ONLY_TOOL_NAMES`，注册表的 `readOnly` 标记、
   并发调度与审批白名单三者共用同一份常量，新增只读工具只改一处）；
-- **需要确认**：`write_file`、`edit_file`、`bash`；
+- **需要确认**：`write_file`、`edit_file`、`bash`、`task`；
 - **`write_file` 会区分新建与覆盖**：目标文件已存在时，提示语写的是
   `覆盖已存在的文件 <path>（写入 N 字符，原内容将被替换）`，
   新建时才是 `新建 <path>（N 字符）`——覆盖会整份替换原有内容且无法撤销，
@@ -545,7 +546,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
 | `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
-| `/subagent [on\|off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；状态写入 settings.json |
+| `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on`/`trace off` 单独开关子 Agent trace 落盘（**默认关闭**）；两者状态都写入 settings.json |
 | `/update [on\|off]` | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（写入 settings.json，缺省开启） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
 | `/sessions` | 列出**当前工作目录**的会话（标注当前会话与大小，标题下打印工作目录） |
@@ -562,30 +563,30 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 ```
 📖 可用命令（所有命令以 / 开头）:
 
-  /new               - 创建新的会话
-  /login             - 登录模型服务商（方向键选择服务商，输入 apiKey 不回显）
-  /model             - 选择模型供应商和模型
-  /reload            - 重载配置文件
-  /skills            - 列出所有可用的 skills
-  /load <name>       - 加载指定 skill 的完整内容
-  /trust             - 切换信任模式（跳过写文件/执行命令的确认）
-        y = 允许本次 / n = 拒绝 / a = 本会话全部允许
-  /subagent [on|off] - 开关子 Agent 委派（默认关闭，不带参数则切换）
-  /update [on|off]   - 检查新版本（不带参数立即检查）；on/off 开关启动检测
-  /status            - 查看模型、会话文件、上下文与 token 用量、确认模式
-  /sessions          - 列出当前工作目录的会话
-  /switch <n>        - 切换到指定会话（恢复其历史上下文）
-  /last [n]          - 查看上一条工具输出的完整内容（默认 200 行）
-  /help              - 显示帮助信息
-  /clear             - 清除对话历史
-  /exit              - 退出程序
-  /quit              - 退出程序
+  /new                                   - 创建新的会话
+  /login                                 - 登录模型服务商（方向键选择服务商，输入 apiKey 不回显）
+  /model                                 - 选择模型供应商和模型
+  /reload                                - 重载配置文件
+  /skills                                - 列出所有可用的 skills
+  /load <name>                           - 加载指定 skill 的完整内容
+  /trust                                 - 切换信任模式（跳过写文件/执行命令的确认）
+      y = 允许本次 / n = 拒绝 / a = 本会话全部允许
+  /subagent [on|off|trace on|trace off]  - 开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘
+  /update [on|off]                       - 检查是否有新版本（不带参数立即检查）；on/off 开关启动检测
+  /status                                - 查看模型、会话文件、上下文与 token 用量、确认模式
+  /sessions                              - 列出当前工作目录的会话
+  /switch <n>                            - 切换到指定会话（恢复其历史上下文）
+  /last [n]                              - 查看上一条工具输出的完整内容（默认 200 行）
+  /help                                  - 显示帮助信息
+  /clear                                 - 清除对话历史
+  /exit                                  - 退出程序
+  /quit                                  - 退出程序
 
 💡 提示:
   - 直接输入问题即可开始对话
   - 支持多轮对话，上下文会自动保持
   - 输入编程问题或文件操作请求
-  - 当匹配到 skill 时会自动提示，使用 /load 加载完整内容
+  - 需要某个 skill 时模型会自行加载，也可用 /load 手动加载
 ```
 
 ### 5.2 `/new` —— 创建新会话
@@ -744,18 +745,26 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 🚫 已关闭子 Agent 委派：本回合起模型看不到 task 工具（已在跑的子任务不受影响）
 > /subagent on
 🤝 已开启子 Agent 委派：模型可以再次使用 task 工具
+> /subagent trace on
+🔍 已开启子 Agent trace：每次委派会在会话文件旁写 .sub-<id>.jsonl
 ```
 
 - 不带参数则切换，`on` / `off`（也认「开」「关闭」）为显式设定；
+- `trace on` / `trace off`（也认「trace 开」「trace 关」）是**独立的第二个开关**，
+  只控制委派排障落盘、不影响能不能委派：开启后每次委派的内部消息写到
+  `<会话文件>.sub-<agentId>.jsonl`，默认关闭；
+- **trace 是磁盘上额外的敏感数据副本**（子 Agent 读过的内容会原样落盘），
+  只在排障时按需打开，用完记得 `trace off`；
+- 两个开关的状态分别写入 `settings.json` 的 `subagentEnabled` 与 `subagentTrace`
+  （缺省即关闭），重开终端仍保持上次的选择；写盘失败时开关照常在当前会话生效，
+  但会提示「只在当前会话生效」——不能因为写不进配置就让排障手段失效；
 - **默认关闭**：委派会额外烧 token 且单次成本难以预估，所以是按需打开的能力，
   而不是默认开着等人来关。打开一次后状态会被记住；
 - 关闭时**从本回合的工具列表里摘掉 `task`**，而不是"调用时报错"——
   后者会让模型每轮先试着派一次，白白多一轮并且多一次审批询问；
 - 已经在跑的委派不会被打断，开关只影响后续回合；
-- 状态写入 `settings.json` 的 `subagentEnabled`（缺省即关闭），重开终端仍保持上次的选择；
-  只有布尔 `true` 才算开启，手改配置写成别的值（`"true"`、`1`、`"yes"`…）一律按关闭处理——
+- **只有布尔 `true` 才算开启**：手改配置写成别的值（`"true"`、`1`、`"yes"`…）一律按关闭处理——
   认错方向的代价只是"打不开"，反过来则会让人在无感知的情况下产生委派用量；
-- 写盘失败（settings.json 损坏）时开关仍在当前会话生效，但会提示"只在当前会话生效"；
 - `/status` 里单列一行：关闭时显示「🚫 已关闭（/subagent 开启）」，
   避免用户看到"本会话未委派"误以为是模型不想用。
 
@@ -824,6 +833,7 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
   | `gpt-4`（裸） | 8192 | OpenAI 8k |
   | `gpt-4-32k` | 32768 | OpenAI 32k |
   | `gpt-4o` / `gpt-4o-mini` / `gpt-4-turbo` | 128000 | OpenAI |
+  | `o1-mini` | 128000 | OpenAI |
   | `o1` / `o3` / `o4-mini` | 200000 | OpenAI |
   | `deepseek-*`（chat / reasoner / flash） | 128000 | DeepSeek V3.1 起同为 128K |
   | `MiniMax-M2*` | 204800 | MiniMax M2 / M2.1 / M2.5 / M2.7 |
@@ -978,6 +988,8 @@ skill 是"踩坑即沉淀"的产物，会话中途新建很常见，读到旧缓
 | `zhipu` | OpenAI | `https://open.bigmodel.cn/api/paas/v4` |
 | `anthropic` | Anthropic | `https://api.anthropic.com` |
 
+> 各供应商的默认模型列表、接入细节与踩坑见 [模型供应商对接](./providers.md)（唯一来源），本表只保留注册概览。
+
 ### 8.4 凭据文件权限
 
 `auth.json` 与 `settings.json` 在写入时即按 **0600（仅属主可读写）** 创建，
@@ -1032,9 +1044,10 @@ CLI 使用的回调：
 $ cd ~/my-project
 $ mini-pi
 
-（打印 Logo + 版本号 v1.2.3 与欢迎信息）
 [Skills]
  stock-analysis
+
+（打印 Logo + 版本号 v1.2.3 与欢迎信息）
 
 ────────────────────────────────────────────────────────────
   Provider: deepseek
@@ -1070,9 +1083,8 @@ $ mini-pi
 
 ## 11. 相关文档
 
-- [命令行登录与鉴权](./auth.md)
 - [模型供应商对接](./providers.md)
 - [Session 管理功能](./session-management.md)
-- [/new 命令实现总结](./new-command-implementation.md)
 - [产品设计文档](./product-design.md)
 - [技术方案](./technical-solution.md)
+- [CLI 交互体验设计稿](./cli-ux-design.md) - 终端呈现的设计稿（分档进度与偏差记录；终态格式以本文第 4 节为准）

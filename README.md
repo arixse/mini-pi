@@ -76,27 +76,24 @@ mini-pi/
 │   │                   # + context-window.ts 窗口推断、*-store.ts 凭据与设置、private-*.ts 0600 落盘
 │   └── shared/         # 共享协议与日志
 ├── docs/               # 文档
-├── notes/              # 开发日志（day1 ~ day19，索引见 notes/README.md）
+├── notes/              # 开发日志（day1 ~ day22，索引见 notes/README.md）
 ├── .agents/skills/     # 项目级 Skill：把踩过的坑沉淀成可加载的提示词
 ├── .github/workflows/  # ci.yml（门禁）/ publish.yml（npm 发布）
-├── bin/                # 可执行文件（mini-pi-cli.cjs 为 esbuild 产物，不入库）
-└── index.html          # Web 界面（第二阶段预留，尚未实现）
+└── bin/                # 可执行文件（mini-pi-cli.cjs 为 esbuild 产物，不入库）
 ```
 
 ## 文档索引
 
 - [CLI 交互文档](docs/cli-interaction.md) - **CLI 行为的唯一权威来源**：启动、命令、对话、工具调用与审批的完整流程
-- [CLI 交互体验设计稿](docs/cli-ux-design.md) - 终端呈现的分档设计与实现进度
-- [命令行登录与鉴权](docs/auth.md)
+- [CLI 交互体验设计稿](docs/cli-ux-design.md) - 终端呈现的分档设计与实现进度（设计稿；现行格式以 cli-interaction.md 为准）
 - [模型供应商对接](docs/providers.md) - 新增厂商的实现步骤清单（含各家踩坑）
 - [Session 管理功能](docs/session-management.md)
-- [/new 命令实现总结](docs/new-command-implementation.md)
-- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑
-- [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题与分批修复清单
+- [多 Agent 实现方案](docs/multi-agent-design.md) - 委派的目标架构与里程碑（M0~M5 已落地，现行口径见技术方案 §3.6）
+- [多 Agent 修复方案](docs/multi-agent-fix-plan.md) - 预算/取消/超时等遗留问题的分批修复清单（A~E 已全部落地）
 - [产品设计文档](docs/product-design.md)
 - [技术方案](docs/technical-solution.md)
 - [发布到 npm](docs/publishing.md) - 标签触发的发布流程、包内容与踩过的坑
-- [开发日志索引](notes/README.md) - day1 ~ day19，按真实提交日期编排
+- [开发日志索引](notes/README.md) - day1 ~ day22，按真实提交日期编排
 
 > 行为有变动时先改 `docs/cli-interaction.md`，其余文档只做索引；README 里的
 > 命令与参数描述应当能在这份文档里找到出处。
@@ -113,7 +110,8 @@ mini-pi/
 7. **会话管理** - `/sessions` 列表、`/switch` 切换并恢复历史、`/status` 查看用量；每个会话独立存储，且**按工作目录隔离**（换目录即换会话串）
    - `/status` 还会显示本次会话累计的 token 消耗（输入/输出/合计与请求次数；
      提供方没返回用量时会明确说明，而不是显示成 0）
-8. **模型切换** - 支持 OpenAI 和 Anthropic 模型；模型列表与请求都会走你配置的 Base URL；
+8. **模型切换** - 支持 7 家供应商的模型（OpenAI / Anthropic / DeepSeek / MiniMax-CN /
+   MiMo / Kimi / 智谱）；模型列表与请求都会走你配置的 Base URL；
    切换后立即按新模型重建实例与上下文窗口（不必等 `/reload`）
 9. **上下文窗口** - 默认 128k；启动时按**当前模型名自动推断**（如 `MiniMax-M2.7` → 204.8k、
    `gpt-3.5-turbo` → 16k），推断不到才用默认值；`settings.json` 的 `contextWindow` 可显式覆盖；
@@ -330,6 +328,8 @@ Mini Pi 支持多个模型提供商，下表为当前已注册的提供商概览
 | Anthropic  | `anthropic`  | Anthropic | `https://api.anthropic.com`            |
 
 使用 `/login` 命令可为提供商配置 API Key，使用 `/model` 命令可切换提供商与模型。
+
+> 各供应商的默认模型列表、上下文窗口与接入细节见 [模型供应商对接](docs/providers.md)（唯一来源）；本节只保留注册概览。
 
 ### OpenAI
 
@@ -609,7 +609,7 @@ mini-pi --version    # → mini-pi v1.0.0
 
 ## 开发日志
 
-`notes/` 按**真实开发日**编排日志（day1 ~ day19，共 165 个提交），每篇写明了
+`notes/` 按**真实开发日**编排日志（day1 ~ day22，共 211 个提交），每篇写明了
 对应的 commit 范围，可用 `git log <from>~1..<to>` 回放。索引见 [notes/README.md](notes/README.md)。
 
 约定：日志跟着 commit 走，攒几天再补写会导致日期与提交事实对不上；

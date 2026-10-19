@@ -16,7 +16,7 @@
 
 ---
 
-## 0. Anthropic
+## 1. Anthropic
 
 ### 官方文档
 
@@ -75,7 +75,7 @@ Anthropic
 
 ---
 
-## 0. Kimi（月之暗面 Moonshot AI）
+## 2. Kimi（月之暗面 Moonshot AI）
 
 ### 官方文档
 
@@ -129,7 +129,7 @@ OpenAI
 
 ---
 
-## 0. 智谱（Zhipu / BigModel 开放平台）
+## 3. 智谱（Zhipu / BigModel 开放平台）
 
 ### 官方文档
 
@@ -194,7 +194,7 @@ OpenAI
 
 ---
 
-## 0. MiMo（小米）
+## 4. MiMo（小米）
 
 ### 官方文档
 
@@ -246,7 +246,7 @@ Token Plan（订阅制）使用专属端点，例如 `https://token-plan-cn.xiao
 
 ---
 
-## 1. DeepSeek
+## 5. DeepSeek
 
 ### 官方文档
 
@@ -289,7 +289,7 @@ OpenAI
 
 ---
 
-## 2. MiniMax-CN
+## 6. MiniMax-CN
 
 ### 官方文档
 
@@ -336,7 +336,7 @@ https://api.minimax.cn/v1/models
 
 ---
 
-## 3. OpenAI
+## 7. OpenAI
 
 ### 官方文档
 
@@ -352,11 +352,15 @@ https://api.minimax.cn/v1/models
 
 | 模型 | 说明 |
 |------|------|
-| `gpt-3.5-turbo` | GPT-3.5 Turbo 模型 |
-| `gpt-4` | GPT-4 模型 |
-| `gpt-4-turbo` | GPT-4 Turbo 模型 |
-| `gpt-4o` | GPT-4o 模型 |
-| `gpt-4o-mini` | GPT-4o Mini 模型 |
+| `gpt-4o` | GPT-4o 模型（128K 上下文） |
+| `gpt-4o-mini` | GPT-4o Mini 模型（128K 上下文） |
+| `gpt-4-turbo` | GPT-4 Turbo 模型（128K 上下文） |
+| `o1` | 推理模型（200K 上下文） |
+| `o1-mini` | 推理模型（128K 上下文） |
+| `gpt-3.5-turbo` | 经典对话模型（16K 上下文） |
+
+> 默认列表与 `src/provider/openai.ts` 的 `getDefaultModels()` 一致；
+> `gpt-4`（裸型号，8K 上下文）等旧型号不在默认列表里。
 
 ### 接入方式
 
@@ -411,12 +415,12 @@ export interface Provider {
    - Anthropic 官方：鉴权用 `x-api-key` 且要带 `anthropic-version`，列表在 `/v1/models`
      → 自定义 `fetch` 头 + 覆写 `getModelsUrl()`。
    注意 Anthropic SDK 会自己拼 `/v1`，所以 Base URL 里**不要**写 `/v1`。
-4. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
+5. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
    按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
    会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
-5. 编写单元测试
-6. 更新本文档（含 README 的提供商表格）
-7. **检查"注册顺序"假设**：新 provider 会插进 `/login`、`/model` 的选择列表，
+6. 编写单元测试
+7. 更新本文档（含 README 的提供商表格）
+8. **检查"注册顺序"假设**：新 provider 会插进 `/login`、`/model` 的选择列表，
    任何按序号模拟按键的测试（如 `src/cli/login-model.test.ts`）都会因此错位。
    测试里不要写死"第 N 个服务商"，改用 `getRegisteredProviders().indexOf(...)` 定位。
 
@@ -463,4 +467,4 @@ export interface Provider {
 
 ---
 
-*最后更新: 2026-10-08*
+*最后更新: 2026-10-19*

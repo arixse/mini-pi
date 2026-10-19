@@ -2,7 +2,8 @@
 
 > 状态：**A~E 批全部落地**。B/C/D/E 见下方"实施记录"。
 > 本文描述改动清单、实施顺序与验收标准。
-> 前置阅读：[多 Agent 实现方案](multi-agent-design.md)、`src/agent/subagent.ts`、`notes/day5.md`。
+> 前置阅读：[多 Agent 实现方案](multi-agent-design.md)、`src/agent/subagent.ts`、`notes/day18.md`
+> （Day 18 即多 Agent 委派篇；`notes/day5.md` 已被 2026-09-20 的路径安全篇占用）。
 > 本文的第 1 节已用临时脚本实测复现（脚本已删），其余节为代码评审结论。
 >
 > **已完成的批次**
@@ -24,7 +25,7 @@
 
 ## 0. 为什么需要这份文档
 
-`M0~M5` 落地后委派链路是通的，但在**并发 + 取消 + 预算**这三个交织点上留下了两处实测可复现的缺陷，以及一批"口径不一致"（两处地方表达同一件事却写了两套实现）。后者在 day5 的经验 3 里已经被明确反对过——_`concurrent` 与 `readOnly` 必须分成两个维度_——但同类问题在别处又出现了。
+`M0~M5` 落地后委派链路是通的，但在**并发 + 取消 + 预算**这三个交织点上留下了两处实测可复现的缺陷，以及一批"口径不一致"（两处地方表达同一件事却写了两套实现）。后者在 day18 的经验 3 里已经被明确反对过——_`concurrent` 与 `readOnly` 必须分成两个维度_——但同类问题在别处又出现了。
 
 分批原则：**先修正确性，再补成本护栏，最后是呈现与清理**。前两批决定委派是否真的省上下文，后三批决定它是否好用、是否好维护。
 
@@ -166,7 +167,7 @@ export type AcquireResult =
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
 ```
 
-`RunSubAgentInput` 增加可选 `timeoutMs`，在 `runSubAgent` 内部用独立 `AbortController` 计时，并与外部 signal 合并（**不能用 `AbortSignal.any`，需 Node 20+**；项目基线是 Node 18+,手写一个 `linkSignals(a, b)`，与 `acquire` 里链接父信号的写法保持一致）。
+`RunSubAgentInput` 增加可选 `timeoutMs`，在 `runSubAgent` 内部用独立 `AbortController` 计时，并与外部 signal 合并（**不能用 `AbortSignal.any`，需 Node 20+**；项目基线是 Node 22+（`engines` 声明），手写一个 `linkSignals(a, b)`，与 `acquire` 里链接父信号的写法保持一致）。
 
 超时不是取消，两者必须在结果里可区分：
 
@@ -254,7 +255,7 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
 
 尤其要把"是否含写/bash"放在第一行可见处——这是用户决定放不放行的唯一依据。
 
-### D3 `--trace` 落盘（建议做，day5 已记为遗留）
+### D3 `/subagent trace` 落盘（建议做，day18 已记为遗留）
 
 子 Agent 的来回不进主会话，排障时无从知道它读了什么、在哪一轮跑偏。按设计稿把子 Agent 的完整消息写到 `<会话>.sub-<agentId>.jsonl`，默认关闭（`settings.subagentTrace` 或 `--trace`）。
 
@@ -275,7 +276,7 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 180_000;
 | 看 `parentRegistry` | 否 | 是 |
 | 认 `canEscalate` | 否——给 explore 传 allowWrite 会加出 `write_file` | 是 |
 
-**被测试担保的恰好是没在用的那一套**，而且它是错的那一套（违反 day5 经验 4：冲突取更严格者）。建议删掉 `subAgentToolNames` 及其 3 个用例，让决议只剩一条路径。
+**被测试担保的恰好是没在用的那一套**，而且它是错的那一套（违反 day18 经验 4：冲突取更严格者）。建议删掉 `subAgentToolNames` 及其 3 个用例，让决议只剩一条路径。
 
 ### E2 轮次决议同样双轨
 
@@ -317,7 +318,7 @@ E（一致性，一次 commit）
   E1~E4 归一口径、删重复、补 parentId
 ```
 
-理由与 day5 一致：**A 单独一个 commit**（涉及取消与预算，值得独立 review）；**B 紧随其后**（它决定委派到底省不省上下文）；C/D/E 风险低且互不耦合，可以按精力逐个来。
+理由与 day18 一致：**A 单独一个 commit**（涉及取消与预算，值得独立 review）；**B 紧随其后**（它决定委派到底省不省上下文）；C/D/E 风险低且互不耦合，可以按精力逐个来。
 
 每批结束都要跑 `pnpm check`（typecheck + test），并以 Pull Request 或 `/code-review` 的形式过一遍再合入。
 
