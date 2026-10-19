@@ -136,8 +136,10 @@ mini-pi/
     **默认关闭**（委派会额外烧 token 且单次成本难预估），需用 `/subagent on` 主动打开，
     状态持久化到 settings.json；关闭后模型看不到 `task` 工具
     （详见 [多 Agent 实现方案](docs/multi-agent-design.md)）
-18. **Skills 渐进式披露** - 扫描多个目录里的 `SKILL.md`，只把「名称 + 一句话描述」
-    注入系统提示词，命中后才由 `/load` 或模型请求加载全文——避免每次请求都背上全部 Skill。
+18. **Skills 渐进式披露** - 扫描多个目录里的 `SKILL.md`，把「名称 + 一句话描述」
+    全量注入系统提示词（不设数量上限），由**模型自己判断**该用哪个，再调用
+    `load_skill` 工具把对应全文取进对话；用户也可用 `/load <name>` 手动加载。
+    全文不进系统提示词——每次请求的固定开销只有那一份清单。
     （详见 [Skills](#skills)）
 19. **项目技术栈探测** - 启动时读 `package.json` / lock 文件 / `tsconfig.json`，
     把模块系统（ESM/CommonJS）、包管理器与**项目里真实存在的验证命令**（`pnpm test` 等）
@@ -557,14 +559,15 @@ mini-pi --version    # → mini-pi v1.0.0
 - **项目技术栈**：由 `src/cli/projectStack.ts` 自动探测（`package.json` / lock 文件 /
   `tsconfig.json`），给出模块系统、包管理器、主要依赖与项目里真实存在的验证命令
   （如 `pnpm test`、`pnpm typecheck`）。长驻的 `dev` / `start` 不列入。
-- **Skill 摘要**：只列名称与一句话描述（见下）。
+- **Skill 摘要**：只列名称与一句话描述，模型据此自行决定加载哪个（见下）。
 
 ## Skills
 
 一个 Skill 就是「一个目录 + 一篇 `SKILL.md`」，`SKILL.md` 的 YAML frontmatter 里写
-`name` 与 `description`。系统提示词里**只注入名称与描述**，命中后才加载全文
-（`src/agent/skillLoader.ts`）——全部正文常驻会让每次请求的固定开销变大，
-而它会计入上下文压缩的预算。
+`name` 与 `description`。系统提示词里**只注入名称与描述**（全量、不设上限），
+模型判断相关后调用 `load_skill` 工具取全文（`src/agent/tools/skill.ts`）；
+用户侧的手动入口是 `/load <name>`。全部正文常驻系统提示词会让每次请求的固定开销
+变大，而它会计入上下文压缩的预算。
 
 扫描目录按下面的顺序，**后者覆盖同名 Skill**：
 
@@ -573,7 +576,9 @@ mini-pi --version    # → mini-pi v1.0.0
 | 全局 | `~/.agents/skills/` → `~/.mini-pi/skills/`                        |
 | 项目 | `<工作目录>/.mini-pi/skills/` → `.pi/skills/` → `.agents/skills/` |
 
-- `/skills` 列出名称、描述与来源；`/load <name>` 把全文注入当前对话。
+- `/skills` 列出名称、描述与来源（每次全量重扫，会话中途新建的 skill 立刻可见）；
+  `/load <name>` 把全文注入系统提示词（名单派生，`/reload` 不丢、重复加载不重复注入）；
+  模型则可自行调用 `load_skill` 把全文取进对话。
 - 本仓库自带 4 个项目级 Skill，都是踩过坑之后沉淀下来的约束：
 
 | Skill                          | 覆盖什么                                                     |

@@ -85,7 +85,7 @@ mini-pi/
 
 ### 3.2 工具层 (Tools)
 
-CLI 内置工具（`src/agent/tools/`，全部限制在 `workspaceRoot` 内）：
+CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `workspaceRoot` 内）：
 
 | 工具 | 只读 | 说明 |
 | --- | --- | --- |
@@ -93,6 +93,7 @@ CLI 内置工具（`src/agent/tools/`，全部限制在 `workspaceRoot` 内）�
 | `glob` | ✅ | glob 找文件（`*` `?` `**` `{a,b}`），最多 200 个 |
 | `grep` | ✅ | 正则搜内容，返回 `<文件>:<行号>: <内容>`，最多 100 处；跳过二进制与 >1MB 文件 |
 | `read_file` | ✅ | 分页读取（`offset`/`limit`），单次上限 2000 行 / 20000 字符并显式标注；拒绝二进制文件与 >5MB 文件 |
+| `load_skill` | ✅ | 按名称加载 skill 全文（仅接受系统提示词「可用 Skills」清单里的名字，不接受路径，可读工作区外的 skill 目录） |
 | `write_file` | — | 写入文件 |
 | `edit_file` | — | 精确文本替换（返回 `lineNumber` 供卡片标注 diff 位置） |
 | `bash` | — | 执行命令；单次输出上限 20000 字符并显式标注，超时可配（默认 30s，上限 10min），超时会结束整棵进程树 |

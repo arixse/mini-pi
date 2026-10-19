@@ -244,6 +244,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 | `glob` | 🔎 | 青色 | 匹配到的文件路径 | `12 个文件[· 已截断]` |
 | `grep` | 🔍 | 青色 | `<文件>:<行号>: <内容>` | `3 处匹配 · 扫描 12 个文件` |
 | `read_file` | 📖 | 青色 | 带行号的前 8 行 | `共 529 行 · 18.6 KB [· 本次返回 N 行] [· 显示前 8 行]` |
+| `load_skill` | 📚 | 青色 | SKILL.md 全文 | `<skill 名> · N 字符` |
 | `write_file` | ✏️ | 品红 | ——（不重复展示写入内容） | `新增/覆盖 · 42 行 · 2.1 KB` |
 | `edit_file` | 🔧 | 黄色 | unified diff | `1 处修改 · +12 -3` |
 | `bash` | 💻 | 绿色 | stdout 随后 stderr（黄） | `21 行 · 1.2 KB [· stderr][· 已截断][· 超时（30.0s）]` |
@@ -326,7 +327,12 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 4.4 可用工具
 
-CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `workspaceRoot` 内：
+CLI 内置以下工具（定义于 `src/agent/tools/`）。
+
+除 `load_skill` 外全部限制在 `workspaceRoot` 内：`load_skill` 按名称读取已枚举的
+skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只接受系统提示词
+「可用 Skills」清单里的名字、按名单精确查找，不接受路径，因此不存在拼路径
+读取任意文件的口子。
 
 | 工具 | 说明 |
 | ---- | ---- |
@@ -334,11 +340,12 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 | `glob` | 按 glob 模式找文件（`*` `?` `**` `{a,b}`；不含 `/` 的模式匹配任意层级），最多 200 个 |
 | `grep` | 按正则搜索内容，返回 `<文件>:<行号>: <内容>`；支持 `include` 与 `ignoreCase`，最多 100 处 |
 | `read_file` | 读取文件，支持 `offset` / `limit` 分页；拒绝二进制与 >5MB 文件 |
+| `load_skill` | 按名称加载 skill 的完整内容（仅接受系统提示词「可用 Skills」清单里的名字，不接受路径） |
 | `write_file` | 写入文件 |
 | `edit_file` | 按精确文本匹配编辑文件 |
 | `bash` | 执行命令（`cwd` 为工作区；超时可配，默认 30s，超时/SIGKILL 会结束整棵进程树） |
 
-**只读工具**（`list_files` / `glob` / `grep` / `read_file`）由注册表的 `readOnly` 标记统一定义：
+**只读工具**（`list_files` / `glob` / `grep` / `read_file` / `load_skill`）由注册表的 `readOnly` 标记统一定义：
 它们无需审批，并且在同一轮里**连续的只读调用会并发执行**（写类工具仍一次一个），
 结果始终按调用顺序归档，保证 `toolResult` 与 `toolCall` 一一对应。
 
@@ -426,7 +433,7 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
   `elevated` 的理由——一次列五条会把真正致命的那条淹掉；
   除命令外，`write_file` 覆盖已有文件、`task` 给子 Agent 放开 `bash`/写权限也算 `elevated`；
 
-- **只读工具自动放行**：`list_files`、`glob`、`grep`、`read_file` 不询问
+- **只读工具自动放行**：`list_files`、`glob`、`grep`、`read_file`、`load_skill` 不询问
   （白名单取自 `tools/registry.ts` 的 `READ_ONLY_TOOL_NAMES`，注册表的 `readOnly` 标记、
   并发调度与审批白名单三者共用同一份常量，新增只读工具只改一处）；
 - **需要确认**：`write_file`、`edit_file`、`bash`；
@@ -610,9 +617,12 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 
 - 调用 `onReload()` 回调：
   - 重新通过 `createModelFromSettings()` 构建模型并注入 `SessionManager`；
-  - 重新读取固定上下文与 Skill 摘要，重建 System Prompt；
+  - **清 Skill 缓存后**重新读取固定上下文与 Skill 摘要，重建 System Prompt
+    （会话中途新建/修改的 skill 由此立刻生效，与 AGENTS.md 的即时生效语义对齐）；
+  - **已加载的 skill 不丢**：`/load` 注入的全文按 `loadedSkillNames` 名单
+    在新 base 上重组回去（名单是唯一事实来源，见 5.7）；
   - 重新打印 Logo 与欢迎信息（含生效的上下文窗口与来源）；
-  - 将新的 `model`、`systemPrompt`、`contextWindow` 与其来源写回 REPL 的 `options`。
+  - 将新的 `model`、`systemPrompt`、`baseSystemPrompt`、`contextWindow` 与其来源写回 REPL 的 `options`。
 - 成功输出 `✅ 配置已重载`。
 - 未配置回调输出 `❌ 重载功能未配置`；失败输出 `❌ 重载失败: <原因>`。
 
@@ -637,6 +647,9 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 
 来源分组与顺序：`项目 Skills`（project）→ `用户 Skills`（global-mini-pi）→ `全局 Skills`（global-agents）。
 
+**每次调用都全量重扫**（`clearCache` 后重新列举）：skill 是"踩坑即沉淀"的产物，
+会话中途新建很常见，读到旧缓存会让用户以为功能坏了。`/reload` 前同样会清缓存。
+
 没有找到任何 Skill 时，会提示可放置 Skill 的目录：
 
 - `~/.agents/skills/`
@@ -645,11 +658,18 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 - `项目目录/.pi/skills/`
 - `项目目录/.agents/skills/`（AGENTS.md 约定的项目级 Skill 目录）
 
-### 5.7 `/load <name>` —— 加载 Skill
+### 5.7 `/load <name>` —— 手动加载 Skill
+
+模型侧的自动加载走 `load_skill` 工具（见第 7 节）；`/load` 是用户手动入口，
+确定要用哪个时比等模型判断更快。两者注入的位置不同：工具结果进对话，
+`/load` 进 System Prompt（后续每一轮都在）。
 
 - `loadSkillContent(name)` 读取该 Skill 的 `SKILL.md` 完整内容；
-- 将内容拼接到 System Prompt：`## 已加载 Skill: <name>` + 完整内容；
+- **名单派生**：`loadedSkillNames` 是唯一事实来源，System Prompt 里的 skill 段
+  永远由 `baseSystemPrompt + 名单` 重组而来——直接往 prompt 上追加快进快出，
+  `/reload` 一重建就全军覆没；
 - 输出 `✅ 已加载 skill: <name>` 并提示内容已注入上下文。
+- 重复加载同一个 skill：`ℹ️ skill <name> 已加载，不重复注入`（全文进两遍只会烧上下文）；
 - 未指定名称：`❌ 请指定 skill 名称，例如: /load stock-analysis`。
 - 未找到：`❌ 未找到 skill: <name>` 并提示用 `/skills` 查看。
 
@@ -686,7 +706,7 @@ CLI 内置以下工具（定义于 `src/agent/tools/`），全部限制在 `work
 
 - 每次执行 `/trust` 切换一次状态，仅对当前会话有效（重启后恢复为需确认）；
 - 开启后 `write_file` / `edit_file` / `bash` 不再询问，请只在可信任务下使用；
-- `list_files` / `read_file` 本来就免确认，不受影响。
+- `list_files` / `read_file` / `load_skill` 本来就免确认，不受影响。
 
 ### 5.11 `/subagent` —— 子 Agent 委派开关
 
@@ -819,19 +839,18 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 
 启动时会：
 - 读取所有 Skill 元数据（来自 `SKILL.md` 的 YAML frontmatter 的 `name` / `description`）；
-- 将元数据摘要注入 System Prompt；
+- 将元数据摘要注入 System Prompt（全量注入，不设数量上限）；
 - 在控制台打印 `[Skills]` 及其名称列表。
 
-对话时（`checkSkillMatch`）：
-- 用户每次输入都会匹配 Skill（名称精确匹配权重最高，其次名称单词、描述关键词）；
-- 命中时展示前 3 个最相关的 Skill：
+对话时由**模型自己决定**用哪个 skill：
+- 模型读完元数据摘要，判断当前请求与某个 skill 相关时，调用 `load_skill` 工具
+  加载它的完整内容（工具结果进入对话，模型随即按其中规则执行）；
+- 未命中时工具会附上可用 skill 名单，模型可自我纠正，不需要用户介入；
+- 用户侧的手动入口是 `/load <name>`（见 5.7）。
 
-```
-💡 发现匹配的 Skills:
-  - stock-analysis: 股票分析助手
-
-使用 /load <name> 加载 skill 获取更专业的帮助
-```
+> 此前这里有一段"输入时的关键词匹配提示"（`checkSkillMatch`），已删除：
+> 描述按空白切分时中文整句成一个"词"，中文查询几乎永远匹配不上，
+> 提示通道对中文用户形同虚设。模型驱动不依赖任何切分规则。
 
 **Skill 目录优先级**（同名后加载者覆盖前者）：
 
@@ -840,6 +859,10 @@ JSONL 是上下文的唯一事实来源，因此**一行坏数据不会让整份
 3. `<workspaceRoot>/.mini-pi/skills`（project）
 4. `<workspaceRoot>/.pi/skills`（project）
 5. `<workspaceRoot>/.agents/skills`（project，最高；AGENTS.md 中约定的项目级 Skill 目录）
+
+元数据缓存的生命周期：`/skills` 每次全量重扫，`/reload` 前也会清缓存——
+skill 是"踩坑即沉淀"的产物，会话中途新建很常见，读到旧缓存会让用户以为功能坏了。
+`load_skill` 工具与 `SessionManager` 共用同一个 `SkillLoader` 实例，缓存只有一份。
 
 ---
 
