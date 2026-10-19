@@ -167,7 +167,7 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
-| [开发日志索引](notes/README.md)                 | day1 ~ day24，按真实提交日期编排                                             |
+| [开发日志索引](notes/README.md)                 | day1 ~ day25，按真实提交日期编排                                             |
 
 ## 范围
 
