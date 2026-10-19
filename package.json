@@ -1,6 +1,6 @@
 {
   "name": "@minipi/mini-pi",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Mini Pi Code Agent - AI编程助手",
   "bin": {
     "mini-pi": "./bin/mini-pi-cli.cjs"
@@ -30,8 +30,8 @@
     "prepare": "npm run build:cli",
     "link:cli": "npm link",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"src/**/*.test.ts\"",
+    "test": "tsx --test --test-concurrency=4 \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --test-concurrency=4 --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"src/**/*.test.ts\"",
     "check": "npm run typecheck && npm run test:coverage"
   },
   "keywords": [],
