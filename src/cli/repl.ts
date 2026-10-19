@@ -30,22 +30,57 @@ import { createAgentEventHandler } from "./toolEvents";
 import { runAgentTurn } from "./turn";
 import type { ReplOptions } from "./options";
 
-export async function startRepl(options: ReplOptions): Promise<void> {
+/**
+ * 主循环依赖的运行时环境。
+ *
+ * 默认全部走真实实现；抽成可注入的一份，是为了能单测主循环本身——
+ * 此前 repl.ts 的覆盖率只有 7%：退出协调、取消兑现、输入串行、审批
+ * fail-closed 这些"装配逻辑"没有任何测试，而它们恰恰是每次改
+ * SIGINT 处理或队列语义时最容易静默改坏的地方。
+ */
+export type ReplEnvironment = {
+  /** readline 工厂：测试传入假接口即可驱动 line / SIGINT 事件 */
+  createInterface: typeof createInterface;
+  /** 标准输入：只看 isTTY——能否进行交互式确认 */
+  stdin: { isTTY?: boolean };
+  /** 标准输出：状态行与宽度跟随都写它 */
+  stdout: NodeJS.WriteStream;
+  /** 环境变量：NO_COLOR 与 MINI_PI_ASCII 两个样式开关 */
+  env: Record<string, string | undefined>;
+  /** 退出：生产实现是 process.exit，测试里只记录调用 */
+  exit: (code: number) => void;
+};
+
+/** 生产环境的默认实现 */
+export function defaultReplEnvironment(): ReplEnvironment {
+  return {
+    createInterface,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    env: process.env,
+    exit: (code) => process.exit(code),
+  };
+}
+
+export async function startRepl(
+  options: ReplOptions,
+  env: ReplEnvironment = defaultReplEnvironment(),
+): Promise<void> {
   // 用量统计：整个 REPL 生命周期共用一份，切会话/清历史时清零
   const usageTracker: UsageTracker = options.usageTracker ?? createUsageTracker();
   options.usageTracker = usageTracker;
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
+  const rl = env.createInterface({
+    input: env.stdin as NodeJS.ReadableStream,
+    output: env.stdout,
     prompt: chalk.cyan("> "),
   });
 
   // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行
   const status = createStatusLine({
-    stream: process.stdout,
-    enabled: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
-    ascii: Boolean(process.env.MINI_PI_ASCII),
+    stream: env.stdout,
+    enabled: Boolean(env.stdout.isTTY) && !env.env.NO_COLOR,
+    ascii: Boolean(env.env.MINI_PI_ASCII),
   });
   const quiet = (...args: unknown[]): void => {
     status.stop();
@@ -56,7 +91,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   // 非交互式终端（管道输入等）无法确认，按「拒绝」处理（fail closed）。
   let trusted = false;
   let warnedNonInteractive = false;
-  const canPrompt = Boolean(process.stdin.isTTY);
+  const canPrompt = Boolean(env.stdin.isTTY);
 
   const approval: BeforeToolCall = createToolApproval({
     isTrusted: () => trusted,
@@ -80,7 +115,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       return parseApprovalAnswer(answer);
     },
     // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
-    ascii: Boolean(process.env.MINI_PI_ASCII),
+    ascii: Boolean(env.env.MINI_PI_ASCII),
     /**
      * 用户在确认时按了 `a`：语义等价于 `/trust`，只是由真实上下文触发。
      *
@@ -102,7 +137,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
   // 卡片渲染上下文与事件处理：整个会话复用同一份（样式开关只在启动时定）
   const renderContext: RenderContext = createRenderContext();
   // 宽度要跟着终端走：会话是长期存在的，中途拖窗口不该让后续卡片按旧列数排版
-  const unfollowWidth = followTerminalWidth(renderContext);
+  const unfollowWidth = followTerminalWidth(renderContext, env.stdout);
   const onAgentEvent = createAgentEventHandler({
     status,
     renderContext,
@@ -171,7 +206,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
       // 退出前摘掉 resize 监听：否则监听器持有 stdout，进程收尾不清爽
       unfollowWidth();
       console.log(chalk.yellow("\n👋 再见！\n"));
-      process.exit(code);
+      env.exit(code);
     },
     onWaiting: () =>
       quiet(chalk.yellow("\n⏹️  正在取消当前任务，本轮结束后自动退出\n")),
