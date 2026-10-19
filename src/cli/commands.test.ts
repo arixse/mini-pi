@@ -24,6 +24,19 @@ function repoFile(relativePath: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
+/**
+ * 文档命令表里的命令名。
+ *
+ * 只数**表行**（首格是 `` `/<name>` `` 的行），不数正文里 `` `/help` `` 这类
+ * 行内引用——否则一段说明文字就能让集合对不上。
+ * 上游断言（"覆盖全部命令"）只能发现文档**少了**命令；这条集合比对还能发现
+ * 文档**多出**了已经从注册表删掉的行，例如 `/subagent` 的用法后来加了
+ * `trace on|off`，只靠命令名比对是看不出这种细节漂移的。
+ */
+function docCommandTableNames(markdown: string): string[] {
+  return [...markdown.matchAll(/^\|\s*`\/([a-z]+)/gm)].map((match) => match[1]);
+}
+
 describe("命令注册表", () => {
   it("命令名不重复", () => {
     const names = COMMANDS.map((spec) => commandName(spec.usage));
@@ -110,5 +123,21 @@ describe("清单不再分叉：注册表、实现与文档必须互相覆盖", (
         `cli-interaction.md 缺 ${spec.usage}：它是 CLI 行为的唯一权威来源`,
       );
     }
+  });
+
+  it("README 的命令表与注册表一一对应：不许多，也不许少", () => {
+    assert.deepStrictEqual(
+      docCommandTableNames(readme).sort(),
+      COMMANDS.map((spec) => commandName(spec.usage)).sort(),
+      "README 命令表与注册表不一致（文档多出或缺少命令）",
+    );
+  });
+
+  it("docs/cli-interaction.md 的命令表与注册表一一对应：不许多，也不许少", () => {
+    assert.deepStrictEqual(
+      docCommandTableNames(interactionDoc).sort(),
+      COMMANDS.map((spec) => commandName(spec.usage)).sort(),
+      "cli-interaction.md 命令表与注册表不一致（文档多出或缺少命令）",
+    );
   });
 });
