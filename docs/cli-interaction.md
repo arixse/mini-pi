@@ -531,7 +531,9 @@ skill 文件（可能位于 `~/.agents/skills` 等工作区之外），但它只
 
 ## 5. 命令列表
 
-所有命令以 `/` 开头，需独立一行、完整匹配（`/load` 除外，它需要参数）。
+所有命令以 `/` 开头，需独立一行、完整匹配。`/load` 不带参数时同样命中命令
+（提示 `请指定 skill 名称`），不会落给模型当提问——与 `/last`、`/subagent`、
+`/update` 的裸命令形式一致。
 
 > 这张表必须与 `src/cli/commands.ts` 的注册表一致（`/help` 与启动欢迎语都从那里渲染）。
 > `src/cli/commands.test.ts` 会逐条比对本文档、README 与 `dispatch.ts` 的分派分支，

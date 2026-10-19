@@ -44,6 +44,94 @@ export async function resolveContextWindowFromSettings(
   return resolveContextWindow({ configured, modelName });
 }
 
+/**
+ * `/model` 选中新模型后的重建：换模型、换窗口。
+ *
+ * 从 main() 的闭包里拆出来，是为了能绕开 startRepl（会占住 stdin）
+ * 直接测这条链路：模型重建、sessionManager 的模型同步、窗口重算。
+ */
+export async function applyModelChange(deps: {
+  providerService: ModelProviderService;
+  settingsStore: SettingsStore;
+  sessionManager: SessionManager;
+}): Promise<{
+  model: LlmModel | null;
+  providerName: string | null;
+  modelName: string | null;
+  contextWindow: number;
+  contextWindowSource: ContextWindowSource;
+}> {
+  const { model, providerName, modelName } = await createModelFromSettings(
+    deps.providerService,
+    deps.settingsStore,
+  );
+  if (model) {
+    deps.sessionManager.setModel(model);
+  }
+  const resolved = await resolveContextWindowFromSettings(deps.settingsStore, modelName);
+  return {
+    model,
+    providerName,
+    modelName,
+    contextWindow: resolved.window,
+    contextWindowSource: resolved.source,
+  };
+}
+
+/** `/reload` 的重建：在换模型换窗口之外，还要重扫 skill 与固定上下文并重组提示词 */
+export async function applyModelReload(deps: {
+  providerService: ModelProviderService;
+  settingsStore: SettingsStore;
+  sessionManager: SessionManager;
+  /** 重新构建基础提示词（每次重新探测技术栈与固定上下文，不缓存） */
+  buildPrompt: () => string;
+  /** 已加载 skill 的名单（同一引用）：重组后已加载的段不能丢 */
+  loadedSkillNames: string[];
+}): Promise<{
+  model: LlmModel | null;
+  providerName: string | null;
+  modelName: string | null;
+  systemPrompt: string;
+  baseSystemPrompt: string;
+  contextWindow: number;
+  contextWindowSource: ContextWindowSource;
+}> {
+  const changed = await applyModelChange(deps);
+  // skill 与 AGENTS.md 同等待遇：重载就重新扫。不清缓存的话，会话中新建的
+  // skill 进不了摘要，模型的 load_skill 也取不到它
+  deps.sessionManager.getSkillLoader().clearCache();
+  const baseSystemPrompt = deps.buildPrompt();
+  // 已加载的 skill 不能跟着丢：名单仍在册，就把它们的段落重组回去
+  const systemPrompt =
+    baseSystemPrompt +
+    composeLoadedSkillSections(deps.sessionManager, deps.loadedSkillNames);
+  return {
+    model: changed.model,
+    providerName: changed.providerName,
+    modelName: changed.modelName,
+    systemPrompt,
+    baseSystemPrompt,
+    contextWindow: changed.contextWindow,
+    contextWindowSource: changed.contextWindowSource,
+  };
+}
+
+/**
+ * 会话切换的两个回调：`/new` 与 `/switch`。
+ *
+ * 只做"把 sessionManager 的能力接到 ReplOptions 上"这一层；
+ * 切换后的上下文重建在 session.ts 的 startNewSession / switchSession 里。
+ */
+export function createSessionCallbacks(sessionManager: SessionManager): {
+  onNewSession: () => ReturnType<SessionManager["createNewSession"]>;
+  onSwitchSession: (target: string) => ReturnType<SessionManager["loadSession"]>;
+} {
+  return {
+    onNewSession: () => sessionManager.createNewSession(),
+    onSwitchSession: (target: string) => sessionManager.loadSession(target),
+  };
+}
+
 
 export async function createModelFromSettings(
   providerService: ModelProviderService,
@@ -287,14 +375,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   printUpdateNotice(updateResult);
 
   // 创建新会话的回调函数：返回新的 store，由 REPL 切换并重建上下文
-  const onNewSession = () => {
-    return sessionManager.createNewSession();
-  };
-
-  // 切换到已有会话（/switch）
-  const onSwitchSession = (target: string) => {
-    return sessionManager.loadSession(target);
-  };
+  const { onNewSession, onSwitchSession } = createSessionCallbacks(sessionManager);
 
   // 重载配置的回调函数
   const onReload = async (): Promise<{
@@ -304,69 +385,29 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     contextWindow?: number;
     contextWindowSource?: ContextWindowSource;
   }> => {
-    // 重新从配置创建模型
-    const { model: newModel, providerName: newProviderName, modelName: newModelName } =
-      await createModelFromSettings(providerService, settingsStore);
-
-    // 更新 sessionManager 的模型
-    if(newModel) {
-      sessionManager.setModel(newModel);
-    }
-
-    // skill 与 AGENTS.md 同等待遇：重载就重新扫。不清缓存的话，
-    // 会话中新建的 skill 进不了摘要，模型的 load_skill 也取不到它
-    sessionManager.getSkillLoader().clearCache();
-
-    // 重新构建 systemPrompt（获取最新的固定上下文与技术栈）。
-    // 已加载的 skill 不能跟着丢：名单仍在册，就把它们的段落重组回去
-    const newBasePrompt = buildPrompt();
-    const newSystemPrompt =
-      newBasePrompt + composeLoadedSkillSections(sessionManager, loadedSkillNames);
-
-    // 换了模型就要换窗口：沿用旧窗口会让小窗口模型在压缩前超窗
-    const resolved = await resolveContextWindowFromSettings(
+    // 重建逻辑（换模型、清 skill 缓存、重组提示词、重算窗口）在
+    // applyModelReload 里，可单测；这里只负责把结果告知用户
+    const reloaded = await applyModelReload({
+      providerService,
       settingsStore,
-      newModelName,
-    );
+      sessionManager,
+      buildPrompt,
+      loadedSkillNames,
+    });
 
     // 显示重载后的信息
     printLogo();
-    printWelcome(newProviderName, newModelName, resolved);
+    printWelcome(reloaded.providerName ?? null, reloaded.modelName ?? null, {
+      window: reloaded.contextWindow,
+      source: reloaded.contextWindowSource,
+    });
 
-    return {
-      model: newModel,
-      systemPrompt: newSystemPrompt,
-      baseSystemPrompt: newBasePrompt,
-      contextWindow: resolved.window,
-      contextWindowSource: resolved.source,
-    };
+    return reloaded;
   };
 
   // /model 选中新模型后立刻重建模型与窗口（不必等 /reload）
-  const onModelChange = async (): Promise<{
-    model: LlmModel | null;
-    providerName: string | null;
-    modelName: string | null;
-    contextWindow: number;
-    contextWindowSource: ContextWindowSource;
-  }> => {
-    const { model: newModel, providerName: newProviderName, modelName: newModelName } =
-      await createModelFromSettings(providerService, settingsStore);
-    if (newModel) {
-      sessionManager.setModel(newModel);
-    }
-    const resolved = await resolveContextWindowFromSettings(
-      settingsStore,
-      newModelName,
-    );
-    return {
-      model: newModel,
-      providerName: newProviderName,
-      modelName: newModelName,
-      contextWindow: resolved.window,
-      contextWindowSource: resolved.source,
-    };
-  };
+  const onModelChange = (): ReturnType<typeof applyModelChange> =>
+    applyModelChange({ providerService, settingsStore, sessionManager });
 
   await startRepl({
     prompt: "You: ",
