@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { buildSystemPrompt } from "./prompt";
+import { isCredentialFile } from "../agent/tools/workspace";
 
 describe("buildSystemPrompt", () => {
   const root = "/work/mini-pi";
@@ -99,5 +100,42 @@ describe("buildSystemPrompt", () => {
     );
     // 下限同样要看：提示词被误删成一句话时这里会拦住
     assert.ok(prompt.length > 1_200, `提示词过短（${prompt.length}），像是被误删了`);
+  });
+
+  /**
+   * 提示词与守卫名单的绑定。
+   *
+   * 系统提示词会点名几个最常见的凭据文件（.env / .npmrc / *.pem …），
+   * 工具层的强制守卫在 `workspace.ts` 的名单里。两边是分别演化的：
+   * 提示词加了新例子而守卫没跟上，模型按提示词去读就会被工具拒绝
+   * （反过来更糟——守卫悄悄收紧，提示词却还在让模型"可以用"）。
+   * 这条断言把"提示词点名的每个示例都必须真的被拦住"钉住。
+   */
+  it("提示词点名的凭据示例必须都在工具层守卫名单里", () => {
+    const prompt = buildSystemPrompt({ workspaceRoot: root });
+    // 按段落找：这条禁令在提示词里是折行的，按行取会漏掉续行上的示例
+    const paragraph = prompt
+      .split("\n\n")
+      .find((block) => block.includes("凭据类文件"));
+    assert.ok(paragraph, "提示词应保留点名凭据类文件的段落");
+
+    const examples = [
+      ...paragraph!
+        .slice(
+          paragraph!.indexOf("（", paragraph!.indexOf("凭据类文件")),
+          paragraph!.indexOf("）"),
+        )
+        .matchAll(/`([^`]+)`/g),
+    ].map((match) => match[1]);
+    assert.ok(
+      examples.length >= 6,
+      `至少应点名 .env/.npmrc/*.pem/*.key/id_rsa/.git-credentials，实际：${examples.join(", ")}`,
+    );
+    for (const example of examples) {
+      assert.ok(
+        isCredentialFile(example),
+        `提示词点名了 ${example}，但工具层守卫并不拦它——两处名单已漂移`,
+      );
+    }
   });
 });

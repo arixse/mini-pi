@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import {
   STATUS_LABEL_WIDTH,
   alignLabel,
+  printStatus,
   sessionStatusEntries,
   sessionStatusLines,
 } from "./sessionStatus";
@@ -208,5 +209,98 @@ describe("/status 的条目与排版", () => {
     assert.ok(row, "失败过就应该有一行压缩状态");
     assert.match(row[1], /context_length_exceeded/);
     assert.match(row[1], /保留完整历史/, "要让用户知道历史没有被删减");
+  });
+});
+
+/**
+ * `printStatus` 的打印层。
+ *
+ * 条目内容由 sessionStatusEntries 上面测全；这里验证"打印"这一步：
+ * 面板标题、以及把会话级操作的提示（/new、/sessions、/switch）带出来——
+ * 这三条此前的覆盖率是 0，而用户对 /status 的感知就是这整块输出。
+ */
+describe("/status 的打印（printStatus）", () => {
+  function capture(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    return { lines, restore: () => void (console.log = original) };
+  }
+
+  it("打印面板标题与全部条目，并带会话操作提示", () => {
+    const options: ReplOptions = makeReplOptions({
+      modelLabel: "solo/m1",
+      workspaceRoot: "/work/mini-pi",
+    });
+    const captured = capture();
+    try {
+      printStatus(options, false, false, false);
+    } finally {
+      captured.restore();
+    }
+    const text = captured.lines.join("\n");
+
+    assert.match(text, /会话状态/);
+    // 条目确实被打印（不是只打了标题）
+    assert.match(text, /solo\/m1/);
+    assert.match(text, /需确认|信任/, "确认模式要么显示需确认、要么显示信任");
+    // 会话级操作的提示要在：用户看完状态要知道接下来能敲什么
+    assert.match(text, /\/new/);
+    assert.match(text, /\/sessions/);
+    assert.match(text, /\/switch <序号>/);
+  });
+});
+
+/**
+ * 委派统计的两个分支。
+ *
+ * "已委派 N 次 · 累计 tokens"这一行此前没有覆盖——它是 /status 里唯一
+ * 让子 Agent 成本可见的地方（委派烧的 token 不在主会话消息里），
+ * 显示逻辑坏了用户只会以为委派是免费的。
+ */
+describe("/status 的委派统计", () => {
+  function optionsWith(stats: ReplOptions["subAgentStats"]): ReplOptions {
+    return makeReplOptions({ subAgentStats: stats, modelLabel: "solo/m1" });
+  }
+
+  it("开启且有委派时，显示次数与 token 明细", () => {
+    const entries = sessionStatusEntries(
+      optionsWith(() => ({
+        delegations: 3,
+        usage: { input: 1_200, output: 318, totalTokens: 1_518 },
+      })),
+      false,
+      true,
+    );
+    const row = entries.find(([label]) => label === "子 Agent");
+    assert.ok(row, "应有一行子 Agent 统计");
+    assert.match(row[1], /已委派 3 次/);
+    assert.match(row[1], /累计 1518 tokens/);
+    assert.match(row[1], /入 1200/);
+    assert.match(row[1], /出 318/);
+  });
+
+  it("开启但没有 stats 查询时不留这一行（不编造数据）", () => {
+    const entries = sessionStatusEntries(optionsWith(undefined), false, true);
+    assert.ok(
+      !entries.some(([label]) => label === "子 Agent"),
+      "没有统计来源时不该显示一行空壳",
+    );
+  });
+
+  it("trace 开启时与委派统计同行展示，互不遮挡", () => {
+    const entries = sessionStatusEntries(
+      optionsWith(() => ({
+        delegations: 1,
+        usage: { input: 10, output: 5, totalTokens: 15 },
+      })),
+      false,
+      true,
+      true,
+    );
+    const row = entries.find(([label]) => label === "子 Agent");
+    assert.match(row![1], /trace 开/);
   });
 });
