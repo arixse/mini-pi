@@ -70,6 +70,31 @@ export function handleSkills(sessionManager?: SessionManager): void {
   console.log("");
 }
 
+/**
+ * 拼装已加载 skill 的 system prompt 段落。
+ *
+ * **名单是唯一事实来源**：`options.loadedSkillNames` 记了哪些 skill 在册，
+ * systemPrompt 里的 skill 段永远由 `baseSystemPrompt + 本函数` 派生——
+ * 直接往 systemPrompt 上追加字符串的话，`/reload` 一重建就全军覆没，
+ * 重复 `/load` 同一个也会把全文注入两遍。
+ *
+ * 取不到内容的 skill（会话中途被删）静默跳过：名单留着，文件回来了
+ * 下次重组又会带上。
+ */
+export function composeLoadedSkillSections(
+  sessionManager: SessionManager,
+  names: readonly string[],
+): string {
+  const sections: string[] = [];
+  for (const name of names) {
+    const content = sessionManager.loadSkillContent(name);
+    if (content) {
+      sections.push(`## 已加载 Skill: ${name}\n\n${content}`);
+    }
+  }
+  return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
+}
+
 /** 加载指定 skill 的完整内容并注入到 system prompt */
 export async function handleLoadSkill(
   sessionManager: SessionManager | undefined,
@@ -81,6 +106,13 @@ export async function handleLoadSkill(
     return;
   }
 
+  // 已在册就不重复注入：全文进两遍只会烧上下文，不会让模型更重视它
+  const names = options.loadedSkillNames ?? (options.loadedSkillNames = []);
+  if (names.includes(skillName)) {
+    console.log(chalk.dim(`\nℹ️ skill ${skillName} 已加载，不重复注入\n`));
+    return;
+  }
+
   const skillContent = sessionManager.loadSkillContent(skillName);
 
   if (!skillContent) {
@@ -89,9 +121,13 @@ export async function handleLoadSkill(
     return;
   }
 
-  // 将 skill 内容添加到 system prompt
-  const skillSection = `\n\n## 已加载 Skill: ${skillName}\n\n${skillContent}`;
-  options.systemPrompt = options.systemPrompt + skillSection;
+  // 先入册再重组：baseSystemPrompt 缺省时以当前 prompt 为 base 兜底
+  // （只有不走 index.ts 接线的调用方会缺省，正常路径下它恒有值）
+  names.push(skillName);
+  const base = options.baseSystemPrompt ?? options.systemPrompt;
+  options.baseSystemPrompt = base;
+  options.systemPrompt = base + composeLoadedSkillSections(sessionManager, names);
+
   console.log(chalk.green(`\n✅ 已加载 skill: ${skillName}\n`));
   console.log(chalk.dim("该 skill 的内容已注入到上下文中，后续对话将参考此 skill。\n"));
 }

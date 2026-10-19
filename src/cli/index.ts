@@ -13,6 +13,7 @@ import {
   createSubAgentTool,
 } from "../agent/subagentTool";
 import { startRepl } from "./repl";
+import { composeLoadedSkillSections } from "./skills";
 import { buildSystemPrompt } from "./prompt";
 import { detectProjectStack, formatProjectStack } from "./projectStack";
 import {
@@ -223,6 +224,9 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     console.log(chalk.dim(`[Skills]\n ${skills.length > 0 ? skills.map(skill => skill.name).join(',') : ''}`));
   }
 
+  // 已加载 skill 的名单：/load 原地追加，/reload 重组时同一引用可见
+  const loadedSkillNames: string[] = [];
+
   /**
    * 每次都重新探测技术栈与固定上下文，不缓存。
    *
@@ -277,6 +281,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   const onReload = async (): Promise<{
     model: LlmModel | null;
     systemPrompt: string;
+    baseSystemPrompt: string;
     contextWindow?: number;
     contextWindowSource?: ContextWindowSource;
   }> => {
@@ -289,8 +294,11 @@ export async function main(argv: string[] = process.argv.slice(2)) {
       sessionManager.setModel(newModel);
     }
 
-    // 重新构建 systemPrompt（获取最新的固定上下文与技术栈）
-    const newSystemPrompt = buildPrompt();
+    // 重新构建 systemPrompt（获取最新的固定上下文与技术栈）。
+    // 已加载的 skill 不能跟着丢：名单仍在册，就把它们的段落重组回去
+    const newBasePrompt = buildPrompt();
+    const newSystemPrompt =
+      newBasePrompt + composeLoadedSkillSections(sessionManager, loadedSkillNames);
 
     // 换了模型就要换窗口：沿用旧窗口会让小窗口模型在压缩前超窗
     const resolved = await resolveContextWindowFromSettings(
@@ -305,6 +313,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     return {
       model: newModel,
       systemPrompt: newSystemPrompt,
+      baseSystemPrompt: newBasePrompt,
       contextWindow: resolved.window,
       contextWindowSource: resolved.source,
     };
@@ -339,6 +348,8 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   await startRepl({
     prompt: "You: ",
     systemPrompt,
+    baseSystemPrompt: systemPrompt,
+    loadedSkillNames,
     messages,
     model,
     toolRegistry,

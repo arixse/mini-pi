@@ -154,11 +154,16 @@ export async function handleSlashCommand(
   if (input === "/reload") {
     if (options.onReload) {
       try {
-        const { model, systemPrompt, contextWindow, contextWindowSource } =
+        const { model, systemPrompt, baseSystemPrompt, contextWindow, contextWindowSource } =
           await options.onReload();
         // 更新外部传入的 model 和 systemPrompt
         options.model = model;
         options.systemPrompt = systemPrompt;
+        // base 也要跟着换：它是一切 skill 段重组的起点，
+        // 沿用旧 base 会让下一轮 /load 把重载前的提示词又拼回来
+        if (baseSystemPrompt !== undefined) {
+          options.baseSystemPrompt = baseSystemPrompt;
+        }
         if (contextWindow !== undefined) {
           options.contextWindow = contextWindow;
           // 重载必然重算过窗口，来源缺省时按"已配置"展示

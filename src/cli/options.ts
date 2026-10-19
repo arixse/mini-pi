@@ -23,6 +23,21 @@ import type { AgentMessage, Usage } from "../shared/protocol";
 export type ReplOptions = {
   prompt: string;
   systemPrompt: string;
+  /**
+   * 不含 skill 段的基础提示词（`buildSystemPrompt` 的原始产物）。
+   *
+   * `/load` 注入的 skill 全文由 `baseSystemPrompt + loadedSkillNames` 派生，
+   * 而不是直接往 `systemPrompt` 上追加——否则 `/reload` 一重建就全丢了。
+   * 缺省时 `/load` 以当前 `systemPrompt` 为 base 兜底。
+   */
+  baseSystemPrompt?: string;
+  /**
+   * 已加载 skill 的名单（按加载顺序），skill 段的唯一事实来源。
+   *
+   * 与 {@link baseSystemPrompt} 配对使用；`handleLoadSkill` 原地追加，
+   * 持有同一引用的调用方（`/reload` 重组）能看到最新名单。
+   */
+  loadedSkillNames?: string[];
   messages: AgentMessage[];
   model: LlmModel | null;
   toolRegistry: ToolRegistry;
@@ -64,6 +79,11 @@ export type ReplOptions = {
   onReload?: () => Promise<{
     model: LlmModel | null;
     systemPrompt: string;
+    /**
+     * 重载后的基础提示词（不含 skill 段）。分派负责写回
+     * `options.baseSystemPrompt`，让已加载 skill 在重组后仍在册。
+     */
+    baseSystemPrompt?: string;
     /** 重载后若配置了新的窗口，一并生效 */
     contextWindow?: number;
     /** 重载后的窗口来源 */
