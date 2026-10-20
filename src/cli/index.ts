@@ -14,8 +14,8 @@ import {
 } from "../agent/subagentTool";
 import { startRepl } from "./repl";
 import { composeLoadedSkillSections } from "./skills";
-import { buildSystemPrompt } from "./prompt";
-import { detectProjectStack, formatProjectStack } from "./projectStack";
+import { buildSystemPrompt } from "../core/prompt";
+import { detectProjectStack, formatProjectStack } from "../core/projectStack";
 import {
   ContextWindowSource,
   ModelProviderService,
