@@ -7,6 +7,7 @@
  * 任何"只有命令行才成立"的逻辑。
  */
 
+import { pathToFileURL } from "node:url";
 import { AppServer } from "./app";
 import { SERVE_USAGE, parseServeArgs } from "./serveArgs";
 import { WorkspaceHost } from "./host";
@@ -50,5 +51,19 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   process.on("SIGTERM", shutdown);
   return new Promise<number>(() => {
     // 常驻：真正的退出走上面的信号处理器
+  });
+}
+
+/**
+ * 只有被当作进程入口（`tsx src/server/entry.ts`）时才自启。
+ *
+ * 不加这道判断，测试或 Electron 主进程 import 本文件就会顺带起一个服务，
+ * 而"起了服务"这件事在两种场景下都只会表现为端口占用。
+ */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().then((code) => {
+    if (code !== 0) {
+      process.exitCode = code;
+    }
   });
 }

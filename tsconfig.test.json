@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    // 这一项必须**直接写在这一份**里：tsx 不做 `extends` 解析，写在
+    // tsconfig.base.json 里它看不见，`.tsx` 会退化成 `React.createElement`
+    // （经典模式），运行期报 "React is not defined"。
+    "jsx": "react-jsx",
+    "paths": {
+      "@minipi/core/*": ["./packages/core/src/*"]
+    }
+  },
+  // tsx 只对 `include` 覆盖到的文件应用这份配置。根 tsconfig.json 的 include
+  // 只有 `tests`（那是给 `tsc -p tsconfig.json` 用的，不该顺带把整个仓库
+  // 再类型检查一遍），而 `tsx --test` 跑的是 packages/* 下的用例，
+  // 于是这里单独给测试运行器一份"覆盖 packages"的配置。
+  "include": ["tests", "packages"]
+}

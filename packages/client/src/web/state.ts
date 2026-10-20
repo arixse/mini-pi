@@ -613,6 +613,23 @@ export function activeRuns(state: ClientState): RunSummary[] {
   );
 }
 
+/** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */
+export type ComposerMode = "ready" | "busy" | "blocked" | "readonly";
+
+export function modeOf(state: ClientState): ComposerMode {
+  if (state.view.readOnly) {
+    return "readonly";
+  }
+  if (!state.sendable) {
+    return "blocked";
+  }
+  const status = state.view.status;
+  if (status === "running" || status === "blocked" || status === "queued") {
+    return "busy";
+  }
+  return "ready";
+}
+
 /** 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有） */
 export function filterBySearch<T extends { title: string }>(items: T[], keyword: string): T[] {
   const needle = keyword.trim().toLowerCase();

@@ -9,9 +9,11 @@
 | 包管理 | pnpm 10.17         | 快速、节省磁盘空间   |
 | 打包   | esbuild            | CLI 打成自包含单文件 |
 | AI SDK | OpenAI / Anthropic | 模型调用             |
+| 客户端 | Express + React + Vite | 只在 `packages/client` 内（详见 §7） |
 
-> Web / Server（Express + React + Vite）属第二阶段，**尚未实现**，依赖也未引入。
-> 实现时应复用 `packages/core/src/agent` 的内核，而不是在 CLI 之上再包一层。
+> 客户端的两套依赖只装在 `packages/client`：CLI 的"零依赖单文件"不受影响，
+> 由 `tests/packages.test.ts` 钉住。服务端直接 `import` 内核，
+> 而不是在 CLI 之上再包一层。
 
 ## 2. 项目结构
 
@@ -40,8 +42,8 @@ mini-pi/
 │   │       ├── exec.ts      # headless 执行（--json 输出 JSONL 事件流）
 │   │       └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
 │   └── client/          # 客户端：App Server + Web 前端（M2 已落地）与 Electron 壳（M5 未实现）
-│       ├── src/server/  # HTTP + SSE 传输层（node:http 自建路由，零运行时依赖）
-│       ├── src/web/     # 原生 TS + DOM 前端（esbuild 打包，界面照 design/mockup.html）
+│       ├── src/server/  # HTTP + SSE 传输层（Express 路由 + 自写 SSE 帧）
+│       ├── src/web/     # React + Vite 前端（界面照 design/mockup.html）
 │       └── src/shared/  # 线上契约：只有类型，前端不 import server
 ├── tests/               # 跨包测试（文档漂移门禁）
 ├── docs/                # 文档
@@ -312,7 +314,7 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 
 > **前端/后端命令在客户端包内**：M2（App Server + Web 前端）已落地，
 > 命令挂在 `packages/client` 上——`pnpm --filter @minipi/client run dev`（起服务）、
-> `run build:web`（esbuild 打包 `src/web` 到 `dist/web`）。
+> `run build:web`（Vite 打包 `src/web` 到 `dist/web`，配置在 `packages/client/vite.config.ts`）。
 > 服务入口是 `packages/client/src/server/entry.ts`；桌面壳（`src/electron`）属于 M5，仍未实现。
 
 ## 6. 配置
@@ -321,16 +323,20 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 
 ## 7. 客户端（M2：App Server + Web）
 
-实现与里程碑规划的偏差都有同一条理由——**客户端包零运行时依赖**：
+传输层与前端都改用现成框架，唯二的"自己写"是框架不负责的那两处：
 
-- **传输层用 `node:http` 自建路由，不用 Express**。路由器 60 行；换来的
-  是 `dependencies` 恒为空（`tests/packages.test.ts` 钉住）。SSE 带 `id:`
-  游标、心跳与断线重放，前端断线后用最新游标重开，重放区间为空——
-  `EventSource` 自带的自动重连用同一个 URL，会把增量事件重放一遍。
-- **前端用原生 TS + DOM 组装，不用 React / Vite**。打包用 esbuild
-  （CLI 已有的 devDependency）；状态归约是纯函数（`src/web/state.ts`），
-  渲染层按 id 键控更新。时间线是**会话级**的：Run 完成后发送即开新任务、
+- **传输层用 Express**，路由与请求体解析交给它；**SSE 帧自己写**
+  （`src/server/sse.ts`）：带 `id:` 游标、心跳与断线重放，前端断线后用最新
+  游标重开，重放区间为空——`EventSource` 自带的自动重连用同一个 URL，
+  会把增量事件重放一遍。来源校验同样自己写（`src/server/http.ts`）。
+- **前端用 React + Vite**，但**状态刻意就地修改**（`src/web/state.ts`），
+  再由 `store.ts` 的 `revision` 告诉 React"该重画了"：流式输出每秒几十条
+  `message_update`，每来一条克隆整棵时间线纯属浪费。通知按帧合并，
+  条目按指纹 memo。时间线是**会话级**的：Run 完成后发送即开新任务、
   沿用同一会话（与 CLI「回合结束后执行」同口径）。
+- **纯逻辑不下沉到 `.tsx`**：归约、动作、展示判断都在 `.ts` 里，
+  于是它们能在 node 里直接测（连组件树的可挂载性都用 `react-dom/server`
+  验了一遍）；`.tsx` 因此被排除在覆盖率统计之外。
 - **安全模型**：只监听 `127.0.0.1`，校验 `Host` / `Origin` 挡 DNS rebinding，
   无令牌门禁（前提写进 client README，绑 `0.0.0.0` 前必须先造出新的前提）。
 - **审批在网页与终端是同一个裁决**：风险等级与摘要由内核算好
