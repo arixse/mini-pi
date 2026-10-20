@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-electron/
 .vitepress/cache/
 .vitepress/dist/
 .playwright-cli/
