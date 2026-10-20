@@ -73,7 +73,7 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | **M2 App Server + Web**    | `packages/client/src/server`（Express 路由 + SSE）+ `packages/client/src/web`（React + Vite）                                                       | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
 | ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                                       | 无                           | 两个 Run 并行不互相踩                                                  |
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
-| **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                          | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
+| **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`pnpm desktop`                                                                          | 客户端包新增`desktop`命令  | 关窗即退出、单实例、端口不残留、没有默认工作区                       |
 
 **进度（2026-10-20）**：M0 ~ M5 全部落地，`pnpm check` 绿灯。
 M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层用 Express
@@ -104,11 +104,29 @@ M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端
 
 | 交付     | 位置                                                                    | 要点                                                                                                                                                                                                                                                |
 | -------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 窄接口   | `packages/client/src/electron/api.ts`                                 | 六个方法（`requestSingleInstanceLock` / `onSecondInstance` / `whenReady` / `createWindow` / `appPath` / `quit`），**自己描述形状，不 import electron 的类型**——测试塞假实现就能钉住全部行为，它也画出"桌面壳只许碰窗口与进程生命周期"这条边界 |
+| 窄接口   | `packages/client/src/electron/api.ts`                                 | 七个方法（`requestSingleInstanceLock` / `onSecondInstance` / `whenReady` / `createWindow` / `appPath` / `pickDirectory` / `quit`），**自己描述形状，不 import electron 的类型**——测试塞假实现就能钉住全部行为，它也画出"桌面壳只许碰窗口与进程生命周期"这条边界 |
 | 执行体   | `packages/client/src/electron/main.ts`                                | 装配与副作用分离，Electron API 全在`deps.electron` 后面                                                                                                                                                                                           |
 | 入口     | `packages/client/src/electron/entry.ts` → `dist-electron/main.cjs` | 单独一个文件，避免`main.ts` 带上一进门就执行的副作用                                                                                                                                                                                              |
 | 共用装配 | `packages/client/src/server/app.ts` 的 `bootAppServer`               | `serve` 与 Electron 主进程走同一条路，不各写一份                                                                                                                                                                                                  |
+| 工作区   | `packages/client/src/electron/workspace.ts` + `server/workspaceMemory.ts` | **没有默认工作区**：`--cwd` > 记住的目录 > 弹系统目录框问一次；选完写进 `~/.mini-pi/client-workspace.json`                                                                                                                          |
 | 命令     | `packages/client/src/electron/desktop.ts`                            | 父进程拉起 Electron 后立即返回；`--no-electron` 退回浏览器 `--app=`；`--no-open` 无头                                                                                                                                                         |
+
+**工作区：没有默认值**。桌面壳从快捷方式 / Dock / 双击图标启动时，
+`process.cwd()` 是哪儿都不一定（macOS 上甚至是 `/`），而 agent 会真的读写
+那个目录——"默认工作区"在这里不是便利，是误伤。因此优先级是三段：
+
+1. `--cwd` 显式指定：直接用它，**也不改写记忆**（一次性指定不该决定"下次开哪儿"）；
+2. `~/.mini-pi/client-workspace.json` 里记着的目录还在：直接开，不问；
+3. 都没有：`dialog.showOpenDialog({properties:["openDirectory"]})` 问一次，
+   选完记下来；**取消就退出**，不替他挑一个目录。
+
+界面里切换工作区（顶栏芯片 → `POST /api/workspace`）同样会更新这份记忆，
+否则"在应用里换了三次、重启一问又回到最初那个"。记忆放在 `~/.mini-pi/`
+而不是 Electron 的 userData：浏览器形态没有 userData 却也要读它，
+而且它与 `auth.json` / `settings.json` 同目录，用户找得到、删得掉。
+
+窗口先建（隐藏）再问工作区：目录框挂在窗口上才是模态的，没有窗口时它在
+某些窗口管理器下会跑到应用后面，用户看见的就是一个"点了没反应"的应用。
 
 **命令挂在哪**：`desktop` 与 `serve` 一样挂在 **客户端包**上
 （`pnpm desktop` = `pnpm --filter @minipi/client run desktop`），不挂 CLI。
@@ -240,9 +258,10 @@ cherry-pick / 复制过来再修 import；`packages/cli/src/` 下的改动（26 
 - CLI 行为回归：M0 结束时应能通过全部既有 CLI 测试且**不新增、不删除任何
   终端输出格式**；有变化就是改坏了。
 - 命令表三处一致性由 `commands.test.ts` 守（注册表 ↔ dispatch ↔ README ↔cli-interaction）；改斜杠命令要同步四处。`exec` / `serve` / `desktop` 是**顶层子命令**，不在这张表里，但改了也要同步 README 与各包 README。
-- 单文件不超过 1000 行；测试 glob 只收 `.test.ts`（`.test.tsx` 不被收集），因此**前端有逻辑的代码要抽成 `.ts` 纯模块**，组件只做摆放；桌面壳同理——`api.ts` / `main.ts` / `desktop.ts` 全是纯逻辑，Electron 只在 `deps.electron` 后面出现，于是"单实例 / 关窗退出 / 打开哪个地址"不需要桌面就能钉住。
+- 单文件不超过 1000 行；测试 glob 只收 `.test.ts`（`.test.tsx` 不被收集），因此**前端有逻辑的代码要抽成 `.ts` 纯模块**，组件只做摆放；桌面壳同理——`api.ts` / `main.ts` / `desktop.ts` / `workspace.ts` 全是纯逻辑，Electron 只在 `deps.electron` 后面出现，于是"单实例 / 关窗退出 / 打开哪个地址 / 选哪个工作区"不需要桌面就能钉住。
 - Windows 上实测：路径分隔符、spawn、`ELECTRON_RUN_AS_NODE` 清理。
 - M5 验收的三条都写成了断言：关窗即退出（`onClosed → quit`）、单实例（抢不到锁就不起第二个服务）、端口不残留（服务活在主进程里，`quit` 即释放）。
+- **没有默认工作区**也写成了断言：取消选择框必须退出（`resolveDesktopWorkspace` 返回 `cancelled`，主进程随即 `quit`），显式 `--cwd` 不改记忆，记忆里的目录被删了就再问一次，界面切换工作区会更新记忆（`AppServer.switchWorkspace` → 注入的 `workspaceMemory`）。
 
 ## 8. 工作量分布（粗估）
 

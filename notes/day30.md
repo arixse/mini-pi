@@ -80,3 +80,43 @@ Electron"不再靠 require 的返回值判断，而是靠磁盘事实。
 - `electron-builder` 出安装包：有主进程入口之后才谈得上，本次不做。
 - 打包后 `app.getAppPath()` 的真实取值没实测（要真装好 Electron），
   `resolveClientDir()` 因此保留了"应用目录 + 上一级"两次尝试。
+
+---
+
+## 追加（同日）：桌面壳没有默认工作区
+
+分支上继续做的第二波。用户的要求很直接：**desktop 不应该有默认的 workspace，
+初次进入后首先应该让用户选择 workspace；用户选择完后下次打开记住之前的
+workspace**。落地后优先级是三段（`src/electron/workspace.ts`）：
+
+1. `--cwd` 显式指定 → 直接用它，且**不改记忆**（一次性指定不该决定"下次开哪儿"）；
+2. `~/.mini-pi/client-workspace.json` 里记着的目录还在 → 直接开，不问；
+3. 都没有 → `dialog.showOpenDialog({properties:["openDirectory"]})` 问一次，
+   选完记下来；**取消就退出**，不替他挑一个目录。
+
+几个判断：
+
+- **记忆放 `~/.mini-pi/` 而不是 Electron 的 userData**。浏览器形态
+  （`--no-electron`）没有 userData 却也要读它；而且它与 `auth.json` /
+  `settings.json` 同目录，用户找得到、删得掉。文件名 `client-workspace.json`，
+  原子写（临时文件 + rename），读出来不是字符串就当没有。
+- **界面里切换工作区也要更新记忆**（`AppServer.switchWorkspace` → 注入的
+  `workspaceMemory`）。不这么做的话"在应用里换了三次、重启一问又回到最初
+  那个"——记忆就成了半份。为此 `AppServer` 多了一个可注入项，**默认不记**：
+  单测构造服务的次数太多，默认实现会往用户家目录写文件。
+- **`--cwd` 不再由父进程顺手传给 Electron 子进程**（`toServeArgv` 只在
+  `cwdGiven` 时才拼 `--cwd`）。父进程塞一个 `process.cwd()` 进去，子进程
+  就连问都不会问了——"没有默认工作区"就这么被悄悄改回去。为此
+  `ServeArgs` 多了一个 `cwdGiven` 字段。
+- **窗口先建（隐藏）再问工作区**：目录框挂在窗口上才是模态的，没有窗口时
+  它在某些窗口管理器下会跑到应用后面，用户看见的就是一个"点了没反应"的应用。
+  连带改了"起不了服务"那条断言的形状——窗口建了，但不加载、不显示。
+- **浏览器形态没有目录框可弹**，因此它只有 `--cwd` 或记忆两条路；两条都
+  没有时报错并说明，而不是退回启动目录（那正是要避免的那件事）。
+
+门禁：`pnpm check` 1635 条全绿（3 skip 同上），覆盖率 97.32 / 90.77 / 92.29。
+新增 39 条测试：`serveArgs.test.ts`（含"默认值不算显式给定"）、
+`workspaceMemory.test.ts`（没有 / 有 / 坏三种答案、原子写不残留临时文件、
+默认不记）、`workspace.test.ts`（三段优先级各自的边界：记忆没了再问、
+取消即 cancelled、不可用的路径不记也不用）、`main.test.ts` 的"默认解析器"
+一组（走真实记忆文件，指到临时目录）。

@@ -201,6 +201,11 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 `--app=` 无地址栏窗口）与 `--no-open`（只起服务，无头机器用）。
 没装 Electron 或没跑过 `build:electron` 时会明说并自动退回浏览器壳。
 
+**工作区**：`serve` 默认当前目录；`desktop` **没有默认工作区**——首次启动
+时弹出系统目录框让用户选，选完记住（`~/.mini-pi/client-workspace.json`），
+之后直接开上次那个；在界面里切换工作区也会更新记忆。取消选择就退出，
+不会悄悄拿启动目录顶替。
+
 ## 许可
 
 本项目采用**非商业免费、商业使用需获得授权**的条款，全文见 [LICENSE](LICENSE)。

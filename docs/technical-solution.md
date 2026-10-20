@@ -417,11 +417,13 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 
 | 位置                                            | 职责                                                                 |
 | ----------------------------------------------- | -------------------------------------------------------------------- |
-| `packages/client/src/electron/api.ts`         | 六个动作的窄接口；`isInsideElectron` / `importElectron` / `resolveElectronBinary` |
-| `packages/client/src/electron/main.ts`        | 主进程执行体：单实例锁 → 起服务 → 开窗口 → 关窗 `quit`            |
+| `packages/client/src/electron/api.ts`         | 七个动作的窄接口；`isInsideElectron` / `importElectron` / `resolveElectronBinary` |
+| `packages/client/src/electron/main.ts`        | 主进程执行体：单实例锁 → 选工作区 → 起服务 → 开窗口 → 关窗 `quit`  |
 | `packages/client/src/electron/entry.ts`       | 主进程入口，打成 `dist-electron/main.cjs`（**必须 CJS**，见下）     |
+| `packages/client/src/electron/workspace.ts`   | 用哪个工作区：`--cwd` > 记住的目录 > 弹系统目录框                    |
 | `packages/client/src/electron/desktop.ts`     | `desktop` 命令：拉起 Electron / 退回浏览器 / `--no-open` 无头       |
 | `packages/client/src/electron/desktopEntry.ts` | 命令的进程入口（自己起服务时驻留，等 Ctrl+C）                      |
+| `packages/client/src/server/workspaceMemory.ts` | `~/.mini-pi/client-workspace.json` 的读写（原子写）               |
 
 三条行为事实：
 
@@ -434,6 +436,20 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   的 `bootAppServer`，`--cwd` / `--port` / `--host` / `--isolate` /
   `--concurrency` 是同一套选项；`desktop` 额外只认 `--no-electron` 与
   `--no-open`。
+
+**没有默认工作区**：从快捷方式 / Dock / 双击图标启动时 `process.cwd()`
+是哪儿都不一定（macOS 上甚至是 `/`），而 agent 会真的读写那个目录。
+优先级是三段——`--cwd` 显式指定（直接用它，**不改记忆**）→ `~/.mini-pi/
+client-workspace.json` 里记着的目录还在（直接开，不问）→ 都没有就
+`dialog.showOpenDialog({properties:["openDirectory"]})` 问一次，选完记下来。
+用户**取消就退出**，不替他挑一个目录。界面里切换工作区
+（`POST /api/workspace` → `AppServer.switchWorkspace`）同样更新记忆，
+否则"在应用里换了三次、重启一问又回到最初那个"。记忆文件放 `~/.mini-pi/`
+而不是 Electron 的 userData：浏览器形态没有 userData 却也要读它，
+且它与 `auth.json` / `settings.json` 同目录，用户找得到、删得掉。
+`AppServer` 对记忆是**可注入**的（`workspaceMemory` 选项，默认不记）：
+单测构造服务的次数太多，默认实现会往用户家目录写文件。
+窗口先建（隐藏）再问工作区——目录框挂在窗口上才是模态的。
 
 三个环境坑（都有断言）：
 

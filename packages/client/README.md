@@ -15,10 +15,12 @@ pnpm --filter @minipi/client run test            # 本包测试
 
 `pnpm desktop`（仓库根）等于"构建前端 → 构建主进程 → `desktop`"三步。
 
-启动参数：`--cwd <目录>`（工作区，默认当前目录）、`--port`、`--host`、
-`--isolate`（每个任务一个隔离的 git worktree）、`--concurrency <n>`
-（同时执行上限，1-8，默认 1）。没构建过前端时页面会提示先跑 `build:web`
-（服务端不代跑构建）。
+启动参数：`--cwd <目录>`（工作区）、`--port`、`--host`、`--isolate`
+（每个任务一个隔离的 git worktree）、`--concurrency <n>`（同时执行上限，
+1-8，默认 1）。没构建过前端时页面会提示先跑 `build:web`（服务端不代跑构建）。
+
+**`--cwd` 的默认值两种形态不一样**：`serve` 默认当前目录（命令行你在哪儿
+敲的就在哪儿干活）；`desktop` **没有默认工作区**——见下。
 
 ### 桌面壳
 
@@ -27,6 +29,16 @@ pnpm --filter @minipi/client run test            # 本包测试
 - `--no-electron`：不用 Electron，改用系统里 Chromium 系浏览器的
   `--app=<url>` 开无地址栏窗口；连 Chromium 都没有就退回普通标签页并明说。
 - `--no-open`：只起服务不开窗口（无头机器 / SSH 用同一条命令）。
+
+**工作区：没有默认值**。从快捷方式 / Dock / 双击图标启动时当前目录是哪儿
+都不一定（macOS 上甚至是 `/`），而 agent 会真的读写那个目录。因此：
+
+1. `--cwd` 显式指定 → 直接用它，且**不改记忆**（一次性指定不该决定下次开哪儿）；
+2. `~/.mini-pi/client-workspace.json` 里记着的目录还在 → 直接开，不问；
+3. 都没有 → 弹系统目录框问一次，选完记下来；**取消就退出**，不替你挑。
+
+在界面里切换工作区（顶栏的工作区芯片）同样会更新这份记忆。记忆文件与
+`auth.json` / `settings.json` 同目录，找得到、删得掉；删掉就等于"回到首次启动"。
 
 Electron 窗口的三个性质（都是断言钉住的）：**关窗即退出**（服务活在主进程
 里，不收掉下次启动直接 EADDRINUSE）、**单实例**（再敲一次只是把已有窗口叫到
@@ -50,9 +62,9 @@ Electron 是开发依赖（上百 MB 二进制），npm 包里不带它。没装
 ## 目录
 
 ```
-src/server/     App Server：Express 路由 + 自写 SSE 帧
+src/server/     App Server：Express 路由 + 自写 SSE 帧；workspaceMemory.ts 记"上次用哪个工作区"
 src/web/        前端：React + Vite，界面照 design/mockup.html 实现
-src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / desktop.ts 命令
+src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / workspace.ts 选工作区 / desktop.ts 命令
 src/shared/     线上契约（只有类型）：服务端产什么、前端消费什么
 vite.config.ts  前端构建：src/web → dist/web
 ```
