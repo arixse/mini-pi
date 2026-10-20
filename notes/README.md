@@ -36,8 +36,9 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 | [Day 27](./day27.md) | 2026-10-20 | 9 | 拆成 core / cli / client 三个 pnpm 包（`refactor/workspace-packages` 分支，2026-10-20 合入）：包边界与依赖归属、发布链路随包挪动、包边界守卫；客户端 UI 设计稿（七个界面 / 23 条决策） |
 | [Day 28](./day28.md) | 2026-10-20 | 3 | M2 落地：内核摘要下沉收尾、App Server（node:http + SSE，零运行时依赖）、Web 前端照设计稿实现（流式 / 审批 / 会话 / 设置 / 工作区），假模型 + 真浏览器逐屏核对 |
 | [Day 29](./day29.md) | 2026-10-20 | 7 | 客户端改用 Express + React + Vite（用户拍板，含三个修正）与 M3/M4：worktree 每 Run 隔离（`core/worktree.ts` + `serve --isolate` + 丢弃接口）、审批三档两端同一裁决（`core/policy.ts`，CLI `/approval` 与 exec `--approval`） |
+| [Day 30](./day30.md) | 2026-10-20 | 3 | M5 落地：Electron 桌面壳（`packages/client/src/electron/`，窄接口 / 主进程 / `desktop` 命令）；顺带抽出 `bootAppServer` 让 serve 与桌面壳同源；两个判断与方案原文不同（desktop 不进 CLI、不靠 require 判"能不能起 Electron"） |
 
-合计 29 篇 / 238 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
+合计 30 篇 / 241 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
 
 > Day 21 / 22 / 23 / 24 / 25 同属 2026-10-19，主题完全不同（Skill 加载链路 /
 > 版本更新检测 / 安全与正确性修复 / 测试覆盖缺口 / Maker+Checker 与文档收口），
