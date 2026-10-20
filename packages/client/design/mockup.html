@@ -6,7 +6,7 @@
 <title>mini-pi 客户端 UI 设计稿</title>
 <style>
 /* ---------------------------------------------------------------
-   设计令牌：与 packages/client/src/styles.css 同一套色板
+   设计令牌：M2 落地时 packages/client/src/styles.css 沿用这一套色板
    （深底 slate-950 / 面板 slate-900 / 描边 slate-800 / 强调 indigo）
    --------------------------------------------------------------- */
 :root {
@@ -109,6 +109,9 @@ svg.ic { width: 1em; height: 1em; flex: none; stroke-width: 1.8; fill: none; str
   color: var(--t4); background: transparent; cursor: pointer; font-size: 15px;
 }
 .icon-btn:hover { border-color: rgba(99,102,241,.6); color: var(--indigo-lt); }
+/* 汉堡入口只在窄屏（420）出现；宽屏用屏 ① 演示的"切换侧栏"按钮 */
+.drawer-btn { display: none; }
+.frame--narrow .drawer-btn { display: inline-flex; }
 .spacer { flex: 1 1 auto; }
 .dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; flex: none; }
 
@@ -405,22 +408,21 @@ body.show-anno .legend-title { display: block; }
       <!-- ================= ① 执行中 ================= -->
       <section data-screen="run">
         <header class="topbar">
-          <button class="icon-btn" style="display:none" aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono anno-host" title="当前工作区"><svg class="ic"><use href="#i-folder"/></svg>mini-pi<i class="anno" data-n="1">1</i></span>
-          <span class="chip mono" title="当前模型">deepseek / deepseek-flash</span>
-          <span class="pill pill-slate anno-host" title="审批档位">workspace-write<i class="anno" data-n="2">2</i></span>
+          <span class="chip mono" title="默认模型（新任务生效）">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate anno-host" title="默认审批档位（新任务生效）">workspace-write<i class="anno" data-n="2">2</i></span>
           <span class="pill pill-amber anno-host"><svg class="ic"><use href="#i-shield"/></svg>1 个待审批<i class="anno" data-n="3">3</i></span>
           <span class="spacer"></span>
           <button class="icon-btn" title="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
           <button class="icon-btn" title="设置"><svg class="ic"><use href="#i-gear"/></svg></button>
-          <button class="icon-btn anno-host" title="切换侧栏"><svg class="ic"><use href="#i-menu"/></svg><i class="anno" data-n="11">11</i></button>
+          <button class="icon-btn anno-host" data-drawer title="切换侧栏（窄屏即抽屉开关）"><svg class="ic"><use href="#i-menu"/></svg><i class="anno" data-n="11">11</i></button>
         </header>
 
         <div class="body" style="position:relative">
-          <aside class="sidebar" id="sidebar">
+          <aside class="sidebar">
             <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
-            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务 / 会话</div>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
             <div style="margin:14px 0 7px" class="side-h">进行中</div>
             <ul class="side-list">
               <li><button class="side-item is-active">
@@ -444,9 +446,11 @@ body.show-anno .legend-title { display: block; }
             <div class="run-head anno-host">
               <span class="pill pill-sky"><i class="dot"></i>运行中</span>
               <span class="title">把上下文口径抽到 core，CLI 只留翻译层</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
               <span>12.4s · 8.2k / 128k</span>
               <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px"><svg class="ic" style="font-size:11px"><use href="#i-stop"/></svg>停止</button>
               <i class="anno" data-n="4">4</i>
+              <i class="anno" data-n="21" style="top:-6px;right:150px">21</i>
             </div>
 
             <div class="row right anno-host">
@@ -477,11 +481,28 @@ export function contextUsage(options) { … }</pre></div>
 
             <div class="row">
               <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack">
+                <div class="card" style="width:100%">
+                  <div class="card-head">
+                    <span class="card-name">bash</span>
+                    <span class="pill pill-rose">失败</span>
+                    <span class="spacer"></span>
+                    <span style="font-size:11px;color:var(--t5)">18.7s · 退出码 1</span>
+                  </div>
+                  <div class="card-args">pnpm -w check</div>
+                  <div class="card-out"><pre class="err">✖ tests/packages.test.ts
+  → CLI 的 dependencies 应恒为空，发现 1 个运行时依赖</pre><button class="card-more">展开全部（42 行）</button></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
               <div class="stack anno-host">
                 <div class="card" style="width:100%">
                   <div class="card-head">
                     <span class="card-name">grep</span>
-                    <span class="pill pill-emerald">完成</span>
+                    <span class="pill pill-sky"><i class="dot"></i>运行中</span>
                     <span class="spacer"></span><span style="font-size:11px;color:var(--t5)">1.1s</span>
                   </div>
                   <div class="card-args">pattern: "resolveContextBudget|compactionBudget" · 命中 14 处</div>
@@ -525,7 +546,7 @@ export const compactionBudget = (o: ReplOptions) =&gt;
 content: …（+182 行）</pre>
                   <div class="approval-actions">
                     <button class="btn btn-yes">仅本次允许</button>
-                    <button class="btn btn-always">本轮总是允许 write_file</button>
+                    <button class="btn btn-always">本会话内全部允许 write_file</button>
                     <button class="btn btn-no">拒绝</button>
                   </div>
                 </div>
@@ -535,17 +556,21 @@ content: …（+182 行）</pre>
           </main>
 
         <footer class="composer anno-host">
-          <div class="composer-row">
+          <div class="composer-row anno-host">
             <textarea rows="3" placeholder="接着说，或 / 开头用命令">继续，把 session.ts 的落盘编排也搬下去</textarea>
-            <button class="btn-send" disabled>发送</button>
+            <button class="btn-send">发送</button>
             <button class="btn btn-stop" style="padding:9px 12px"><svg class="ic" style="font-size:12px"><use href="#i-stop"/></svg></button>
+            <i class="anno" data-n="20" style="top:-8px;left:44%">20</i>
+            <i class="anno" data-n="22" style="top:-8px;right:120px">22</i>
           </div>
           <div class="composer-hint">
             <label class="switch"><input type="checkbox" checked style="accent-color:var(--indigo)">隔离工作区（每个任务一个 worktree）</label>
+            <label class="switch"><input type="checkbox" style="accent-color:var(--indigo)">委派（允许开子 Agent）</label>
             <span class="spacer"></span>
             <span><span class="kbd">Enter</span> 发送</span>
             <span><span class="kbd">Shift</span>+<span class="kbd">Enter</span> 换行</span>
             <span><span class="kbd">Esc</span> 停止</span>
+            <span>运行中发送会排队，回合结束后执行</span>
           </div>
           <i class="anno" data-n="12" style="right:8px;bottom:6px">12</i>
           <i class="anno" data-n="19" style="left:8px;bottom:6px">19</i>
@@ -556,6 +581,7 @@ content: …（+182 行）</pre>
       <!-- ================= ② 高危审批 ================= -->
       <section data-screen="approval" hidden>
         <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
           <span class="chip mono">deepseek / deepseek-flash</span>
@@ -568,7 +594,7 @@ content: …（+182 行）</pre>
         <div class="body" style="position:relative">
           <aside class="sidebar">
             <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
-            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务 / 会话</div>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
             <div style="margin:14px 0 7px" class="side-h">进行中</div>
             <ul class="side-list">
               <li><button class="side-item is-active"><span class="t">清理构建产物后重跑单测</span><span class="m"><span class="pill pill-rose">待审批</span>已等待 42s</span></button></li>
@@ -578,6 +604,7 @@ content: …（+182 行）</pre>
             <div class="run-head">
               <span class="pill pill-rose">待审批</span>
               <span class="title">清理构建产物后重跑单测</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
               <span>42s · 3.1k / 128k</span>
               <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px">停止</button>
             </div>
@@ -605,7 +632,7 @@ content: …（+182 行）</pre>
                   <pre>rm -rf dist bin</pre>
                   <div class="approval-actions">
                     <button class="btn btn-yes">仅本次允许</button>
-                    <button class="btn btn-always">本轮总是允许 bash</button>
+                    <button class="btn btn-always">本会话内全部允许 bash</button>
                     <button class="btn btn-no">拒绝</button>
                   </div>
                 </div>
@@ -629,9 +656,11 @@ content: …（+182 行）</pre>
       <!-- ================= ③ 空闲 / 空态 ================= -->
       <section data-screen="idle" hidden>
         <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>未打开工作区</span>
           <span class="chip warn anno-host"><svg class="ic"><use href="#i-alert"/></svg>未配置模型<i class="anno" data-n="13">13</i></span>
+          <span class="pill pill-slate" title="默认审批档位（新任务生效）">workspace-write</span>
           <span class="spacer"></span>
           <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
         </header>
@@ -658,7 +687,7 @@ content: …（+182 行）</pre>
             <textarea rows="3" placeholder="配置好模型后即可开始" disabled></textarea>
             <button class="btn-send" disabled>发送</button>
           </div>
-          <div class="composer-hint"><span style="color:#fcd34d">请先配置服务商与模型</span></div>
+          <div class="composer-hint"><span style="color:#fcd34d">请先选择工作区、配置服务商与模型</span></div>
         </footer>
         </div>
       </section>
@@ -666,9 +695,11 @@ content: …（+182 行）</pre>
       <!-- ================= ④ 历史会话 ================= -->
       <section data-screen="history" hidden>
         <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
           <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
           <span class="spacer"></span>
           <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
         </header>
@@ -685,7 +716,7 @@ content: …（+182 行）</pre>
             <div class="session-head anno-host">
               <span style="flex:1 1 auto">2026-10-20 09:14 · 客户端化 M0</span>
               <span class="pill pill-slate">42 条</span>
-              <button class="btn btn-no" style="font-size:11.5px;padding:3px 8px"><svg class="ic" style="font-size:11px"><use href="#i-trash"/></svg>删除</button>
+              <button class="btn btn-no" style="font-size:11.5px;padding:3px 8px" title="删除前需二次确认"><svg class="ic" style="font-size:11px"><use href="#i-trash"/></svg>删除</button>
               <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 8px">回到当前</button>
               <i class="anno" data-n="15">15</i>
             </div>
@@ -708,16 +739,18 @@ content: …（+182 行）</pre>
       <!-- ================= ⑤ 变更 diff ================= -->
       <section data-screen="diff" hidden>
         <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
-          <span class="pill pill-emerald">已完成</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
           <span class="spacer"></span>
           <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
         </header>
         <div class="body" style="position:relative">
           <aside class="sidebar">
             <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
-            <div style="margin:14px 0 7px" class="side-h">进行中</div>
+            <div style="margin:14px 0 7px" class="side-h">任务</div>
             <ul class="side-list">
               <li><button class="side-item is-active"><span class="t">把上下文口径抽到 core</span><span class="m"><span class="pill pill-emerald">已完成</span>1 分前</span></button></li>
             </ul>
@@ -726,6 +759,7 @@ content: …（+182 行）</pre>
             <div class="run-head">
               <span class="pill pill-emerald">已完成</span>
               <span class="title">把上下文口径抽到 core，CLI 只留翻译层</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
               <span>48.2s · 21.4k tokens · 委派 1 次</span>
             </div>
             <div class="bar bar-ok anno-host"><svg class="ic"><use href="#i-check"/></svg>隔离工作区：改动还没回到你的目录，确认后再落地<i class="anno" data-n="16">16</i></div>
@@ -743,8 +777,10 @@ content: …（+182 行）</pre>
             </div>
           </main>
 
-        <footer class="composer">
-          <div class="composer-row"><textarea rows="3" placeholder="还想改什么？"></textarea><button class="btn-send">发送</button></div>
+        <footer class="composer anno-host">
+          <div class="composer-row"><textarea rows="3" placeholder="还想改什么？接着追问也可以"></textarea><button class="btn-send">发送</button></div>
+          <div class="composer-hint"><span>Run 已完成：发送即开新任务、沿用此会话；diff 未落地前提示条保留</span></div>
+          <i class="anno" data-n="23" style="right:8px;bottom:6px">23</i>
         </footer>
         </div>
       </section>
@@ -752,8 +788,10 @@ content: …（+182 行）</pre>
       <!-- ================= ⑥ 设置 · 模型 ================= -->
       <section data-screen="settings" hidden>
         <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
           <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
           <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
           <span class="pill pill-slate">workspace-write</span>
           <span class="spacer"></span>
           <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
@@ -761,7 +799,7 @@ content: …（+182 行）</pre>
         <div class="body" style="position:relative">
           <aside class="sidebar">
             <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
-            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务 / 会话</div>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
           </aside>
           <main class="main">
             <div class="bar bar-warn"><svg class="ic"><use href="#i-alert"/></svg>密钥只写不读：保存后前端再也拿不到明文</div>
@@ -784,20 +822,21 @@ content: …（+182 行）</pre>
                 </div>
                 <div class="field">
                   <label for="m">默认模型</label>
-                  <select id="m"><option>deepseek-chat</option><option>deepseek-reasoner</option></select>
+                  <select id="m"><option>deepseek-flash</option><option>deepseek-v4-pro</option></select>
                 </div>
                 <div class="field">
                   <label for="w">上下文窗口</label>
                   <input id="w" value="128000" />
                 </div>
-                <div class="field">
+                <div class="field anno-host">
                   <label>审批档位</label>
                   <div style="display:flex;gap:8px">
                     <button class="btn btn-ghost">read-only</button>
                     <button class="btn btn-always" style="border-color:rgba(99,102,241,.7)">workspace-write</button>
                     <button class="btn btn-ghost">full-access</button>
                   </div>
-                  <span style="font-size:11.5px;color:var(--t5)">档位只影响"哪些工具还要问人"；认不出的档位服务端直接报错，不回落。</span>
+                  <span style="font-size:11.5px;color:var(--t5)">档位只影响"哪些工具还要问人"；认不出的档位服务端直接报错，不回落。切换不追溯：已挂起的审批卡仍等人裁决。</span>
+                  <i class="anno" data-n="24" style="top:-8px;right:-6px">24</i>
                 </div>
               </div>
               <div class="modal-foot">
@@ -836,12 +875,14 @@ content: …（+182 行）</pre>
             <div class="win-bar">
               <span class="win-dots"><i></i><i></i><i></i></span>
               <span style="flex:1;text-align:center;color:var(--t4);font-size:11.5px">mini-pi — D:\Workspace\mini-pi</span>
-              <span style="font-size:11px;color:var(--t6)">127.0.0.1:5173</span>
+              <span style="font-size:11px;color:var(--t6)">127.0.0.1:4788</span>
             </div>
             <header class="topbar">
+              <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
               <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
               <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
               <span class="chip mono">deepseek / deepseek-flash</span>
+              <span class="pill pill-slate">workspace-write</span>
               <span class="spacer"></span>
               <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
             </header>
@@ -852,7 +893,7 @@ content: …（+182 行）</pre>
                 <ul class="side-list"><li><button class="side-item is-active"><span class="t">把上下文口径抽到 core</span><span class="m"><span class="pill pill-sky">运行中</span>12.4s</span></button></li></ul>
               </aside>
               <main class="main">
-                <div class="run-head"><span class="pill pill-sky"><i class="dot"></i>运行中</span><span class="title">把上下文口径抽到 core</span><span>12.4s</span></div>
+                <div class="run-head"><span class="pill pill-sky"><i class="dot"></i>运行中</span><span class="title">把上下文口径抽到 core</span><span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span><span>12.4s</span><button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px"><svg class="ic" style="font-size:11px"><use href="#i-stop"/></svg>停止</button></div>
                 <div class="row right"><div class="stack"><div class="bubble-user">把上下文口径抽到 core</div><div class="avatar user">我</div></div></div>
                 <div class="row"><div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div><div class="stack"><div class="bubble-bot" style="width:100%">正在改<span class="caret"></span></div></div></div>
               </main>
@@ -883,7 +924,7 @@ const NOTES = {
   7: "参数必须渲染。只写「跑了 grep」等于让用户信任一句没有证据的话。",
   8: "风险等级与命中原因由内核算好（core/risk.ts），前端只负责配色与按钮——两端不会对同一条命令给出不同等级。",
   9: "挂起要显式说出来：一个「什么都不动」的界面分不清是卡住、是网络断了，还是在等你。",
-  10: "高危用 rose 并单独成块；按钮三档「仅本次 / 本轮总是 / 拒绝」，没有第四种默认。",
+  10: "高危用 rose 并单独成块；按钮三档「仅本次 / 本会话内全部允许 / 拒绝」，与 CLI 的 y / N / a 同义，没有第四种默认。",
   11: "窄屏侧栏收成抽屉（overlay + 半透明遮罩），不是把侧栏挤成一条。",
   12: "输入区只放两个开关：隔离工作区、委派。其余能力靠模型调工具，不在界面上做成按钮墙。",
   13: "没配模型也要能开：空态说清缺的是哪一样，并给直达入口，而不是一片空白。",
@@ -894,6 +935,16 @@ const NOTES = {
   18: "令牌门禁独占整页：拿不到令牌时其余区块全空，画出来只是噪音。",
   19: "输入区与会话同宽（只占第 2 列，不横跨侧栏）：输入框是「对话的一部分」，"
     + "不是页脚。跨过去之后视线要在侧栏宽度之外才能落笔，长会话里尤其别扭。",
+  20: "输入框默认三行高（≈84px），随内容长到约八行（208px）后内部滚动——"
+    + "给默认高度是为了让用户一开始就看出这里能写多段。",
+  21: "顶栏模型 / 档位芯片是「默认值」，对新任务生效；每个 Run 实际用的模型显示在运行头——"
+    + "多任务并行时「用谁在跑」必须按 Run 回答，一枚全局芯片答不了。",
+  22: "运行中输入照常排队（与 CLI 同一口径），发送不禁用；排队的条目在时间线里标「已入队」。"
+    + "挂起（等审批）与运行中一样可以输入。",
+  23: "Run 完成后仍可续聊：发送即开新任务、沿用同一会话；"
+    + "隔离工作区的 diff 未落地前，提示条保留。",
+  24: "档位切换不追溯：只影响之后的工具调用，已挂起的审批卡仍等人裁决，"
+    + "不自动放行也不作废。",
 };
 
 const legend = document.getElementById("legend");
@@ -922,8 +973,17 @@ document.querySelectorAll(".tools .tab[data-w]").forEach((btn) => {
     document.querySelectorAll(".tools .tab[data-w]").forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
     frame.classList.remove("frame--wide", "frame--mid", "frame--narrow");
     frame.classList.add("frame--" + btn.dataset.w);
-    const sidebar = document.getElementById("sidebar");
-    if (sidebar) sidebar.hidden = btn.dataset.w === "narrow";
+    // 窄屏：侧栏全部收成抽屉（CSS 已备好 overlay + 遮罩），由顶栏汉堡开合
+    const narrow = btn.dataset.w === "narrow";
+    frame.querySelectorAll("section[data-screen] .sidebar").forEach((s) => { s.hidden = narrow; });
+  });
+});
+
+// 抽屉开关：窄屏的汉堡入口，以及屏 ① 那个常驻的「切换侧栏」
+document.querySelectorAll("[data-drawer]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const aside = btn.closest("section").querySelector(".sidebar");
+    if (aside) aside.hidden = !aside.hidden;
   });
 });
 
