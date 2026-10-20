@@ -74,8 +74,9 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                                       | 无                           | 两个 Run 并行不互相踩                                                  |
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
 | **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`pnpm desktop`                                                                          | 客户端包新增`desktop`命令  | 关窗即退出、单实例、端口不残留、没有默认工作区                       |
+| **M6 安装包**         | `electron-builder.yml` + `pnpm dist:win` / `dist:mac`；图标 `build/icon.png`                                                        | 无                     | NSIS / 便携版、dmg / zip 出包；接线由 `tests/desktop-dist.test.ts` 守 |
 
-**进度（2026-10-20）**：M0 ~ M5 全部落地，`pnpm check` 绿灯。
+**进度（2026-10-20）**：M0 ~ M6 全部落地，`pnpm check` 绿灯。
 M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层用 Express
 （SSE 帧与来源校验仍自己写），前端用 React + Vite（状态仍就地修改，
 由 `revision` 驱动重画）。"零运行时依赖"这条不变量只由 **CLI 包**承担——
@@ -134,7 +135,8 @@ M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端
 （由 `tests/packages.test.ts` 钉住），否则 `cli → client → core` 的方向就乱了。
 于是"桌面壳"是客户端自己的第三种开法，与 CLI 平级。
 
-**三个必踩的坑**（都要写进测试）：
+**四个必踩的坑**（都要写进测试，前三个是在 M5 就预判到的，第四个是 M6 真
+起一次 Electron 才撞上的）：
 
 1. `require("electron")` 与 `import("electron")` 不是同一个东西。Electron只把内建模块注册在 **CJS 加载器**里；ESM 的 `import()` 解析到的是 npm 包给的可执行文件路径——于是"我在不在 Electron 里"的答案永远是"不在"。同一个名字，两种含义，只能看形状分辨。因此主进程产物必须是 CJS（`build:electron` 的 `--format=cjs`），检测也只走 `require`。
 2. **别在普通 Node 里 require("electron")**。electron 30 之后它的 `index.js`
@@ -146,6 +148,13 @@ M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端
    常年带着它，Electron 拿到就退化成普通 Node：`process.type` 变 undefined、
    内建模块一个都不注册，表现是"窗口开不出来"，而报错里连 Electron 的影子
    都没有。由 `electronSpawnOptions()` 统一清理。
+4. **`globalThis.require` 在主进程里是 `undefined`**。`require` 是 CJS 模块
+   包装器给的局部变量，不是全局——M6 之前 `importElectron()` 正是从那里取的，
+   于是"明明在 Electron 里"被判成"没装 Electron"，主进程一进门就退。
+   注入假 electron 的单测走不到这条分支（它压根不取 require），typecheck 也
+   看不出来，只有真起一次窗口才现形。改为 `createRequire(__filename)` 自己
+   造一个（走的是同一套内建模块解析），并且因为 ESM 里没有 `__filename`，
+   取值前先 `typeof`——这个取法本身由源码级断言钉住。
 
 **esbuild 打 CJS 时 `import.meta` 是空的**：主进程产物因此不能靠
 `import.meta.url` 找前端产物（`packages/client/src/server/app.ts` 的
@@ -261,6 +270,7 @@ cherry-pick / 复制过来再修 import；`packages/cli/src/` 下的改动（26 
 - 单文件不超过 1000 行；测试 glob 只收 `.test.ts`（`.test.tsx` 不被收集），因此**前端有逻辑的代码要抽成 `.ts` 纯模块**，组件只做摆放；桌面壳同理——`api.ts` / `main.ts` / `desktop.ts` / `workspace.ts` 全是纯逻辑，Electron 只在 `deps.electron` 后面出现，于是"单实例 / 关窗退出 / 打开哪个地址 / 选哪个工作区"不需要桌面就能钉住。
 - Windows 上实测：路径分隔符、spawn、`ELECTRON_RUN_AS_NODE` 清理。
 - M5 验收的三条都写成了断言：关窗即退出（`onClosed → quit`）、单实例（抢不到锁就不起第二个服务）、端口不残留（服务活在主进程里，`quit` 即释放）。
+- M6 验收：三个 `dist:*` 脚本、入口与 `main`、`directories.output`、图标、两份 README、`.github/workflows/desktop.yml` 的 matrix 全由 `tests/desktop-dist.test.ts` 钉住。**打包能不能成不在这条门禁里**——那要真下一份 Electron，属于构建机的事。
 - **没有默认工作区**也写成了断言：取消选择框必须退出（`resolveDesktopWorkspace` 返回 `cancelled`，主进程随即 `quit`），显式 `--cwd` 不改记忆，记忆里的目录被删了就再问一次，界面切换工作区会更新记忆（`AppServer.switchWorkspace` → 注入的 `workspaceMemory`）。
 
 ## 8. 工作量分布（粗估）
@@ -271,3 +281,4 @@ cherry-pick / 复制过来再修 import；`packages/cli/src/` 下的改动（26 
 | M1   | 中高 | `run.ts` 是新增的核心抽象，测试量最大  |
 | M2   | 高   | 服务端 + 前端两条线同时起                |
 | M5   | 低   | 有了 M2，Electron 只是薄薄一层壳         |
+| M6   | 中   | 代码量小，但每条结论都得真起一次 Electron 才拿得到  |

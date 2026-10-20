@@ -146,7 +146,21 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 pnpm build:web      # Vite 打包前端到 packages/client/dist/web
 pnpm build:electron # 打包 Electron 主进程到 packages/client/dist-electron/main.cjs
 pnpm desktop        # 起服务并开桌面窗口（内含上面两步构建）
+pnpm dist:win       # 出 Windows 安装包（NSIS + 便携版）
+pnpm dist:mac       # 出 macOS 安装包（dmg + zip）
+pnpm dist           # 按当前平台出安装包
 ```
+
+三个 `dist:*` 都是"构建前端 → 构建主进程 → 打包"三步，产物落在
+`packages/client/dist/installer/`（不是 `dist/`，否则下一次 `build:web`
+的 `emptyOutDir` 会把安装包一起清掉）。Windows 上能出 NSIS 与便携版，
+macOS 上能出 dmg 与 zip。
+
+**electron-builder 只肯在本平台上打本平台的包**：Windows 上敲 `dist:mac`
+会直接报 `Build for macOS is supported only on macOS` 然后退出——它不
+会给你一个"看起来打好了"的东西。想一次性拿到两边，推一个 `v*` tag，
+`.github/workflows/desktop.yml` 会在 Windows 与 macOS 两个 runner 上各
+打各的，产物挂在工作流运行记录里。
 
 包结构（三个包，由 workspace 管理）：
 
@@ -205,6 +219,29 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 时弹出系统目录框让用户选，选完记住（`~/.mini-pi/client-workspace.json`），
 之后直接开上次那个；在界面里切换工作区也会更新记忆。取消选择就退出，
 不会悄悄拿启动目录顶替。
+
+## 桌面安装包
+
+`pnpm dist:win` / `pnpm dist:mac` 把上面的服务与前端打成系统安装包，
+配置在 `packages/client/electron-builder.yml`，接线由 `tests/desktop-dist.test.ts`
+钉住（入口、构建顺序、产物目录、图标、两处 README 都登记了命令）。
+
+打进包的东西只有三样：`dist-electron/main.cjs`（esbuild 已把 express、
+内核、模型 SDK 全量内联成自包含 bundle）、`dist/web/**`、`package.json`。
+运行时依赖不进 `app.asar`——所以装完的机器不需要 `pnpm install`。
+
+首次打包会下载平台工具链（NSIS / winCodeSign / dmg 相关），国内网络下
+GitHub release 资产通常不可达，用 npmmirror 镜像：
+
+```bash
+ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/ \
+ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/ \
+pnpm dist:win
+```
+
+**签名不做**：NSIS 安装包与 dmg 都未签名，Windows 会弹 SmartScreen、
+macOS 会提示"来自身份不明的开发者"。要分发给团队以外的人，得自己配
+证书（`CSC_LINK` / `CSC_KEY_PASSWORD` 或 macOS 的 Developer ID）。
 
 ## 许可
 

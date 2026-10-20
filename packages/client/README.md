@@ -10,10 +10,13 @@ pnpm --filter @minipi/client run build:web       # Vite 打包前端到 dist/web
 pnpm --filter @minipi/client run dev             # 起服务（默认 127.0.0.1:4788）
 pnpm --filter @minipi/client run build:electron  # 打 Electron 主进程到 dist-electron/main.cjs
 pnpm --filter @minipi/client run desktop         # 起服务并开桌面窗口
+pnpm --filter @minipi/client run dist:win        # 出 Windows 安装包（NSIS + 便携版）
+pnpm --filter @minipi/client run dist:mac        # 出 macOS 安装包（dmg + zip）
 pnpm --filter @minipi/client run test            # 本包测试
 ```
 
-`pnpm desktop`（仓库根）等于"构建前端 → 构建主进程 → `desktop`"三步。
+`pnpm desktop`（仓库根）等于"构建前端 → 构建主进程 → `desktop`"三步；
+`pnpm dist:win` 等于"构建前端 → 构建主进程 → electron-builder --win"。
 
 启动参数：`--cwd <目录>`（工作区）、`--port`、`--host`、`--isolate`
 （每个任务一个隔离的 git worktree）、`--concurrency <n>`（同时执行上限，
@@ -58,6 +61,33 @@ Electron 是开发依赖（上百 MB 二进制），npm 包里不带它。没装
   都回 409，删除后目录与分支一并消失）。
 - worktree 落在 `<tmp>/mini-pi-worktrees/`，基准工作区始终干净：
   隔离的执行不往用户打开的目录里落东西。
+
+## 打包成安装包
+
+`dist:win` / `dist:mac` 走 electron-builder，配置在 `electron-builder.yml`：
+
+| 键                      | 值                        | 为什么                                                        |
+| ----------------------- | ------------------------- | ------------------------------------------------------------- |
+| `files`               | 三样（主进程 / 前端 / package.json） | 运行时依赖已被 esbuild 内联，装完的机器不用 `pnpm install` |
+| `directories.output`  | `dist/installer`      | `dist/` 根部会被 `build:web` 的 `emptyOutDir` 清掉         |
+| `win.target`          | `nsis` + `portable` | 装到哪儿要让用户看见（`oneClick: false`）                  |
+| `mac.target`          | `dmg` + `zip`       | zip 是"不用过 Apple 那道门"的分发形态                      |
+| `asar`                | `true`                | 前端产物在 asar 里也能被 `findWebRoot()` 找到              |
+
+打包前先构建两步（三个脚本顺序都是 `build:web →  build:electron →
+electron-builder`），顺序反了不会报错、只会把旧产物打进包里。
+
+首次打包要下载 NSIS / winCodeSign 等平台工具链，GitHub release 资产在
+国内通常不可达，设 `ELECTRON_BUILDER_BINARIES_MIRROR` 走镜像（Electron
+二进制本身另有 `ELECTRON_MIRROR`，两者是两回事）。
+
+**不做签名**：没有配 `CSC_*` 环境变量时，Windows 会弹 SmartScreen、macOS
+会提示"来自身份不明的开发者"。这是刻意留的口子——签名需要自己的证书。
+
+**只能在本平台打本平台的包**：electron-builder 在 Windows 上收到 `--mac`
+会直接报 `Build for macOS is supported only on macOS` 并退出。要同时拿到
+两边，就推一个 `v*` tag——`.github/workflows/desktop.yml` 在 Windows 与
+macOS 两个 runner 上各打各的，产物挂在工作流运行记录里（30 天）。
 
 ## 目录
 
