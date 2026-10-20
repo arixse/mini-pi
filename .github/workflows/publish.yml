@@ -59,8 +59,8 @@ jobs:
       # 版本号以 tag 为唯一事实来源。否则很容易出现 tag 打的是 v1.2.3、
       # package.json 还是 1.0.0，于是发出去一个谁都没预料的版本。
       #
-      # 必须排在 Build CLI 之前：src/cli/version.ts 是
-      # `import pkg from "../../package.json"`，esbuild 会把 version 字段
+      # 必须排在 Build CLI 之前：packages/cli/src/version.ts 是
+      # `import pkg from "../package.json"`，esbuild 会把 version 字段
       # 内联进 bundle。先 build 后定版本时，发出去的 CLI 报的是仓库里的旧号
       # 而不是 tag 上的号——此前只靠 npm pack 隐式重跑 prepare 才碰巧修好，
       # 加一个 --ignore-scripts 就会翻车。
@@ -74,7 +74,7 @@ jobs:
             VERSION="$INPUT_VERSION"
           fi
           if [ -z "$VERSION" ]; then
-            VERSION="$(node -p "require('./package.json').version")"
+            VERSION="$(node -p "require('./packages/cli/package.json').version")"
           fi
           # 必须是完整 semver：v1.2、release-1.2.3 这类 tag 不该被静默
           # 转成 npm 能接受但语义不明的东西，直接拦下让人去改 tag。
@@ -84,11 +84,15 @@ jobs:
           fi
           # 用 pkg set 而不是 npm version：后者会碰 git（要求工作区干净），
           # 在 CI 里没这个必要。
-          npm pkg set version="$VERSION"
+          #
+          # 版本号写在 **CLI 包**上：workspace 根是 private 的，发布出去的是
+          # packages/cli。写错位置的表现是"包元数据的版本对了、bundle 内联的
+          # 版本还是旧的"（version.ts 读的是自己那一份 package.json）。
+          (cd packages/cli && npm pkg set version="$VERSION")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "发布版本：$VERSION"
 
-      # bin/mini-pi-cli.cjs 在 .gitignore 里（构建产物不入库），
+      # packages/cli/bin/mini-pi-cli.cjs 在 .gitignore 里（构建产物不入库），
       # 仓库中并不存在，全靠这一步产出。不把它寄托在 pnpm install 的
       # prepare 是否触发上——包里少了可执行文件，用户装完就是
       # command not found，而 pipeline 全程绿灯。
@@ -98,13 +102,23 @@ jobs:
       - name: Build CLI
         run: pnpm build:cli
 
+      # README 与 LICENSE 在仓库根，但 npm 只打包**包目录里**的文件：
+      # files 白名单写了 README.md，包里没有就不进包（不报错，静默少一个文件）；
+      # LICENSE 同理，而 publish.yml 下面有一条 test -f "$PKG_DIR/LICENSE"。
+      # 复制而不是维护两份：两份必然漂移，而漂移看不出来。
+      - name: 准备包内元数据
+        run: |
+          set -euo pipefail
+          cp README.md packages/cli/README.md
+          cp LICENSE packages/cli/LICENSE
+
       - name: 预检
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          PKG="$(node -p "require('./package.json').name")"
-          VERSION="$(node -p "require('./package.json').version")"
+          PKG="$(node -p "require('./packages/cli/package.json').name")"
+          VERSION="$(node -p "require('./packages/cli/package.json').version")"
           if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
             if [ "$DRY_RUN" = "true" ]; then
               echo "::warning::$PKG@$VERSION 已存在，正式发布会被拒绝"
@@ -121,13 +135,15 @@ jobs:
       - name: 打包并校验产物
         run: |
           set -euo pipefail
-          PKG="$(node -p "require('./package.json').name")"
-          VERSION="$(node -p "require('./package.json').version")"
+          PKG="$(node -p "require('./packages/cli/package.json').name")"
+          VERSION="$(node -p "require('./packages/cli/package.json').version")"
           # tarball 名不等于包名：scoped 包会去掉 @、把 / 换成 -
           # （@minipi/mini-pi → minipi-mini-pi-<version>.tgz）。直接拿包名拼
           # 路径会拼出一个带斜杠的地址，tar 必然找不到文件。
-          ARCHIVE="$(node -p "require('./package.json').name.replace(/^@/,'').replace('/','-')")"
-          npm pack --pack-destination "$RUNNER_TEMP"
+          ARCHIVE="$(node -p "require('./packages/cli/package.json').name.replace(/^@/,'').replace('/','-')")"
+          # 必须在包目录里 pack：npm 不认 pnpm-workspace.yaml，在根 pack
+          # 只会去打包根包（它是 private 的，且里面没有 bin）。
+          (cd packages/cli && npm pack --pack-destination "$RUNNER_TEMP")
           TARBALL="$RUNNER_TEMP/$ARCHIVE-$VERSION.tgz"
           mkdir -p "$RUNNER_TEMP/smoke"
           tar -xzf "$TARBALL" -C "$RUNNER_TEMP/smoke"
@@ -164,7 +180,10 @@ jobs:
         # 而私有包要付费，会以 402/403 失败。package.json 的
         # publishConfig.access 已经配了同一件事，这里再写一遍是双保险 ——
         # 这一项漏掉的表现是"看起来发出去了、其实是付费墙"。
-        run: npm publish --provenance --access public
+        #
+        # 在包目录里 publish：在根发布会去发那个 private 的 workspace 根，
+        # 而它既没有 bin 也没有 files。
+        run: (cd packages/cli && npm publish --provenance --access public)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -172,6 +191,6 @@ jobs:
         if: ${{ inputs.dry-run != 'true' }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          PKG="$(node -p "require('./package.json').name")"
+          PKG="$(node -p "require('./packages/cli/package.json').name")"
           echo "### $PKG@$VERSION 已发布" >> "$GITHUB_STEP_SUMMARY"
           echo "https://www.npmjs.com/package/$PKG/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"
