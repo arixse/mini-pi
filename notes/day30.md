@@ -120,3 +120,48 @@ workspace**。落地后优先级是三段（`src/electron/workspace.ts`）：
 默认不记）、`workspace.test.ts`（三段优先级各自的边界：记忆没了再问、
 取消即 cancelled、不可用的路径不记也不用）、`main.test.ts` 的"默认解析器"
 一组（走真实记忆文件，指到临时目录）。
+
+## M6 落地：桌面安装包（同日第三波）
+
+同一条分支、同一天，5 个提交（`7c15c22`~`fa6b7f1`），与 M5 的 6 个一起用
+`--no-ff` 合入 main（合并提交 `ad6e273`）。门禁 1645 条全绿。
+
+- **`dist` / `dist:win` / `dist:mac` 三个脚本**（客户端包 + 仓库根转发），
+  都是"构建前端 → 构建主进程 → electron-builder"三步。产物落在
+  `dist/installer/`——**不能是默认的 `dist/`**：`vite.config.ts` 开了
+  `emptyOutDir`，下次 `build:web` 会把刚打好的安装包一起清掉。
+- **真起一次才撞上的第四个坑**：M5 的 `importElectron()` 从
+  `globalThis.require` 上取 require，而 Electron 主进程里那里是
+  `undefined`（`require` 是 CJS 模块包装器的**局部变量**，不是全局）。
+  打包后一进门就报"未找到 Electron 运行时"并退出——注入假 electron 的
+  单测压根不走这条分支，typecheck 也不看它。**M5 那次二进制没下载成功、
+  真窗口没起得来，于是它一路带到了 M6。** 改成
+  `createRequire(__filename)`（走同一套内建模块解析），ESM 里没有
+  `__filename` 故先 `typeof`；取法本身由源码级断言钉住（断言前先剥掉
+  注释，否则会被讲述这个坑的那段注释自己绊倒）。
+- **asar 开着也能用**：实测打包后 app.asar 里的前端产物 `readFileSync`
+  与 `createReadStream` 都通（后两者正是 `express.static` 与 `sendFile`
+  的依赖），字节数对得上。
+- **electron-builder 只肯在本平台打本平台的包**：Windows 上敲 `dist:mac`
+  直接报 `Build for macOS is supported only on macOS` 退出。要一次拿到
+  两边就推 `v*` tag，走 `.github/workflows/desktop.yml` 的矩阵——win 与
+  mac 两个 runner 各打各的，产物名带 slug（同名产物会互相覆盖，表现是
+  "只有一边下载得到"），`fail-fast: false`。
+- **国内下载**：`ELECTRON_MIRROR` 与 `ELECTRON_BUILDER_BINARIES_MIRROR`
+  是两回事，都指 npmmirror 的 binary 路径；GitHub release 资产可达时
+  两个都不用设。
+- **签名不做**（不配 `CSC_*`）：Windows 弹 SmartScreen、macOS 提示身份
+  不明，这个口子刻意留着。
+- 顺带修掉一条碰巧绿着的测试：`resolveElectronBinary` 的"压根没装"用
+  temp 目录伪造，但 **tsx 会把仓库根（含 `.pnpm` 虚拟仓库）兜进
+  `createRequire` 的解析路径**，仓库里真装了 electron 就必然解析得到——
+  此前只是靠"二进制没下载"才过。改成传非路径，让 `createRequire` 自己抛。
+- 本机没跑完的部分：沙箱里 GPU 进程起不来会把 Electron 拖死，Electron
+  起的服务器也不在别的进程能连到的 loopback 上。验证到"主进程走到
+  loadURL"为止，GUI 留待实机过目。
+
+实测产物（`packages/client/dist/installer/`）：NSIS 安装包与便携版各
+112MB。拆提交时为了每个提交独立过门禁，`packages/client/package.json`
+同时含 devDep 与脚本两处改动，用"删掉脚本行 → 提交 → 加回来 → 提交"
+归位（与当天拆 `styles.css` 同一手法）。文档与接线测试必须同批——
+`tests/desktop-dist.test.ts` 断言了两处 README 登记 `dist:*`。

@@ -36,7 +36,7 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 | [Day 27](./day27.md) | 2026-10-20 | 9 | 拆成 core / cli / client 三个 pnpm 包（`refactor/workspace-packages` 分支，2026-10-20 合入）：包边界与依赖归属、发布链路随包挪动、包边界守卫；客户端 UI 设计稿（七个界面 / 23 条决策） |
 | [Day 28](./day28.md) | 2026-10-20 | 3 | M2 落地：内核摘要下沉收尾、App Server（node:http + SSE，零运行时依赖）、Web 前端照设计稿实现（流式 / 审批 / 会话 / 设置 / 工作区），假模型 + 真浏览器逐屏核对 |
 | [Day 29](./day29.md) | 2026-10-20 | 7 | 客户端改用 Express + React + Vite（用户拍板，含三个修正）与 M3/M4：worktree 每 Run 隔离（`core/worktree.ts` + `serve --isolate` + 丢弃接口）、审批三档两端同一裁决（`core/policy.ts`，CLI `/approval` 与 exec `--approval`） |
-| [Day 30](./day30.md) | 2026-10-20 | 5 | M5 落地：Electron 桌面壳（`packages/client/src/electron/`，窄接口 / 主进程 / `desktop` 命令）；顺带抽出 `bootAppServer` 让 serve 与桌面壳同源；**桌面壳没有默认工作区**（`--cwd` > 记住的目录 > 弹系统目录框，选完写 `~/.mini-pi/client-workspace.json`）；三个判断与方案原文不同（desktop 不进 CLI、不靠 require 判"能不能起 Electron"、取消选择即退出而不拿启动目录顶替） |
+| [Day 30](./day30.md) | 2026-10-20 | 12 | M5 落地：Electron 桌面壳（`packages/client/src/electron/`，窄接口 / 主进程 / `desktop` 命令）；顺带抽出 `bootAppServer` 让 serve 与桌面壳同源；**桌面壳没有默认工作区**（`--cwd` > 记住的目录 > 弹系统目录框，选完写 `~/.mini-pi/client-workspace.json`）；三个判断与方案原文不同（desktop 不进 CLI、不靠 require 判"能不能起 Electron"、取消选择即退出而不拿启动目录顶替）；**M6 桌面安装包**：`dist:*` 出 NSIS 与 dmg/zip，产物在 `dist/installer/` 而非 `dist/`（后者会被 `build:web` 的 `emptyOutDir` 清掉），electron-builder 只肯本平台打本平台 → 加 `.github/workflows/desktop.yml` 走 `v*` tag 双 runner 矩阵，真起一次才撞上的坑是 `globalThis.require` 在主进程里是 undefined |
 
 合计 30 篇 / 243 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
 
@@ -84,12 +84,20 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 
 > Day 18 的日期与 Day 16 / Day 17 重叠：后者是同期 **main** 上的工作，
 > 前者是并行分支上的工作，合入后才归入本索引，故单列一篇而非并入既有编号。
-- `feature/m5-electron-shell`（2026-10-20）记为 [Day 30](./day30.md)：方案里的
-  最后一个里程碑——Electron 桌面壳。只新增 `packages/client/src/electron/`，
-  CLI 与内核一行没改；顺带从 `server/entry.ts` 抽出 `bootAppServer`，让
-  `serve` 与 Electron 共用一条启动路径。三个判断与方案原文不同，理由都写进了
-  方案 §4：一是 `desktop` 挂客户端包而不挂 CLI（CLI 不许依赖 client），
-  二是"能不能起 Electron"不再靠 `require("electron")` 的返回值判断——
-  electron 30 之后那个入口会同步下载上百 MB，三是桌面壳**没有默认工作区**
-  （取消选择就退出，不拿启动目录顶替；选完写进 `~/.mini-pi/client-workspace.json`，
-  界面里切换工作区同样更新它）。
+- `feature/m5-electron-shell`（2026-10-20，11 个提交）已于 **2026-10-20 合入
+  main**（合并提交 `ad6e273`），记为 [Day 30](./day30.md)：方案里的
+  最后两个里程碑——M5 Electron 桌面壳 + M6 桌面安装包。
+  M5 只新增 `packages/client/src/electron/`，CLI 与内核一行没改；顺带从
+  `server/entry.ts` 抽出 `bootAppServer`，让 `serve` 与 Electron 共用一条
+  启动路径。三个判断与方案原文不同，理由都写进了方案 §4：一是 `desktop`
+  挂客户端包而不挂 CLI（CLI 不许依赖 client），二是"能不能起 Electron"
+  不再靠 `require("electron")` 的返回值判断——electron 30 之后那个入口会
+  同步下载上百 MB，三是桌面壳**没有默认工作区**（取消选择就退出，不拿启动
+  目录顶替；选完写进 `~/.mini-pi/client-workspace.json`，界面里切换工作区
+  同样更新它）。
+  M6 接着出安装包，并当场还清了 M5 欠的债：二进制这次下载成功，真起一次
+  Electron 就暴露出 `importElectron()` 取 require 的方式是错的
+  （`globalThis.require` 在主进程里是 `undefined`）——单测与 typecheck 全绿
+  却只有真机才现形的那一类。
+  仍是 main 为祖先、本可 ff，仍用 `--no-ff` 保留分支边界（沿用 Day 25/29
+  先例），合入点在 main 上单独跑过 `pnpm check`（1645 条全绿）。
