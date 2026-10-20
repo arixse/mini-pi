@@ -131,6 +131,51 @@ npm 包的安装成本也跟着涨。
 
 Electron 是**开发依赖**（上百 MB 二进制），npm 包里不带它。
 
+### 5.1 现在就拆 workspace 的风险（2026-10-20 评估）
+
+结论：**没有会让 CLI 坏掉的技术风险**（CLI bundle 自包含、`files` 白名单、
+publish.yml 的版本与产物校验都在），但有空转成本与四类要重配的工程口径。
+具体七条：
+
+1. **时序（最大的一条，但不是技术风险）**：main 上 `core/` `server/` `client/`
+   `electron/` 一个文件都没有，desktop 包里现在没东西可放。隔离收益只在桌面
+   依赖真的出现时才兑现，现在拆等于先付成本后收益，且架子会按想象中的形状
+   定，M2 落地时大概率返工。**推荐 M0、M1 在根包做完**（那两步零新增运行时
+   依赖，本来就隔离），**M2 落地前再拆**，一次成型。
+2. **内核归属**：桌面壳要 import 内核，而内核在根包 `src/core` 下。要么
+   desktop 用相对路径 `../../src/core/...`（跨包摸源码，pnpm 的严格
+   node_modules 不拦相对路径，所以不报错、只会悄悄烂掉）；要么再拆
+   `packages/core`，根包用 `workspace:*` 引用——**这时它必须写进根包的依赖
+   表**。解法是写成 **devDependencies**（esbuild 全量内联，运行时不需要），
+   于是 `dependencies` 仍恒为空。**这条不变量要配一条守卫脚本钉住**：哪天被
+   挪进 `dependencies`，CLI 就从"零依赖单文件"变成"装包才能跑"。
+3. **发布链路**：publish.yml 用的是 `npm pack`，而 npm 只认 package.json 的
+   `workspaces` 字段，**不认 `pnpm-workspace.yaml`**。只加后者时 npm pack
+   照样只打包根包（安全）；但一旦有人顺手补上 `workspaces` 字段，行为就变了。
+   另外 `pnpm check` 只跑根包 `src/**/*.test.ts`，**desktop 包的测试在 CI 里
+   会静默不跑**，必须显式加一步。
+4. **安装体积与时间**：electron 约 100MB。加进 workspace 后 CI 的
+   `pnpm install --frozen-lockfile` 每次都要拉它（CI 超时 10 分钟、publish
+   15 分钟）。且 **pnpm 10 默认不执行依赖的构建脚本**，`electron` 必须进
+   `pnpm.onlyBuiltDependencies`——漏了的表现是"装上了但没二进制"，
+   `desktop` 静默降级到浏览器壳，看不出错。缓解：`pnpm install --filter <根包>`
+   只装根包，桌面包留给专门的 job。
+5. **类型检查与测试口径分裂**：根 tsconfig `include: ["src"]` 管不到
+   `packages/desktop/**`；TS 用的是 `^7.0.2`（native port），上 project
+   references 之前要先确认它在 TS7 上行为一致，别假设。测试 glob 不收
+   `.test.tsx`（既有约定），覆盖率 85/85/90 与"组件排除"都要在第二包里重配。
+6. **产物与 .gitignore**：根 `.gitignore` 忽略 `dist/` 但**不忽略
+   `dist-electron/`**（历史遗留）。拆包后产物目录变成
+   `packages/desktop/dist*`，忽略规则要跟着改；前端产物托管路径
+   （`findClientDir` 现在看"主进程目录或它的上一级"）换到包内后要重测。
+7. **`files` 与 `prepare`**：`files` 白名单依旧是唯一防线（publish.yml 已有
+   `test -f "$PKG_DIR/LICENSE"` 与 `--version` 逐字比对兜底）。别让 desktop
+   包的 `prepare` 也去构建——它失败会挡住整次 `pnpm install`。
+
+**最小可用形态**（如果一定要现在拆）：只建 `pnpm-workspace.yaml` + 空
+`packages/desktop`，**先不拆 `packages/core`**，内核仍留根 `src/core`，
+归属问题留到 M2 再定。
+
 ## 6. 已有分支 `refactor/core-extraction` 怎么处理
 
 该分支 M0~M5 全部走完（23 ahead / 50 behind main），是一份**可参考的
