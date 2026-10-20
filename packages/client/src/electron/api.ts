@@ -142,6 +142,24 @@ export function isInsideElectron(): boolean {
 }
 
 /**
+ * 取能解析内建 `electron` 的那个 require。
+ *
+ * **不能图省事去 `globalThis.require`**——实测（Electron 44.9.1 主进程）
+ * 那里是 `undefined`：`require` 是 CJS 模块包装器给的**局部变量**，不是
+ * 全局。这一点很隐蔽：注入假 electron 的单测永远走不到这条分支，只有真
+ * 起一次 Electron 才会撞上，而撞上的表现是"子树全对、回报说没装 Electron"。
+ *
+ * 于是改用 `createRequire(__filename)` 自己造一个，它走的是同一套内建模块
+ * 解析。ESM 里没有 `__filename`，所以先 `typeof` 再取值。
+ */
+function electronRequire(): ((id: string) => unknown) | null {
+  if (typeof __filename !== "string") {
+    return null;
+  }
+  return createRequire(__filename);
+}
+
+/**
  * 取 electron 模块；不在 Electron 里就返回 null。
  *
  * 必须**懒加载**：静态 import 会让客户端一启动就去要 electron，而它是
@@ -169,9 +187,7 @@ export async function importElectron(): Promise<unknown> {
   if (!isInsideElectron()) {
     return null;
   }
-  // 从 globalThis 上取而不是直接写 `require`：ESM 里那个名字根本不存在，
-  // 写死会让模块一加载就抛 ReferenceError（那时连"没装 electron"都说不出口）
-  const requireLike = (globalThis as { require?: (id: string) => unknown }).require;
+  const requireLike = electronRequire();
   if (typeof requireLike !== "function") {
     return null;
   }

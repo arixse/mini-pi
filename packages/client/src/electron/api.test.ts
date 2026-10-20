@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +22,19 @@ import type { ElectronWindowOptions } from "./api";
 
 /** 真 electron 模块的形状（`createElectronApi` 的入参），不导出也能拿到 */
 type RawElectronLike = Parameters<typeof createElectronApi>[0];
+
+/**
+ * 剥掉注释，只留代码。
+ *
+ * 读源码做断言时必须先做这一步，否则"这里不许出现 X"这类断言会被讲
+ * 述 X 的那段注释自己绊倒——注释是解释为什么不能这么写的，它不是违例。
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\s+\/\/[^"'\\\n]*$/gm, "");
+}
 
 const WINDOW: ElectronWindowOptions = {
   width: 1280,
@@ -217,6 +230,34 @@ describe("importElectron", () => {
     assert.strictEqual(value, null);
     assert.ok(Date.now() - started < 1_000, "不該有网络请求，更不该有下载");
   });
+
+  /**
+   * 取 require 的方式是**实测**出来的，而注入假 electron 的单测恰恰走不到
+   * 那一步——它一开始就从 `globalThis.require` 上取，而 Electron 44 的主进程
+   * 里那里是 `undefined`，结果"明明在 Electron 里"被判成"没装 Electron"，
+   * 主进程一进门就退出。单测、typecheck 全绿，只有真起一次窗口才看得见。
+   *
+   * 于是这里钉的是源码本身。先剥注释：那条踩坑记录写在同一份文档注释里，
+   * 不剥就会被自己的注释绊倒。
+   */
+  it("从 createRequire(__filename) 取 require，不从 globalThis 上取", () => {
+    const source = stripComments(
+      readFileSync(new URL("./api.ts", import.meta.url), "utf8"),
+    );
+    assert.ok(
+      !source.includes("globalThis"),
+      "globalThis.require 在 Electron 主进程里是 undefined：改用 createRequire(__filename)",
+    );
+    assert.ok(
+      source.includes("createRequire(__filename)"),
+      "取 require 应走 createRequire(__filename)——内建 electron 只注册在 CJS 加载器里",
+    );
+    // ESM 里 __filename 不存在，直接取值会抛，那样连"没有 Electron"都答不出来
+    assert.ok(
+      /typeof __filename/.test(source),
+      "__filename 在 ESM 下不存在，取值前必须先 typeof",
+    );
+  });
 });
 
 describe("resolveElectronBinary", () => {
@@ -279,15 +320,16 @@ describe("resolveElectronBinary", () => {
     }
   });
 
-  it("压根没装（解析不到包）就是没有", () => {
-    const root = mkdtempSync(join(tmpdir(), "minipi-no-electron-"));
-    try {
-      assert.strictEqual(
-        resolveElectronBinary(pathToFileURL(join(root, "main.cjs")).href),
-        null,
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  /**
+   * 造一个 temp 目录假称"那儿没装 electron"是骗不过 tsx 的：它把仓库根
+   * （含 `.pnpm` 虚拟仓库）兜进了解析路径，于是**仓库里装着 electron 的机器
+   * 上**这条断言必然失败——而 CI 与开发机恰恰都是这种机器，此前它只是靠
+   * "二进制没下载"碰巧绿着。
+   *
+   * 改成让 `createRequire` 自己拒绝：非路径它会直接抛 ERR_INVALID_ARG_VALUE，
+   * 与环境里装没装 electron 无关，走的仍是同一条 catch。
+   */
+  it("解析不到包时返回 null，不把异常抛出去", () => {
+    assert.strictEqual(resolveElectronBinary("not-a-path"), null);
   });
 });
