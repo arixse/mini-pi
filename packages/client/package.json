@@ -11,6 +11,9 @@
     "desktop": "tsx src/electron/desktopEntry.ts",
     "build:web": "vite build",
     "build:electron": "esbuild src/electron/entry.ts --bundle --platform=node --target=node22 --format=cjs --external:electron --outfile=dist-electron/main.cjs",
+    "dist": "npm run build:web && npm run build:electron && electron-builder",
+    "dist:win": "npm run build:web && npm run build:electron && electron-builder --win",
+    "dist:mac": "npm run build:web && npm run build:electron && electron-builder --mac",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test \"src/**/*.test.ts\""
   },

@@ -1,0 +1,56 @@
+# Electron 安装包配置（electron-builder 自动读取本文件）。
+#
+# 入口不写在这里：electron-builder 读 package.json 的 main（见下）。
+# 三条约束只能在这里说清：
+# 1. **files 只要三样**——主进程产物、前端产物、package.json。运行时依赖
+#    （express、内核、模型 SDK）已被 esbuild 全量内联进 dist-electron/main.cjs，
+#    打进 asar 的是一份自包含 bundle。
+# 2. **产物落在 dist/installer**：dist/web 是 Vite 的领地，且 vite.config.ts 的
+#    `emptyOutDir: true` 会在下一次 build:web 时把安装包一起清掉
+#    （`pnpm desktop` 内含 build:web）。用默认的 dist/ 就等于每次开发后
+#    重新打包一次。
+# 3. **asar 开着**：dist/web 留在 app.asar 里，Electron 给 fs 打了 asar 补丁，
+#    `findWebRoot()` 从 `app.getAppPath()` 起跳照样 `existsSync`。这条链上真正
+#    要紧的一环是 `express.static`：它走 `fs.createReadStream`，而 asar 对
+#    createReadStream 的支持是"Electron 说有就有"的东西——实测（44.9.1，
+#    打包后的 app.asar）读得到、字节数对得上，所以 HTML / JS / CSS 都出得来。
+#    哪天要关掉 asar 或换传输层，这条要重新验。
+
+appId: com.minipi.desktop
+productName: mini-pi
+copyright: Copyright © 2026 mini-pi
+
+directories:
+  output: dist/installer
+  buildResources: build
+
+files:
+  - dist-electron/main.cjs
+  - dist/web/**
+  - package.json
+
+# express 在 dependencies 里，electron-builder 会按"生产依赖"把它连同传递依赖
+# 装进 app 的 node_modules——运行时其实用不到（已内联），留着当"哪天 bundle
+# 不再内联 express"的安全网，代价约 1.5MB。
+
+asar: true
+
+win:
+  # 一张 ≥256×256 的 PNG 即可，ico 由 electron-builder 生成
+  icon: build/icon.png
+  target:
+    - nsis
+    - portable
+
+nsis:
+  # 辅助式安装（可选安装目录、可建桌面快捷方式）而不是 oneClick：
+  # 分发出去的东西要让用户看清装到哪儿
+  oneClick: false
+  perMachine: false
+
+mac:
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
