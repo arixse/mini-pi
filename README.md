@@ -65,6 +65,9 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 
 每条命令的交互细节与边界见 [cli-commands.md](docs/cli-commands.md)。
 
+非交互场景（脚本 / CI）用 `mini-pi exec "<提问>"`，`--json` 时 stdout 只输出事件流，
+细节见 [CLI 交互文档](docs/cli-interaction.md) §2.4。
+
 ## 安全模型
 
 写文件与执行命令属于危险动作，CLI 默认**逐次询问**，确认时可选

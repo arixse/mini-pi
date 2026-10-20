@@ -46,6 +46,22 @@ mini-pi --version                   # 只看版本号，不进 REPL
 
 **运行要求**：Node.js 22+（`engines` 与 `.nvmrc` 同一份声明）。
 
+### 2.4 非交互执行（`exec`）
+
+```bash
+mini-pi exec "读一下这个仓库的结构"     # 跑完一次执行就退出，不进 REPL
+mini-pi exec "..." --json               # stdout 只有 JSONL：一行一个事件，末行 exec_done
+mini-pi exec "..." --cwd /path/to/dir   # 指定工作区
+```
+
+- **审批 fail closed**：没有终端可以问人，所以除只读工具外一律拒绝。
+  写文件与执行命令请用交互式 CLI —— headless 下"默认放行"会让一条脚本命令
+  在无人确认的情况下删东西。
+- `--json` 时 stdout 不会出现任何人类可读的输出（日志与错误一律走 stderr），
+  因此可以直接被管道消费；末行 `exec_done` 带上 `status` 与正文，
+  脚本只看这一行就知道成败。
+- 退出码：`0` 正常结束，`1` 出错或被取消，`2` 参数错误。
+
 ---
 
 ## 3. 启动流程

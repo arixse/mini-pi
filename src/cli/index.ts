@@ -13,6 +13,7 @@ import {
   createSubAgentTool,
 } from "../agent/subagentTool";
 import { startRepl } from "./repl";
+import { runExec } from "./exec";
 import { composeLoadedSkillSections } from "./skills";
 import { buildSystemPrompt } from "../core/prompt";
 import { detectProjectStack, formatProjectStack } from "../core/projectStack";
@@ -246,6 +247,28 @@ export async function main(argv: string[] = process.argv.slice(2)) {
    */
   if (wantsVersion(argv)) {
     printVersion();
+    return;
+  }
+
+  /**
+   * 子命令在 REPL 之前分流。
+   *
+   * `exec` 必须走在这里而不是等 REPL 起来：它不占 stdin，
+   * 而 startRepl() 一旦占住，脚本就再也拿不到控制权了。
+   */
+  if (argv[0] === "exec") {
+    const code = await runExec(argv.slice(1), {
+      stdout: process.stdout,
+      stderr: process.stderr,
+    }, {
+      resolveModel: async () => {
+        const service = new ModelProviderService();
+        const settings = new SettingsStore();
+        const { model } = await createModelFromSettings(service, settings);
+        return { model };
+      },
+    });
+    process.exitCode = code;
     return;
   }
 

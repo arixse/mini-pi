@@ -32,6 +32,7 @@ mini-pi/
 │   │   ├── repl.ts      # 主循环；dispatch.ts 命令分派；turn.ts 回合执行
 │   │   ├── context.ts   # ReplOptions → 内核口径的翻译层
 │   │   ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
+│   │   └── exec.ts       # headless 执行（--json 输出 JSONL 事件流）
 │   │   └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
 │   └── shared/          # 共享模块
 │       └── protocol.ts  # 通信协议
