@@ -8,8 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AppController, type ComposerHandle } from "./controller";
-import { ClientProvider } from "./store";
-import { useActions, useClient } from "./store";
+import { ClientProvider, useActions, useClient } from "./store";
 import { Boot } from "./components/Boot";
 import { Composer } from "./components/Composer";
 import { Picker } from "./components/Picker";
