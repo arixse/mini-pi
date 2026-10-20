@@ -1,0 +1,173 @@
+# Electron 客户端封装方案
+
+> 目标：给 mini-pi 加一个桌面壳，**CLI 的行为、体积与依赖口径一行都不许变**。
+> 本文是实施计划，落地后的行为事实写入 `docs/technical-solution.md` 与
+> `docs/cli-interaction.md`（终态格式与行为以那两篇为准）。
+
+## 0. 结论先行
+
+Electron 壳**不该碰 CLI**。做法是先把与界面无关的内核从 `cli/` 里剥出来，
+再在内核之上加一条 HTTP + SSE 传输层（App Server），最后让 Electron
+只做一件事——开一个窗口 `loadURL` 到本机服务。
+
+```
+客户端层   CLI（现状 REPL） │ exec（headless） │ Web │ Electron
+              ▲ 同一份 AgentEvent 事件流
+传输层     进程内直连 │ HTTP + SSE │ JSONL
+              ▲ 同一份 Run 语义
+内核层     Run │ RunManager │ ApprovalGateway │ Session │ Tools
+```
+
+于是 Electron 是**第四个客户端**，与 CLI 并列，而不是 CLI 的一个分支。
+判断标准只有一句：**内核里不许出现 `console.log`、`chalk`、TTY 假设**。
+
+## 1. 现状盘点（2026-10-20 扫描 main）
+
+### 1.1 好消息：内核已经相当干净
+
+| 事实 | 证据 |
+| --- | --- |
+| `src/agent`、`src/shared`、`src/provider` **零** `../cli` 依赖 | grep 无命中 |
+| 除 `shared/logger.ts` 外，内核不碰 `chalk` / `console.*` / `process.std*` | grep 无命中 |
+| `shared/protocol.ts` 已预留 `RunStreamEvent` / `SessionResponse` / `CreateRunResponse` | 客户端化当时就留了口子 |
+| `agent/loop.ts` 已经是事件驱动，审批是注入的 `beforeToolCall` 异步钩子 | GUI 审批不用改 loop 一行 |
+| `tools/*` 的 `workspaceRoot` 是构造参数 | 多工作区隔离天然支持 |
+
+也就是说：**M0 不是重写，是搬家**。
+
+### 1.2 要还的债（挡在 Electron 前面的）
+
+| 债 | 为什么挡路 |
+| --- | --- |
+| `cli/prompt.ts`、`cli/projectStack.ts` 长在 `cli/` 下 | 它们是纯内核逻辑，非终端客户端也要用 |
+| `cli/turn.ts` 把回合编排与 `console.log` / `status` / `chalk` 焊在一起 | 无法被非终端客户端复用 |
+| `cli/approval.ts` 的风险评估与着色混在一起 | 两端拿不到结构化风险数据 |
+| `SubAgentRuntimeProvider` 挂在 `ReplOptions` 上（全局可变容器） | 多 Run 并行会互相覆盖，是并发地雷 |
+| `SessionManager.loadLatestSession()` | 隐含"一个进程一个会话"，服务端需要显式 `sessionId` |
+
+## 2. 目标分层与目录
+
+| 目录 | 职责 | 与 CLI 的关系 |
+| --- | --- | --- |
+| `src/core/` | 与界面无关的内核：Run / RunManager / ApprovalGateway / prompt / projectStack / risk / session 编排 | **不许 import `cli`**（由 `core/hygiene.test.ts` 守） |
+| `src/server/` | App Server：Express + SSE，会话 CRUD、目录选择、配置读写 | 不 import `cli` |
+| `src/client/` | Web 前端（React + Vite），Electron 与浏览器共用 | 不 import `server`（会带 `node:crypto`） |
+| `src/electron/` | 主进程：起服务 → 开窗口 → 关窗即退出 | **绝不 import `cli`** |
+| `src/cli/` | 保持现状职责，只把下沉掉的部分改成调内核 | 是内核的一个订阅者 |
+
+依赖方向必须单向：`cli/desktop → electron/api`、`electron/main → server`、
+`cli → core`。反向依赖会让 `cli → electron → cli` 成环。
+
+下沉套路（沿用既有约定）：**给内核定义窄输入**，cli 侧写 `<X>From(options)`
+翻译层；**内核产出数据而非文本**，渲染只发生在订阅者那一侧。
+
+## 3. 里程碑
+
+标 ★ 的是"只为 Electron 服务"的可选项；只想要桌面壳的话，
+M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
+
+| 阶段 | 做什么 | 对 CLI 的影响 | 验收 |
+| --- | --- | --- | --- |
+| **M0 内核去 UI** | `prompt` / `projectStack` / 上下文预算 / 风险评估 / 落盘压缩下沉到 `src/core/`；`approval.ts` 拆成"结构化 risk 数据" + "各端渲染" | **纯重构，行为零变化** | 现有测试全绿 + `pnpm check`；新增 `core/hygiene.test.ts` 守依赖方向 |
+| **M1 Run 抽象 + headless** | 新增 `core/run.ts` / `core/runManager.ts`；`SubAgentRuntime` 从全局改 per-run；新增 `mini-pi exec "..." --json` 输出 JSONL | 新增子命令，不动 REPL | CI 能跑 `exec` 并断言事件序列 |
+| **M2 App Server + Web** | `src/server`（Express + SSE）+ `src/client`（Vite 代理到服务端） | 新增子命令 `serve` | 浏览器里能流式看回复、点允许 / 拒绝 |
+| ★ M3 并行 + worktree | `core/worktree.ts`，每个 Run 一个隔离 root | 无 | 两个 Run 并行不互相踩 |
+| ★ M4 审批三档 | `read-only` / `workspace-write`（默认）/ `full-access` | 无 | 三档在两端给出同一裁决 |
+| **M5 Electron 壳** | `src/electron`；服务端托管前端产物；`mini-pi desktop` | 新增子命令 `desktop` | 关窗即退出、单实例、端口不残留 |
+
+**M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
+"多一个事件订阅者"。
+
+## 4. Electron 壳的最小实现
+
+主进程只做三件事：起服务 → 开窗口 → 关窗退出。业务（模型、会话、审批、
+事件流）全在 App Server 里，因此 **Web 客户端与内核一行都不用改**。
+
+| 交付 | 位置 | 要点 |
+| --- | --- | --- |
+| 窄接口 | `src/electron/api.ts` | 六个方法（`requestSingleInstanceLock` / `onSecondInstance` / `whenReady` / `createWindow` / `appPath` / `quit`），**自己描述形状，不 import electron 的类型**——仓库里不装 electron 也能 typecheck，测试塞假实现就能钉住全部行为 |
+| 执行体 | `src/electron/main.ts` | 装配与副作用分离，Electron API 全在 `deps.electron` 后面 |
+| 入口 | `src/electron/entry.ts` → `dist-electron/main.cjs` | 单独一个文件，避免 `main.ts` 带上一进门就执行的副作用 |
+| 共用装配 | `server` 的 `bootAppServer` | `serve` 与 Electron 主进程走同一条路，不各写一份 |
+| 命令 | `mini-pi desktop` | 父进程拉起 Electron 后立即返回；`--no-electron` 退回浏览器 `--app=`；`--no-open` 无头 |
+
+**两个必踩的坑**（都要写进测试）：
+
+1. `require("electron")` 与 `import("electron")` 不是同一个东西。Electron
+   只把内建模块注册在 **CJS 加载器**里；ESM 的 `import()` 解析到的是 npm 包
+   给的可执行文件路径——于是"我在不在 Electron 里"的答案永远是"不在"。
+   反过来在普通 Node 里 `require("electron")` 拿到的正是那个路径字符串，
+   这恰好是"我能不能起 Electron"的答案。同一个名字，两种含义，只能看形状分辨。
+2. `ELECTRON_RUN_AS_NODE` 必须从子进程环境里删掉。某些终端（VS Code 集成终端）
+   常年带着它，Electron 拿到就退化成普通 Node：`process.type` 变 undefined、
+   内建模块一个都不注册，表现是"窗口开不出来"，而报错里连 Electron 的影子
+   都没有。由 `electronSpawnOptions()` 统一清理。
+
+**为什么真上 Electron，而不是浏览器 `--app=` 开无地址栏窗口**：关窗即退出
+（服务活在主进程里，不收掉下次启动直接 EADDRINUSE）、单实例、可打包。
+但浏览器壳作为降级路径保留（机器上没装 Electron 时仍能用）。
+
+## 5. 依赖与打包：最容易破功的地方
+
+现状（main）：`dependencies` 为空，`bin/mini-pi-cli.cjs` 是 esbuild 自包含
+单文件——chalk / openai / @anthropic-ai/sdk 全在 `devDependencies`，
+验证方式是把它复制到空目录跑 `--version`。
+
+**这是加客户端时最容易被顺手破坏的一条**，历史上已经破过一次：为了起服务端，
+把 `express` / `react` / `vite` / `tsx` / `concurrently` 都写进了 `dependencies`，
+同时给 `build:cli` 加 `--external:react --external:express …`。
+结果 CLI bundle 运行时需要 node_modules，**单文件自包含这条不变量直接没了**，
+npm 包的安装成本也跟着涨。
+
+两条路：
+
+- **方案 A（起步推荐）**：留在单包。新增依赖**一律 devDependencies**；
+  `build:cli` **保持不加 `--external`**（全量内联）；另开 `build:electron`
+  单独 bundle（`--external:electron`，由 Electron 运行时提供）与 `build:web`。
+  `publish.yml` 里已有 `test -f "$PKG_DIR/LICENSE"` 这类钉子，再加一条：
+  **把产物复制到空目录跑 `--version`**，守住单文件自包含。
+- **方案 B（规模上来后）**：pnpm workspace 拆出 `packages/desktop`，
+  CLI 包 `dependencies` 恒为空，桌面壳的依赖与 CLI 彻底隔离。
+
+Electron 是**开发依赖**（上百 MB 二进制），npm 包里不带它。
+
+## 6. 已有分支 `refactor/core-extraction` 怎么处理
+
+该分支 M0~M5 全部走完（23 ahead / 50 behind main），是一份**可参考的
+实现与踩坑记录**，但**不建议直接 merge**，理由有三：
+
+1. **冲突面集中在 main 之后又改过的五个文件**：`prompt.ts`、`turn.ts`、
+   `approval.ts`、`session.ts`、`index.ts`。main 在那之后落了落盘 at-least-once、
+   `load_skill` 模型驱动、凭据守卫下沉、review 受限验证、`main()` 回调拆分——
+   全是语义级改动，逐行解冲突的成本高于重写 cli 侧接线。
+2. **依赖口径冲突**：分支把服务端依赖写进了 `dependencies` 并给 `build:cli`
+   加了 `--external`，与 main 现在钉住的"运行时零依赖"正面冲突（见 §5）。
+3. **文档冲突**：分支里还在的 `auth.md` / `multi-agent-fix-plan.md` /
+   `new-command-implementation.md`，main 已合并进权威篇并删除，merge 会让它们复活。
+
+**建议做法**：以 main 为基线按 M 顺序重做。`src/core/`、`src/server/`、
+`src/client/`、`src/electron/` 在 main 上是**纯新增目录**，可以直接从分支
+cherry-pick / 复制过来再修 import；`src/cli/` 下的改动（26 个文件）全部重写，
+只保留"下沉后的接线"这一层。分支的 `docs/client-architecture.md` 作为设计
+参考留档，不进 main 的权威文档体系。
+
+## 7. 门禁与验收清单
+
+- `pnpm check` = typecheck + 覆盖率闸门（lines / branches 85、functions 90）；
+  新增模块必须同步补测试，否则直接卡住。
+- CLI 行为回归：M0 结束时应能通过全部既有 CLI 测试且**不新增、不删除任何
+  终端输出格式**；有变化就是改坏了。
+- 命令表三处一致性由 `commands.test.ts` 守（注册表 ↔ dispatch ↔ README ↔
+  cli-interaction）；新增 `serve` / `desktop` / `exec` 要同步四处。
+- 单文件不超过 1000 行；测试 glob 只收 `.test.ts`（`.test.tsx` 不被收集），
+  因此**前端有逻辑的代码要抽成 `.ts` 纯模块**，组件只做摆放。
+- Windows 上实测：路径分隔符、spawn、`ELECTRON_RUN_AS_NODE` 清理。
+
+## 8. 工作量分布（粗估）
+
+| 阶段 | 量级 | 说明 |
+| --- | --- | --- |
+| M0 | 中 | 主要是移动文件 + 改 import，风险低但面广 |
+| M1 | 中高 | `run.ts` 是新增的核心抽象，测试量最大 |
+| M2 | 高 | 服务端 + 前端两条线同时起 |
+| M5 | 低 | 有了 M2，Electron 只是薄薄一层壳 |
