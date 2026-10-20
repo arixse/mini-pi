@@ -11,7 +11,7 @@
  */
 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 
 /**
  * 把路径解析到工作区内，并做两层校验：
@@ -68,6 +68,35 @@ export function realpathOrNull(target: string): string | null {
 export function workspaceRealPath(workspaceRoot: string): string {
   const root = resolve(workspaceRoot);
   return realpathOrNull(root) ?? root;
+}
+
+/**
+ * 判断相对路径是否指向工作区内**已存在**的文件。
+ *
+ * 只服务于审批展示（决定写文件时要不要标"覆盖"），因此逃逸出工作区或路径非法
+ * 一律按"不存在"处理，不影响真正的写入校验（那在 `resolveInsideWorkspace`）。
+ *
+ * 放在内核里的理由与风险判定相同：终端与客户端必须给出同一句
+ * 「覆盖已存在的文件」——两边各写一份，迟早有一边漏掉 `..` 的判定。
+ */
+export function workspaceFileExists(
+  workspaceRoot: string,
+  relativePath: string,
+): boolean {
+  if (typeof relativePath !== "string" || relativePath.trim() === "") {
+    return false;
+  }
+  try {
+    const root = resolve(workspaceRoot);
+    const target = resolve(root, relativePath);
+    const rel = relative(root, target);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      return false;
+    }
+    return existsSync(target);
+  } catch {
+    return false;
+  }
 }
 
 /**

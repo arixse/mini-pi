@@ -3,7 +3,13 @@ import assert from "node:assert";
 import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkBashCommand, findCredentialMentions, isCredentialFile, tokenizeCommand } from "./workspace";
+import {
+  checkBashCommand,
+  findCredentialMentions,
+  isCredentialFile,
+  tokenizeCommand,
+  workspaceFileExists,
+} from "./workspace";
 import { createToolRegistry } from "./registry";
 import { IS_WIN32, OUTSIDE_ABSOLUTE_FILE, createTempWorkspace } from "./testWorkspace";
 
@@ -313,5 +319,33 @@ describe("工作区守卫（路径、凭据与 symlink 逃逸）", () => {
         message: /Path cannot be empty/,
       });
     });
+  });
+});
+
+describe("workspaceFileExists（审批展示里的覆盖判断）", () => {
+  beforeEach(() => workspace.reset());
+  afterEach(() => workspace.remove());
+
+  it("只在工作区内且真实存在时为 true", () => {
+    writeFileSync(join(testDir, "a.txt"), "x");
+    assert.strictEqual(workspaceFileExists(testDir, "a.txt"), true);
+    assert.strictEqual(workspaceFileExists(testDir, "b.txt"), false);
+  });
+
+  it("逃逸出工作区的路径一律按「不存在」处理", () => {
+    // 只影响展示（要不要标"覆盖"），真正写入时的守卫在 resolveInsideWorkspace
+    assert.strictEqual(workspaceFileExists(testDir, "../outside.txt"), false);
+    assert.strictEqual(workspaceFileExists(testDir, OUTSIDE_ABSOLUTE_FILE), false);
+  });
+
+  it("空路径与纯空白不算文件", () => {
+    assert.strictEqual(workspaceFileExists(testDir, ""), false);
+    assert.strictEqual(workspaceFileExists(testDir, "   "), false);
+  });
+
+  it("名字以两个点开头但仍在工作区内的文件，不该被当成逃逸", () => {
+    // 旧实现用 startsWith("..") 判定逃逸，会把 "..foo" 误判成越界
+    writeFileSync(join(testDir, "..foo"), "x");
+    assert.strictEqual(workspaceFileExists(testDir, "..foo"), true);
   });
 });

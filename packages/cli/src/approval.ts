@@ -1,11 +1,11 @@
 import chalk from "chalk";
-import { existsSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
 import { BeforeToolCall, ToolCallContext, ToolDecision } from "@minipi/core/agent/loop";
 import { ToolCallContent } from "@minipi/core/shared/protocol";
 import { READ_ONLY_TOOLS } from "@minipi/core/agent/tools/registry";
 // 风险等级与命中原因在内核里算：终端只是把同一份判断画出来
 import { assessToolRisk } from "@minipi/core/risk";
+// 摘要文案同样在内核里：终端与客户端必须对同一次调用说同一句话
+import { describeToolCallLines } from "@minipi/core/toolSummary";
 
 /**
  * 工具调用的用户审批。
@@ -17,31 +17,14 @@ import { assessToolRisk } from "@minipi/core/risk";
  */
 
 /**
- * 判断相对路径是否指向工作区内**已存在**的文件。
+ * 摘要与"文件是否已存在"的实现都搬去了内核（`core/toolSummary.ts`、
+ * `core/agent/tools/workspace.ts`）：客户端落地时要用同一份判断，
+ * 留在这里就只能复制一份，然后等着两边对同一条命令给出不同说法。
  *
- * 只服务于审批提示的展示（决定写文件提示里要不要加"覆盖"），
- * 因此逃逸出工作区或路径非法一律按"不存在"处理，不影响真正的写入校验
- * （真正的校验在 `resolveInsideWorkspace`）。
+ * 这里保留同名导出，是为了让既有调用方（`repl.ts`）与测试不必跟着改 import。
  */
-export function workspaceFileExists(
-  workspaceRoot: string,
-  relativePath: string,
-): boolean {
-  if (typeof relativePath !== "string" || relativePath.trim() === "") {
-    return false;
-  }
-  try {
-    const root = resolve(workspaceRoot);
-    const target = resolve(root, relativePath);
-    const rel = relative(root, target);
-    if (rel === ".." || rel.startsWith("..") || isAbsolute(rel)) {
-      return false;
-    }
-    return existsSync(target);
-  } catch {
-    return false;
-  }
-}
+export { workspaceFileExists } from "@minipi/core/agent/tools/workspace";
+export { describeTaskCall, describeToolCall } from "@minipi/core/toolSummary";
 
 /**
  * 信任模式变更回执。
@@ -67,8 +50,6 @@ export function printTrustNotice(trusted: boolean): void {
  * 于是"注册表认为只读（可并发）"与"审批认为需确认"两套判断会分叉。
  */
 export const AUTO_APPROVED_TOOLS: ReadonlySet<string> = READ_ONLY_TOOLS;
-
-const MAX_VALUE_LENGTH = 120;
 
 /**
  * 用户对一次确认的回答。
@@ -137,109 +118,6 @@ export type ApprovalPolicy = {
   onDecision?: (call: ToolCallContent, allowed: boolean, reason: ApprovalReason) => void;
 };
 
-/** 委派摘要里目标字段的显示上限 */
-const TASK_GOAL_PREVIEW = 120;
-
-/**
- * `task` 的专属审批摘要（批次 D2）。
- *
- * 此前走 `default` 分支，把 `goal` / `role` / `allowWrite` / `allowBash` /
- * `maxTurns` 全量铺开，用户要在一堆参数里自己找"这次会不会动我的文件"。
- *
- * 重排的判据很直接：**"是否含写 / bash"是用户决定放不放行的唯一依据**，
- * 必须放在第一行可见处；角色与工具数量是背景，轮次预算可省。
- */
-export function describeTaskCall(call: ToolCallContent): string[] {
-  const args = call.arguments ?? {};
-  const granted = [
-    args.allowWrite ? "写文件" : "",
-    args.allowBash ? "执行命令" : "",
-  ].filter(Boolean);
-
-  const role = typeof args.role === "string" && args.role ? args.role : "general";
-  const lines: string[] = [
-    `目标: ${truncateToValue(args.goal, TASK_GOAL_PREVIEW)}`,
-    `角色: ${truncateToValue(role, 40)} · 权限: ${
-      granted.length > 0 ? granted.join(" / ") : "只读"
-    }`,
-  ];
-  return lines;
-}
-
-/**
- * 压平成单行。
- *
- * 提示语每行只有一个 gutter 前缀，而命令 / goal 里可能带换行
- * （多行 bash 脚本、带换行的委派目标），原样输出会让后续行"掉出"卡片。
- */
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function truncateToValue(value: unknown, limit: number): string {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  const text =
-    typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  const flat = oneLine(text);
-  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
-}
-
-function truncateValue(value: unknown): string {
-  return truncateToValue(value, MAX_VALUE_LENGTH);
-}
-
-/**
- * 生成给用户看的工具调用摘要。
- * 大字段（写入内容等）只显示长度，避免把整段文件内容刷到终端。
- */
-export function describeToolCall(
-  call: ToolCallContent,
-  fileExists?: (relativePath: string) => boolean,
-): string {
-  const args = call.arguments ?? {};
-
-  switch (call.name) {
-    case "bash":
-      return `命令: ${truncateValue(args.command)}`;
-    case "verify_command":
-      // 必须写出"受限"：光看"命令: pnpm test"用户无法判断它能干什么，
-      // 而"只接受验证类白名单"恰恰是这次放行该不该点的依据
-      return `验证: ${truncateValue(args.command)}（受限白名单：测试 / 构建 / 检查）`;
-    case "write_file": {
-      const path = truncateValue(args.path);
-      // 覆盖已有文件必须显式标注：原有内容会被整份替换且无法撤销
-      const exists =
-        typeof args.path === "string" ? fileExists?.(args.path) : undefined;
-      const size = `${String(args.content ?? "").length} 字符`;
-      if (exists === undefined) {
-        return `写入 ${path}（${size}）`;
-      }
-      return exists
-        ? `覆盖已存在的文件 ${path}（写入 ${size}，原内容将被替换）`
-        : `新建 ${path}（${size}）`;
-    }
-    case "edit_file":
-      return `编辑 ${truncateValue(args.path)}`;
-    case "task": {
-      // 委派会把"要用什么工具"写进参数里：直接在摘要里读出来，
-      // 比让用户从一长串 goal 后面找 allowBash 强
-      const granted = [
-        args.allowBash ? "bash" : "",
-        args.allowWrite ? "写工具" : "",
-      ].filter(Boolean);
-      return `委派目标: ${truncateValue(args.goal)}（工具权限：${granted.length > 0 ? granted.join(" / ") : "仅只读"}）`;
-    }
-    default: {
-      const entries = Object.entries(args).map(
-        ([key, value]) => `${key}=${truncateValue(value)}`,
-      );
-      return entries.length > 0 ? entries.join(", ") : "(无参数)";
-    }
-  }
-}
-
 /**
  * 调用来源前缀。
  *
@@ -277,11 +155,9 @@ export function buildApprovalQuestion(
     tag ? `${header} ${chalk.dim(tag)}` : header,
   ];
 
-  // task 有专属的多行摘要（目标 / 角色 / 权限分两行），其余工具走单行描述
-  const summaryLines =
-    call.name === "task"
-      ? describeTaskCall(call)
-      : [describeToolCall(call, fileExists)];
+  // task 有专属的多行摘要（目标 / 角色 / 权限分两行），其余工具走单行描述。
+  // 这条知识收在内核里：客户端渲染审批卡时用的是同一个函数
+  const summaryLines = describeToolCallLines(call, fileExists);
   for (const line of summaryLines) {
     lines.push(`${gutter}${line}`);
   }
