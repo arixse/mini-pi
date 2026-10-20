@@ -321,12 +321,6 @@ svg.ic { width: 1em; height: 1em; flex: none; stroke-width: 1.8; fill: none; str
 .diff .del { background: rgba(244,63,94,.1); color: #fda4af; }
 .diff .ctx { color: var(--t5); }
 
-/* 令牌门禁 */
-.gate { height: 560px; display: flex; align-items: center; justify-content: center; }
-.gate-card { width: 340px; border: 1px solid var(--border); background: var(--panel); border-radius: 16px; padding: 20px; }
-.gate-card h3 { margin: 0 0 6px; font-size: 15px; color: var(--t1); }
-.gate-card p { margin: 0 0 14px; font-size: 12.5px; color: var(--t5); }
-
 /* 桌面壳 */
 .win { border: 1px solid #334155; border-radius: 12px; overflow: hidden; background: var(--bg); }
 .win-bar { height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #0b1220; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--t5); }
@@ -371,7 +365,6 @@ body.show-anno .legend-title { display: block; }
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h8"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M9 7V4h6v3"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
-  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M17 6l3 3M14 9l3 3"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
 </svg>
@@ -398,8 +391,7 @@ body.show-anno .legend-title { display: block; }
     <button class="tab" role="tab" data-screen="history" aria-selected="false">④ 历史会话</button>
     <button class="tab" role="tab" data-screen="diff" aria-selected="false">⑤ 变更 diff</button>
     <button class="tab" role="tab" data-screen="settings" aria-selected="false">⑥ 设置 · 模型</button>
-    <button class="tab" role="tab" data-screen="gate" aria-selected="false">⑦ 令牌门禁</button>
-    <button class="tab" role="tab" data-screen="desktop" aria-selected="false">⑧ 桌面壳</button>
+    <button class="tab" role="tab" data-screen="desktop" aria-selected="false">⑦ 桌面壳</button>
   </div>
 
   <div class="frame-wrap">
@@ -450,7 +442,7 @@ body.show-anno .legend-title { display: block; }
               <span>12.4s · 8.2k / 128k</span>
               <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px"><svg class="ic" style="font-size:11px"><use href="#i-stop"/></svg>停止</button>
               <i class="anno" data-n="4">4</i>
-              <i class="anno" data-n="21" style="top:-6px;right:150px">21</i>
+              <i class="anno" data-n="20" style="top:-6px;right:150px">20</i>
             </div>
 
             <div class="row right anno-host">
@@ -560,8 +552,8 @@ content: …（+182 行）</pre>
             <textarea rows="3" placeholder="接着说，或 / 开头用命令">继续，把 session.ts 的落盘编排也搬下去</textarea>
             <button class="btn-send">发送</button>
             <button class="btn btn-stop" style="padding:9px 12px"><svg class="ic" style="font-size:12px"><use href="#i-stop"/></svg></button>
-            <i class="anno" data-n="20" style="top:-8px;left:44%">20</i>
-            <i class="anno" data-n="22" style="top:-8px;right:120px">22</i>
+            <i class="anno" data-n="19" style="top:-8px;left:44%">19</i>
+            <i class="anno" data-n="21" style="top:-8px;right:120px">21</i>
           </div>
           <div class="composer-hint">
             <label class="switch"><input type="checkbox" checked style="accent-color:var(--indigo)">隔离工作区（每个任务一个 worktree）</label>
@@ -573,7 +565,7 @@ content: …（+182 行）</pre>
             <span>运行中发送会排队，回合结束后执行</span>
           </div>
           <i class="anno" data-n="12" style="right:8px;bottom:6px">12</i>
-          <i class="anno" data-n="19" style="left:8px;bottom:6px">19</i>
+          <i class="anno" data-n="18" style="left:8px;bottom:6px">18</i>
         </footer>
         </div>
       </section>
@@ -780,7 +772,7 @@ content: …（+182 行）</pre>
         <footer class="composer anno-host">
           <div class="composer-row"><textarea rows="3" placeholder="还想改什么？接着追问也可以"></textarea><button class="btn-send">发送</button></div>
           <div class="composer-hint"><span>Run 已完成：发送即开新任务、沿用此会话；diff 未落地前提示条保留</span></div>
-          <i class="anno" data-n="23" style="right:8px;bottom:6px">23</i>
+          <i class="anno" data-n="22" style="right:8px;bottom:6px">22</i>
         </footer>
         </div>
       </section>
@@ -836,7 +828,7 @@ content: …（+182 行）</pre>
                     <button class="btn btn-ghost">full-access</button>
                   </div>
                   <span style="font-size:11.5px;color:var(--t5)">档位只影响"哪些工具还要问人"；认不出的档位服务端直接报错，不回落。切换不追溯：已挂起的审批卡仍等人裁决。</span>
-                  <i class="anno" data-n="24" style="top:-8px;right:-6px">24</i>
+                  <i class="anno" data-n="23" style="top:-8px;right:-6px">23</i>
                 </div>
               </div>
               <div class="modal-foot">
@@ -854,21 +846,7 @@ content: …（+182 行）</pre>
         </div>
       </section>
 
-      <!-- ================= ⑦ 令牌门禁 ================= -->
-      <section data-screen="gate" hidden>
-        <div class="gate">
-          <div class="gate-card anno-host">
-            <svg class="ic" style="font-size:20px;color:var(--indigo-lt)"><use href="#i-key"/></svg>
-            <h3 style="margin-top:10px">需要访问令牌</h3>
-            <p>服务端以 <code style="font-family:var(--mono)">--token</code> 启动。拿不到令牌时整页只做这一件事——其余每块都是空的，画出来只是噪音。</p>
-            <div class="field"><input type="password" placeholder="粘贴令牌" /></div>
-            <button class="btn-primary" style="margin-top:12px">进入</button>
-            <i class="anno" data-n="18">18</i>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================= ⑧ 桌面壳 ================= -->
+      <!-- ================= ⑦ 桌面壳 ================= -->
       <section data-screen="desktop" hidden>
         <div style="padding:18px">
           <div class="win">
@@ -932,18 +910,17 @@ const NOTES = {
   15: "历史会话只读。切过去就换 store，删除当前会话时服务端顺手开一个新的。",
   16: "隔离工作区的 diff 要在落地前看：这是「改完再决定去留」的关键一步。",
   17: "密钥只写不读，前端永不回显明文；档位认不出时报错而不是回落。",
-  18: "令牌门禁独占整页：拿不到令牌时其余区块全空，画出来只是噪音。",
-  19: "输入区与会话同宽（只占第 2 列，不横跨侧栏）：输入框是「对话的一部分」，"
+  18: "输入区与会话同宽（只占第 2 列，不横跨侧栏）：输入框是「对话的一部分」，"
     + "不是页脚。跨过去之后视线要在侧栏宽度之外才能落笔，长会话里尤其别扭。",
-  20: "输入框默认三行高（≈84px），随内容长到约八行（208px）后内部滚动——"
+  19: "输入框默认三行高（≈84px），随内容长到约八行（208px）后内部滚动——"
     + "给默认高度是为了让用户一开始就看出这里能写多段。",
-  21: "顶栏模型 / 档位芯片是「默认值」，对新任务生效；每个 Run 实际用的模型显示在运行头——"
+  20: "顶栏模型 / 档位芯片是「默认值」，对新任务生效；每个 Run 实际用的模型显示在运行头——"
     + "多任务并行时「用谁在跑」必须按 Run 回答，一枚全局芯片答不了。",
-  22: "运行中输入照常排队（与 CLI 同一口径），发送不禁用；排队的条目在时间线里标「已入队」。"
+  21: "运行中输入照常排队（与 CLI 同一口径），发送不禁用；排队的条目在时间线里标「已入队」。"
     + "挂起（等审批）与运行中一样可以输入。",
-  23: "Run 完成后仍可续聊：发送即开新任务、沿用同一会话；"
+  22: "Run 完成后仍可续聊：发送即开新任务、沿用同一会话；"
     + "隔离工作区的 diff 未落地前，提示条保留。",
-  24: "档位切换不追溯：只影响之后的工具调用，已挂起的审批卡仍等人裁决，"
+  23: "档位切换不追溯：只影响之后的工具调用，已挂起的审批卡仍等人裁决，"
     + "不自动放行也不作废。",
 };
 
