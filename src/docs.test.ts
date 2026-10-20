@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { SUBAGENT_ROLE_NAMES, rolePreset } from "./agent/roles";
 import { DEFAULT_CONTEXT_WINDOW, matchContextWindowRule } from "./provider/context-window";
-import { MAX_CONTEXT_TOKENS, resolveContextBudget } from "./cli/context";
+import { MAX_CONTEXT_TOKENS, resolveContextBudget } from "./core/context";
 
 /**
  * 文档与实现的一致性测试（`docs/*.md`）。
@@ -37,11 +37,16 @@ function docFiles(): string[] {
 /**
  * 文档里允许出现的"不存在路径"，以及凭什么允许。
  *
- * Web 阶段（`src/server` / `src/client`）整块尚未实现，文档已明确标注，
+ * 客户端化的后三段（`src/server` / `src/client` / `src/electron`）整块尚未实现，
+ * 方案文档（`docs/electron-client-plan.md`）已明确标注是规划，
  * 因此它们的缺失是**事实**而不是漂移；这里用显式白名单把这件事写死，
  * 将来真落地了就要删掉白名单条目，而不是让断言一直泛泛地失败。
+ *
+ * 反过来，`src/core` **不在这份名单里**：它随 M0 一起落地了，
+ * 方案文档里点到的每个 `src/core/*.ts` 都必须真实存在——
+ * 那正是"内核确实下沉了"的唯一机器可验证的证据。
  */
-const UNIMPLEMENTED_PATHS = ["src/server", "src/client"];
+const UNIMPLEMENTED_PATHS = ["src/server", "src/client", "src/electron"];
 
 function isUnimplemented(path: string): boolean {
   return UNIMPLEMENTED_PATHS.some(

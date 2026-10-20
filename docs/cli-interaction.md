@@ -69,7 +69,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 3.1 System Prompt 组成
 
-段落顺序固定（`src/cli/prompt.ts`）：
+段落顺序固定（`src/core/prompt.ts`）：
 
 ```
 # 角色 → 工作区 → 工具使用 → 代码风格 → 遇到错误时 → 当前项目 → 输出
@@ -77,7 +77,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 # 可用 Skills（来自 Skill 元数据摘要）
 ```
 
-**技术栈**由 `src/cli/projectStack.ts` 自动探测，列出模块系统、包管理器与真实存在的验证命令。
+**技术栈**由 `src/core/projectStack.ts` 自动探测，列出模块系统、包管理器与真实存在的验证命令。
 不收 `dev` / `start`（长驻进程，会超时）；探测不出时整段省略。
 
 ### 3.2 启动界面示例

@@ -167,11 +167,14 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
+| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 进行中，桌面壳尚未实现）           |
 | [开发日志索引](notes/README.md)                 | day1 ~ day25，按真实提交日期编排                                             |
 
 ## 范围
 
-当前只有 CLI 一种形态，`src/server` / `src/client`（Web 端）尚未实现，文档中出现的相关路径均为规划。
+当前只有 CLI 一种形态。与界面无关的内核正在下沉到 `src/core`（提示词、技术栈探测、
+风险判定、上下文口径与落盘编排已在其中），`src/server` / `src/client` / `src/electron`
+尚未实现，文档中出现的相关路径均为规划。
 
 ## 许可
 

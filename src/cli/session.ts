@@ -1,15 +1,31 @@
 /**
- * 会话的读写：落盘、压缩与切换。
+ * 会话的读写：落盘、压缩与切换（终端侧）。
  *
- * 会话文件是上下文的**唯一事实来源**：内存里的 `options.messages` 只是它的投影，
- * 因此这里的每个函数都保证"写完文件再重建投影"，而不是两边各改各的。
+ * 编排本身在 `core/session.ts`——落盘与压缩是一次执行的固有步骤，
+ * headless 与服务端同样要走。这里只多两件终端专属的事：
+ * **压缩时显示状态行**，以及**切换会话时清掉工具卡片的渲染缓存**。
+ *
+ * 于是 `turn.ts` 这类调用方看到的还是"传 options 进来"的形状，
+ * 而内核那边拿到的是不带终端味的窄输入。
  */
 
 import { AgentMessage } from "../shared/protocol";
-import { KEEP_RECENT_MESSAGES, compactionBudget } from "./context";
+import { compactionBudget } from "./context";
 import { resetToolRenderState } from "./toolEvents";
 import type { StatusController } from "./status";
 import type { ReplOptions } from "./options";
+import {
+  SessionSink,
+  appendAgentMessages as appendAgentMessagesToSink,
+  appendUserMessage as appendUserMessageToSink,
+  compactIfNeeded,
+  needsCompaction,
+} from "../core/session";
+
+/** 把终端的入参结构翻译成内核的落盘目标 */
+function sinkFrom(options: ReplOptions): SessionSink {
+  return { store: options.sessionStore ?? null, messages: options.messages };
+}
 
 /**
  * 检查并在需要时压缩上下文。
@@ -23,21 +39,15 @@ export async function compactContext(
   status: StatusController,
   signal?: AbortSignal,
 ): Promise<AgentMessage[] | undefined> {
-  const store = options.sessionStore;
-  const { budget, overhead } = compactionBudget(options);
-  if (!store || !store.needsCompaction(budget, KEEP_RECENT_MESSAGES, overhead)) {
+  const sink = sinkFrom(options);
+  const budget = compactionBudget(options);
+  if (!needsCompaction(sink, budget)) {
     return undefined;
   }
 
   status.set({ kind: "compacting", startedAt: Date.now() });
   try {
-    const entry = await store.compactIfNedded(
-      budget,
-      KEEP_RECENT_MESSAGES,
-      overhead,
-      signal,
-    );
-    return entry ? store.buildContext() : undefined;
+    return await compactIfNeeded(sink, budget, signal);
   } finally {
     status.stop();
   }
@@ -46,8 +56,6 @@ export async function compactContext(
 /**
  * 追加一条用户消息并同步上下文。
  *
- * 未接会话存储时退回纯内存模式；接了会话存储时以会话文件为准，
- * 并在必要时压缩上下文，使压缩结果真正作用于后续的模型调用。
  * @param signal 取消信号：只用于压缩（写会话文件必须写完）
  */
 export async function appendUserMessage(
@@ -55,39 +63,15 @@ export async function appendUserMessage(
   message: AgentMessage,
   signal?: AbortSignal,
 ): Promise<void> {
-  const store = options.sessionStore;
-  if (!store) {
-    options.messages.push(message);
-    return;
-  }
-  await store.appendMessage(message);
-  const { budget, overhead } = compactionBudget(options);
-  await store.compactIfNedded(budget, KEEP_RECENT_MESSAGES, overhead, signal);
-  store.syncContext(options.messages);
+  await appendUserMessageToSink(sinkFrom(options), message, compactionBudget(options), signal);
 }
 
-/**
- * 把 Agent 本轮产生的消息写入会话存储，并同步上下文。
- *
- * 整批一次写入（而不是逐条 await）：一轮里几十条消息本来就是一批，
- * 逐条写既多花系统调用，也会把失败点摊在中间——写到第 k 条时失败，
- * 调用方无法知道到底落了几条，重试必然"漏的漏、重的重"。
- */
+/** 把 Agent 本轮产生的消息写入会话存储，并同步上下文 */
 export async function appendAgentMessages(
   options: ReplOptions,
   messages: AgentMessage[],
 ): Promise<void> {
-  const store = options.sessionStore;
-  if (!store) {
-    options.messages.push(...messages);
-    return;
-  }
-  if (messages.length === 0) {
-    return;
-  }
-  // 写失败时这里抛出，且 store 的内存状态保持不变：调用方按"整批未落盘"重试
-  await store.appendMessages(messages);
-  store.syncContext(options.messages);
+  await appendAgentMessagesToSink(sinkFrom(options), messages);
 }
 
 /**

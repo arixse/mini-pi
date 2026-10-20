@@ -24,9 +24,13 @@ mini-pi/
 │   │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
 │   │   └── sessionStore.ts # 会话存储
 │   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
-│   ├── cli/             # 命令行交互
+│   ├── core/            # 与界面无关的内核（客户端化的地基，M0 起陆续下沉）
+│   │   ├── prompt.ts    # 系统提示词组装；projectStack.ts 技术栈探测
+│   │   ├── risk.ts      # 工具调用的风险等级（结构化数据，不含呈现）
+│   │   └── context.ts   # 上下文窗口与压缩阈值；session.ts 落盘与压缩编排
+│   ├── cli/             # 命令行交互（内核的一个订阅者）
 │   │   ├── repl.ts      # 主循环；dispatch.ts 命令分派；turn.ts 回合执行
-│   │   ├── context.ts   # 上下文窗口与压缩阈值；session.ts 会话读写
+│   │   ├── context.ts   # ReplOptions → 内核口径的翻译层
 │   │   ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
 │   │   └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
 │   └── shared/          # 共享模块
