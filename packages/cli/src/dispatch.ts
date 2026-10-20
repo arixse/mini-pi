@@ -11,7 +11,9 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
 import { CONTEXT_WINDOW_SOURCE_LABEL } from "@minipi/core/provider";
-import { printTrustNotice } from "./approval";
+import { printApprovalNotice, printTrustNotice } from "./approval";
+import { APPROVAL_MODES, describeApprovalMode, parseApprovalMode } from "@minipi/core/policy";
+import type { ApprovalMode } from "@minipi/core/policy";
 import { printHelp } from "./help";
 import { handleLogin, handleModel } from "./login";
 import { clearSession, startNewSession, switchSession } from "./session";
@@ -40,12 +42,12 @@ export type SlashCommandContext = {
   /** 退出请求：`/exit`、`/quit` 与 EOF 共用同一条协调流程 */
   requestExit: () => void;
   /**
-   * 信任模式。
+   * 审批策略档位（三档，见 `core/policy.ts`）。
    *
-   * 做成 getter/setter 而不是一个布尔值：`/trust` 与确认提示里的 `a`
-   * 是同一个开关的两条入口，分派这里只能拿到当前的真实值。
+   * 做成 getter/setter 而不是一个布尔值：`/approval`、`/trust` 与确认提示
+   * 里的 `a` 是同一个开关的三条入口，分派这里只能拿到当前的真实值。
    */
-  trusted: { get(): boolean; set(value: boolean): void };
+  approvalMode: { get(): ApprovalMode; set(value: ApprovalMode): void };
   /** 子 Agent 委派开关 */
   subAgent: { get(): boolean; set(value: boolean): void };
   /** 子 Agent trace 落盘开关（与委派开关互不影响） */
@@ -72,14 +74,46 @@ export async function handleSlashCommand(
     return true;
   }
 
+  // `/trust` 是 `/approval` 的简写：在"全权"与"工作区读写"之间来回切。
+  // 留着它是因为确认提示里的 `a` 用的就是这套说辞，两者必须同一个开关。
   if (input === "/trust") {
-    ctx.trusted.set(!ctx.trusted.get());
-    printTrustNotice(ctx.trusted.get());
+    const next: ApprovalMode =
+      ctx.approvalMode.get() === "full-access" ? "workspace-write" : "full-access";
+    ctx.approvalMode.set(next);
+    printTrustNotice(next === "full-access");
+    return true;
+  }
+
+  if (input === "/approval" || input.startsWith("/approval ")) {
+    const current = ctx.approvalMode.get();
+    const argument = input.slice("/approval".length).trim();
+    if (argument === "") {
+      console.log(
+        chalk.yellow(
+          `\n🛡️  当前审批策略：${current}（${describeApprovalMode(current)}）\n`,
+        ),
+      );
+      console.log(chalk.dim(`  可选：${APPROVAL_MODES.join(" / ")}（/trust 在末两档间快切）\n`));
+      return true;
+    }
+    // 认不出的档位当场报错，不回落：`/approval rw2` 按默认档跑起来，
+    // 用户以为自己在最宽松那一档，结果相反才最糟
+    const mode = parseApprovalMode(argument);
+    if (!mode) {
+      console.log(
+        chalk.red(
+          `\n❌ 无法识别的审批档位：${argument}\n  可选：${APPROVAL_MODES.join(" / ")}\n`,
+        ),
+      );
+      return true;
+    }
+    ctx.approvalMode.set(mode);
+    printApprovalNotice(mode);
     return true;
   }
 
   if (input === "/status") {
-    printStatus(options, ctx.trusted.get(), ctx.subAgent.get(), ctx.subAgentTrace.get());
+    printStatus(options, ctx.approvalMode.get(), ctx.subAgent.get(), ctx.subAgentTrace.get());
     return true;
   }
 

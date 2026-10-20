@@ -100,6 +100,8 @@ function RunHead(): React.ReactElement | null {
     parts.push(`${formatTokens(view.tokens)} / ${formatTokens(view.contextWindow)}`);
   }
   const busy = view.status === "running" || view.status === "blocked" || view.status === "queued";
+  const workspace = view.workspace;
+  const isolated = workspace?.isolated === true;
 
   return (
     <div className="run-head">
@@ -113,7 +115,22 @@ function RunHead(): React.ReactElement | null {
           {view.model}
         </span>
       ) : null}
+      {isolated && workspace ? (
+        <span className="pill pill-sky" title={`隔离工作区：${workspace.root}`}>
+          <Icon name="folder" size={11} />
+          隔离工作区
+        </span>
+      ) : null}
       <span>{parts.join(" · ")}</span>
+      {isolated && workspace && !busy ? (
+        workspace.released ? (
+          <span className="pill pill-slate" title={`已删除：${workspace.root}`}>
+            已丢弃
+          </span>
+        ) : (
+          <DiscardWorktree runId={workspace.runId} root={workspace.root} />
+        )
+      ) : null}
       {view.activeRunId && busy ? (
         <button
           className="btn btn-ghost"
@@ -135,6 +152,50 @@ function RunHead(): React.ReactElement | null {
         </button>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 「丢弃」：删掉这个任务的隔离工作区。
+ *
+ * 两步确认放在按钮自己身上，不弹窗——隔离工作区里是这次执行的全部产物，
+ * 删了不可恢复；但运行头是常驻元素，弹一次框等于把人从当前上下文里拽出来。
+ * 动作层只认"点了确认"那一下（`actions.discardWorktree`）。
+ */
+function DiscardWorktree({ runId, root }: { runId: string; root: string }): React.ReactElement {
+  const actions = useActions();
+  const [confirming, setConfirming] = useState(false);
+  const compact = { fontSize: "11.5px", padding: "3px 9px" };
+
+  if (confirming) {
+    return (
+      <>
+        <button
+          className="btn btn-no"
+          style={compact}
+          onClick={() => {
+            setConfirming(false);
+            void actions.discardWorktree(runId);
+          }}
+        >
+          确认丢弃
+        </button>
+        <button className="btn btn-ghost" style={compact} onClick={() => setConfirming(false)}>
+          取消
+        </button>
+      </>
+    );
+  }
+  return (
+    <button
+      className="btn btn-ghost"
+      style={compact}
+      title={`删除隔离工作区 ${root}（其中的改动不可恢复）`}
+      onClick={() => setConfirming(true)}
+    >
+      <Icon name="trash" size={11} />
+      丢弃
+    </button>
   );
 }
 

@@ -70,6 +70,9 @@ export const api = {
     post("/api/runs", sessionId ? { prompt, sessionId } : { prompt }),
   cancelRun: (runId: string): Promise<void> =>
     request<void>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+  /** 丢弃这个 Run 的隔离工作区（M3）；跑着的时候服务端会 409 */
+  discardWorktree: (runId: string): Promise<void> =>
+    request<void>(`/api/runs/${encodeURIComponent(runId)}/worktree`, { method: "DELETE" }),
   runSummaries: (): Promise<RunSummary[]> => request<RunSummary[]>("/api/runs"),
 
   approvals: (): Promise<ApprovalRequest[]> => request<ApprovalRequest[]>("/api/approvals"),

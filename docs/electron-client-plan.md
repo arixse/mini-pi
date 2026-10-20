@@ -75,13 +75,27 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
 | **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                          | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
 
-**进度（2026-10-20）**：M0、M1 与 M2 已落地，`pnpm check` 绿灯。
+**进度（2026-10-20）**：M0、M1、M2、M3 与 M4 已落地，`pnpm check` 绿灯。
 M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层用 Express
 （SSE 帧与来源校验仍自己写），前端用 React + Vite（状态仍就地修改，
 由 `revision` 驱动重画）。"零运行时依赖"这条不变量只由 **CLI 包**承担——
 它才是要发到 npm 的那一个，由 `tests/packages.test.ts` 钉住。
 **M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
 "多一个事件订阅者"——M2 的 App Server 正是按这个假设接上的。
+
+M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端同源）：
+
+- **M3 并行 + worktree**：裁决落在 `core/worktree.ts` 的 `WorkspaceManager`
+  （三条硬规则：隔离不可用就报错不静默共用、不主动回收、diff 只给隔离
+  工作区）。服务端 `serve --isolate` 开启，每个 Run 一个独立检出，
+  `--concurrency <n>` 放开并行上限；运行头显示「隔离工作区」与「丢弃」
+  （`DELETE /api/runs/:id/worktree`）。目录名后缀取 runId **后** 8 位——
+  取头会把一半熵浪费在同一个 `run` 前缀上，同一毫秒连发两个 Run 会撞目录。
+- **M4 审批三档**：裁决表只有一份，在内核 `core/policy.ts`
+  （`evaluateApprovalPolicy`）；CLI 与服务端都调它，客户端的 `Tier`
+  是 `ApprovalMode` 的类型别名，相等由测试钉住。安全排序：只读档的
+  block 裁决排在会话授权（`a` / 「本会话全部允许」）**之前**——切档是
+  比旧授权更新的意图，否则限制令会被一次旧授权穿透。
 
 ## 4. Electron 壳的最小实现
 

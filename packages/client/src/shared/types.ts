@@ -8,9 +8,17 @@
 
 import type { AgentEvent, AgentMessage } from "@minipi/core/shared/protocol";
 import type { ContextWindowSource } from "@minipi/core/provider";
+import type { ApprovalMode } from "@minipi/core/policy";
 
-/** 审批档位：三档之间的差别是"哪些工具还要问人"，不是"问不问得出来" */
-export type Tier = "read-only" | "workspace-write" | "full-access";
+/**
+ * 审批档位：三档之间的差别是"哪些工具还要问人"，不是"问不问得出来"。
+ *
+ * 就是内核 `core/policy.ts` 的 {@link ApprovalMode}——裁决表只有那一份，
+ * 线上契约只是它的别名。用别名而不是在这里重写一个联合类型：
+ * 类型相同但定义两处，"内核加第四档、客户端不认识"就不会有类型错误，
+ * 只会静默少一档。{@link TIERS} 与 `APPROVAL_MODES` 的相等由测试钉住。
+ */
+export type Tier = ApprovalMode;
 
 export const TIERS: readonly Tier[] = ["read-only", "workspace-write", "full-access"];
 
@@ -28,6 +36,21 @@ export function isTier(value: unknown): value is Tier {
  */
 export type RunPhase = "queued" | "running" | "blocked" | "done" | "failed" | "cancelled";
 
+/**
+ * 这个 Run 实际落盘的工作区。
+ *
+ * `isolated` 为 false 时 `root` 就是基准 workspace（没开隔离时的老行为）；
+ * 为 true 时是 git worktree 的独立检出，**改完不会自动合回**——
+ * 用户要在运行头点「丢弃」或另行合并。服务端不会静默回退到共用目录，
+ * 隔离拿不到就是 409（见 host 的 isolationError）。
+ */
+export type RunWorkspace = {
+  root: string;
+  isolated: boolean;
+  /** 已点过丢弃：按钮变灰，防止回收一个已回收的目录 */
+  released: boolean;
+};
+
 export type RunSummary = {
   runId: string;
   /** 首条提问的前几个字，侧栏与运行头都用它 */
@@ -44,6 +67,8 @@ export type RunSummary = {
   contextWindow: number;
   /** 这个 Run 上还挂着的审批数 */
   pendingApprovals: number;
+  /** 这次执行实际用的根目录；开隔离时是独立 worktree */
+  workspace: RunWorkspace;
   error?: string;
 };
 

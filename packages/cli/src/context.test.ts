@@ -48,7 +48,7 @@ describe("上下文窗口的来源与展示", () => {
           contextWindow: 16_384,
           contextWindowSource: "inferred",
         }),
-        false,
+        "workspace-write",
       ),
     );
 
@@ -90,7 +90,7 @@ describe("contextUsage", () => {
     const usage = contextUsage(options);
     assert.ok(usage, "启用会话存储后应能算出占用");
 
-    const entries = new Map(sessionStatusEntries(options, false));
+    const entries = new Map(sessionStatusEntries(options, "workspace-write"));
     const row = entries.get("上下文") ?? "";
     assert.ok(
       row.includes(`约 ${usage!.used} tokens`),
@@ -102,7 +102,7 @@ describe("contextUsage", () => {
   it("压缩后保留的条数与 KEEP_RECENT_MESSAGES 同一口径", () => {
     const store = new JsonlSessionStore(sessionFile, testDir);
     const options = makeReplOptions({ sessionStore: store, workspaceRoot: testDir });
-    const entries = new Map(sessionStatusEntries(options, false));
+    const entries = new Map(sessionStatusEntries(options, "workspace-write"));
 
     assert.ok(
       entries.get("上下文")?.includes(`保留 ${KEEP_RECENT_MESSAGES} 条`),

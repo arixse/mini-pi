@@ -37,6 +37,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     workspaceRoot: root,
     port: parsed.args.port,
     host: parsed.args.host,
+    ...(parsed.args.isolate ? { isolate: true } : {}),
+    concurrency: parsed.args.concurrency,
   });
   const running = await app.start();
   process.stdout.write(

@@ -42,6 +42,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     note: "      y = 允许本次 / n = 拒绝 / a = 本会话全部允许",
   },
   {
+    usage: "/approval [mode]",
+    description: "查看或切换审批档位（read-only / workspace-write / full-access）",
+  },
+  {
     usage: "/subagent [on|off|trace on|trace off]",
     description: "开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘",
   },
