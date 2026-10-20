@@ -58,7 +58,7 @@
 
 ## 实现结构
 
-**`src/cli/render.ts`**（纯函数，便于单测）：
+**`packages/cli/src/render.ts`**（纯函数，便于单测）：
 
 ```ts
 export type RenderContext = {
@@ -76,7 +76,7 @@ export function renderTurnFooter(usage, elapsedMs, ctx): string;
 export function renderSessionRestore(messages, ctx): string[];
 ```
 
-**`src/cli/width.ts`** — 宽度相关函数独立抽出，避免循环依赖：
+**`packages/cli/src/width.ts`** — 宽度相关函数独立抽出，避免循环依赖：
 
 ```ts
 export function displayWidth(text: string): number;   // CJK/emoji 宽度

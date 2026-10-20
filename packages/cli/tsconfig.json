@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@minipi/core/*": ["../core/src/*"]
+    }
+  },
+  "include": ["src"]
+}
