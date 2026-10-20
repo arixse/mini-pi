@@ -75,6 +75,10 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                              | 无                           | 三档在两端给出同一裁决                                                 |
 | **M5 Electron 壳**         | `src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                                 | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
 
+**进度（2026-10-20）**：M0 与 M1 已落地，CLI 行为零变化，`pnpm check` 绿灯
+（1369 用例 / 行 93.26% / 分支 93.07% / 函数 95.24%）。下一步是 M2（App Server
++ Web）——那一步才会引入第一批运行时依赖，也是拆 workspace 的时点。
+
 **M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
 "多一个事件订阅者"。
 
