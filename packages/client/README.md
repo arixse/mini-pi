@@ -28,12 +28,15 @@ vite.config.ts  前端构建：src/web → dist/web
 - **前端不 import server**。`src/shared` 只放类型（`import type` 打包时被擦除），
   前端拿到的是形状而不是代码——否则 `node:crypto` 会被拖进浏览器 bundle。
 - **只有 CLI 的 `dependencies` 恒为空**。传输层用 express、界面用 React，
-  两者都进**本包**的依赖；这条由 `tests/packages.test.ts` 只钉 CLI——
-  它是"bin 是自包含单文件"的唯一可验证形式，而客户端从不上 npm。
+  markdown 用 react-markdown + remark-gfm，两者都进**本包**的依赖；
+  这条由 `tests/packages.test.ts` 只钉 CLI——它是"bin 是自包含单文件"的
+  唯一可验证形式，而客户端从不上 npm。
 - **纯逻辑不进 `.tsx`**。状态归约（`state.ts`）、动作（`controller.ts`）、
-  展示判断（`items.ts` / `markdown.ts` / `format.ts`）全是 `.ts`，
-  于是它们能在 node 里直接测；`.tsx` 只负责把算好的东西摆上去，
-  也因此被排除在覆盖率统计之外（`test:coverage` 的 `--test-coverage-exclude`）。
+  展示判断（`items.ts` / `format.ts`）全是 `.ts`，于是它们能在 node 里
+  直接测；`.tsx` 只负责把算好的东西摆上去，也因此被排除在覆盖率统计之外
+  （`test:coverage` 的 `--test-coverage-exclude`）。markdown 是唯一的例外：
+  解析与渲染整体交给成熟库，安全性质（裸 HTML 降级成文本、危险 URL 被
+  `urlTransform` 挡掉）由 `web/markdown.test.ts` 拿真实渲染结果钉住。
 
 ## 安全模型
 
@@ -50,6 +53,15 @@ agent 交出去。密钥只写不读：保存后前端连打码的明文都拿�
 状态刻意**就地修改**（`state.ts`），再由 `store.ts` 的 `revision` 告诉 React
 "该重画了"：流式输出每秒几十条事件，每来一条克隆整棵时间线纯属浪费。
 通知按帧合并，因此"每秒重画几次"与事件到达频率无关。
+
+**会话是懒创建的**：点「新任务」只把界面换成一块白板（`view.sessionId === null`
+即草稿态），不发任何请求；会话文件在**第一次发送**时由服务端创建
+（`POST /api/runs` 不带 `sessionId`）。启动时一段会话都没有、删掉当前会话，
+也都回到草稿态，不再补开空文件。相应地 `applySnapshot` 不会把服务端的
+"当前会话"回填进草稿时间线——否则下一次发送就接到旧对话上去了。
+
+**工作区选择器**：`readdir` 到盘根就没有"上一级"了，所以 `GET /api/dirs`
+额外返回 `drives`（Windows 枚举盘符，其他平台空数组），浮层顶部画一条盘符条。
 
 ## 依赖方向
 
