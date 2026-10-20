@@ -73,6 +73,13 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
   （合并提交 `1907dee`），记为 [Day 27](./day27.md)。同样是 main 为祖先、本可
   fast-forward 仍走 `--no-ff`。它把仓库拆成 `packages/core` / `packages/cli` /
   `packages/client`，并把客户端 UI 设计稿一并带进来。
+- `refactor/client-react-express`（2026-10-20，6 个提交）已于 **2026-10-20 合入 main**
+  （合并提交 `460c538`），`feature/m3-m4-worktree-approval`（2026-10-20，1 个提交）
+  已于同日合入（合并提交 `c098c92`），共同记为 [Day 29](./day29.md)。两者是
+  **同一条线上的前后两截**（后者基点是前者），仍分两次 `--no-ff` 合入：
+  前者是用户拍板的「客户端从 node:http + 原生 DOM 换成 Express + React + Vite」，
+  后者是方案里的 M3/M4，各自保留分支边界便于回溯。两个合入点都单独跑过
+  `pnpm check`（1495 / 1543 条，全绿）。
 
 > Day 18 的日期与 Day 16 / Day 17 重叠：后者是同期 **main** 上的工作，
 > 前者是并行分支上的工作，合入后才归入本索引，故单列一篇而非并入既有编号。

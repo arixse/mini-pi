@@ -74,6 +74,12 @@ markdown 改用成熟库、新任务懒建会话、工作区选择器换盘—�
 
 - M5：Electron 壳（`src/electron` + `mini-pi desktop`）；服务端已可直接复用
 - 设计稿遗留的两处有意未决：通知形态、隔离 diff 的合并冲突策略
-- `refactor/client-react-express` 与本次分支的边界：本次以
-  `feature/m3-m4-worktree-approval` 整体合入，React 化的 6 个提交
-  在历史里仍可逐条回溯（分支引用保留）
+
+## 合入记录
+
+- `refactor/client-react-express`（React 化 6 提交）于 **2026-10-20 合入
+  main**（合并提交 `460c538`，`--no-ff`）
+- `feature/m3-m4-worktree-approval`（M3/M4 1 提交）于 **2026-10-20 合入
+  main**（合并提交 `c098c92`，`--no-ff`）
+- 分两次合是为了给「用户拍板的技术栈转向」和「M3/M4」各自保留分支边界；
+  两次合入点都单独跑过 `pnpm check`（1495 / 1543 条，全绿）
