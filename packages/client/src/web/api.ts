@@ -77,10 +77,9 @@ export const api = {
     post(`/api/approvals/${encodeURIComponent(id)}`, { answer }),
 
   sessions: (): Promise<SessionSummary[]> => request<SessionSummary[]>("/api/sessions"),
-  newSession: (): Promise<SessionSummary> => post("/api/sessions"),
   session: (id: string): Promise<SessionDetail> =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),
-  deleteSession: (id: string): Promise<{ currentSessionId: string }> =>
+  deleteSession: (id: string): Promise<{ currentSessionId: string | null }> =>
     request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   providers: (): Promise<ProviderView[]> => request<ProviderView[]>("/api/providers"),

@@ -192,9 +192,8 @@ export class AppServer {
       res.json(this.host.listSessions());
     }));
 
-    app.post("/api/sessions", wrap((_req, res) => {
-      res.status(201).json(this.host.createSession());
-    }));
+    // 没有"新建会话"这个接口：会话在第一次发送时创建（POST /api/runs
+    // 不带 sessionId），界面上点「新任务」因此不会往磁盘上写空文件
 
     app.get("/api/sessions/:id", wrap(async (req, res) => {
       res.json(await this.host.readSession(pathParam(req.params.id)));

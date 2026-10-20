@@ -60,6 +60,14 @@ export function Timeline(): React.ReactElement {
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
       <RunHead />
       <Banners />
+      {state.view.sessionId === null && state.view.items.length === 0 ? (
+        <div className="empty-hint draft-hint">
+          <Icon name="sparkles" size={14} />
+          <span>
+            新任务：直接在下面对话。这段会话还不在磁盘上——发出第一条消息时才创建
+          </span>
+        </div>
+      ) : null}
       {state.view.items.map((item) => (
         <TimelineItemRow
           key={item.id}

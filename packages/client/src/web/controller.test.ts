@@ -34,6 +34,9 @@ class FakeEventSource {
 
 type Route = { status?: number; body?: unknown };
 
+/** 假 fetch 打过的每一次请求：用来断言"这个动作根本没发请求" */
+const requested: Array<{ url: string; body: string }> = [];
+
 /** 按 URL 前缀给响应的假 fetch */
 function installFetch(routes: Record<string, Route | (() => Route)>): void {
   const respond = (route: Route): Response =>
@@ -43,7 +46,7 @@ function installFetch(routes: Record<string, Route | (() => Route)>): void {
     });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
-    const method = init?.method ?? "GET";
+    requested.push({ url, body: typeof init?.body === "string" ? init.body : "" });
     const key = Object.keys(routes).find((pattern) => url.includes(pattern));
     if (!key) {
       return new Response(JSON.stringify({ error: "没有这个接口", status: 404 }), {
@@ -52,7 +55,6 @@ function installFetch(routes: Record<string, Route | (() => Route)>): void {
       });
     }
     const route = routes[key]!;
-    void method;
     return respond(typeof route === "function" ? route() : route);
   }) as typeof fetch;
 }
@@ -91,6 +93,7 @@ describe("AppController", () => {
 
   beforeEach(() => {
     (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    requested.length = 0;
     controller = new AppController();
   });
 
@@ -194,6 +197,60 @@ describe("AppController", () => {
 
     assert.match(FakeEventSource.last?.url ?? "", /\/api\/runs\/run_9\/events\?cursor=0/);
     assert.strictEqual(controller.store.current.view.activeRunId, "run_9");
+  });
+
+  it("新任务只换一块白板：不发请求，也不创建会话", async () => {
+    installFetch({
+      "/api/state": { body: snapshot({ currentSessionId: "s1.jsonl" }) },
+      "/api/sessions/": {
+        body: { sessionId: "s1.jsonl", messages: [], messageCount: 0, compactedCount: 0 },
+      },
+    });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    controller.actions.newTask();
+    await settle();
+
+    const state = controller.store.current;
+    assert.strictEqual(state.view.sessionId, null, "草稿态：还没有会话");
+    assert.strictEqual(state.view.items.length, 0);
+    assert.strictEqual(state.currentSessionId, "s1.jsonl", "服务端的当前会话原样不动");
+    // 一条请求都不该有：会话在第一次发送时才创建（服务端也没有这个接口了）
+    assert.deepStrictEqual(requested, []);
+    assert.strictEqual(state.banner, null);
+  });
+
+  it("草稿态连发两条只开一段会话：第二个请求等第一个带回 sessionId", async () => {
+    let created = 0;
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/runs": () => ({
+        status: 201,
+        body: { runId: `run_${(created += 1)}`, sessionId: "s1.jsonl" },
+      }),
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.send("第一句");
+    controller.actions.send("第二句");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+
+    const sent = requested.filter((item) => item.url.includes("/api/runs"));
+    assert.strictEqual(sent.length, 2, "两条都发出去了（排队是正常行为）");
+    assert.ok(
+      !sent[0]!.body.includes("sessionId"),
+      "第一条不带 sessionId：让服务端开一段新的",
+    );
+    assert.ok(
+      sent[1]!.body.includes('"sessionId":"s1.jsonl"'),
+      "第二条复用第一个请求带回来的会话，而不是再开一段",
+    );
+    assert.strictEqual(controller.store.current.view.items.length, 2);
+    assert.strictEqual(controller.store.current.view.sessionId, "s1.jsonl");
   });
 
   it("提示条会自动消失，且不误清后一条", async () => {

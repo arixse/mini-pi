@@ -300,9 +300,10 @@ export function applySnapshot(state: ClientState, snapshot: ServerSnapshot): voi
   state.runs = snapshot.runs;
   state.sessions = snapshot.sessions;
   state.currentSessionId = snapshot.currentSessionId;
-  if (state.view.sessionId === null) {
-    state.view.sessionId = snapshot.currentSessionId;
-  }
+  // 注意：**不**把 currentSessionId 回填进 view.sessionId。
+  // `view.sessionId === null` 是"草稿"——点了新任务、还没说话，此时悄悄
+  // 按回服务端的当前会话，下一次发送就会接到那段旧对话上去。
+  // 真正要认领当前会话的地方是启动与换工作区（controller 显式 openSession）。
 }
 
 /**
@@ -334,10 +335,17 @@ export function openSession(
   state.view = view;
 }
 
+/** 乐观 id 的序号：同一毫秒连发两条时靠它区分（见 addUserMessage） */
+let optimisticSeq = 0;
+
 /** 发送时的乐观插入：先让用户看见自己说了什么，再等服务端事件 */
 export function addUserMessage(view: View, text: string, queued: boolean): string {
+  optimisticSeq += 1;
   const stamp = Date.now();
-  const id = `u:${stamp}`;
+  // id 带一个客户端序号：连发两条可能落在同一毫秒，只按时间戳算会把
+  // 前一条覆盖掉。服务端回来的消息仍按 `messageId`（`u:<时间戳>`）幂等
+  // 落地，与这个占位 id 无关——它只在对不上时被撤回。
+  const id = `u:${stamp}#${optimisticSeq}`;
   upsertItem(view, {
     kind: "user",
     id,

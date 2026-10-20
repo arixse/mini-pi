@@ -415,6 +415,20 @@ svg.ic {
   font-size: 11.5px;
 }
 
+/* 草稿空态：会话还没创建，别让人以为界面坏了 */
+.draft-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 56px auto 0;
+  max-width: 460px;
+  padding: 20px 18px;
+  color: var(--t5);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
 /* ---------------- 主区 ---------------- */
 
 .main {

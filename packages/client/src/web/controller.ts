@@ -39,7 +39,14 @@ export class AppController {
   private stream: StreamHandle | null = null;
   private streamedRunId: string | null = null;
   /** 乐观插入的用户消息：等服务端把同一条消息发回来时让位给它 */
-  private pendingUser: { id: string; text: string } | null = null;
+  private pendingUsers: Array<{ id: string; text: string }> = [];
+  /**
+   * 发送闸门。
+   *
+   * 草稿态（`view.sessionId === null`）下连发两条时，第二个请求必须等第一个
+   * 把 sessionId 带回来，否则服务端会开出两段各一句话的会话。
+   */
+  private sendGate: Promise<void> = Promise.resolve();
   /** 首屏只认第一次调用：React 严格模式的双次挂载不该起两遍 */
   private booted: Promise<void> | null = null;
   private bannerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -89,7 +96,7 @@ export class AppController {
   /** 换工作区 / 首屏之后的彻底重来：时间线与事件流全部丢弃重建 */
   private async reload(): Promise<void> {
     this.closeStream();
-    this.pendingUser = null;
+    this.pendingUsers = [];
     this.store.update((state) => {
       state.view = emptyView();
     });
@@ -122,7 +129,7 @@ export class AppController {
         });
         state.ui.sidebar = false;
       });
-      this.pendingUser = null;
+      this.pendingUsers = [];
       if (live) {
         this.attach(live.runId);
       } else {
@@ -165,7 +172,6 @@ export class AppController {
   }
 
   private async send(text: string): Promise<void> {
-    const sessionId = this.store.current.view.sessionId ?? undefined;
     const status = this.store.current.view.status;
     const busy = status === "running" || status === "blocked" || status === "queued";
     // 先让用户看见自己说了什么：网络往返可能几百毫秒，空着窗口最难受
@@ -173,10 +179,20 @@ export class AppController {
     this.store.update((state) => {
       optimisticId = addUserMessage(state.view, text, busy);
     });
-    this.pendingUser = { id: optimisticId, text };
+    this.pendingUsers.push({ id: optimisticId, text });
     this.composer?.current?.clear();
 
+    // 闸门：见字段注释。等的是"上一个请求把 sessionId 带回来"
+    const previous = this.sendGate;
+    let openGate: () => void = () => {};
+    this.sendGate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+
     try {
+      await previous;
+      // 等的这一下里，上一个请求可能已经建好会话了：优先用它
+      const sessionId = this.store.current.view.sessionId ?? undefined;
       const created = await api.sendRun(text, sessionId);
       this.store.update((state) => {
         if (state.view.sessionId === null) {
@@ -186,11 +202,13 @@ export class AppController {
       this.attach(created.runId);
       await this.refreshState();
     } catch (error) {
-      if (this.pendingUser?.id === optimisticId) {
+      if (this.pendingUsers.some((item) => item.id === optimisticId)) {
         this.store.update((state) => removeItem(state.view, optimisticId));
-        this.pendingUser = null;
+        this.pendingUsers = this.pendingUsers.filter((item) => item.id !== optimisticId);
       }
       this.fail(error);
+    } finally {
+      openGate();
     }
   }
 
@@ -207,21 +225,20 @@ export class AppController {
     }
   }
 
-  private async newTask(): Promise<void> {
-    try {
-      const session = await api.newSession();
-      this.closeStream();
-      this.pendingUser = null;
-      this.store.update((state) => {
-        state.view = emptyView();
-        state.currentSessionId = session.sessionId;
-      });
-      await this.refreshState();
-      await this.openSession(session.sessionId);
-      this.composer?.current?.focus();
-    } catch (error) {
-      this.fail(error);
-    }
+  /**
+   * 新任务 = 本地换一块白板。
+   *
+   * **不发请求**：会话在第一次发送时才创建（服务端 `send` 不带 sessionId
+   * 即新建）。原来这里会立刻 `POST /api/sessions`，于是"点了一下新任务、
+   * 什么都没说"也会在磁盘上留下一个空文件，侧栏里还多一条"新会话"。
+   */
+  private newTask(): void {
+    this.closeStream();
+    this.pendingUsers = [];
+    this.store.update((state) => {
+      state.view = emptyView();
+    });
+    this.composer?.current?.focus();
   }
 
   private async deleteTarget(): Promise<void> {
@@ -241,7 +258,11 @@ export class AppController {
         this.store.update((state) => {
           state.view = emptyView();
         });
-        await this.openSession(result.currentSessionId);
+        // 删掉的正是当前会话时，服务端不再补开新的：回到草稿态，
+        // 下一段对话从第一次发送算起
+        if (result.currentSessionId) {
+          await this.openSession(result.currentSessionId);
+        }
       }
     } catch (error) {
       this.store.update((state) => {
@@ -322,12 +343,17 @@ export class AppController {
   }
 
   private reconcileUser(text: string): void {
-    if (!this.pendingUser || this.pendingUser.text !== text) {
+    // 同一句话可能发过两条（连发）：按文本找，删到哪条都一样
+    const index = this.pendingUsers.findIndex((item) => item.text === text);
+    if (index < 0) {
       return;
     }
-    const { id } = this.pendingUser;
-    this.pendingUser = null;
-    this.store.update((state) => removeItem(state.view, id));
+    const pending = this.pendingUsers[index];
+    if (!pending) {
+      return;
+    }
+    this.pendingUsers.splice(index, 1);
+    this.store.update((state) => removeItem(state.view, pending.id));
   }
 
   // ------------------------------------------------------------ 提示条
