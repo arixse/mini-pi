@@ -1,13 +1,23 @@
 {
   "name": "@minipi/client",
   "version": "1.0.2",
-  "description": "Mini Pi 客户端：Web 前端（M2）与 Electron 桌面壳（M5）",
+  "description": "Mini Pi 客户端：App Server + Web 前端（M2）与 Electron 桌面壳（M5）",
   "private": true,
   "type": "module",
-  "scripts": {},
+  "scripts": {
+    "dev": "tsx src/server/entry.ts",
+    "serve": "tsx src/server/entry.ts",
+    "build:web": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {},
   "devDependencies": {
-    "@minipi/core": "workspace:*"
+    "@minipi/core": "workspace:*",
+    "@types/node": "^26.3.0",
+    "esbuild": "^0.25.2",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
   }
 }

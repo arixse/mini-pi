@@ -198,6 +198,24 @@ export class SettingsStore {
   }
 
   /**
+   * 写模型上下文窗口。
+   *
+   * 传 `undefined` 表示**删掉**这一项、回到"按模型名推断"——
+   * 这是客户端的"上下文窗口"输入框清空时的语义。写成 0 或负数没有意义
+   * （压缩阈值会算成 0，每次请求都触发压缩），因此由调用方先校验，
+   * 这里只接受正整数。
+   */
+  async setContextWindow(contextWindow: number | undefined): Promise<void> {
+    await this.initialize();
+    if (contextWindow === undefined) {
+      delete this.settings.contextWindow;
+    } else {
+      this.settings.contextWindow = Math.floor(contextWindow);
+    }
+    await this.persist();
+  }
+
+  /**
    * 子 Agent 委派是否可用（`/subagent` 开关）。
    *
    * **默认关闭**：委派会额外烧 token 且单次成本难以预估，属于需要用户主动

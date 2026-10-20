@@ -1,0 +1,286 @@
+/**
+ * 测试用的服务端脚架。
+ *
+ * 三条硬约束，任何一条破了都会污染开发者的机器：
+ * - **不读真实配置**：`~/.mini-pi/auth.json` 里有真凭据，必须注入临时存储；
+ * - **不写真实会话**：`~/.mini-pi/sessions` 是用户的历史，sessionsDir 指向临时目录；
+ * - **不发真实请求**：模型整条链路换成脚本化假模型，测试不该花一分钱。
+ */
+
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AppServer } from "./app";
+import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
+import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
+import type { LlmModel, CompleteInput } from "@minipi/core/agent/model";
+import type { AssistantMessage } from "@minipi/core/shared/protocol";
+import type { ServerEvent, Tier } from "./types";
+
+export const TEST_MODEL_LABEL = "test/test-model";
+
+export function textResponse(text: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+    usage: { input: 10, output: 5, totalTokens: 15 },
+    timestamp: Date.now(),
+  };
+}
+
+export function toolCallResponse(
+  name: string,
+  args: Record<string, unknown>,
+  id = "call_1",
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id, name, arguments: args },
+    ],
+    stopReason: "toolUse",
+    usage: { input: 10, output: 5, totalTokens: 15 },
+    timestamp: Date.now(),
+  };
+}
+
+export type ScriptedModel = LlmModel & { calls: CompleteInput[] };
+
+/** 假模型：按脚本逐次返回；用完之后一直重复最后一个 */
+export function scriptedModel(responses: AssistantMessage[]): ScriptedModel {
+  const calls: CompleteInput[] = [];
+  let index = 0;
+  return {
+    calls,
+    async complete(input: CompleteInput): Promise<AssistantMessage> {
+      calls.push(input);
+      const response = responses[Math.min(index, responses.length - 1)] ?? textResponse("");
+      index += 1;
+      // 真模型是"逐字"回来的：把正文切几段喂给 onDelta，前端才有东西可流式渲染
+      const text = response.content
+        .filter((part): part is { type: "text"; text: string } => part.type === "text")
+        .map((part) => part.text)
+        .join("");
+      if (text && input.onDelta) {
+        const step = Math.max(1, Math.ceil(text.length / 3));
+        for (let offset = 0; offset < text.length; offset += step) {
+          input.onDelta(text.slice(offset, offset + step));
+        }
+      }
+      return { ...response, timestamp: Date.now() };
+    },
+  };
+}
+
+export type TestServer = {
+  url: string;
+  workspace: string;
+  sessionsDir: string;
+  model: ScriptedModel;
+  app: AppServer;
+  get: <T>(path: string) => Promise<T>;
+  raw: (path: string, init?: RequestInit) => Promise<Response>;
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  del: <T>(path: string) => Promise<T>;
+  /** 收某条 Run 的事件流，直到 run_done 或超时 */
+  stream: (
+    runId: string,
+    options?: { cursor?: number; until?: number; onEvent?: (event: ServerEvent) => void },
+  ) => Promise<ServerEvent[]>;
+  close: () => Promise<void>;
+};
+
+export type TestServerOptions = {
+  tier?: Tier;
+  responses?: AssistantMessage[];
+  /** 预置的会话文件（测历史只读 / 删除） */
+  sessions?: Array<{ fileName: string; lines: string[] }>;
+  workspaceFiles?: Record<string, string>;
+};
+
+export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
+  const root = mkdtempSync(join(tmpdir(), "minipi-client-"));
+  const workspace = join(root, "workspace");
+  const sessionsDir = join(root, "sessions");
+  const configDir = join(root, "config");
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(sessionsDir, { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+
+  for (const [name, content] of Object.entries(options.workspaceFiles ?? {})) {
+    writeFileSync(join(workspace, name), content, "utf8");
+  }
+
+  // 目录名必须用内核同一个函数推导：手抄一份规则，改了内核这里就会静默错位
+  const projectSessions = join(sessionsDir, workspaceSessionDirName(workspace));
+  mkdirSync(projectSessions, { recursive: true });
+  for (const session of options.sessions ?? []) {
+    writeFileSync(join(projectSessions, session.fileName), session.lines.join("\n"), "utf8");
+  }
+
+  const model = scriptedModel(options.responses ?? [textResponse("好的")]);
+  const settingsStore = new SettingsStore(join(configDir, "settings.json"));
+  const providerStore = new ProviderStore(join(configDir, "auth.json"));
+  const providerService = new ModelProviderService(providerStore);
+
+  const app = new AppServer({
+    workspaceRoot: workspace,
+    port: 0,
+    sessionsDir,
+    globalAgentsPath: join(configDir, "AGENTS.md"),
+    ...(options.tier ? { tier: options.tier } : {}),
+    settingsStore,
+    providerService,
+    resolveModel: async () => ({
+      model,
+      providerName: "test",
+      modelName: "test-model",
+    }),
+  });
+  const running = await app.start();
+
+  const raw = (path: string, init?: RequestInit): Promise<Response> =>
+    fetch(`${running.url}${path}`, init);
+
+  async function expectOk<T>(response: Response): Promise<T> {
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${response.status} ${text}`);
+    }
+    return (text.length > 0 ? JSON.parse(text) : null) as T;
+  }
+
+  const get = async <T>(path: string): Promise<T> => expectOk<T>(await raw(path));
+  const post = async <T>(path: string, body?: unknown): Promise<T> =>
+    expectOk<T>(
+      await raw(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      }),
+    );
+  const del = async <T>(path: string): Promise<T> =>
+    expectOk<T>(await raw(path, { method: "DELETE" }));
+
+  const stream = (
+    runId: string,
+    streamOptions: {
+      cursor?: number;
+      until?: number;
+      onEvent?: (event: ServerEvent) => void;
+    } = {},
+  ): Promise<ServerEvent[]> =>
+    collectEvents(
+      `${running.url}/api/runs/${runId}/events?cursor=${streamOptions.cursor ?? 0}`,
+      streamOptions.until ?? 5_000,
+      streamOptions.onEvent,
+    );
+
+  return {
+    url: running.url,
+    workspace,
+    sessionsDir,
+    model,
+    app,
+    get,
+    raw,
+    post,
+    del,
+    stream,
+    close: async () => {
+      await app.stop();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * 读一条 SSE 直到 `run_done`。
+ *
+ * 必须自己解析帧：`fetch` 的 body 是字节流，SSE 的一帧以空行结束，
+ * 而 `data:` 可能有多行——这正是最容易写错的地方（只有一行时看着是好的）。
+ */
+export async function collectEvents(
+  url: string,
+  timeoutMs: number,
+  onEvent?: (event: ServerEvent) => void,
+): Promise<ServerEvent[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const events: ServerEvent[] = [];
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.body) {
+      throw new Error("没有响应体");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch {
+        // 超时主动 abort：把已经收到的交回去，由断言判断够不够。
+        // 抛出去的话，"某条流本来就不该有事件"这种用例没法表达。
+        return events;
+      }
+      const { value, done } = chunk;
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = parseFrame(frame);
+        if (event) {
+          events.push(event);
+          onEvent?.(event);
+          if (event.type === "run_done") {
+            await reader.cancel();
+            return events;
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    return events;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseFrame(frame: string): ServerEvent | null {
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("data: ")) {
+      dataLines.push(line.slice(6));
+    } else if (line === "data:") {
+      dataLines.push("");
+    }
+  }
+  if (dataLines.length === 0) {
+    return null;
+  }
+  return JSON.parse(dataLines.join("\n")) as ServerEvent;
+}
+
+/** 轮询直到条件成立：执行在后台跑，没有"完成"回调可等 */
+export async function waitFor(
+  predicate: () => Promise<boolean> | boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await predicate()) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error("等待超时");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}

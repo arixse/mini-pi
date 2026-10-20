@@ -50,6 +50,18 @@ importers:
       '@minipi/core':
         specifier: workspace:*
         version: link:../core
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.5.1
+      esbuild:
+        specifier: ^0.25.2
+        version: 0.25.12
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.13
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/core:
     devDependencies:
