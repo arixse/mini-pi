@@ -130,7 +130,8 @@ Electron 是**开发依赖**（上百 MB 二进制），npm 包里不带它。
 
 ### 5.1 现在就拆 workspace 的风险（2026-10-20 评估）
 
-> **已于 2026-10-20 实施**（分支 `refactor/workspace-packages`）：三个包
+> **已于 2026-10-20 实施并合入 main**（分支 `refactor/workspace-packages`，
+> 合并提交 `1907dee`）：三个包
 > `packages/core` / `packages/cli` / `packages/client`，内核确实拆出去了，
 > CLI 以 `devDependencies` 引用它。下面的七条按"当时怎么判断、实际怎么收场"
 > 保留，未删——它们解释的是**为什么这么定**，实施细节见本节末尾。
@@ -174,7 +175,8 @@ packages/client  @minipi/client   客户端（private），暂无代码
 
 ## 6. 已有分支 `refactor/core-extraction` 怎么处理
 
-该分支 M0~M5 全部走完（23 ahead / 50 behind main），是一份**可参考的
+该分支 M0~M5 全部走完（合入前统计：23 ahead / 50 behind main；此后 main
+又多了拆包那 9 个提交，落后差距只会更大），是一份**可参考的
 实现与踩坑记录**，但**不建议直接 merge**，理由有三：
 
 1. **冲突面集中在 main 之后又改过的五个文件**：`prompt.ts`、`turn.ts`、`approval.ts`、`session.ts`、`index.ts`。main 在那之后落了落盘 at-least-once、`load_skill` 模型驱动、凭据守卫下沉、review 受限验证、`main()` 回调拆分——全是语义级改动，逐行解冲突的成本高于重写 cli 侧接线。

@@ -33,8 +33,9 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 | [Day 24](./day24.md) | 2026-10-19 | 6 | 测试审计与覆盖缺口修复：repl 环境注入、turn 回合编排、dispatch 分派层（顺带修 /load 裸命令）、main 回调抽出 |
 | [Day 25](./day25.md) | 2026-10-19 | 7 | Maker+Checker 落地（`feature/maker-checker` 分支，2026-10-19 合入）：受限验证工具、委派可观测性、文档拆分与漂移门禁、开源许可 |
 | [Day 26](./day26.md) | 2026-10-20 | 9 | 客户端化 M0/M1：内核下沉到 src/core（提示词 / 技术栈 / 风险 / 上下文口径 / 落盘编排）、Run 与 RunManager、委派运行时按 Run 隔离、`mini-pi exec` headless |
+| [Day 27](./day27.md) | 2026-10-20 | 9 | 拆成 core / cli / client 三个 pnpm 包（`refactor/workspace-packages` 分支，2026-10-20 合入）：包边界与依赖归属、发布链路随包挪动、包边界守卫；客户端 UI 设计稿（七个界面 / 23 条决策） |
 
-合计 26 篇 / 219 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
+合计 27 篇 / 228 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
 
 > Day 21 / 22 / 23 / 24 / 25 同属 2026-10-19，主题完全不同（Skill 加载链路 /
 > 版本更新检测 / 安全与正确性修复 / 测试覆盖缺口 / Maker+Checker 与文档收口），
@@ -66,6 +67,10 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
   （合并提交 `ca35737`），记为 [Day 25](./day25.md)。它与合入前的 main 是同一条线
   （main 是分支的祖先），本可 fast-forward，仍用 `--no-ff` 保留分支边界，
   便于日后按分支回溯「受限验证 + 可观测性 + 文档收口 + 许可」这四件事。
+- `refactor/workspace-packages`（2026-10-20，9 个提交）已于 **2026-10-20 合入 main**
+  （合并提交 `1907dee`），记为 [Day 27](./day27.md)。同样是 main 为祖先、本可
+  fast-forward 仍走 `--no-ff`。它把仓库拆成 `packages/core` / `packages/cli` /
+  `packages/client`，并把客户端 UI 设计稿一并带进来。
 
 > Day 18 的日期与 Day 16 / Day 17 重叠：后者是同期 **main** 上的工作，
 > 前者是并行分支上的工作，合入后才归入本索引，故单列一篇而非并入既有编号。
