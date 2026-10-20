@@ -25,13 +25,13 @@ Electron 壳**不该碰 CLI**。做法是先把与界面无关的内核从 `cli/
 
 ### 1.1 好消息：内核已经相当干净
 
-| 事实                                                                                           | 证据                     |
-| ---------------------------------------------------------------------------------------------- | ------------------------ |
-| `packages/core/src/agent`、`packages/core/src/shared`、`packages/core/src/provider` **零** `../cli` 依赖                   | grep 无命中              |
-| 除`shared/logger.ts` 外，内核不碰 `chalk` / `console.*` / `process.std*`               | grep 无命中              |
-| `shared/protocol.ts` 已预留 `RunStreamEvent` / `SessionResponse` / `CreateRunResponse` | 客户端化当时就留了口子   |
-| `agent/loop.ts` 已经是事件驱动，审批是注入的 `beforeToolCall` 异步钩子                     | GUI 审批不用改 loop 一行 |
-| `tools/*` 的 `workspaceRoot` 是构造参数                                                    | 多工作区隔离天然支持     |
+| 事实                                                                                                                   | 证据                     |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `packages/core/src/agent`、`packages/core/src/shared`、`packages/core/src/provider` **零** `../cli` 依赖 | grep 无命中              |
+| 除`shared/logger.ts` 外，内核不碰 `chalk` / `console.*` / `process.std*`                                       | grep 无命中              |
+| `shared/protocol.ts` 已预留 `RunStreamEvent` / `SessionResponse` / `CreateRunResponse`                         | 客户端化当时就留了口子   |
+| `agent/loop.ts` 已经是事件驱动，审批是注入的 `beforeToolCall` 异步钩子                                             | GUI 审批不用改 loop 一行 |
+| `tools/*` 的 `workspaceRoot` 是构造参数                                                                            | 多工作区隔离天然支持     |
 
 也就是说：**M0 不是重写，是搬家**。
 
@@ -47,13 +47,13 @@ Electron 壳**不该碰 CLI**。做法是先把与界面无关的内核从 `cli/
 
 ## 2. 目标分层与目录
 
-| 目录              | 职责                                                                                               | 与 CLI 的关系                                                   |
-| ----------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `packages/core/src/`     | 与界面无关的内核：Run / RunManager / ApprovalGateway / prompt / projectStack / risk / session 编排 | **不许 import `cli`**（由 `core/hygiene.test.ts` 守） |
+| 目录                              | 职责                                                                                               | 与 CLI 的关系                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `packages/core/src/`            | 与界面无关的内核：Run / RunManager / ApprovalGateway / prompt / projectStack / risk / session 编排 | **不许 import `cli`**（由 `core/hygiene.test.ts` 守） |
 | `packages/client/src/server/`   | App Server：Express + SSE，会话 CRUD、目录选择、配置读写                                           | 不 import`cli`                                                |
-| `packages/client/src/`   | Web 前端（React + Vite），Electron 与浏览器共用                                                    | 不 import`server`（会带 `node:crypto`）                     |
+| `packages/client/src/`          | Web 前端（React + Vite），Electron 与浏览器共用                                                    | 不 import`server`（会带 `node:crypto`）                     |
 | `packages/client/src/electron/` | 主进程：起服务 → 开窗口 → 关窗即退出                                                             | **绝不 import `cli`**                                   |
-| `packages/cli/src/`      | 保持现状职责，只把下沉掉的部分改成调内核                                                           | 是内核的一个订阅者                                              |
+| `packages/cli/src/`             | 保持现状职责，只把下沉掉的部分改成调内核                                                           | 是内核的一个订阅者                                              |
 
 依赖方向必须单向：`cli/desktop → electron/api`、`electron/main → server`、
 `cli → core`。反向依赖会让 `cli → electron → cli` 成环。
@@ -66,17 +66,18 @@ Electron 壳**不该碰 CLI**。做法是先把与界面无关的内核从 `cli/
 标 ★ 的是"只为 Electron 服务"的可选项；只想要桌面壳的话，
 M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 
-| 阶段                             | 做什么                                                                                                                                    | 对 CLI 的影响                | 验收                                                                   |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
+| 阶段                             | 做什么                                                                                                                                             | 对 CLI 的影响                | 验收                                                                   |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
 | **M0 内核去 UI**           | `prompt` / `projectStack` / 上下文预算 / 风险评估 / 落盘压缩下沉到 `packages/core/src/`；`approval.ts` 拆成"结构化 risk 数据" + "各端渲染" | **纯重构，行为零变化** | 现有测试全绿 +`pnpm check`；新增 `core/hygiene.test.ts` 守依赖方向 |
-| **M1 Run 抽象 + headless** | 新增`core/run.ts` / `core/runManager.ts`；`SubAgentRuntime` 从全局改 per-run；新增 `mini-pi exec "..." --json` 输出 JSONL         | 新增子命令，不动 REPL        | CI 能跑`exec` 并断言事件序列                                         |
-| **M2 App Server + Web**    | `packages/client/src/server`（Express + SSE）+ `packages/client/src`（Vite 代理到服务端）                                                                      | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
-| ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                              | 无                           | 两个 Run 并行不互相踩                                                  |
-| ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                              | 无                           | 三档在两端给出同一裁决                                                 |
-| **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                                 | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
+| **M1 Run 抽象 + headless** | 新增`core/run.ts` / `core/runManager.ts`；`SubAgentRuntime` 从全局改 per-run；新增 `mini-pi exec "..." --json` 输出 JSONL                  | 新增子命令，不动 REPL        | CI 能跑`exec` 并断言事件序列                                         |
+| **M2 App Server + Web**    | `packages/client/src/server`（Express + SSE）+ `packages/client/src`（Vite 代理到服务端）                                                      | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
+| ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                                       | 无                           | 两个 Run 并行不互相踩                                                  |
+| ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
+| **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                          | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
 
 **进度（2026-10-20）**：M0 与 M1 已落地，CLI 行为零变化，`pnpm check` 绿灯
 （1369 用例 / 行 93.26% / 分支 93.07% / 函数 95.24%）。下一步是 M2（App Server
+
 + Web）——那一步才会引入第一批运行时依赖，也是拆 workspace 的时点。
 
 **M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
@@ -87,13 +88,13 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 主进程只做三件事：起服务 → 开窗口 → 关窗退出。业务（模型、会话、审批、
 事件流）全在 App Server 里，因此 **Web 客户端与内核一行都不用改**。
 
-| 交付     | 位置                                                    | 要点                                                                                                                                                                                                                                                |
-| -------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 交付     | 位置                                                                    | 要点                                                                                                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 窄接口   | `packages/client/src/electron/api.ts`                                 | 六个方法（`requestSingleInstanceLock` / `onSecondInstance` / `whenReady` / `createWindow` / `appPath` / `quit`），**自己描述形状，不 import electron 的类型**——仓库里不装 electron 也能 typecheck，测试塞假实现就能钉住全部行为 |
 | 执行体   | `packages/client/src/electron/main.ts`                                | 装配与副作用分离，Electron API 全在`deps.electron` 后面                                                                                                                                                                                           |
 | 入口     | `packages/client/src/electron/entry.ts` → `dist-electron/main.cjs` | 单独一个文件，避免`main.ts` 带上一进门就执行的副作用                                                                                                                                                                                              |
-| 共用装配 | `server` 的 `bootAppServer`                         | `serve` 与 Electron 主进程走同一条路，不各写一份                                                                                                                                                                                                  |
-| 命令     | `mini-pi desktop`                                     | 父进程拉起 Electron 后立即返回；`--no-electron` 退回浏览器 `--app=`；`--no-open` 无头                                                                                                                                                         |
+| 共用装配 | `server` 的 `bootAppServer`                                         | `serve` 与 Electron 主进程走同一条路，不各写一份                                                                                                                                                                                                  |
+| 命令     | `mini-pi desktop`                                                     | 父进程拉起 Electron 后立即返回；`--no-electron` 退回浏览器 `--app=`；`--no-open` 无头                                                                                                                                                         |
 
 **两个必踩的坑**（都要写进测试）：
 
