@@ -8,6 +8,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DESKTOP_SERVE_USAGE,
@@ -61,6 +63,7 @@ function spawnRecorder(): { spawn: DesktopSpawn; calls: Array<[string, string[]]
 
 const BASE_ARGS: DesktopArgs = {
   cwd: "D:\\workspace",
+  cwdGiven: true,
   port: 4788,
   host: "127.0.0.1",
   isolate: false,
@@ -154,6 +157,18 @@ describe("toServeArgv", () => {
 
   it("--isolate 会传下去", () => {
     assert.ok(toServeArgv({ ...BASE_ARGS, isolate: true }).includes("--isolate"));
+  });
+
+  /**
+   * 没给 `--cwd` 时**一个字符都不传**。
+   *
+   * 父进程要是顺手塞个 `process.cwd()` 进去，Electron 子进程就连问都不会问
+   * 了——"桌面壳没有默认工作区"就这么被悄悄改回去。
+   */
+  it("没给 --cwd 就不传：工作区由子进程自己决定", () => {
+    const argv = toServeArgv({ ...BASE_ARGS, cwdGiven: false, cwd: process.cwd() });
+    assert.ok(!argv.includes("--cwd"), argv.join(" "));
+    assert.ok(!argv.includes(process.cwd()), "启动目录不该出现在命令行里");
   });
 });
 
@@ -289,14 +304,13 @@ describe("runDesktop", () => {
     assert.strictEqual(result.code, 0);
     assert.strictEqual(result.server, null, "服务在子进程里，父进程没有句柄");
     assert.strictEqual(boot.seen.length, 0, "不该再起一个服务去撞同一个端口");
+    // 没给 --cwd 就一个都不传：工作区（记忆 → 询问）由子进程决定
     assert.deepStrictEqual(recorded.calls, [
       [
         "D:\\node_modules\\electron\\dist\\electron.exe",
         [
           "D:\\pkg\\dist-electron\\main.cjs",
           "--",
-          "--cwd",
-          process.cwd(),
           "--port",
           "4788",
           "--host",
@@ -314,7 +328,7 @@ describe("runDesktop", () => {
     const boot = fakeBoot();
     const io = collector();
 
-    const result = await runDesktop([], io.streams, {
+    const result = await runDesktop(["--cwd", "D:\\workspace"], io.streams, {
       platform: "win32",
       spawn: recorded.spawn,
       electronBinary: async () => null,
@@ -325,6 +339,7 @@ describe("runDesktop", () => {
     assert.strictEqual(result.code, 0);
     assert.match(io.err(), /未找到 Electron/);
     assert.strictEqual(boot.seen.length, 1, "服务照起，只是窗口换一种开法");
+    assert.strictEqual(boot.seen[0]?.cwd, "D:\\workspace");
     assert.strictEqual(recorded.calls.length, 1, "浏览器窗口");
     assert.ok(recorded.calls[0]?.[1].includes("--app=http://127.0.0.1:4788"));
   });
@@ -333,7 +348,7 @@ describe("runDesktop", () => {
     const recorded = spawnRecorder();
     const io = collector();
 
-    const result = await runDesktop([], io.streams, {
+    const result = await runDesktop(["--cwd", "D:\\workspace"], io.streams, {
       platform: "win32",
       spawn: recorded.spawn,
       electronBinary: async () => "D:\\electron.exe",
@@ -352,7 +367,7 @@ describe("runDesktop", () => {
     const boot = fakeBoot();
     const io = collector();
 
-    const result = await runDesktop(["--no-open"], io.streams, {
+    const result = await runDesktop(["--no-open", "--cwd", "D:\\workspace"], io.streams, {
       platform: "win32",
       spawn: recorded.spawn,
       electronBinary: async () => "D:\\electron.exe",
@@ -364,6 +379,7 @@ describe("runDesktop", () => {
     assert.strictEqual(result.code, 0);
     assert.strictEqual(recorded.calls.length, 0, "--no-open 不该开窗口，也不该拉起 Electron");
     assert.strictEqual(boot.seen.length, 1);
+    assert.strictEqual(boot.seen[0]?.cwd, "D:\\workspace");
     assert.match(io.out(), /http:\/\/127\.0\.0\.1:4788/);
   });
 
@@ -371,7 +387,7 @@ describe("runDesktop", () => {
     const recorded = spawnRecorder();
     const io = collector();
 
-    const result = await runDesktop(["--no-electron"], io.streams, {
+    const result = await runDesktop(["--no-electron", "--cwd", "D:\\workspace"], io.streams, {
       platform: "win32",
       spawn: recorded.spawn,
       boot: fakeBoot({ code: 1, url: null, port: null }).boot,
@@ -395,10 +411,87 @@ describe("runDesktop", () => {
 
   it("浏览器形态下拿得到服务句柄（进程入口要靠它收端口）", async () => {
     const boot = fakeBoot({ server: {} as AppServer });
-    const result = await runDesktop(["--no-electron", "--no-open"], collector().streams, {
-      boot: boot.boot,
-    });
+    const result = await runDesktop(
+      ["--no-electron", "--no-open", "--cwd", "D:\\workspace"],
+      collector().streams,
+      { boot: boot.boot },
+    );
     assert.ok(result.server, "句柄要传出去，否则关窗后端口不释放");
     assert.strictEqual(result.url, "http://127.0.0.1:4788");
+  });
+
+  // ------------------------------------------------------------ 工作区
+
+  /**
+   * 浏览器形态没有原生目录框，因此它只有两条路：`--cwd` 或上次记住的目录。
+   * 两条都没有时**明说**——退回启动目录正是"桌面壳不该有默认工作区"
+   * 要避免的那件事。
+   */
+  describe("浏览器形态的工作区", () => {
+    /** 临时记忆文件：不碰用户家目录里那份真实的 */
+    function tempMemory(): { file: string; dir: string; cleanup: () => void } {
+      const dir = mkdtempSync(join(tmpdir(), "minipi-desktop-ws-"));
+      return {
+        dir,
+        file: join(dir, "memory.json"),
+        cleanup: () => rmSync(dir, { recursive: true, force: true }),
+      };
+    }
+
+    it("没有 --cwd 也没有记忆：报错并说明该怎么办", async () => {
+      const memory = tempMemory();
+      try {
+        const boot = fakeBoot();
+        const io = collector();
+        const result = await runDesktop(["--no-electron", "--no-open"], io.streams, {
+          boot: boot.boot,
+          workspaceMemoryFile: memory.file,
+        });
+
+        assert.strictEqual(result.code, 1);
+        assert.match(io.err(), /没有默认工作区/);
+        assert.match(io.err(), /--cwd/);
+        assert.strictEqual(boot.seen.length, 0, "没工作区就不该起服务");
+      } finally {
+        memory.cleanup();
+      }
+    });
+
+    it("有记忆：直接开上次那个目录", async () => {
+      const memory = tempMemory();
+      try {
+        writeFileSync(
+          memory.file,
+          `${JSON.stringify({ workspace: memory.dir })}\n`,
+          "utf8",
+        );
+        const boot = fakeBoot();
+        const result = await runDesktop(["--no-electron", "--no-open"], collector().streams, {
+          boot: boot.boot,
+          workspaceMemoryFile: memory.file,
+        });
+
+        assert.strictEqual(result.code, 0);
+        assert.strictEqual(boot.seen[0]?.cwd, memory.dir);
+      } finally {
+        memory.cleanup();
+      }
+    });
+
+    it("显式 --cwd 优先于记忆", async () => {
+      const memory = tempMemory();
+      try {
+        writeFileSync(memory.file, `${JSON.stringify({ workspace: memory.dir })}\n`, "utf8");
+        const boot = fakeBoot();
+        await runDesktop(["--no-electron", "--no-open", "--cwd", "D:\\explicit"], collector().streams, {
+          boot: boot.boot,
+          workspaceMemoryFile: memory.file,
+        });
+
+        assert.strictEqual(boot.seen[0]?.cwd, "D:\\explicit");
+      } finally {
+        memory.cleanup();
+      }
+    });
   });
 });

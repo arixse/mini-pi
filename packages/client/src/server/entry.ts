@@ -10,6 +10,7 @@
 import { pathToFileURL } from "node:url";
 import { bootAppServer } from "./app";
 import { SERVE_USAGE, parseServeArgs } from "./serveArgs";
+import { fileWorkspaceMemory } from "./workspaceMemory";
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const parsed = parseServeArgs(argv);
@@ -22,11 +23,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     return 2;
   }
 
-  // 与 Electron 主进程共用装配：两边拿到的服务是同一个形状
-  const booted = await bootAppServer(parsed.args, {
-    stdout: process.stdout,
-    stderr: process.stderr,
-  });
+  // 与 Electron 主进程共用装配：两边拿到的服务是同一个形状。
+  // 接上"记住工作区"是为了让界面里的一次切换对桌面壳的下次启动也生效
+  const booted = await bootAppServer(
+    { ...parsed.args, workspaceMemory: fileWorkspaceMemory },
+    { stdout: process.stdout, stderr: process.stderr },
+  );
   if (!booted.server || !booted.url) {
     return booted.code;
   }

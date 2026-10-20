@@ -2,8 +2,8 @@
  * Electron 的窄接口。
  *
  * 刻意**自己描述形状**，不 import electron 的类型：
- * - 测试里的假实现天然满足它（一共六个方法），于是"单实例 / 关窗退出 /
- *   加载哪个地址"全都钉得住，不必真开一个窗口；
+ * - 测试里的假实现天然满足它（一共七个方法），于是"单实例 / 关窗退出 /
+ *   加载哪个地址 / 选哪个工作区"全都钉得住，不必真开一个窗口；
  * - 它同时画出了**边界**：桌面壳只许碰"窗口与进程生命周期"，业务
  *   （模型、会话、审批、事件流）一个都不许碰——那些都在 App Server 里。
  *   这条边界就是"为什么 Web 客户端一行都不用改"的原因。
@@ -48,6 +48,15 @@ export type ElectronApi = {
    * 找前端产物只能问 Electron 自己。
    */
   appPath(): string;
+  /**
+   * 弹出系统目录选择框；用户取消时返回 null。
+   *
+   * 桌面壳没有默认工作区，第一次启动就靠它问一句"用哪个目录"。
+   * 之所以用原生对话框而不是网页里那个路径输入框：选工作区是**文件系统
+   * 操作**，浏览器给的输入框既不能补全也不能校验，而这里本来就有
+   * 一个原生壳。
+   */
+  pickDirectory(): Promise<string | null>;
   quit(): void;
 };
 
@@ -59,6 +68,17 @@ type RawWindow = {
   on(event: "closed", handler: () => void): void;
 };
 
+/** `dialog.showOpenDialog` 的结果：取消与空选都算"没选" */
+type RawDirectoryChoice = { canceled: boolean; filePaths: string[] };
+
+type RawDialog = {
+  showOpenDialog(options: {
+    /** 只列目录：这里选的是工作区，不是文件 */
+    properties: string[];
+    title: string;
+  }): Promise<RawDirectoryChoice>;
+};
+
 type RawElectron = {
   app: {
     requestSingleInstanceLock(): boolean;
@@ -68,6 +88,7 @@ type RawElectron = {
     quit(): void;
   };
   BrowserWindow: new (options: ElectronWindowOptions) => RawWindow;
+  dialog: RawDialog;
 };
 
 /**
@@ -77,7 +98,7 @@ type RawElectron = {
  * `desktop` 那边则只看得到"有没有可执行文件"——两种场景各取所需。
  */
 export function createElectronApi(raw: RawElectron): ElectronApi {
-  const { app, BrowserWindow } = raw;
+  const { app, BrowserWindow, dialog } = raw;
   return {
     requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
     onSecondInstance: (handler) => app.on("second-instance", handler),
@@ -93,6 +114,15 @@ export function createElectronApi(raw: RawElectron): ElectronApi {
         focus: () => window.focus(),
         onClosed: (handler) => window.on("closed", handler),
       };
+    },
+    pickDirectory: async () => {
+      const choice = await dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "选择工作区",
+      });
+      // 取消和"选了 0 个"是同一件事；对话框保证返回的一定是已存在的目录
+      const [first] = choice.filePaths;
+      return choice.canceled || !first ? null : first;
     },
     quit: () => app.quit(),
   };
@@ -192,7 +222,8 @@ function isElectronApiShape(value: unknown): value is RawElectron {
       typeof candidate.app?.whenReady === "function" &&
       typeof candidate.app?.requestSingleInstanceLock === "function" &&
       typeof candidate.app?.getAppPath === "function" &&
-      typeof candidate.BrowserWindow === "function",
+      typeof candidate.BrowserWindow === "function" &&
+      typeof candidate.dialog?.showOpenDialog === "function",
   );
 }
 

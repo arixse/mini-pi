@@ -8,6 +8,14 @@
 
 export type ServeArgs = {
   cwd: string;
+  /**
+   * `--cwd` 是不是**显式**给的。
+   *
+   * 桌面壳靠它区分两件事："用户指定了工作区"与"顺手用了启动目录"。
+   * 后者在 `serve` 里是默认值，在 `desktop` 里根本不是默认值——
+   * 桌面壳没有默认工作区，首次启动时询问，之后记住上次的选择。
+   */
+  cwdGiven: boolean;
   port: number;
   host: string;
   /** 每个 Run 一个隔离 worktree（M3）；默认关 */
@@ -25,7 +33,8 @@ export const SERVE_USAGE = `用法：<client> serve [选项]
 
 启动 mini-pi 的本地客户端服务（HTTP + SSE），浏览器打开输出的地址即可。
 
-  --cwd <目录>      工作区，默认当前目录
+  --cwd <目录>      工作区：serve 默认当前目录；desktop 没有默认值，
+                    首次启动时询问，之后记住上次选择的目录
   --port <端口>     监听端口，默认 4788；0 表示由系统分配
   --host <地址>     监听地址，默认 127.0.0.1（这个服务没有鉴权，别绑到 0.0.0.0）
   --isolate         每个任务一个隔离的 git worktree，并行不互相踩
@@ -40,6 +49,7 @@ export function parseServeArgs(
   },
 ): ServeParseResult {
   let cwd = defaults.cwd;
+  let cwdGiven = false;
   let port = defaults.port ?? 4788;
   let host = defaults.host ?? "127.0.0.1";
   let isolate = false;
@@ -62,6 +72,7 @@ export function parseServeArgs(
       index += 1;
       if (token === "--cwd") {
         cwd = value;
+        cwdGiven = true;
       } else if (token === "--host") {
         host = value;
       } else if (token === "--concurrency") {
@@ -82,5 +93,5 @@ export function parseServeArgs(
     return { kind: "error", message: `无法识别的参数：${token}` };
   }
 
-  return { kind: "serve", args: { cwd, port, host, isolate, concurrency } };
+  return { kind: "serve", args: { cwd, cwdGiven, port, host, isolate, concurrency } };
 }

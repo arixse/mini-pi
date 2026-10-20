@@ -25,6 +25,8 @@ import { errorHandler, localGuard, noStore } from "./http";
 import { openSse } from "./sse";
 import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "../shared/types";
 import type { ServeArgs } from "./serveArgs";
+import { logger } from "@minipi/core/shared/logger";
+import { nullWorkspaceMemory, type WorkspaceMemory } from "./workspaceMemory";
 
 export type AppServerOptions = {
   workspaceRoot: string;
@@ -45,6 +47,13 @@ export type AppServerOptions = {
   resolveModel?: WorkspaceHostOptions["resolveModel"];
   providerService?: WorkspaceHostOptions["providerService"];
   settingsStore?: WorkspaceHostOptions["settingsStore"];
+  /**
+   * 记住工作区的方式；缺省**不记**（见 `nullWorkspaceMemory`）。
+   *
+   * 界面切到哪个目录要记下来，桌面壳下次启动才开得对——否则用户在
+   * 应用里换了三次工作区，重启一问又回到最初那个。
+   */
+  workspaceMemory?: WorkspaceMemory;
   now?: () => number;
 };
 
@@ -96,6 +105,7 @@ export class AppServer {
   private readonly app: Express = express();
   private readonly options: AppServerOptions;
   private readonly webRoot: string;
+  private readonly rememberWorkspace: WorkspaceMemory;
   private server: Server | null = null;
   /** 进行中的 SSE 连接：关闭服务时要一起断掉，否则进程不退出 */
   private readonly streams = new Set<() => void>();
@@ -103,6 +113,7 @@ export class AppServer {
   constructor(options: AppServerOptions) {
     this.options = options;
     this.webRoot = options.webRoot ?? defaultWebRoot();
+    this.rememberWorkspace = options.workspaceMemory ?? nullWorkspaceMemory;
     this.host = this.createHost(options.workspaceRoot, options.tier);
     this.registerRoutes();
   }
@@ -154,6 +165,22 @@ export class AppServer {
     const previous = this.host;
     this.host = next;
     previous.close();
+    await this.remember(root);
+  }
+
+  /**
+   * 记下这次选择，供桌面壳下次启动使用。
+   *
+   * 失败**不影响切换本身**：宿主已经换过来了，会话在跑、页面能用，
+   * 唯独"下次自动开这个目录"这条会失效。为一条便利功能把一次成功的
+   * 切换报成失败是不划算的，因此只把原因写进日志。
+   */
+  private async remember(root: string): Promise<void> {
+    try {
+      await this.rememberWorkspace.remember(root);
+    } catch (error) {
+      logger.error("记住工作区失败（不影响本次切换）:", errorMessage(error));
+    }
   }
 
   private createHost(workspaceRoot: string, tier?: Tier): WorkspaceHost {
@@ -450,6 +477,9 @@ export async function bootAppServer(
     ...(options.resolveModel ? { resolveModel: options.resolveModel } : {}),
     ...(options.providerService ? { providerService: options.providerService } : {}),
     ...(options.settingsStore ? { settingsStore: options.settingsStore } : {}),
+    // 入口显式给才记：bootAppServer 自己不定默认值，否则单测调它就会
+    // 往用户家目录里写文件
+    ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
     ...(options.now ? { now: options.now } : {}),
     concurrency: options.concurrency,
   });

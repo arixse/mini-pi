@@ -28,6 +28,7 @@ import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolveElectronBinary } from "./api";
+import { resolveDesktopWorkspace } from "./workspace";
 import {
   bootAppServer,
   type AppServer,
@@ -35,6 +36,7 @@ import {
   type BootResult,
   type BootStreams,
 } from "../server/app";
+import { fileWorkspaceMemory } from "../server/workspaceMemory";
 import { SERVE_USAGE, parseServeArgs, type ServeArgs } from "../server/serveArgs";
 
 /** 主进程产物：由 `build:electron` 生成（相对本包根目录） */
@@ -51,6 +53,11 @@ export const DESKTOP_USAGE = `用法：<client> desktop [选项]
   --no-electron     不用 Electron，改用系统浏览器打开无地址栏窗口
   --no-open         只起服务不打开窗口（无头机器 / 远程 SSH 用）
   -h, --help        显示本帮助
+
+工作区：desktop **没有默认工作区**。首次启动时弹出系统目录选择框，选完
+记住；之后启动直接开上次那个目录（界面上随时可以再换）。显式给了 --cwd
+就用它，且不改记忆。--no-electron 形态没有目录框可弹，只能用 --cwd 或
+上次记住的目录。
 `;
 
 /**
@@ -102,11 +109,14 @@ export function parseDesktopArgs(argv: readonly string[]): DesktopParseResult {
  *
  * 桌面壳的两个形态（拉起 Electron 子进程、自己起服务）都要这份 argv：
  * 抽出来是为了让它们永远拿到同一份选项，而不是一个多一个少。
+ *
+ * `--cwd` **只在显式给了的时候传**：没给就由子进程自己决定（记忆 → 询问）。
+ * 父进程这里顺手塞一个 `process.cwd()` 进去，就等于把"桌面壳没有默认
+ * 工作区"这条又改回去了——子进程连问都不会问。
  */
 export function toServeArgv(args: DesktopArgs): string[] {
   return [
-    "--cwd",
-    args.cwd,
+    ...(args.cwdGiven ? ["--cwd", args.cwd] : []),
     "--port",
     String(args.port),
     "--host",
@@ -311,6 +321,8 @@ export type DesktopDeps = {
   mainScript?: string;
   /** 起服务；缺省与 `serve` 共用一条路（保证桌面与 serve 行为一致） */
   boot?: (options: BootOptions, streams: BootStreams) => Promise<BootResult>;
+  /** 记忆文件路径；缺省 `~/.mini-pi/client-workspace.json`（测试传临时目录） */
+  workspaceMemoryFile?: string;
 };
 
 /**
@@ -345,6 +357,7 @@ export async function runDesktop(
    *
    * 父进程在这里立刻返回，不再往下起服务——服务活在 Electron 主进程里，
    * 因此它拿不到句柄，而这也正是"桌面壳不占住终端"的代价与代价的理由。
+   * 工作区同样不在这里决定：没给 `--cwd` 时由主进程"记忆 → 询问"。
    */
   if (args.open && args.electron) {
     const binary = deps.electronBinary
@@ -368,9 +381,31 @@ export async function runDesktop(
     }
   }
 
+  /**
+   * 自己起服务的形态（`--no-electron` / 无头）：工作区也走同一条解析，
+   * 只是没有目录框可弹——没有 `--cwd` 也没有记忆时就明说，
+   * 而不是退回启动目录（那正是"桌面壳不该有默认工作区"要避免的事）。
+   */
+  const workspace = await resolveDesktopWorkspace(args, {
+    ...(deps.workspaceMemoryFile ? { memoryFile: deps.workspaceMemoryFile } : {}),
+  });
+  if (workspace.kind !== "ok") {
+    streams.stderr.write(
+      `mini-pi desktop: ${workspace.kind === "cancelled" ? "未选择工作区，已退出" : workspace.message}\n`,
+    );
+    return { code: 1, server: null, url: null };
+  }
+
   // 与 serve 共用装配：模型装配、隔离、并发、审批档位都在那里，桌面壳不再
   // 抄一遍——抄一遍的结果一定是"两边行为慢慢分叉"
-  const booted = await (deps.boot ?? bootAppServer)(args, streams);
+  const booted = await (deps.boot ?? bootAppServer)(
+    {
+      ...args,
+      cwd: workspace.root,
+      workspaceMemory: fileWorkspaceMemory,
+    },
+    streams,
+  );
   if (!booted.url) {
     return { code: booted.code, server: null, url: null };
   }

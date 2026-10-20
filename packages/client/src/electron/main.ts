@@ -22,6 +22,7 @@
 import { join } from "node:path";
 import { asElectronApi, importElectron } from "./api";
 import type { ElectronApi, ElectronWindowHandle, ElectronWindowOptions } from "./api";
+import { resolveDesktopWorkspace, type WorkspaceResolution } from "./workspace";
 import {
   bootAppServer,
   findWebRoot,
@@ -29,7 +30,8 @@ import {
   type BootResult,
   type BootStreams,
 } from "../server/app";
-import { parseServeArgs } from "../server/serveArgs";
+import { parseServeArgs, type ServeArgs } from "../server/serveArgs";
+import { fileWorkspaceMemory } from "../server/workspaceMemory";
 
 /** 与 Web 客户端的三栏布局匹配（窄了侧栏会挤成两行） */
 export const WINDOW_OPTIONS: ElectronWindowOptions = {
@@ -78,14 +80,39 @@ export function extractElectronArgv(argv: readonly string[]): string[] {
  * 主进程的执行体。
  *
  * Electron 的 API 全在 `deps.electron` 后面：这样一来单测塞一个假实现就能
- * 把"单实例 / 关窗退出 / 加载哪个地址"全部钉住，不必真的开一个窗口。
+ * 把"单实例 / 关窗退出 / 加载哪个地址 / 选哪个工作区"全部钉住，不必真的
+ * 开一个窗口。
  */
 export type ElectronMainDeps = {
   electron: ElectronApi;
   streams: BootStreams;
   /** 起服务；缺省与 `serve` 共用一条路 */
   boot?: (options: BootOptions, streams: BootStreams) => Promise<BootResult>;
+  /**
+   * 决定用哪个工作区；缺省走"记忆 → 询问"。
+   *
+   * 可注入有两个理由：单测不该读用户家目录里那份真实的记忆，
+   * 也不该真弹一个系统对话框。
+   */
+  resolveWorkspace?: (
+    args: Pick<ServeArgs, "cwd" | "cwdGiven">,
+    electron: ElectronApi,
+  ) => Promise<WorkspaceResolution>;
+  /** 记忆文件路径；只有默认的解析器会用到它 */
+  workspaceMemoryFile?: string;
 };
+
+/** 默认的"用哪个工作区"：记忆优先，没有就问 */
+function defaultResolveWorkspace(
+  args: Pick<ServeArgs, "cwd" | "cwdGiven">,
+  electron: ElectronApi,
+  memoryFile?: string,
+): Promise<WorkspaceResolution> {
+  return resolveDesktopWorkspace(args, {
+    pick: () => electron.pickDirectory(),
+    ...(memoryFile ? { memoryFile } : {}),
+  });
+}
 
 export async function runElectronMain(
   argv: readonly string[],
@@ -126,8 +153,40 @@ export async function runElectronMain(
       "提示：未找到前端产物（dist/web），先执行 build:web；窗口里只会显示一句提示。\n",
     );
   }
+
+  /**
+   * 先建窗口（隐藏）再问工作区。
+   *
+   * 目录选择框挂在窗口上才是模态的——没有窗口时它在某些窗口管理器下会
+   * 跑到主窗口后面，用户看见的就是一个"点了没反应"的应用。窗口先不显示，
+   * 等页面加载完再 show，因此这一步用户看不到空窗口。
+   */
+  await electron.whenReady();
+  primary = electron.createWindow(WINDOW_OPTIONS);
+
+  const resolveWorkspace = deps.resolveWorkspace;
+  const workspace = resolveWorkspace
+    ? await resolveWorkspace(parsed.args, electron)
+    : await defaultResolveWorkspace(parsed.args, electron, deps.workspaceMemoryFile);
+  if (workspace.kind === "cancelled") {
+    streams.stderr.write("mini-pi desktop: 未选择工作区，已退出。\n");
+    electron.quit();
+    return 1;
+  }
+  if (workspace.kind === "missing") {
+    streams.stderr.write(`mini-pi desktop: ${workspace.message}\n`);
+    return 1;
+  }
+
   const booted = await (deps.boot ?? bootAppServer)(
-    { ...parsed.args, ...(webRoot ? { webRoot } : {}) },
+    {
+      ...parsed.args,
+      cwd: workspace.root,
+      ...(webRoot ? { webRoot } : {}),
+      // 桌面壳自己起服务，因此"记住工作区"由它接上：界面里切换工作区后，
+      // 下次启动要开的是新目录，而不是最初选的那个
+      workspaceMemory: fileWorkspaceMemory,
+    },
     streams,
   );
   // 只看 url：主进程不负责收服务（关窗即 quit，进程走了端口自然释放），
@@ -136,8 +195,6 @@ export async function runElectronMain(
     return booted.code;
   }
 
-  await electron.whenReady();
-  primary = electron.createWindow(WINDOW_OPTIONS);
   /**
    * 关窗即退出。
    *

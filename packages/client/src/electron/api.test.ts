@@ -1,8 +1,8 @@
 /**
- * Electron 窄接口的可测部分：形状认别与六个动作的委托。
+ * Electron 窄接口的可测部分：形状认别与七个动作的委托。
  *
  * 真 Electron 不在这里出现——它要一个桌面，而这里要钉的是"我们只用了
- * Electron 的哪六个动作"与"怎么分辨'我在 Electron 里'和'我能起 Electron'"。
+ * Electron 的哪七个动作"与"怎么分辨'我在 Electron 里'和'我能起 Electron'"。
  */
 
 import { describe, it } from "node:test";
@@ -33,7 +33,14 @@ const WINDOW: ElectronWindowOptions = {
 };
 
 /** 一个够真的假 electron 模块：记录调用顺序，事件回调可以事后触发 */
-function fakeRaw(options: { lock?: boolean; appPath?: string } = {}): {
+function fakeRaw(
+  options: {
+    lock?: boolean;
+    appPath?: string;
+    /** 目录框的返回值：null 表示用户取消，缺省同取消 */
+    pick?: string | null;
+  } = {},
+): {
   raw: RawElectronLike;
   calls: string[];
   fireClosed: () => void;
@@ -80,6 +87,15 @@ function fakeRaw(options: { lock?: boolean; appPath?: string } = {}): {
       },
     },
     BrowserWindow: FakeWindow,
+    dialog: {
+      showOpenDialog: async (dialogOptions) => {
+        calls.push(`showOpenDialog:${dialogOptions.properties.join(",")}`);
+        const picked = options.pick ?? null;
+        return picked === null
+          ? { canceled: true, filePaths: [] }
+          : { canceled: false, filePaths: [picked] };
+      },
+    },
   };
 
   return {
@@ -131,6 +147,23 @@ describe("createElectronApi", () => {
       "quit",
     ]);
   });
+
+  /**
+   * 桌面壳没有默认工作区，第一次启动就靠这一步问。
+   * 取消与"选了 0 个"必须合成同一个答案——调用方不该去分是哪一种。
+   */
+  it("pickDirectory：只列目录，选中返回路径", async () => {
+    const fake = fakeRaw({ pick: "D:\\projects\\mini-pi" });
+    const api = createElectronApi(fake.raw);
+
+    assert.strictEqual(await api.pickDirectory(), "D:\\projects\\mini-pi");
+    assert.deepStrictEqual(fake.calls, ["showOpenDialog:openDirectory"]);
+  });
+
+  it("pickDirectory：用户取消（或选了 0 个）返回 null", async () => {
+    const api = createElectronApi(fakeRaw().raw);
+    assert.strictEqual(await api.pickDirectory(), null);
+  });
 });
 
 describe("asElectronApi", () => {
@@ -144,6 +177,16 @@ describe("asElectronApi", () => {
     for (const value of [null, undefined, {}, { app: {} }, 42]) {
       assert.strictEqual(asElectronApi(value), null, `${String(value)} 不该被认成 Electron`);
     }
+  });
+
+  /**
+   * 缺 `dialog` 也是半成品：主进程第一次启动要弹目录框，
+   * 认一个没有 dialog 的"electron"进去只会在那一刻才崩。
+   */
+  it("缺 dialog 的模块不算认得出（第一次启动就要用它）", () => {
+    const fake = fakeRaw();
+    const withoutDialog = { ...fake.raw, dialog: undefined };
+    assert.strictEqual(asElectronApi(withoutDialog), null);
   });
 
   /**
