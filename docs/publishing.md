@@ -23,6 +23,31 @@ git push origin v1.0.1
 也可以在 Actions 页面手动触发（workflow_dispatch），可填版本号、可勾 dry-run
 只打包不发布。**手动触发不会跳过门禁**。
 
+## 桌面安装包
+
+同一个 `v*` tag 会**同时**触发 `.github/workflows/desktop.yml`，与 npm
+发布各跑各的、互不等待（共用一个 tag，两件事互不阻塞）：
+
+1. `gate`——跑一遍 `pnpm check`，与 publish 是**同一条命令**。tag 打在门禁
+   红的提交上时，npm 包与安装包**两个都不出**，不会出现"npm 没发、安装包
+   发了"的两个 1.2.3。跨工作流的依赖做不出来（`needs` 只在同一个 run 内
+   有效），所以是两个工作流各自判一遍。
+2. `installer`——Windows 与 macOS 两个 runner 各打各的。electron-builder
+   只肯在本平台打本平台的包，Windows 上敲 `dist:mac` 会直接报错退出。
+3. `release`——把两个平台的安装包挂到同 tag 的 Release 上。Release 不
+   存在就连它一起建（`--generate-notes`）；已存在则只补附件（`--clobber`，
+   重跑同一次 tag 会撞同名文件）。
+
+想在 Release 里写变更说明，就**先推 tag，再在网页上用这个 tag 建
+Release**：工作流发现它已存在，只补附件，不会覆盖你写的说明。
+
+> **反过来不行**：在 Release 页面新建 tag 后 Publish，创建的是 tag 引用
+> （GitHub 文档上归到 `create` 事件），而两个工作流订阅的都是
+> `push: tags`——它可能被触发，也可能不会，别把发版寄托在这上面。
+
+手动触发时第 3 步跳过：那时 `github.ref` 是分支名，拿它去建 Release 会
+得到一个指向分支的 Release，那不是我们要的。
+
 ## 首次配置：NPM_TOKEN
 
 > **npm 已于 2025 年 11 月移除 Legacy（传统）令牌**，网上大量教程里的

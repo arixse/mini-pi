@@ -158,9 +158,12 @@ macOS 上能出 dmg 与 zip。
 
 **electron-builder 只肯在本平台上打本平台的包**：Windows 上敲 `dist:mac`
 会直接报 `Build for macOS is supported only on macOS` 然后退出——它不
-会给你一个"看起来打好了"的东西。想一次性拿到两边，推一个 `v*` tag，
-`.github/workflows/desktop.yml` 会在 Windows 与 macOS 两个 runner 上各
-打各的，产物挂在工作流运行记录里。
+会给你一个"看起来打好了"的东西。想一次性拿到两边，推一个 `v*` tag：
+`.github/workflows/desktop.yml` 会先跑一遍 `pnpm check`（tag 打在门禁红
+的提交上时，npm 包与安装包**两个都不出**），再让 Windows 与 macOS 两个
+runner 各打各的，最后把安装包挂到这个 tag 的 Release 上——Release 不存在
+就自动建出来；人先建好写了变更说明的话，它只补附件。详见
+`docs/publishing.md`。
 
 包结构（三个包，由 workspace 管理）：
 
@@ -230,14 +233,20 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 内核、模型 SDK 全量内联成自包含 bundle）、`dist/web/**`、`package.json`。
 运行时依赖不进 `app.asar`——所以装完的机器不需要 `pnpm install`。
 
-首次打包会下载平台工具链（NSIS / winCodeSign / dmg 相关），国内网络下
-GitHub release 资产通常不可达，用 npmmirror 镜像：
+首次打包要下载两类东西，而**它们是两套镜像配置，不是一个**：
+
+- **Electron 二进制**：仓库里的 `.npmrc` 已配好 `electron_mirror`，
+  `pnpm install` 时自动走 npmmirror，不用再设环境变量；
+- **electron-builder 的平台工具链**（NSIS / winCodeSign / dmg 相关）：
+  另一套变量，还得自己给：
 
 ```bash
-ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/ \
 ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/ \
 pnpm dist:win
 ```
+
+只配前者的话，打包会卡在下载工具链那一步——表现是"装依赖很快，一按
+`dist:win` 就不动了"。
 
 **签名不做**：NSIS 安装包与 dmg 都未签名，Windows 会弹 SmartScreen、
 macOS 会提示"来自身份不明的开发者"。要分发给团队以外的人，得自己配
