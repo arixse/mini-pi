@@ -7,8 +7,14 @@
     "dev": "pnpm --filter @minipi/mini-pi run dev",
     "dev:cli": "pnpm --filter @minipi/mini-pi run dev:cli",
     "build:cli": "pnpm --filter @minipi/mini-pi run build:cli",
+    "build:web": "pnpm --filter @minipi/client run build:web",
+    "build:electron": "pnpm --filter @minipi/client run build:electron",
     "link:cli": "pnpm --filter @minipi/mini-pi run link:cli",
     "dev:client": "pnpm --filter @minipi/client run build:web && pnpm --filter @minipi/client run dev",
+    "desktop": "pnpm --filter @minipi/client run build:web && pnpm --filter @minipi/client run build:electron && pnpm --filter @minipi/client run desktop",
+    "dist": "pnpm --filter @minipi/client run dist",
+    "dist:win": "pnpm --filter @minipi/client run dist:win",
+    "dist:mac": "pnpm --filter @minipi/client run dist:mac",
     "prepare": "npm run build:cli",
     "typecheck": "pnpm -r run typecheck && tsc --noEmit -p tsconfig.json",
     "test": "tsx --tsconfig tsconfig.test.json --test --test-concurrency=4 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\"",
@@ -27,6 +33,8 @@
     "typescript": "^7.0.2"
   },
   "pnpm": {
-    "onlyBuiltDependencies": []
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
   }
 }

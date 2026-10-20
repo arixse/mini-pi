@@ -8,9 +8,9 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { AppServer } from "./app";
+import { bootAppServer } from "./app";
 import { SERVE_USAGE, parseServeArgs } from "./serveArgs";
-import { WorkspaceHost } from "./host";
+import { fileWorkspaceMemory } from "./workspaceMemory";
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const parsed = parseServeArgs(argv);
@@ -23,26 +23,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     return 2;
   }
 
-  let root: string;
-  try {
-    root = WorkspaceHost.assertWorkspaceRoot(parsed.args.cwd);
-  } catch (error) {
-    process.stderr.write(
-      `mini-pi 客户端：工作区不可用：${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    return 1;
+  // 与 Electron 主进程共用装配：两边拿到的服务是同一个形状。
+  // 接上"记住工作区"是为了让界面里的一次切换对桌面壳的下次启动也生效
+  const booted = await bootAppServer(
+    { ...parsed.args, workspaceMemory: fileWorkspaceMemory },
+    { stdout: process.stdout, stderr: process.stderr },
+  );
+  if (!booted.server || !booted.url) {
+    return booted.code;
   }
-
-  const app = new AppServer({
-    workspaceRoot: root,
-    port: parsed.args.port,
-    host: parsed.args.host,
-    ...(parsed.args.isolate ? { isolate: true } : {}),
-    concurrency: parsed.args.concurrency,
-  });
-  const running = await app.start();
+  const app = booted.server;
   process.stdout.write(
-    `mini-pi 客户端已启动：${running.url}\n工作区：${root}\n（Ctrl+C 退出）\n`,
+    `mini-pi 客户端已启动：${booted.url}\n工作区：${app.workspaceRoot}\n（Ctrl+C 退出）\n`,
   );
 
   // 收到信号时先收服务，再退出：SSE 连接不断掉的话进程会一直挂着

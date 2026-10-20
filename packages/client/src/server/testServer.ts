@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { AppServer } from "./app";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
+import type { WorkspaceMemory } from "./workspaceMemory";
 import type { LlmModel, CompleteInput } from "@minipi/core/agent/model";
 import type { AssistantMessage } from "@minipi/core/shared/protocol";
 import type { ServerEvent, Tier } from "../shared/types";
@@ -104,6 +105,13 @@ export type TestServerOptions = {
   initGit?: boolean;
   /** 同时执行上限，默认 1 */
   concurrency?: number;
+  /**
+   * "记住工作区"的替身；不注入就默认不记。
+   *
+   * 默认实现写的是 `~/.mini-pi/client-workspace.json`——那是用户的真实文件，
+   * 测试不该碰，因此这里和其他存储一样必须可注入。
+   */
+  workspaceMemory?: WorkspaceMemory;
 };
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
@@ -151,6 +159,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(options.isolate ? { isolate: true } : {}),
     ...(worktreesRoot ? { worktreesRoot } : {}),
     ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+    ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
     settingsStore,
     providerService,
     resolveModel: async () => ({

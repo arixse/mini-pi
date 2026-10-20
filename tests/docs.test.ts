@@ -37,15 +37,15 @@ function docFiles(): string[] {
 /**
  * 文档里允许出现的"不存在路径"，以及凭什么允许。
  *
- * M2（App Server + Web 前端）已落地：`packages/client/src/server` 与
- * `packages/client/src/web` 都真实存在，方案文档里点到的每一个文件都必须
- * 经得起这条断言——那正是"客户端确实在长"的唯一机器可验证的证据。
+ * M2（App Server + Web 前端）与 M5（Electron 桌面壳）都已落地，
+ * `packages/client/src/{server,web,electron}` 全部真实存在，于是这条
+ * 白名单已经**清空**——方案文档里点到的每一个文件都必须经得起断言，
+ * 那正是"客户端确实在长"的唯一机器可验证的证据。
  *
- * 还没落地的只剩 M5 的桌面壳（`packages/client/src/electron`）：
- * 方案文档已明确标注它是规划，缺失是**事实**而不是漂移；
- * 等它落地就删掉白名单条目，而不是让断言一直泛泛地失败。
+ * 保留这个空数组而不是删掉整段判断，是为了让下一个人要开白名单时
+ * 必须先写清"凭什么允许"，而不是随手往里塞一条。
  */
-const UNIMPLEMENTED_PATHS = ["packages/client/src/electron"];
+const UNIMPLEMENTED_PATHS: string[] = [];
 
 function isUnimplemented(path: string): boolean {
   return UNIMPLEMENTED_PATHS.some(

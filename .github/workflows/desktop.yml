@@ -1,0 +1,117 @@
+name: 桌面安装包
+
+# 与 publish.yml 共用 `v*` 这一个 tag：一次发版，npm 包与两个平台的安装包
+# 同时出，不必维护两个 tag 命名空间（两处版本号各自漂移是迟早的事）。
+#
+# 不挂在 publish.yml 里而是单独一个工作流，是因为两者的时长与失败面
+# 完全不同：publish 是"几十秒、可逆性为零"，安装包是"十几分钟、失败了
+# 重跑即可"。捆在一起的话，一个平台的大文件下载超时会挡住整次发布，
+# 而安装包本身并没有"发布到 registry"那种不可逆副作用。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# 与 publish 一样不 cancel：出到一半被取消时，runner 上的缓存与已下载的
+# 工具链都白费，而这里没有不可逆的外部副作用，排队跑完反而更快。
+concurrency:
+  group: desktop
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  EVENT_NAME: ${{ github.event_name }}
+  TAG_NAME: ${{ github.ref_name }}
+
+jobs:
+  installer:
+    # fail-fast: false：Windows 那台挂了不该连累 macOS 那台，
+    # 反正两边产物互不相干，先看住能出包的那一边更有价值。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            slug: win
+            script: dist:win
+          - os: macos-latest
+            slug: mac
+            script: dist:mac
+    runs-on: ${{ matrix.os }}
+    # 两个 runner 都要现场下载 Electron（约 100MB）与平台工具链；
+    # 冷缓存下 10 分钟会不够，但也就几分钟的事，给 30 分钟兜底。
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # 不写 version：pnpm 版本由 package.json 的 packageManager 字段指定
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # 只装客户端包（与它的依赖 @minipi/core）：打安装包用不到 CLI，
+      # 而 electron 是上百 MB 的二进制，装在谁身上谁就慢。
+      #
+      # 不能省掉 `...`（依赖）：@minipi/core 是 workspace 包，
+      # 只装 @minipi/client 会拿到一个解析不到内核的包。
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter "@minipi/client..."
+
+      # 版本号以 tag 为唯一事实来源，理由与 publish.yml 里那条一致：
+      # tag 打的是 v1.2.3 而包里还是 1.0.0 时，用户装到的东西与他以为的
+      # 不是同一个。这里写在**客户端包**上——electron-builder 读的就是
+      # 它，安装包文件名里的版本号从这里来。
+      #
+      # 用 npm pkg set 而不是 npm version：后者会碰 git 且要求工作区干净。
+      - name: 定版本
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号不是合法 semver：'$VERSION'（tag 应为 v1.2.3）"
+            exit 1
+          fi
+          (cd packages/client && npm pkg set version="$VERSION")
+          echo "安装包版本：$VERSION"
+
+      # 客户端包自己的 dist:win / dist:mac 里已经含 build:web 与
+      # build:electron 两步，这里不再重复——漏一步的表现是"包能装、
+      # 打开是旧界面"，而那在 CI 里看不出来。
+      - name: Build
+        run: pnpm --filter @minipi/client run ${{ matrix.script }}
+
+      # 只上传真正的分发物，不上传 win-unpacked 那 300MB 的中间目录。
+      #
+      # 名字里带 slug 而不是"两个 job 都叫 installer"：矩阵的两个 job
+      # 会在同一次运行里互相覆盖同名产物，表现是"只有一边下载得到"。
+      - name: 校验产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="packages/client/dist/installer"
+          test -d "$DIR"
+          ls -la "$DIR"
+          # 必须有安装包而不只是 win-unpacked：electron-builder 卡在
+          # 签名或下载工具链上时，目录里会只剩一个中间目录且退出码为 0
+          COUNT=$(find "$DIR" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::$DIR 里没有任何安装包"
+            exit 1
+          fi
+          echo "出包 $COUNT 个"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-pi-desktop-${{ matrix.slug }}
+          path: |
+            packages/client/dist/installer/*.exe
+            packages/client/dist/installer/*.dmg
+            packages/client/dist/installer/*.zip
+          if-no-files-found: error
+          retention-days: 30

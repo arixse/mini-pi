@@ -143,7 +143,24 @@ pnpm test           # node:test，并发 4
 pnpm test:coverage  # 带覆盖率门槛：行 85% / 分支 85% / 函数 90%
 pnpm check          # typecheck + test:coverage —— CI 跑的就是这一条
 pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
+pnpm build:web      # Vite 打包前端到 packages/client/dist/web
+pnpm build:electron # 打包 Electron 主进程到 packages/client/dist-electron/main.cjs
+pnpm desktop        # 起服务并开桌面窗口（内含上面两步构建）
+pnpm dist:win       # 出 Windows 安装包（NSIS + 便携版）
+pnpm dist:mac       # 出 macOS 安装包（dmg + zip）
+pnpm dist           # 按当前平台出安装包
 ```
+
+三个 `dist:*` 都是"构建前端 → 构建主进程 → 打包"三步，产物落在
+`packages/client/dist/installer/`（不是 `dist/`，否则下一次 `build:web`
+的 `emptyOutDir` 会把安装包一起清掉）。Windows 上能出 NSIS 与便携版，
+macOS 上能出 dmg 与 zip。
+
+**electron-builder 只肯在本平台上打本平台的包**：Windows 上敲 `dist:mac`
+会直接报 `Build for macOS is supported only on macOS` 然后退出——它不
+会给你一个"看起来打好了"的东西。想一次性拿到两边，推一个 `v*` tag，
+`.github/workflows/desktop.yml` 会在 Windows 与 macOS 两个 runner 上各
+打各的，产物挂在工作流运行记录里。
 
 包结构（三个包，由 workspace 管理）：
 
@@ -151,7 +168,7 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 | ------------------- | -------------------------------------------------------------- |
 | `packages/core`   | 内核：执行编排（Run / RunManager）、模型循环、工具、会话落盘、提示词、风险判定。不许依赖任何界面 |
 | `packages/cli`     | 命令行客户端：REPL、命令分派、审批、渲染、启动编排、`exec`。**发布到 npm 的就是它** |
-| `packages/client`  | 客户端：App Server + Web 前端（已落地，`pnpm --filter @minipi/client run dev`）与 Electron 壳（未实现，见 [electron-client-plan.md](docs/electron-client-plan.md)） |
+| `packages/client`  | 客户端：App Server + Web 前端 + Electron 桌面壳（均已落地，`pnpm --filter @minipi/client run desktop`，见 [electron-client-plan.md](docs/electron-client-plan.md)） |
 
 内核内部沿用原有分层（`packages/core/src/agent/` 等）：
 
@@ -180,16 +197,51 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
-| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 / M1 / M2 已落地，桌面壳 M5 未实现）   |
+| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M5 已全部落地）   |
 | [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、23 条已定决策（配套静态稿 `packages/client/design/mockup.html`） |
 | [开发日志索引](notes/README.md)                 | day1 ~ day28，按真实提交日期编排                                             |
 
 ## 范围
 
-CLI 与浏览器两种形态可用：`pnpm --filter @minipi/client run dev` 在本机
-`127.0.0.1:4788` 起 App Server + Web 界面（流式回复、审批、会话管理，
-界面照 `packages/client/design/mockup.html` 实现）。内核已下沉到
-`packages/core/src`，桌面壳 `packages/client/src/electron` 属于 M5，尚未实现。
+三种形态可用，共用同一份内核与同一套 HTTP + SSE 契约：
+
+- `mini-pi` —— 终端 REPL；`mini-pi exec "<提问>"` 是它的 headless 形态。
+- `pnpm --filter @minipi/client run dev` —— 在本机 `127.0.0.1:4788` 起
+  App Server + Web 界面（流式回复、审批、会话管理），浏览器打开即可，
+  界面照 `packages/client/design/mockup.html` 实现。
+- `pnpm desktop` —— 同一套服务装进一个 Electron 窗口（关窗即退出、单实例）。
+
+`desktop` 的选项与 `dev` 完全一致，另加 `--no-electron`（退回浏览器
+`--app=` 无地址栏窗口）与 `--no-open`（只起服务，无头机器用）。
+没装 Electron 或没跑过 `build:electron` 时会明说并自动退回浏览器壳。
+
+**工作区**：`serve` 默认当前目录；`desktop` **没有默认工作区**——首次启动
+时弹出系统目录框让用户选，选完记住（`~/.mini-pi/client-workspace.json`），
+之后直接开上次那个；在界面里切换工作区也会更新记忆。取消选择就退出，
+不会悄悄拿启动目录顶替。
+
+## 桌面安装包
+
+`pnpm dist:win` / `pnpm dist:mac` 把上面的服务与前端打成系统安装包，
+配置在 `packages/client/electron-builder.yml`，接线由 `tests/desktop-dist.test.ts`
+钉住（入口、构建顺序、产物目录、图标、两处 README 都登记了命令）。
+
+打进包的东西只有三样：`dist-electron/main.cjs`（esbuild 已把 express、
+内核、模型 SDK 全量内联成自包含 bundle）、`dist/web/**`、`package.json`。
+运行时依赖不进 `app.asar`——所以装完的机器不需要 `pnpm install`。
+
+首次打包会下载平台工具链（NSIS / winCodeSign / dmg 相关），国内网络下
+GitHub release 资产通常不可达，用 npmmirror 镜像：
+
+```bash
+ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/ \
+ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/ \
+pnpm dist:win
+```
+
+**签名不做**：NSIS 安装包与 dmg 都未签名，Windows 会弹 SmartScreen、
+macOS 会提示"来自身份不明的开发者"。要分发给团队以外的人，得自己配
+证书（`CSC_LINK` / `CSC_KEY_PASSWORD` 或 macOS 的 Developer ID）。
 
 ## 许可
 
