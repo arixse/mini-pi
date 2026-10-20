@@ -9,7 +9,13 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
+import { bootAppServer } from "./app";
 import {
+  scriptedModel,
   startTestServer,
   textResponse,
   toolCallResponse,
@@ -893,3 +899,81 @@ async function startNoModelServer(): Promise<TestServer> {
     },
   };
 }
+
+/**
+ * `bootAppServer`：`serve` 与 Electron 主进程（M5）共用的那一条启动路径。
+ *
+ * 它存在的理由就是"只有一份"，因此这里要钉的是**两个启动者拿到的是同一个
+ * 东西**：地址、端口、以及一个真的能回答 /api/state 的服务。
+ */
+describe("bootAppServer", () => {
+  it("起服务并返回地址与端口（端口 0 由系统分配后必须报出来）", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-boot-"));
+    try {
+      const workspace = join(root, "workspace");
+      const sessionsDir = join(root, "sessions");
+      const configDir = join(root, "config");
+      for (const dir of [workspace, sessionsDir, configDir]) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      const booted = await bootAppServer(
+        {
+          cwd: workspace,
+          port: 0,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          sessionsDir,
+          settingsStore: new SettingsStore(join(configDir, "settings.json")),
+          providerService: new ModelProviderService(
+            new ProviderStore(join(configDir, "auth.json")),
+          ),
+          resolveModel: async () => ({
+            model: scriptedModel([textResponse("你好")]),
+            providerName: "test",
+            modelName: "test-model",
+          }),
+        },
+        { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+      );
+      try {
+        assert.strictEqual(booted.code, 0);
+        assert.ok(booted.server, "起成了就该给出句柄，调用方要拿它收服务");
+        assert.ok((booted.port ?? 0) > 0, "端口 0 是让系统分配，分配结果必须回传");
+        assert.ok(
+          /^http:\/\/127\.0\.0\.1:\d+$/.test(booted.url ?? ""),
+          `地址形状不对：${String(booted.url)}`,
+        );
+
+        const response = await fetch(`${booted.url}/api/state`);
+        const state = (await response.json()) as AppState;
+        assert.strictEqual(state.workspace.root, workspace);
+        assert.strictEqual(state.model.label, "test / test-model");
+      } finally {
+        await booted.server?.stop();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("工作区不可用时**返回码**而不是抛（两种调用方都要拿它当退出码）", async () => {
+    const err: string[] = [];
+    const booted = await bootAppServer(
+      {
+        cwd: join(tmpdir(), "mini-pi-no-such-workspace", String(Date.now())),
+        port: 0,
+        host: "127.0.0.1",
+        isolate: false,
+        concurrency: 1,
+      },
+      { stdout: { write: () => undefined }, stderr: { write: (chunk) => void err.push(chunk) } },
+    );
+
+    assert.strictEqual(booted.code, 1);
+    assert.strictEqual(booted.server, null);
+    assert.strictEqual(booted.url, null);
+    assert.match(err.join(""), /工作区不可用/);
+  });
+});

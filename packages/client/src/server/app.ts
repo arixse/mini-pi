@@ -20,10 +20,11 @@ import { fileURLToPath } from "node:url";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import type { Server } from "node:http";
 import { HttpError, requireString } from "./errors";
-import { WorkspaceHost, type WorkspaceHostOptions } from "./host";
+import { WorkspaceHost, errorMessage, type WorkspaceHostOptions } from "./host";
 import { errorHandler, localGuard, noStore } from "./http";
 import { openSse } from "./sse";
 import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "../shared/types";
+import type { ServeArgs } from "./serveArgs";
 
 export type AppServerOptions = {
   workspaceRoot: string;
@@ -57,9 +58,37 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const DEFAULT_PORT = 4788;
 /** 请求体上限：审批参数、提问都在这里，1MB 对"文本"这个用途绰绰有余 */
 const MAX_BODY = "1mb";
+/** 前端产物在本包内的相对位置（`vite build` 的 outDir） */
+const WEB_ROOT_PARTS = ["dist", "web"] as const;
+
+/**
+ * 本文件所在目录（即 `src/server`）。
+ *
+ * 多一层判断是因为 Electron 主进程是 **CJS 产物**：esbuild 打 CJS 时
+ * `import.meta` 会被换成空对象，`import.meta.url` 成了 undefined，
+ * 直接 `fileURLToPath(undefined)` 就是一次崩溃——而"前端产物没构建"
+ * 本该是页面上一句提示，不是进程起不来。
+ */
+function moduleDir(): string {
+  const url = import.meta.url;
+  return url ? dirname(dirname(fileURLToPath(url))) : process.cwd();
+}
 
 function defaultWebRoot(): string {
-  return join(dirname(dirname(fileURLToPath(import.meta.url))), "..", "dist", "web");
+  return join(moduleDir(), "..", ...WEB_ROOT_PARTS);
+}
+
+/**
+ * 判断前端产物是不是在 `candidate` 下。
+ *
+ * Electron 主进程要自己找它：打包后 `process.cwd()` 可能是任何地方
+ * （双击启动时甚至是 `/`），而 `import.meta.url` 在 CJS 产物里也靠不住，
+ * 只能拿 Electron 说的应用目录来试。命中返回目录，没命中返回 undefined——
+ * 调用方据此决定要不要再往上找一层，或者如实告诉用户"先跑 build:web"。
+ */
+export function findWebRoot(candidate: string): string | undefined {
+  const root = join(candidate, ...WEB_ROOT_PARTS);
+  return existsSync(join(root, "index.html")) ? root : undefined;
 }
 
 export class AppServer {
@@ -369,6 +398,63 @@ export class AppServer {
     req.on("close", teardown);
     req.on("error", teardown);
   }
+}
+
+/**
+ * `serve` 与 Electron 主进程（M5）共用的装配。
+ *
+ * 抽出来不是为了省几行，而是为了**只有一条启动路径**：桌面壳与命令行是
+ * 同一个服务的两种开法，各写一份的结果一定是两边慢慢分叉（一边加了
+ * `--isolate` 而另一边没有，用户只会认为桌面版是残缺版）。
+ *
+ * 失败时**返回码**而不是抛：调用方有两种（进程入口要退出码、桌面壳要
+ * 决定"还开不开窗口"），抛异常会逼它们各自写一份 try/catch。
+ */
+export type BootOptions = ServeArgs &
+  Omit<AppServerOptions, "workspaceRoot" | "port" | "host" | "isolate" | "concurrency">;
+
+export type BootStreams = {
+  stdout: { write(chunk: string): void };
+  stderr: { write(chunk: string): void };
+};
+
+export type BootResult = {
+  code: number;
+  server: AppServer | null;
+  url: string | null;
+  port: number | null;
+};
+
+export async function bootAppServer(
+  options: BootOptions,
+  streams: BootStreams,
+): Promise<BootResult> {
+  let root: string;
+  try {
+    root = WorkspaceHost.assertWorkspaceRoot(options.cwd);
+  } catch (error) {
+    streams.stderr.write(`mini-pi 客户端：工作区不可用：${errorMessage(error)}\n`);
+    return { code: 1, server: null, url: null, port: null };
+  }
+
+  const server = new AppServer({
+    workspaceRoot: root,
+    port: options.port,
+    host: options.host,
+    ...(options.webRoot ? { webRoot: options.webRoot } : {}),
+    ...(options.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
+    ...(options.globalAgentsPath ? { globalAgentsPath: options.globalAgentsPath } : {}),
+    ...(options.tier ? { tier: options.tier } : {}),
+    ...(options.isolate ? { isolate: true } : {}),
+    ...(options.worktreesRoot ? { worktreesRoot: options.worktreesRoot } : {}),
+    ...(options.resolveModel ? { resolveModel: options.resolveModel } : {}),
+    ...(options.providerService ? { providerService: options.providerService } : {}),
+    ...(options.settingsStore ? { settingsStore: options.settingsStore } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    concurrency: options.concurrency,
+  });
+  const running = await server.start();
+  return { code: 0, server, url: running.url, port: running.port };
 }
 
 /**
