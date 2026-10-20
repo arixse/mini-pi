@@ -6,7 +6,7 @@
  * 否则测试文件 import 时会启动 REPL 占住 stdin 导致测试挂起。
  */
 import { createModelFromProvider, LlmModel } from "../agent/model";
-import { createToolRegistry } from "../agent/tools/registry";
+import { ToolRegistry, createToolRegistry } from "../agent/tools/registry";
 import { AgentMessage } from "../shared/protocol";
 import {
   SubAgentRuntimeProvider,
@@ -269,31 +269,43 @@ export async function main(argv: string[] = process.argv.slice(2)) {
    */
   const skillLoader = new SkillLoader(workspaceRoot);
 
+  // 创建 sessionManager（与 load_skill 工具共用同一个 SkillLoader）
+  const sessionManager = new SessionManager(workspaceRoot, { skillLoader });
+
   /**
-   * 委派工具 `task` 的运行时容器。
+   * 工具注册表的**唯一构造处**：按 Run 现造。
    *
-   * 注册表是一次性构建的，而运行时每轮都新建（预算按回合计、取消信号连本轮），
-   * 所以工具不能持有运行时，只能每轮从这里取——REPL 与这里共享同一个容器。
-   * 委派期间容器为空即意味着"当前没有活跃回合"，工具会直接报错而不是静默失败。
+   * `task` 工具要从运行时容器里取当次的监督者、模型与取消信号，那三样
+   * 每次执行都不同；共用一个注册表时并行会互相覆盖。因此容器由调用方
+   * （`core/run.ts`）造好传进来，工具只闭包住它。
+   *
+   * 子 Agent 的工具集必须从父注册表派生：派生保证它拿不到父级没有的能力。
+   * 项目规则（AGENTS.md）用惰性取值而不是闭包捕获：/reload 之后规则可能已变，
+   * 捕获会把旧值永久钉住。
    */
-  const subAgentRuntime = new SubAgentRuntimeProvider();
-  const toolRegistry = createToolRegistry(workspaceRoot, {
-    skillLoader,
-    extraTools: [
-      createSubAgentTool({
-        workspaceRoot,
-        depth: 0,
-        runtime: () => subAgentRuntime.get(),
-        // 子 Agent 的工具集必须从父注册表派生：派生保证它拿不到父级没有的能力
-        parentRegistry: () => toolRegistry,
-        // 项目规则（AGENTS.md）：子 Agent 也要知道本项目的约定，
-        // 否则 implement 不知道"每次改动要 commit、交付前必须跑单测"。
-        // 用惰性取值而不是闭包捕获：注册表在 fixedContext 读取之前就要构建，
-        // 而 /reload 之后规则可能已变，捕获会把旧值永久钉住。
-        projectRules: () => sessionManager.getFixedContext(),
-      }),
-    ],
-  });
+  const toolRegistryFactory = (runtime: SubAgentRuntimeProvider): ToolRegistry => {
+    const registry = createToolRegistry(workspaceRoot, {
+      skillLoader,
+      extraTools: [
+        createSubAgentTool({
+          workspaceRoot,
+          depth: 0,
+          runtime: () => runtime.get(),
+          parentRegistry: () => registry,
+          projectRules: () => sessionManager.getFixedContext(),
+        }),
+      ],
+    });
+    return registry;
+  };
+
+  /**
+   * 展示与估算用的那份（`/status` 的只读工具名单、上下文固定开销）。
+   *
+   * 与执行用的那份分开，是为了让"执行"完全交给 Run：展示侧不需要运行时，
+   * 给它一个永远为空的容器即可——它不会被任何一次执行用到。
+   */
+  const toolRegistry = toolRegistryFactory(new SubAgentRuntimeProvider());
 
   // 上下文窗口：settings.json 的 contextWindow 优先，否则按当前模型名推断
   // （认不出模型名时回退到 128k），用于推导压缩阈值
@@ -305,8 +317,6 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // trace 落盘同样默认关闭：它是磁盘上额外的敏感数据副本
   const subAgentTrace = await settingsStore.getSubagentTrace();
 
-  // 创建 sessionManager（与 load_skill 工具共用同一个 SkillLoader）
-  const sessionManager = new SessionManager(workspaceRoot, { skillLoader });
   if(model) {
     sessionManager.setModel(model);
   }
@@ -417,7 +427,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     messages,
     model,
     toolRegistry,
-    subAgentRuntime,
+    toolRegistryFactory,
     subAgentEnabled,
     subAgentTrace,
     workspaceRoot,

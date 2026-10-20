@@ -1,49 +1,30 @@
 /**
  * 一个回合：从"用户敲下回车"到"脚注打完"。
  *
- * 与 REPL 主循环分开，是因为这里是唯一需要同时摆弄取消信号、子 Agent 监督者、
- * 用量累计与落盘的地方；主循环只负责"什么时候该跑一个回合、跑完要不要退出"。
+ * 与 REPL 主循环分开，是因为这里是唯一需要同时摆弄取消信号、用量累计、
+ * 落盘与终端呈现的地方；主循环只负责"什么时候该跑一个回合、跑完要不要退出"。
+ *
+ * **执行本身不在这里**：循环、委派监督者、终态判定全在 `core/run.ts` 的
+ * `Run` 里。这里只做三件终端专属的事——压缩前给状态行、每轮把消息落到
+ * 会话文件、结束打脚注。于是 headless（`exec`）与服务端复用的是同一段
+ * 执行代码，终端多出来的只是呈现。
  */
 
 import chalk from "chalk";
 import type { AgentEvent, Usage } from "../shared/protocol";
 import { createUserMessage } from "../agent/message";
-import { BeforeToolCall, runAgentLoop } from "../agent/loop";
+import type { BeforeToolCall } from "../agent/loop";
 import type { LlmModel } from "../agent/model";
-import {
-  SUBAGENT_TOOL_NAME,
-  SubAgentSupervisor,
-  emptyUsage,
-} from "../agent/subagent";
-import type { ToolRegistry } from "../agent/tools/registry";
+import { emptyUsage } from "../agent/subagent";
 import { UsageTracker, formatTokenCount, sumUsage } from "../agent/usage";
 import { logger } from "../shared/logger";
+import { Run } from "../core/run";
 import { KEEP_RECENT_MESSAGES, compactionBudget, contextUsage } from "./context";
 import { appendAgentMessages, appendUserMessage, compactContext } from "./session";
 import { printSeparator } from "./ui";
 import type { RenderContext } from "./render";
 import type { StatusController } from "./status";
 import type { ReplOptions } from "./options";
-
-/**
- * 本回合实际生效的工具注册表：关闭委派时把 `task` 摘掉。
- *
- * 用"过滤后的子集"而不是注销工具：注册表（含 `task` 的执行器）是一次性构建的，
- * 这里改的只是模型这一轮看不看得到它，两者不应互相影响。
- */
-export function activeToolRegistry(
-  registry: ToolRegistry,
-  subAgentEnabled: boolean,
-): ToolRegistry {
-  if (subAgentEnabled || !registry.has(SUBAGENT_TOOL_NAME)) {
-    return registry;
-  }
-  const names = registry
-    .definitions()
-    .map((definition) => definition.name)
-    .filter((name) => name !== SUBAGENT_TOOL_NAME);
-  return registry.filter(names);
-}
 
 /**
  * 回合脚注的输入。
@@ -117,7 +98,7 @@ export type RunAgentTurnDeps = {
 };
 
 /**
- * 跑一个回合：落盘提问 → 调模型循环 → 落盘回答 → 打脚注。
+ * 跑一个回合：落盘提问 → 跑一次 Run → 补写未落盘的消息 → 打脚注。
  *
  * 抛错时只记录日志不向上抛：一个回合失败不该让 REPL 退出
  * （退出由 `/exit` 与 EOF 单独决定）。
@@ -128,14 +109,6 @@ export async function runAgentTurn(
 ): Promise<TurnStats> {
   const { options, signal, status, beforeToolCall } = deps;
 
-  /**
-   * 本回合的委派监督者：管预算、并行配额，也是取消树的根。
-   *
-   * 每轮一个实例，因为预算是按回合计的；而取消树的根连到本轮的 signal，
-   * 所以 Ctrl+C 一次就能中断整棵子树（父信号 → slot.signal → 子 Agent 循环）。
-   */
-  let supervisor: SubAgentSupervisor | null = null;
-
   try {
     console.log("");
     printSeparator();
@@ -144,11 +117,7 @@ export async function runAgentTurn(
     // 压缩要调模型生成摘要，可能静默数秒：先给出可见状态
     const { budget, overhead } = compactionBudget(options);
     const willCompact =
-      options.sessionStore?.needsCompaction(
-        budget,
-        KEEP_RECENT_MESSAGES,
-        overhead,
-      ) ?? false;
+      options.sessionStore?.needsCompaction(budget, KEEP_RECENT_MESSAGES, overhead) ?? false;
     if (willCompact) {
       status.set({ kind: "compacting", startedAt: Date.now() });
     }
@@ -160,47 +129,40 @@ export async function runAgentTurn(
     // 脚注里的耗时从真正开始干活算起：排队与读输入不算本回合的账
     const turnStartedAt = Date.now();
 
-    // 本回合给模型的工具集：关掉委派时 task 不在列表里，模型就不会试着派
-    const turnRegistry = activeToolRegistry(options.toolRegistry, deps.subAgentEnabled);
-
-    // 把本轮运行时交给 task 工具：没有这一步委派无法拿到模型、取消信号与审批钩子
-    if (options.subAgentRuntime && deps.subAgentEnabled) {
-      supervisor = new SubAgentSupervisor({
-        parentSignal: signal,
-      });
-      options.subAgentRuntime.set({
-        supervisor,
-        model: deps.model,
-        parentId: null,
-        beforeToolCall,
-        onEvent: deps.onAgentEvent,
-        // trace 需要主会话路径落地；没有会话存储时自动失效
-        sessionFilePath: options.sessionStore?.getFilePath() ?? null,
-        traceEnabled: deps.subAgentTrace,
+    /**
+     * 一次回合 = 一个 Run。
+     *
+     * 委派监督者、取消信号、委派运行时都归这个 Run 私有：
+     * 交给它之后，这里不再需要"回合结束清空全局容器"这种补救动作——
+     * 那正是并行时最容易漏掉的一步。
+     */
+    const run = new Run({
+      systemPrompt: options.systemPrompt,
+      messages: options.messages,
+      model: deps.model,
+      tools: options.toolRegistryFactory ?? options.toolRegistry,
+      subAgent: {
+        enabled: deps.subAgentEnabled,
+        trace: deps.subAgentTrace,
         // 子 Agent 独立成一条上下文，不落盘也没有压缩：预算必须一起下发，
         // 否则它读满十几个文件后请求直接 400，父 Agent 只看到"委派失败"
         contextBudgetTokens: budget,
-      });
-    }
+        sessionFilePath: options.sessionStore?.getFilePath() ?? null,
+      },
+      signal,
+    });
 
     // 循环每轮都会回调：先把本轮消息落盘，再检查是否需要压缩
     // （单轮内可能跑很多次工具调用，只在用户回合开始时压一次兜不住）
     let syncedMessages = 0;
-    const result = await runAgentLoop({
-      systemPrompt: options.systemPrompt,
-      messages: options.messages,
-      tools: turnRegistry.definitions(),
-      model: deps.model,
-      toolRegistry: turnRegistry,
-      maxTurns: 100,
+    const result = await run.execute({
       beforeToolCall,
-      signal,
+      onEvent: deps.onAgentEvent,
       onTurnEnd: async (turnMessages) => {
         await appendAgentMessages(options, turnMessages);
         syncedMessages += turnMessages.length;
         return await compactContext(options, status, signal);
       },
-      onEvent: deps.onAgentEvent,
     });
 
     status.stop();
@@ -225,7 +187,7 @@ export async function runAgentTurn(
       chalk.dim(
         formatTurnFooter({
           elapsedMs: Date.now() - turnStartedAt,
-          // 没 Statistik usage 就传 null：宁可不显示，也不把 0 说成"没花钱"
+          // 没 usage 就传 null：宁可不显示，也不把 0 说成"没花钱"
           usage: turnUsage.usage.totalTokens > 0 ? turnUsage.usage : null,
           context: contextUsage(options) ?? undefined,
         }),
@@ -233,19 +195,13 @@ export async function runAgentTurn(
     );
     printSeparator();
     console.log("");
+
+    return { delegations: result.delegations, usage: result.subAgentUsage };
   } catch (error) {
     status.stop();
     logger.error("❌ 错误:", error instanceof Error ? error.message : error);
+    return { delegations: 0, usage: emptyUsage() };
   } finally {
     status.stop();
-    // 回合结束后必须清空运行时：残留的运行时会让下一轮之外（例如工具被误调用）
-    // 的委派连到一个已经作废的取消信号上
-    options.subAgentRuntime?.set(null);
   }
-
-  if (!supervisor) {
-    return { delegations: 0, usage: emptyUsage() };
-  }
-  const stats = supervisor.stats;
-  return { delegations: stats.delegations, usage: { ...stats.usage } };
 }

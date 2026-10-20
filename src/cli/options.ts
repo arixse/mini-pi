@@ -93,10 +93,17 @@ export type ReplOptions = {
   /** 工具执行前的审批钩子；不传则使用内置的交互式审批 */
   beforeToolCall?: BeforeToolCall;
   /**
-   * `task` 工具的运行时容器。REPL 每轮把当轮的监督者注入进去，回合结束清空。
-   * 不传则模型看不到 `task`，委派不可用——这是"没有子 Agent 支持"的默认安全态。
+   * **执行用**的工具注册表工厂：按每个 Run 现造一份。
+   *
+   * 为什么要工厂而不是一个固定注册表：`task` 工具要从一个容器里取当次的
+   * 委派监督者、模型与取消信号，而那三样都是**每 Run 不同**的。
+   * 共用一个注册表时，两个 Run 并行会互相覆盖运行时——委派会连到别人
+   * （可能已经作废）的取消信号上，且不报错。
+   *
+   * 不传时退回 {@link toolRegistry}：单一执行（今天的 REPL）下等价，
+   * 但那意味着"多 Run 并行"这条路上还埋着一颗雷。
    */
-  subAgentRuntime?: SubAgentRuntimeProvider;
+  toolRegistryFactory?: (runtime: SubAgentRuntimeProvider) => ToolRegistry;
   /** 会话级子 Agent 用量查询，供 `/status` 展示（避免委派成本隐形） */
   subAgentStats?: () => { delegations: number; usage: Usage };
   /**

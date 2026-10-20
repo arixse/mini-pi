@@ -4,19 +4,24 @@ import { existsSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { activeToolRegistry, formatTurnFooter, runAgentTurn } from "./turn";
+import { formatTurnFooter, runAgentTurn } from "./turn";
+import { visibleToolRegistry } from "../core/run";
 import { SUBAGENT_TOOL_NAME } from "../agent/subagent";
 import { ToolRegistry } from "../agent/tools/registry";
 import { createTextContent } from "../agent/message";
 import { createFakeStatus, createMockModel, makeReplOptions } from "./testRepl";
 import { JsonlSessionStore } from "../agent/sessionStore";
-import { SubAgentRuntimeProvider } from "../agent/subagentTool";
 import { createUsageTracker } from "../agent/usage";
 import { compactionBudget } from "./context";
 import { createMemorySink, configureLogger, resetLogger } from "../shared/logger";
 import { PLAIN_CONTEXT } from "./render";
 import type { ReplOptions } from "./options";
 
+/**
+ * 工具集的过滤在 `core/run.ts`（`visibleToolRegistry`）：headless 与服务端
+ * 用的是同一份判定，因此断言也放在那边（core/run.test.ts）。
+ * 这里只保留"它确实被引进来了"这一条，防止终端悄悄自己再抄一份。
+ */
 describe("本回合生效的工具注册表（委派开关）", () => {
   function registryWithTask(): ToolRegistry {
     const registry = new ToolRegistry();
@@ -42,7 +47,7 @@ describe("本回合生效的工具注册表（委派开关）", () => {
 
   it("关闭时模型看不到 task，其余工具不受影响", () => {
     const registry = registryWithTask();
-    const filtered = activeToolRegistry(registry, false);
+    const filtered = visibleToolRegistry(registry, false);
     const names = filtered.definitions().map((tool) => tool.name);
 
     assert.ok(!names.includes(SUBAGENT_TOOL_NAME), "关闭后 task 不应出现在工具定义里");
@@ -53,12 +58,12 @@ describe("本回合生效的工具注册表（委派开关）", () => {
 
   it("开启时原样使用完整注册表", () => {
     const registry = registryWithTask();
-    assert.strictEqual(activeToolRegistry(registry, true), registry);
+    assert.strictEqual(visibleToolRegistry(registry, true), registry);
   });
 
   it("注册表里本来就没有 task 时不需要过滤", () => {
     const registry = new ToolRegistry();
-    assert.strictEqual(activeToolRegistry(registry, false), registry);
+    assert.strictEqual(visibleToolRegistry(registry, false), registry);
   });
 });
 
@@ -216,18 +221,24 @@ describe("runAgentTurn（回合编排）", () => {
   });
 
   it("开启委派时把主会话的上下文预算下发给子 Agent 运行时，回合结束即清空", async () => {
-    const provider = new SubAgentRuntimeProvider();
     const seen: Array<{ contextBudgetTokens?: number; sessionFilePath?: string | null }> = [];
-    const realSet = provider.set.bind(provider);
-    provider.set = (runtime) => {
-      if (runtime) {
-        seen.push(runtime);
-      }
-      realSet(runtime);
-    };
 
     const { store, deps } = makeDeps({ subAgentEnabled: true });
-    deps.options.subAgentRuntime = provider;
+    /**
+     * 运行时容器由 Run 现造并通过工厂交出来：终端不再持有一个全局容器。
+     *
+     * 这正是"并行不会互相覆盖"的根据——每个回合拿到的是自己的那一个。
+     */
+    deps.options.toolRegistryFactory = (runtime) => {
+      const realSet = runtime.set.bind(runtime);
+      runtime.set = (value) => {
+        if (value) {
+          seen.push(value);
+        }
+        realSet(value);
+      };
+      return deps.options.toolRegistry;
+    };
 
     const captured = capture();
     try {
@@ -243,8 +254,6 @@ describe("runAgentTurn（回合编排）", () => {
       compactionBudget(deps.options).budget,
     );
     assert.strictEqual(seen[0].sessionFilePath, store.getFilePath());
-    // 残留的运行时会让下一轮之外的误调用连到作废的取消信号上
-    assert.strictEqual(provider.get(), null, "回合结束后运行时必须清空");
   });
 
   it("某一轮落盘失败时，回合末把整批未落盘消息补写回去（不重不漏）", async () => {
