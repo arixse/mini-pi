@@ -17,6 +17,7 @@ import { ToolCallContent } from "@minipi/core/shared/protocol";
 import { runAgentLoop } from "@minipi/core/agent/loop";
 import { ToolRegistry, createToolRegistry } from "@minipi/core/agent/tools/registry";
 import { createTextContent } from "@minipi/core/agent/message";
+import type { ApprovalMode } from "@minipi/core/policy";
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCallContent {
   return { type: "toolCall", id: `call_${name}`, name, arguments: args };
@@ -178,6 +179,66 @@ describe("tool approval", () => {
       ["read_file", true, "auto"],
       ["bash", true, "approved"],
     ]);
+  });
+
+  it("read-only 档：写与执行直接拒绝，连问都不问", async () => {
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => "read-only",
+      confirm: async () => {
+        asked += 1;
+        return "yes";
+      },
+    });
+
+    const decision = await approve(call("bash", { command: "echo hi" }));
+
+    assert.strictEqual(decision.action, "block");
+    assert.strictEqual(asked, 0, "只读档不是「问一下」，是根本不允许");
+    assert.match(decision.action === "block" ? decision.reason ?? "" : "", /read-only/);
+    // 只读工具照常放行：档位管的是"能不能动"，不是"能不能看"
+    const read = await approve(call("read_file", { path: "a.txt" }));
+    assert.strictEqual(read.action, "allow");
+  });
+
+  it("档位是 getter：会话中途切档，下一次调用立刻按新档裁决", async () => {
+    let mode: ApprovalMode = "read-only";
+    const approve = createToolApproval({
+      mode: () => mode,
+      confirm: async () => "yes",
+    });
+
+    assert.strictEqual((await approve(call("write_file", { path: "a", content: "x" }))).action, "block");
+    mode = "full-access";
+    const after = await approve(call("write_file", { path: "a", content: "x" }));
+    assert.strictEqual(after.action, "allow");
+    assert.match(after.reason ?? "", /全权/);
+  });
+
+  it("按过 a 又切到只读：限制令不被旧授权穿透", async () => {
+    let mode: ApprovalMode = "workspace-write";
+    const approve = createToolApproval({
+      mode: () => mode,
+      confirm: async () => "always",
+    });
+    // 第一次：按 a → 本会话全部允许
+    assert.strictEqual((await approve(call("bash", { command: "echo 1" }))).action, "allow");
+    // 随后用户切到只读档：更晚的那个意图必须赢
+    mode = "read-only";
+    assert.strictEqual((await approve(call("bash", { command: "echo 2" }))).action, "block");
+  });
+
+  it("mode 缺省时由 isTrusted 推导（旧布尔入口的兼容层）", async () => {
+    let asked = 0;
+    const trusted = createToolApproval({
+      isTrusted: () => true,
+      confirm: async () => {
+        asked += 1;
+        return "no";
+      },
+    });
+    assert.strictEqual((await trusted(call("write_file", { path: "a", content: "x" }))).action, "allow");
+    assert.strictEqual(asked, 0);
   });
 
   it("should describe tool calls without dumping file contents", () => {

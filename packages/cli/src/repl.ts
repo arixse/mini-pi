@@ -15,6 +15,8 @@ import type { BeforeToolCall } from "@minipi/core/agent/loop";
 import { addUsage, emptyUsage } from "@minipi/core/agent/subagent";
 import { UsageTracker, createUsageTracker } from "@minipi/core/agent/usage";
 import { logger } from "@minipi/core/shared/logger";
+import { DEFAULT_APPROVAL_MODE } from "@minipi/core/policy";
+import type { ApprovalMode } from "@minipi/core/policy";
 import {
   createToolApproval,
   parseApprovalAnswer,
@@ -87,14 +89,15 @@ export async function startRepl(
     console.log(...args);
   };
 
-  // 工具审批：只读工具自动放行，写文件 / 执行命令需用户逐次确认。
+  // 工具审批：只读工具自动放行，写文件 / 执行命令按档位处理。
   // 非交互式终端（管道输入等）无法确认，按「拒绝」处理（fail closed）。
-  let trusted = false;
+  // 档位是会话级可变状态：/approval 与确认提示里的 a 都改它
+  let approvalMode: ApprovalMode = DEFAULT_APPROVAL_MODE;
   let warnedNonInteractive = false;
   const canPrompt = Boolean(env.stdin.isTTY);
 
   const approval: BeforeToolCall = createToolApproval({
-    isTrusted: () => trusted,
+    mode: () => approvalMode,
     confirm: async (promptText) => {
       // 必须先让出状态行：spinner 每 100ms 用 `\r` + 空格覆写当前行，
       // 与确认提示抢的是同一行，不停掉的话提示会被反复擦掉。
@@ -117,14 +120,14 @@ export async function startRepl(
     // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
     ascii: Boolean(env.env.MINI_PI_ASCII),
     /**
-     * 用户在确认时按了 `a`：语义等价于 `/trust`，只是由真实上下文触发。
+     * 用户在确认时按了 `a`：语义等价于 `/trust`（全权），只是由真实上下文触发。
      *
-     * 必须回写 `trusted`，否则 `/status` 仍显示"需确认"，
+     * 必须回写 `approvalMode`，否则 `/status` 仍显示"逐次确认"，
      * 而实际上已经不再问了——状态与实际不符比少一次确认更危险。
      */
     onSessionAllow: () => {
-      trusted = true;
-      printTrustNotice(trusted);
+      approvalMode = "full-access";
+      printTrustNotice(true);
     },
     // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
@@ -238,10 +241,10 @@ export async function startRepl(
     quiet,
     renderContext,
     requestExit: () => exitCoordinator.requestExit(0),
-    trusted: {
-      get: () => trusted,
+    approvalMode: {
+      get: () => approvalMode,
       set: (value) => {
-        trusted = value;
+        approvalMode = value;
       },
     },
     subAgent: {

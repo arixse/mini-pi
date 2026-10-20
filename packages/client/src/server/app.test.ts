@@ -8,6 +8,7 @@
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
+import { spawnSync } from "node:child_process";
 import {
   startTestServer,
   textResponse,
@@ -616,6 +617,166 @@ describe("App Server · 配置", () => {
   });
 });
 
+describe("App Server · 工作区隔离（M3）", () => {
+  // 隔离靠真 git：环境里没有就跳过，而不是让三条用例红得莫名其妙
+  const withGit = gitAvailable() ? { skip: false } : { skip: "环境里没有 git" };
+
+  it("没开隔离时 workspace 就是基准目录（多一层 worktree 只会让人找不到文件）", async () => {
+    const server = await startTestServer({ responses: [textResponse("好")] });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "在吗" });
+      await server.stream(created.runId);
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.workspace.isolated, false);
+      assert.strictEqual(summary.workspace.root, server.workspace);
+      assert.strictEqual(summary.workspace.released, false);
+
+      // 没开隔离就没有什么可丢的：明说，而不是假装删掉了什么
+      const dropped = await server.raw(`/api/runs/${created.runId}/worktree`, { method: "DELETE" });
+      assert.strictEqual(dropped.status, 409);
+      assert.match((await dropped.json() as { error: string }).error, /没有开启工作区隔离/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("隔离不可用（不是 git 仓库）时发送直接 409，不静默退回共用目录", async () => {
+    const server = await startTestServer({ isolate: true, initGit: false });
+    try {
+      // 服务照常起、状态照常答——拒的只是"发送"这一步
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.workspace.root, server.workspace);
+
+      const response = await server.raw("/api/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "你好" }),
+      });
+      assert.strictEqual(response.status, 409);
+      const body = (await response.json()) as { error: string };
+      assert.match(body.error, /无法隔离工作区/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("两个 Run 并行不互相踩：同一个文件名，各写进各的目录", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      concurrency: 2,
+      // 这条用例看的是隔离，别让审批卡住其中一半
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "same.txt", content: "第一个写的" }, "call_1"),
+        toolCallResponse("write_file", { path: "same.txt", content: "第二个写的" }, "call_2"),
+        textResponse("写完了"),
+        textResponse("写完了"),
+      ],
+    });
+    try {
+      const first = await server.post<{ runId: string }>("/api/runs", { prompt: "任务一" });
+      const second = await server.post<{ runId: string }>("/api/runs", { prompt: "任务二" });
+
+      const [firstEvents, secondEvents] = await Promise.all([
+        server.stream(first.runId),
+        server.stream(second.runId),
+      ]);
+      for (const events of [firstEvents, secondEvents]) {
+        const done = events[events.length - 1] as Extract<ServerEvent, { type: "run_done" }>;
+        assert.strictEqual(done.status, "done");
+      }
+
+      const summaryA = await server.get<RunSummary>(`/api/runs/${first.runId}`);
+      const summaryB = await server.get<RunSummary>(`/api/runs/${second.runId}`);
+      // 两个执行各拿到一个只属于自己的根，且都不是基准目录
+      assert.strictEqual(summaryA.workspace.isolated, true);
+      assert.strictEqual(summaryB.workspace.isolated, true);
+      assert.notStrictEqual(summaryA.workspace.root, summaryB.workspace.root);
+      assert.notStrictEqual(summaryA.workspace.root, server.workspace);
+      assert.notStrictEqual(summaryB.workspace.root, server.workspace);
+
+      // 同一个路径两种内容：若两个 Run 共用一个根，只可能剩下一个文件、
+      // 一种内容（后写的覆盖先写的）。各写各的目录才谈得上"不互相踩"
+      const { readFileSync, existsSync } = await import("node:fs");
+      const contents = [summaryA.workspace.root, summaryB.workspace.root].map((root) =>
+        readFileSync(`${root}/same.txt`, "utf8"),
+      );
+      assert.deepStrictEqual(
+        [...contents].sort(),
+        ["第一个写的", "第二个写的"],
+        "两个执行都写了同一个路径，但各自目录里的内容互不覆盖",
+      );
+      // 基准工作区始终干净：隔离的执行不往用户打开的目录里落东西
+      assert.strictEqual(existsSync(`${server.workspace}/same.txt`), false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("丢弃隔离工作区：排队拒删、删掉就真没、重复删 409", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      responses: [
+        toolCallResponse("write_file", { path: "keep.txt", content: "产物" }, "call_1"),
+        textResponse("好了"),
+      ],
+    });
+    try {
+      // 同一个会话两条：第一条卡在审批上，第二条因此排在队里——
+      // 于是"还没轮到它就删它的工作区"可以稳定复现
+      const first = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "先写",
+      });
+      const second = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "再写",
+        sessionId: first.sessionId,
+      });
+
+      const seen: ServerEvent[] = [];
+      const finished = server.stream(first.runId, { onEvent: (event) => seen.push(event) });
+      await waitFor(() => seen.some((event) => event.type === "approval_request"));
+
+      // 排着队就删：409，且说清原因（不能把人锁在一个点不动的按钮上）
+      const queuedDrop = await server.raw(`/api/runs/${second.runId}/worktree`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(queuedDrop.status, 409);
+      assert.match((await queuedDrop.json() as { error: string }).error, /任务还在跑/);
+
+      const request = seen.find(
+        (event): event is Extract<ServerEvent, { type: "approval_request" }> =>
+          event.type === "approval_request",
+      )!.request;
+      await server.post(`/api/approvals/${request.id}`, { answer: "yes" });
+      await finished;
+      // 第二条跟在同一条会话链上，等第一条收尾才轮到它
+      await waitFor(async () => {
+        const state = await server.get<AppState>("/api/state");
+        return state.runs.find((run) => run.runId === second.runId)?.status === "done";
+      });
+
+      const summary = await server.get<RunSummary>(`/api/runs/${first.runId}`);
+      assert.strictEqual(summary.workspace.isolated, true);
+      assert.strictEqual(summary.workspace.released, false);
+
+      const deleted = await server.raw(`/api/runs/${first.runId}/worktree`, { method: "DELETE" });
+      assert.strictEqual(deleted.status, 204);
+      const after = await server.get<RunSummary>(`/api/runs/${first.runId}`);
+      assert.strictEqual(after.workspace.released, true);
+
+      // 重复删：409 而不是 204——第二次并没有什么可删
+      const again = await server.raw(`/api/runs/${first.runId}/worktree`, { method: "DELETE" });
+      assert.strictEqual(again.status, 409);
+
+      // 目录真的没了（而不只是打了一个标记）
+      const { existsSync } = await import("node:fs");
+      assert.strictEqual(existsSync(summary.workspace.root), false);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe("App Server · 安全边界", () => {
   it("非本机 Host / Origin 一律 403（DNS rebinding 挡板）", async () => {
     const server = await startTestServer();
@@ -652,6 +813,12 @@ describe("App Server · 安全边界", () => {
     }
   });
 });
+
+/** 隔离靠真 git：环境里没有就跳过相关用例，而不是让它们红得莫名其妙 */
+function gitAvailable(): boolean {
+  const probe = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true });
+  return !probe.error && probe.status === 0;
+}
 
 /** 用指定的 Host 头发一次 GET，返回状态码 */
 async function statusWithHost(baseUrl: string, host: string): Promise<number> {

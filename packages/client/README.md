@@ -11,8 +11,21 @@ pnpm --filter @minipi/client run dev        # 起服务（默认 127.0.0.1:4788�
 pnpm --filter @minipi/client run test       # 本包测试
 ```
 
-启动参数：`--cwd <目录>`（工作区，默认当前目录）、`--port`、`--host`。
-没构建过前端时页面会提示先跑 `build:web`（服务端不代跑构建）。
+启动参数：`--cwd <目录>`（工作区，默认当前目录）、`--port`、`--host`、
+`--isolate`（每个任务一个隔离的 git worktree）、`--concurrency <n>`
+（同时执行上限，1-8，默认 1）。没构建过前端时页面会提示先跑 `build:web`
+（服务端不代跑构建）。
+
+`--isolate` 的三个前提与三条规则（实现在内核 `core/worktree.ts`）：
+
+- 前提：装了 git、工作区在仓库里、仓库至少有一个提交。启动时探测，
+  **不满足就直接拒绝发送**（409）——"以为隔离了其实共用着"比明说
+  不能并行更危险。
+- 不主动回收：worktree 里的改动就是这次执行的产物，删它只能由用户
+  在运行头点「丢弃」（`DELETE /api/runs/:id/worktree`；跑着 / 排队
+  都回 409，删除后目录与分支一并消失）。
+- worktree 落在 `<tmp>/mini-pi-worktrees/`，基准工作区始终干净：
+  隔离的执行不往用户打开的目录里落东西。
 
 ## 目录
 

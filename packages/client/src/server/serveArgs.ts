@@ -10,6 +10,10 @@ export type ServeArgs = {
   cwd: string;
   port: number;
   host: string;
+  /** 每个 Run 一个隔离 worktree（M3）；默认关 */
+  isolate: boolean;
+  /** 同时执行上限，默认 1 */
+  concurrency: number;
 };
 
 export type ServeParseResult =
@@ -21,26 +25,36 @@ export const SERVE_USAGE = `用法：<client> serve [选项]
 
 启动 mini-pi 的本地客户端服务（HTTP + SSE），浏览器打开输出的地址即可。
 
-  --cwd <目录>    工作区，默认当前目录
-  --port <端口>   监听端口，默认 4788；0 表示由系统分配
-  --host <地址>   监听地址，默认 127.0.0.1（这个服务没有鉴权，别绑到 0.0.0.0）
-  -h, --help      显示本帮助
+  --cwd <目录>      工作区，默认当前目录
+  --port <端口>     监听端口，默认 4788；0 表示由系统分配
+  --host <地址>     监听地址，默认 127.0.0.1（这个服务没有鉴权，别绑到 0.0.0.0）
+  --isolate         每个任务一个隔离的 git worktree，并行不互相踩
+  --concurrency <n> 同时执行的任务上限，默认 1（与 CLI"回合结束后执行"同口径）
+  -h, --help        显示本帮助
 `;
 
 export function parseServeArgs(
   argv: readonly string[],
-  defaults: { cwd: string; port?: number; host?: string } = { cwd: process.cwd() },
+  defaults: { cwd: string; port?: number; host?: string; concurrency?: number } = {
+    cwd: process.cwd(),
+  },
 ): ServeParseResult {
   let cwd = defaults.cwd;
   let port = defaults.port ?? 4788;
   let host = defaults.host ?? "127.0.0.1";
+  let isolate = false;
+  let concurrency = defaults.concurrency ?? 1;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === "-h" || token === "--help") {
       return { kind: "help" };
     }
-    if (token === "--cwd" || token === "--port" || token === "--host") {
+    if (token === "--isolate") {
+      isolate = true;
+      continue;
+    }
+    if (token === "--cwd" || token === "--port" || token === "--host" || token === "--concurrency") {
       const value = argv[index + 1];
       if (value === undefined) {
         return { kind: "error", message: `${token} 需要一个值` };
@@ -50,6 +64,12 @@ export function parseServeArgs(
         cwd = value;
       } else if (token === "--host") {
         host = value;
+      } else if (token === "--concurrency") {
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
+          return { kind: "error", message: `并发上限必须是 1-8 的整数，收到：${value}` };
+        }
+        concurrency = parsed;
       } else {
         const parsed = Number(value);
         if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
@@ -62,5 +82,5 @@ export function parseServeArgs(
     return { kind: "error", message: `无法识别的参数：${token}` };
   }
 
-  return { kind: "serve", args: { cwd, port, host } };
+  return { kind: "serve", args: { cwd, port, host, isolate, concurrency } };
 }

@@ -6,6 +6,9 @@ import { READ_ONLY_TOOLS } from "@minipi/core/agent/tools/registry";
 import { assessToolRisk } from "@minipi/core/risk";
 // 摘要文案同样在内核里：终端与客户端必须对同一次调用说同一句话
 import { describeToolCallLines } from "@minipi/core/toolSummary";
+// 三档裁决表：内核里唯一一份，终端与服务端调的是同一个函数（M4）
+import { approvalModeFromTrusted, describeApprovalMode, evaluateApprovalPolicy } from "@minipi/core/policy";
+import type { ApprovalMode } from "@minipi/core/policy";
 
 /**
  * 工具调用的用户审批。
@@ -30,7 +33,8 @@ export { describeTaskCall, describeToolCall } from "@minipi/core/toolSummary";
  * 信任模式变更回执。
  *
  * `/trust` 与确认时的 `a` 走同一份文案：两者是同一个开关的两条入口，
- * 分开写迟早会说辞不一致。
+ * 分开写迟早会说辞不一致。M4 起 `/trust` 只是"在全权与工作区读写之间切换"
+ * 的简写，三档本身由 {@link printApprovalNotice} 回执。
  */
 export function printTrustNotice(trusted: boolean): void {
   console.log(
@@ -39,6 +43,22 @@ export function printTrustNotice(trusted: boolean): void {
           "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n",
         )
       : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
+  );
+}
+
+/**
+ * 审批档位变更回执（`/approval <mode>`）。
+ *
+ * 每一档都要说清"下一步会被怎么处理"，否则切到只读档的人会发现
+ * 写文件的请求静默失败而不知道原因。
+ */
+export function printApprovalNotice(mode: ApprovalMode): void {
+  const icon = mode === "read-only" ? "🔎" : mode === "full-access" ? "🔓" : "✍️";
+  console.log(
+    chalk.yellow(
+      `\n${icon} 审批策略已切换为 ${mode}：${describeApprovalMode(mode)}` +
+        `（/approval <mode> 可再切）\n`,
+    ),
   );
 }
 
@@ -64,6 +84,7 @@ export type ApprovalReason =
   | "trusted"
   | "approved"
   | "always"
+  | "policy"
   | "rejected";
 
 /**
@@ -84,8 +105,19 @@ export function parseApprovalAnswer(input: string): ApprovalAnswer {
 }
 
 export type ApprovalPolicy = {
-  /** 会话级「信任模式」开关（/trust 切换）；为真时跳过确认 */
-  isTrusted: () => boolean;
+  /**
+   * 当前审批档位（三档，唯一权威在 `core/policy.ts`）。
+   *
+   * 做成 getter 而不是构造时传值：`/approval` 会在会话中途切档，
+   * 钩子必须每次调用都读到新值。缺省时由 {@link ApprovalPolicy.isTrusted}
+   * 推导；两者都给了以 `mode` 为准。
+   */
+  mode?: () => ApprovalMode;
+  /**
+   * 会话级「信任模式」开关（/trust 切换）——布尔入口的遗留形式，
+   * 等价于 `mode: () => approvalModeFromTrusted(isTrusted())`。
+   */
+  isTrusted?: () => boolean;
   /**
    * 向用户确认。
    *
@@ -181,23 +213,39 @@ export function buildApprovalQuestion(
 /**
  * 把审批策略包装成 `beforeToolCall` 钩子。
  * 确认过程抛错时按「拒绝」处理（fail closed）。
+ *
+ * 三档的裁决**不在这里**：`evaluateApprovalPolicy` 是内核里唯一的裁决表，
+ * 终端与服务端调同一个函数——这是 M4「三档在两端给出同一裁决」的落地形式。
+ * 这里只保留终端特有的两件事：把问题渲染成 `[y/N/a]`，以及 `a` 的会话级记忆。
  */
 export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
   const autoApproved = policy.autoApproved ?? AUTO_APPROVED_TOOLS;
   // 用户选了 `a` 之后的会话级状态：即使调用方没接 onSessionAllow，
   // 也必须先兑现"本会话不再问"的承诺，否则下一次照问不误
   let sessionAllowed = false;
+  const resolveMode = (): ApprovalMode =>
+    policy.mode ? policy.mode() : approvalModeFromTrusted(policy.isTrusted?.() === true);
 
   return async (call: ToolCallContent, context?: ToolCallContext): Promise<ToolDecision> => {
-    if (autoApproved.has(call.name)) {
-      policy.onDecision?.(call, true, "auto");
-      return { action: "allow", reason: "只读工具，免确认" };
+    // 档位裁决在最前面：它决定这次调用是免确认、要问人、还是根本不许做，
+    // 而这三件事都没有例外——顺序反了的话，只读档位会退化成"照问"。
+    const verdict = evaluateApprovalPolicy(resolveMode(), call.name, {
+      readOnlyTools: autoApproved,
+    });
+
+    if (verdict.kind === "allow") {
+      const reason: ApprovalReason = verdict.cause === "read-only-tool" ? "auto" : "trusted";
+      policy.onDecision?.(call, true, reason);
+      return { action: "allow", reason: verdict.reason };
     }
 
-    if (policy.isTrusted()) {
-      policy.onDecision?.(call, true, "trusted");
-      return { action: "allow", reason: "会话处于信任模式" };
+    // 只读档的拒绝排在 sessionAllowed 之前：切档是比 `a` 更新的意图，
+    // "按过 a 又切到只读"必须仍然拒绝，否则限制令会被一次旧授权穿透
+    if (verdict.kind === "block") {
+      policy.onDecision?.(call, false, "policy");
+      return { action: "block", reason: verdict.reason };
     }
+
     if (sessionAllowed) {
       policy.onDecision?.(call, true, "always");
       return { action: "allow", reason: "用户已选择本会话不再逐一确认" };

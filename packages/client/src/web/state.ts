@@ -20,6 +20,7 @@ import type {
   ApprovalRequest,
   RunPhase,
   RunSummary,
+  RunWorkspace,
   ServerEvent,
   SessionSummary,
   Tier,
@@ -80,6 +81,13 @@ export type View = {
    * end 落到同一条上。
    */
   streamingAssistantId: string | null;
+  /**
+   * 运行头正在讲的那个 Run 的工作区（M3）。
+   *
+   * 带 runId 是因为「丢弃」按钮要点名具体哪一个；跑完也不擦——
+   * 隔离工作区的改动要留着等人审阅，收尾后才让它消失就等于没隔离过。
+   */
+  workspace: (RunWorkspace & { runId: string }) | null;
 };
 
 export type Banner = { level: "ok" | "warn" | "error"; text: string } | null;
@@ -128,6 +136,7 @@ export function emptyView(): View {
     gap: false,
     streamNote: null,
     streamingAssistantId: null,
+    workspace: null,
   };
 }
 
@@ -310,12 +319,19 @@ export function applySnapshot(state: ClientState, snapshot: ServerSnapshot): voi
  * 打开一个会话：重建时间线，并把"当前在跑的那个 Run"挂上去。
  *
  * `liveRun` 是服务端认为属于这个会话、且还没结束的 Run；有它才订阅事件流。
+ * `run` 是这个会话最近的一条 Run（不论结束没结束）——运行头的隔离信息
+ * （M3）要看它：任务跑完了，「丢弃」按钮还得在。
  */
 export function openSession(
   state: ClientState,
   sessionId: string,
   messages: readonly AgentMessage[],
-  options: { title?: string; readOnly?: boolean; liveRun?: RunSummary | null } = {},
+  options: {
+    title?: string;
+    readOnly?: boolean;
+    liveRun?: RunSummary | null;
+    run?: RunSummary | null;
+  } = {},
 ): void {
   const view = emptyView();
   view.sessionId = sessionId;
@@ -332,7 +348,19 @@ export function openSession(
     view.tokens = options.liveRun.tokens;
     view.title = options.liveRun.title;
   }
+  const head = options.liveRun ?? options.run ?? null;
+  view.workspace = head ? { runId: head.runId, ...head.workspace } : null;
   state.view = view;
+}
+
+/**
+ * 把某个 Run 的工作区信息同步进行走头（发送成功后、run_done 后调用）。
+ *
+ * 单独一个函数而不是塞进归约：`applyRunEvent` 拿不到 runId → RunSummary 的
+ * 映射，而这层信息只在"刚发起/刚刷新"时是新的。
+ */
+export function applyRunWorkspace(view: View, run: RunSummary | null | undefined): void {
+  view.workspace = run ? { runId: run.runId, ...run.workspace } : null;
 }
 
 /** 乐观 id 的序号：同一毫秒连发两条时靠它区分（见 addUserMessage） */

@@ -35,6 +35,12 @@ export type AppServerOptions = {
   sessionsDir?: string;
   globalAgentsPath?: string;
   tier?: Tier;
+  /** 每个 Run 一个隔离 worktree（M3）；默认关——单任务场景多一层检出只是添乱 */
+  isolate?: boolean;
+  /** worktree 存放根目录，默认 `<tmp>/mini-pi-worktrees` */
+  worktreesRoot?: string;
+  /** 同时执行上限，默认 1（与 CLI"回合结束后执行"同口径） */
+  concurrency?: number;
   resolveModel?: WorkspaceHostOptions["resolveModel"];
   providerService?: WorkspaceHostOptions["providerService"];
   settingsStore?: WorkspaceHostOptions["settingsStore"];
@@ -127,6 +133,11 @@ export class AppServer {
       ...(this.options.sessionsDir ? { sessionsDir: this.options.sessionsDir } : {}),
       ...(this.options.globalAgentsPath ? { globalAgentsPath: this.options.globalAgentsPath } : {}),
       ...(tier ? { tier } : {}),
+      ...(this.options.isolate ? { isolate: true } : {}),
+      ...(this.options.worktreesRoot ? { worktreesRoot: this.options.worktreesRoot } : {}),
+      ...(this.options.concurrency !== undefined
+        ? { concurrency: this.options.concurrency }
+        : {}),
       ...(this.options.resolveModel ? { resolveModel: this.options.resolveModel } : {}),
       ...(this.options.providerService ? { providerService: this.options.providerService } : {}),
       ...(this.options.settingsStore ? { settingsStore: this.options.settingsStore } : {}),
@@ -165,6 +176,14 @@ export class AppServer {
 
     app.post("/api/runs/:id/cancel", wrap((req, res) => {
       this.host.cancel(pathParam(req.params.id));
+      res.status(204).end();
+    }));
+
+    // 丢弃这个 Run 的隔离工作区（界面运行头的「丢弃」）。跑着的时候
+    // 宿主会 409——正在用的目录不能抽掉；没开隔离同样是 409，而不是
+    // 假装删掉了什么
+    app.delete("/api/runs/:id/worktree", wrap((req, res) => {
+      this.host.releaseWorktree(pathParam(req.params.id));
       res.status(204).end();
     }));
 

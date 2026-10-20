@@ -10,6 +10,7 @@ import { createReplInput, createMockModel } from "./testRepl";
 import { resetToolRenderState } from "./toolEvents";
 import { createUpdateChecker } from "./updateCheck";
 import { SettingsStore } from "@minipi/core/provider/settings-store";
+import type { ApprovalMode } from "@minipi/core/policy";
 import { APP_VERSION } from "./version";
 
 /**
@@ -67,7 +68,7 @@ describe("/update 分派", () => {
       quiet: () => {},
       renderContext: createRenderContext(),
       requestExit: () => {},
-      trusted: { get: () => false, set: () => {} },
+      approvalMode: { get: () => "workspace-write" as ApprovalMode, set: () => {} },
       subAgent: { get: () => false, set: () => {} },
       subAgentTrace: { get: () => false, set: () => {} },
     };
@@ -191,14 +192,20 @@ describe("其余命令的分派接线", () => {
     await rm(testDir, { recursive: true, force: true });
   });
 
-  /** 记录 set 调用的开关替身 */
-  function switchSpy(initial = false) {
-    const calls: boolean[] = [];
+  /** 开关替身的形状：分派层只认 getter/setter，这里顺带记下每次 set */
+  type SwitchSpy<V> = {
+    calls: V[];
+    object: { get(): V; set(value: V): void };
+  };
+
+  /** 记录 set 调用的开关替身；档位开关的初值是三档之一的字符串 */
+  function switchSpy<V>(initial: V): SwitchSpy<V> {
+    const calls: V[] = [];
     return {
       calls,
       object: {
-        get: () => (calls.length > 0 ? calls[calls.length - 1] : initial),
-        set: (value: boolean) => calls.push(value),
+        get: () => (calls.length > 0 ? calls[calls.length - 1]! : initial),
+        set: (value: V) => calls.push(value),
       },
     };
   }
@@ -213,12 +220,12 @@ describe("其余命令的分派接线", () => {
     ctx: SlashCommandContext;
     options: ReplOptions;
     quietLines: string[];
-    trusted: ReturnType<typeof switchSpy>;
-    subAgent: ReturnType<typeof switchSpy>;
-    subAgentTrace: ReturnType<typeof switchSpy>;
+    trusted: SwitchSpy<ApprovalMode>;
+    subAgent: SwitchSpy<boolean>;
+    subAgentTrace: SwitchSpy<boolean>;
   } {
     const quietLines: string[] = [];
-    const trusted = switchSpy(false);
+    const trusted = switchSpy<ApprovalMode>("workspace-write");
     const subAgent = switchSpy(false);
     const subAgentTrace = switchSpy(false);
     const options = {
@@ -250,7 +257,7 @@ describe("其余命令的分派接线", () => {
       quiet: overrides.quiet ?? ((...args: unknown[]) => quietLines.push(args.map(String).join(" "))),
       renderContext: createRenderContext(),
       requestExit: () => {},
-      trusted: trusted.object,
+      approvalMode: trusted.object,
       subAgent: subAgent.object,
       subAgentTrace: subAgentTrace.object,
       persistSubAgent: overrides.persistSubAgent ?? (async () => {}),
@@ -542,15 +549,17 @@ describe("其余命令的分派接线", () => {
     );
   });
 
-  it("/trust：翻转开关并打印信任提示", async () => {
+  it("/trust：在全权与工作区读写之间快切，并打印信任提示", async () => {
     const { ctx, trusted } = makeCtx();
     const captured = capture();
     try {
       await handleSlashCommand("/trust", ctx);
+      await handleSlashCommand("/trust", ctx);
     } finally {
       captured.restore();
     }
-    assert.deepStrictEqual(trusted.calls, [true]);
+    // 从默认的 workspace-write 出发：开 → 关
+    assert.deepStrictEqual(trusted.calls, ["full-access", "workspace-write"]);
     assert.match(captured.lines.join("\n"), /信任模式/);
   });
 

@@ -98,11 +98,43 @@ describe("parseExecArgs", () => {
     assert.strictEqual(parseExecArgs(["-h"]).kind, "help");
     assert.strictEqual(parseExecArgs(["--help"]).kind, "help");
   });
+
+  it("--approval 缺省是 read-only（headless 的 fail closed 起点）", () => {
+    const parsed = parseExecArgs(["提问"]);
+    assert.ok(parsed.kind === "exec" && parsed.args.approval === "read-only");
+  });
+
+  it("--approval 接受 read-only / full-access 与短别名", () => {
+    const parsed = parseExecArgs(["--approval", "full-access", "提问"]);
+    assert.ok(parsed.kind === "exec" && parsed.args.approval === "full-access");
+    const short = parseExecArgs(["--approval", "ro", "提问"]);
+    assert.ok(short.kind === "exec" && short.args.approval === "read-only");
+  });
+
+  it("--approval 认不出的档位当场报错，不按默认档蒙跑", () => {
+    const parsed = parseExecArgs(["--approval", "rw2", "提问"]);
+    assert.strictEqual(parsed.kind, "error");
+  });
+
+  it("--approval workspace-write 直接报错：headless 里没有人能回答确认", () => {
+    const parsed = parseExecArgs(["--approval", "workspace-write", "提问"]);
+    assert.strictEqual(parsed.kind, "error");
+    assert.ok(parsed.kind === "error" && /workspace-write/.test(parsed.message));
+  });
+
+  it("--approval 缺值时报错", () => {
+    assert.strictEqual(parseExecArgs(["--approval"]).kind, "error");
+  });
 });
 
 describe("headless 审批", () => {
   it("只读工具放行", async () => {
     const decision = await headlessApproval()({ name: "read_file" });
+    assert.strictEqual(decision.action, "allow");
+  });
+
+  it("full-access 档全部放行（显式背书，不是默认）", async () => {
+    const decision = await headlessApproval("full-access")({ name: "write_file" });
     assert.strictEqual(decision.action, "allow");
   });
 

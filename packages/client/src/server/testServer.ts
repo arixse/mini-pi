@@ -10,6 +10,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { AppServer } from "./app";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
@@ -97,6 +98,12 @@ export type TestServerOptions = {
   /** 预置的会话文件（测历史只读 / 删除） */
   sessions?: Array<{ fileName: string; lines: string[] }>;
   workspaceFiles?: Record<string, string>;
+  /** 每个 Run 一个隔离 worktree（M3）；开的话 workspace 会被初始化成有提交的仓库 */
+  isolate?: boolean;
+  /** isolate 为 true 时是否真的建 git 仓库；false 用来测"隔离不可用"的 409 路径 */
+  initGit?: boolean;
+  /** 同时执行上限，默认 1 */
+  concurrency?: number;
 };
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
@@ -110,6 +117,17 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
 
   for (const [name, content] of Object.entries(options.workspaceFiles ?? {})) {
     writeFileSync(join(workspace, name), content, "utf8");
+  }
+
+  // 隔离开时，worktree 只能从"有提交的仓库"建；没有 git 的环境下这条
+  // 探测会直接失败，正是隔离不可用要报错的那条路径（用例据此断言 409）
+  let worktreesRoot: string | undefined;
+  if (options.isolate) {
+    worktreesRoot = join(root, "worktrees");
+    // 默认建仓库；不建是为了构造"隔离不可用"——探不到 HEAD 时 send 必须 409
+    if (options.initGit !== false) {
+      initGitRepo(workspace);
+    }
   }
 
   // 目录名必须用内核同一个函数推导：手抄一份规则，改了内核这里就会静默错位
@@ -130,6 +148,9 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     sessionsDir,
     globalAgentsPath: join(configDir, "AGENTS.md"),
     ...(options.tier ? { tier: options.tier } : {}),
+    ...(options.isolate ? { isolate: true } : {}),
+    ...(worktreesRoot ? { worktreesRoot } : {}),
+    ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
     settingsStore,
     providerService,
     resolveModel: async () => ({
@@ -282,5 +303,33 @@ export async function waitFor(
       throw new Error("等待超时");
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/**
+ * 把 workspace 变成一个"有提交的 git 仓库"——隔离的前置条件。
+ *
+ * 身份信息用 `-c` 逐次覆盖，不碰用户的全局配置：测试机上的 git 可能
+ * 根本没配 user.name，那时 commit 会失败，而失败原因与要测的东西无关。
+ */
+function initGitRepo(dir: string): void {
+  const identity = [
+    "-c",
+    "user.name=mini-pi-test",
+    "-c",
+    "user.email=mini-pi-test@example.invalid",
+  ];
+  const steps: string[][] = [
+    ["init", "--quiet"],
+    ["add", "-A"],
+    // --allow-empty：workspace 可能一个文件都没有（没传 workspaceFiles），
+    // 而隔离要的只是"HEAD 指向一个真实提交"
+    [...identity, "commit", "--quiet", "--allow-empty", "-m", "test baseline"],
+  ];
+  for (const args of steps) {
+    const result = spawnSync("git", args, { cwd: dir, encoding: "utf8", windowsHide: true });
+    if (result.status !== 0) {
+      throw new Error(`测试仓库初始化失败（git ${args[0]}）：${result.stderr || result.stdout}`);
+    }
   }
 }

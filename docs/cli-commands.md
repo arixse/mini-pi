@@ -16,7 +16,8 @@
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
-| `/trust` | 切换信任模式（本会话内跳过工具调用确认） |
+| `/trust` | 切换信任模式（本会话内跳过工具调用确认）；等价于 `/approval full-access` 与 `/approval workspace-write` 之间的快切 |
+| `/approval [mode]` | 查看或切换审批档位：`read-only`（写与执行一律拒绝）/ `workspace-write`（默认，逐次确认）/ `full-access`（全部放行）；不带参数只报告当前档位 |
 | `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on`/`trace off` 单独开关子 Agent trace 落盘（**默认关闭**）；两者状态都写入 settings.json |
 | `/update [on\|off]` | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（写入 settings.json，缺省开启） |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
@@ -44,6 +45,7 @@
   /load <name>                           - 加载指定 skill 的完整内容
   /trust                                 - 切换信任模式（跳过写文件/执行命令的确认）
       y = 允许本次 / n = 拒绝 / a = 本会话全部允许
+  /approval [mode]                       - 查看或切换审批档位（read-only / workspace-write / full-access）
   /subagent [on|off|trace on|trace off]  - 开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘
   /update [on|off]                       - 检查是否有新版本（不带参数立即检查）；on/off 开关启动检测
   /status                                - 查看模型、会话文件、上下文与 token 用量、确认模式
@@ -176,16 +178,35 @@
 
 ---
 
-## 5.10 `/trust` —— 信任模式
+## 5.10 审批档位 —— `/approval` 与 `/trust`
+
+审批档位决定"哪些工具还要问人"，三档（与 Web 端设置里的是同一张表，
+裁决实现只有一份：`packages/core/src/policy.ts`）：
+
+| 档位 | 只读工具 | 写文件 / 执行命令 |
+| --- | --- | --- |
+| `read-only` | 免确认 | **一律拒绝**（不问，直接挡回去） |
+| `workspace-write`（默认） | 免确认 | 逐次确认 |
+| `full-access` | 免确认 | 免确认 |
 
 ```
+> /approval
+🛡️  当前审批策略：workspace-write（工作区读写：写文件与执行命令逐次确认）
+  可选：read-only / workspace-write / full-access（/trust 在末两档间快切）
+> /approval read-only
+🔎 审批策略已切换为 read-only：只读：写文件与执行命令一律拒绝（/approval <mode> 可再切）
 > /trust
-🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认
-> /trust
-🔒 已关闭信任模式：写文件与执行命令需逐次确认
+🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）
 ```
 
-每次执行切换状态，仅对当前会话有效。
+- 档位是**会话级**的，重开终端回到默认档 `workspace-write`；
+- 认不出的档位**当场报错、不回落**：`/approval rw2` 若按默认档跑起来，
+  用户以为自己在最宽松那一档，结果相反才最糟；
+- `/trust` 是 `/approval full-access` 与 `/approval workspace-write`
+  之间的快切，留着它是因为确认提示里的 `a` 用的就是这套说辞；
+- 确认提示里的 `a`（本会话内全部允许）语义上等价于 `/trust`；
+- `mini-pi exec` 另有 `--approval`：headless 里没有人能回答确认，
+  因此只接受 `read-only`（默认）与 `full-access`，`workspace-write` 直接报错。
 
 ---
 
@@ -239,7 +260,7 @@
 │ 上下文       约 3.4k tokens（其中固定开销 1.2k，上限 76.8k，压缩后保留 10 条）· 24 条消息
 │ 用量         输入 12.4k · 输出 3.1k · 合计 15.5k · 8 次请求
 │ 子 Agent     已委派 2 次 · 累计 8.4k tokens（入 6.1k / 出 2.3k）
-│ 工具确认     🔒 需确认（/trust 切换）
+│ 工具确认     workspace-write：工作区读写：写文件与执行命令逐次确认（/approval 切换）
 │ 工作目录     D:\workspace\mini-pi
 └ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换
 ```

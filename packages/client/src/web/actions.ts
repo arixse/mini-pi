@@ -19,6 +19,8 @@ export type SaveModelInput = {
 export type Actions = {
   send: (text: string) => void;
   stop: () => void;
+  /** 丢弃某个 Run 的隔离工作区（M3）：跑着的任务服务端会拒绝 */
+  discardWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
   openSession: (sessionId: string) => void;
   openRun: (runId: string) => void;

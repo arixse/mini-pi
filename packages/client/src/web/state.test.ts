@@ -103,6 +103,11 @@ function feed(view: View, runId: string, events: ServerEvent[]): void {
   }
 }
 
+/** 默认不隔离（老行为）；要断言隔离 UI 的用例自己覆盖 */
+function runWorkspace(overrides: Partial<RunSummary["workspace"]> = {}): RunSummary["workspace"] {
+  return { root: "D:\\demo", isolated: false, released: false, ...overrides };
+}
+
 function itemsOfKind(view: View, kind: TimelineItem["kind"]): TimelineItem[] {
   return view.items.filter((item) => item.kind === kind);
 }
@@ -359,6 +364,7 @@ describe("乐观插入与快照", () => {
       tokens: 5,
       contextWindow: 128000,
       pendingApprovals: 0,
+      workspace: runWorkspace({ root: "D:\\wt\\run_9", isolated: true }),
     };
     state.runs = [live];
     const messages = [userMessage("历史"), assistantText("回答")];
@@ -370,6 +376,41 @@ describe("乐观插入与快照", () => {
     // liveRun 的标题与模型覆盖会话默认值：运行头按 Run 回答"用谁在跑"
     assert.equal(state.view.title, "跑一半的任务");
     assert.equal(state.view.model, "deepseek/deepseek-flash");
+    // 隔离信息跟着 Run 走，且带上 runId——「丢弃」按钮要点名具体哪一个
+    assert.deepStrictEqual(state.view.workspace, {
+      runId: "run_9",
+      root: "D:\\wt\\run_9",
+      isolated: true,
+      released: false,
+    });
+  });
+
+  it("跑完的 Run 没有 liveRun：最近的一条照样把隔离信息带上（M3）", () => {
+    const state = initialState();
+    const done: RunSummary = {
+      runId: "run_10",
+      title: "跑完的任务",
+      sessionId: "s2.jsonl",
+      status: "done",
+      model: "m",
+      startedAt: 1,
+      elapsedMs: 9,
+      tokens: 1,
+      contextWindow: 0,
+      pendingApprovals: 0,
+      workspace: runWorkspace({ root: "D:\\wt\\run_10", isolated: true, released: true }),
+    };
+    // 没有 liveRun、没有 recent：不该留着上一段会话的残影
+    openSession(state, "s3.jsonl", []);
+    assert.strictEqual(state.view.workspace, null);
+
+    openSession(state, "s2.jsonl", [], { run: done });
+    assert.deepStrictEqual(state.view.workspace, {
+      runId: "run_10",
+      root: "D:\\wt\\run_10",
+      isolated: true,
+      released: true,
+    });
   });
 });
 
@@ -387,6 +428,7 @@ describe("侧栏的两组过滤", () => {
       tokens: 0,
       contextWindow: 0,
       pendingApprovals: 0,
+      workspace: runWorkspace(),
     });
     state.runs = [run("a", "running"), run("b", "done"), run("c", "blocked"), run("d", "queued")];
     assert.deepEqual(

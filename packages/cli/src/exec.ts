@@ -9,9 +9,12 @@
  *
  * 两条 headless 专属的约定：
  *
- * - **审批 fail closed**。没有 TTY 就没法问人，因此除只读工具外一律拒绝，
- *   而不是"默认放行"——后者会让一条 `mini-pi exec "清理一下"` 在无人
- *   确认的情况下删文件。
+ * - **审批 fail closed**。没有 TTY 就没法问人，因此默认档位是 `read-only`：
+ *   只读工具放行，写与执行一律拒绝，而不是"默认放行"——后者会让一条
+ *   `mini-pi exec "清理一下"` 在无人确认的情况下删文件。
+ *   `--approval full-access` 是显式的全放行出口（CI 里由人背书）。
+ *   中间档 `workspace-write` 在 headless 里**没有意义**：它意味着"每次都要
+ *   问人"，而这里没有人——给它一个 silently 降级的语义比报错更危险。
  * - **`--json` 时 stdout 只有 JSONL**。一行一个事件，最后一行是
  *   `exec_done`；要能被管道消费，就不能混进任何人类可读的输出
  *   （日志与错误一律走 stderr）。
@@ -25,7 +28,8 @@ import { SessionManager } from "@minipi/core/agent/sessionManager";
 import { createUserMessage } from "@minipi/core/agent/message";
 import { buildSystemPrompt } from "@minipi/core/prompt";
 import { detectProjectStack, formatProjectStack } from "@minipi/core/projectStack";
-import { AUTO_APPROVED_TOOLS } from "./approval";
+import { evaluateApprovalPolicy, parseApprovalMode } from "@minipi/core/policy";
+import type { ApprovalMode } from "@minipi/core/policy";
 import { logger } from "@minipi/core/shared/logger";
 import type { LlmModel } from "@minipi/core/agent/model";
 import type { ToolRegistry } from "@minipi/core/agent/tools/registry";
@@ -36,6 +40,7 @@ export const EXEC_USAGE = `用法：mini-pi exec <提问> [选项]
 
   --json            stdout 只输出 JSONL 事件流（一行一个事件，末行为 exec_done）
   --cwd <目录>      指定工作区，默认是当前目录
+  --approval <档位> 审批档位：read-only（默认，写与执行一律拒绝）/ full-access（全部放行）
   -h, --help        显示本帮助
 `;
 
@@ -43,6 +48,7 @@ export type ExecArgs = {
   prompt: string;
   json: boolean;
   cwd: string;
+  approval: ApprovalMode;
 };
 
 export type ExecParseResult =
@@ -63,6 +69,8 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
 
   const json = argv.includes("--json");
   let cwd = process.cwd();
+  // 默认 read-only：headless 的 fail closed 起点
+  let approval: ApprovalMode = "read-only";
   const words: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -70,13 +78,32 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
     if (token === "--json") {
       continue;
     }
-    if (token === "--cwd") {
+    if (token === "--cwd" || token === "--approval") {
       const next = argv[index + 1];
       if (!next) {
-        return { kind: "error", message: "--cwd 需要一个目录参数" };
+        return { kind: "error", message: `${token} 需要一个值` };
       }
-      cwd = next;
       index += 1;
+      if (token === "--cwd") {
+        cwd = next;
+        continue;
+      }
+      const mode = parseApprovalMode(next);
+      // 认不出当场报错：敲错却按默认档跑起来，用户以为在全放行那一档
+      if (!mode) {
+        return {
+          kind: "error",
+          message: `无法识别的审批档位：${next}（可用 read-only / full-access）`,
+        };
+      }
+      // 中间档在这里没有意义：它意味着"每次都要问人"，而 headless 里没有人
+      if (mode === "workspace-write") {
+        return {
+          kind: "error",
+          message: "headless 不支持 workspace-write：没有人能回答确认（用 read-only 或 full-access）",
+        };
+      }
+      approval = mode;
       continue;
     }
     words.push(token);
@@ -86,25 +113,30 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
   if (!prompt) {
     return { kind: "error", message: "缺少提问" };
   }
-  return { kind: "exec", args: { prompt, json, cwd } };
+  return { kind: "exec", args: { prompt, json, cwd, approval } };
 }
 
 /**
- * headless 的审批：只读放行，其余一律拒绝。
+ * headless 的审批：按档位裁决，只读放行，其余一律拒绝。
  *
  * 不给"默认允许"这条退路——无人确认的写操作是这条命令最大的风险，
  * 而它恰恰最容易在"反正我只是跑个脚本"的心态下被忽略。
+ * 裁决表与交互式 CLI、Web 服务端共用（`core/policy.ts`）。
  */
-export function headlessApproval() {
+export function headlessApproval(mode: ApprovalMode = "read-only") {
   return async (
     call: { name: string },
   ): Promise<{ action: "allow" | "block"; reason: string }> => {
-    if (AUTO_APPROVED_TOOLS.has(call.name)) {
-      return { action: "allow", reason: "只读工具，headless 下免确认" };
+    const verdict = evaluateApprovalPolicy(mode, call.name);
+    if (verdict.kind === "allow") {
+      return { action: "allow", reason: verdict.reason };
     }
     return {
       action: "block",
-      reason: "headless 执行未经确认，不执行写操作与命令（请用交互式 CLI）",
+      reason:
+        verdict.kind === "block"
+          ? verdict.reason
+          : "headless 执行未经确认，不执行写操作与命令（请用交互式 CLI，或 --approval full-access）",
     };
   };
 }
@@ -162,7 +194,7 @@ export async function runExec(
     return 2;
   }
 
-  const { prompt, json, cwd } = parsed.args;
+  const { prompt, json, cwd, approval } = parsed.args;
   const workspaceRoot = cwd || deps.platform?.cwd() || process.cwd();
 
   const { model } = await deps.resolveModel();
@@ -204,7 +236,7 @@ export async function runExec(
   };
 
   const result: RunResult = await run.execute({
-    beforeToolCall: headlessApproval(),
+    beforeToolCall: headlessApproval(approval),
     onEvent: writeEvent,
   });
 

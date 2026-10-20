@@ -373,8 +373,8 @@ describe("startRepl（主循环装配）", () => {
     // 开关写回了主循环的状态：/status 看到的与 /trust 改的是同一份
     fakeRl.emit("line", "/status");
     await waitFor(
-      () => logs.filter((line) => line.includes("信任")).length >= 2,
-      "/status 应反映 /trust 改过的状态",
+      () => logs.some((line) => line.includes("工具确认") && line.includes("full-access")),
+      "/status 应反映 /trust 改过的档位",
     );
 
     fakeRl.emit("line", "/subagent");

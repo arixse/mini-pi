@@ -13,6 +13,7 @@ import { ApiError, api, subscribeRun, type StreamHandle } from "./api";
 import {
   addUserMessage,
   applyRunEvent,
+  applyRunWorkspace,
   applySnapshot,
   emptyView,
   openSession as openSessionIn,
@@ -121,11 +122,16 @@ export class AppController {
     try {
       const detail = await api.session(sessionId);
       const live = this.liveRunOf(sessionId);
+      // 最近的一条 Run（不论结束没结束）：运行头的隔离信息要靠它
+      // （任务跑完了，「丢弃」按钮还得在）
+      const recent =
+        this.store.current.runs.find((run) => run.sessionId === sessionId) ?? null;
       this.store.update((state) => {
         openSessionIn(state, sessionId, detail.messages, {
           // 只有"当前会话"能接着聊；其余历史会话只读回看
           readOnly: sessionId !== state.currentSessionId,
           liveRun: live,
+          run: recent,
         });
         state.ui.sidebar = false;
       });
@@ -201,6 +207,13 @@ export class AppController {
       });
       this.attach(created.runId);
       await this.refreshState();
+      // 隔离信息（M3）跟着这次执行走：刷新后的 runs 里已经有它的工作区
+      this.store.update((state) => {
+        const run = state.runs.find((item) => item.runId === created.runId);
+        if (run) {
+          applyRunWorkspace(state.view, run);
+        }
+      });
     } catch (error) {
       if (this.pendingUsers.some((item) => item.id === optimisticId)) {
         this.store.update((state) => removeItem(state.view, optimisticId));
@@ -220,6 +233,28 @@ export class AppController {
     try {
       await api.cancelRun(runId);
       this.banner("warn", "已请求停止：引擎会在当前这一步结束后收手");
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * 丢弃某个 Run 的隔离工作区（M3）。
+   *
+   * 两步确认不放在这里——按钮自己收（见 RunHead）：动作层只认"点了确认"。
+   * 成功后刷一次状态，让运行头的「已丢弃」以服务端为准，而不是本地猜。
+   */
+  private async discardWorktree(runId: string): Promise<void> {
+    try {
+      await api.discardWorktree(runId);
+      this.banner("ok", "已丢弃这个任务的隔离工作区");
+      await this.refreshState();
+      this.store.update((state) => {
+        const run = state.runs.find((item) => item.runId === runId);
+        if (run) {
+          applyRunWorkspace(state.view, run);
+        }
+      });
     } catch (error) {
       this.fail(error);
     }
@@ -332,7 +367,17 @@ export class AppController {
     if (event.type === "run_done") {
       this.stream = null;
       this.streamedRunId = null;
-      void this.refreshState();
+      void this.refreshState().then(() => {
+        // 收尾后再同步一次工作区：隔离的「已丢弃」标记要以服务端为准。
+        // 带会话守卫：这一小会儿里用户可能已经切去别的会话，
+        // 那时运行头讲的已经不是这条 Run 了
+        this.store.update((state) => {
+          const run = state.runs.find((item) => item.runId === runId);
+          if (run && state.view.activeRunId === null && run.sessionId === state.view.sessionId) {
+            applyRunWorkspace(state.view, run);
+          }
+        });
+      });
     } else if (
       event.type === "approval_request" ||
       event.type === "approval_resolved" ||
@@ -410,6 +455,7 @@ export class AppController {
     return {
       send: (text) => void this.send(text),
       stop: () => void this.stop(),
+      discardWorktree: (runId) => this.discardWorktree(runId),
       newTask: () => void this.newTask(),
       openSession: (sessionId) => void this.openSession(sessionId),
       openRun: (runId) => void this.openRun(runId),

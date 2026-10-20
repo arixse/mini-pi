@@ -35,7 +35,7 @@ class FakeEventSource {
 type Route = { status?: number; body?: unknown };
 
 /** 假 fetch 打过的每一次请求：用来断言"这个动作根本没发请求" */
-const requested: Array<{ url: string; body: string }> = [];
+const requested: Array<{ url: string; body: string; method: string }> = [];
 
 /** 按 URL 前缀给响应的假 fetch */
 function installFetch(routes: Record<string, Route | (() => Route)>): void {
@@ -46,7 +46,7 @@ function installFetch(routes: Record<string, Route | (() => Route)>): void {
     });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
-    requested.push({ url, body: typeof init?.body === "string" ? init.body : "" });
+    requested.push({ url, body: typeof init?.body === "string" ? init.body : "", method: init?.method ?? "GET" });
     const key = Object.keys(routes).find((pattern) => url.includes(pattern));
     if (!key) {
       return new Response(JSON.stringify({ error: "没有这个接口", status: 404 }), {
@@ -292,5 +292,60 @@ describe("AppController", () => {
     controller.actions.closeSidebar();
     await settle();
     assert.strictEqual(controller.store.current.ui.sidebar, false);
+  });
+
+  it("丢弃隔离工作区：发 DELETE、给提示，released 以服务端刷新结果为准", async () => {
+    const run: AppState["runs"][number] = {
+      runId: "run_1",
+      title: "写个文件",
+      sessionId: "s1.jsonl",
+      status: "done",
+      model: "test/test-model",
+      startedAt: 1,
+      elapsedMs: 10,
+      tokens: 5,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: { root: "D:/wt/run_1", isolated: true, released: true },
+    };
+    installFetch({
+      "/api/state": { body: snapshot({ runs: [run] }) },
+      "/api/runs/run_1/worktree": { body: {} },
+    });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+    controller.store.update((state) => {
+      state.view.workspace = { runId: "run_1", root: "D:/wt/run_1", isolated: true, released: false };
+    });
+
+    await controller.actions.discardWorktree("run_1");
+    await settle();
+
+    const deleted = requested.find((item) => item.url.includes("/worktree"));
+    assert.ok(deleted, "该发一条丢弃请求");
+    assert.match(deleted.url, /\/api\/runs\/run_1\/worktree$/);
+    assert.strictEqual(deleted.method, "DELETE", "丢弃是 DELETE，不是 POST");
+    assert.match(controller.store.current.banner?.text ?? "", /已丢弃/, "成功要有明确反馈");
+    // 本地只负责乐观发起，"已丢弃"这三个字要以服务端为准
+    assert.strictEqual(controller.store.current.view.workspace?.released, true);
+  });
+
+  it("丢弃失败（任务还在跑）时把服务端的原因原样说出来", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/runs/run_9/worktree": {
+        status: 409,
+        body: { error: "任务还在跑，先停止它再丢弃工作区" },
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.discardWorktree("run_9");
+    await settle();
+
+    assert.match(controller.store.current.banner?.text ?? "", /任务还在跑/);
+    assert.strictEqual(controller.store.current.banner?.level, "error");
   });
 });

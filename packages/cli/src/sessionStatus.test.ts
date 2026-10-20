@@ -48,19 +48,20 @@ describe("/status 的条目与排版", () => {
       modelLabel: "minimax-cn/MiniMax-M2.7",
     });
 
-    const entries = new Map(sessionStatusEntries(options, false));
-    const trustedEntries = new Map(sessionStatusEntries(options, true));
+    const entries = new Map(sessionStatusEntries(options, "workspace-write"));
+    const trustedEntries = new Map(sessionStatusEntries(options, "full-access"));
 
     assert.strictEqual(entries.get("模型"), "minimax-cn/MiniMax-M2.7");
     assert.ok(entries.get("会话文件")?.endsWith("session.jsonl"));
     assert.ok(entries.get("上下文")?.includes("tokens"));
-    assert.ok(entries.get("工具确认")?.includes("需确认"));
+    // 档位名与"下一步会被怎么处理"都要在：只写名字答不出会不会弹确认
+    assert.match(entries.get("工具确认") ?? "", /workspace-write：.*逐次确认/);
     assert.strictEqual(entries.get("工作目录"), testDir);
-    assert.ok(trustedEntries.get("工具确认")?.includes("信任模式"));
+    assert.match(trustedEntries.get("工具确认") ?? "", /full-access：.*免确认/);
   });
 
   it("sessionStatusEntries 无会话存储时给出占位", () => {
-    const entries = new Map(sessionStatusEntries(createOptions(), false));
+    const entries = new Map(sessionStatusEntries(createOptions(), "workspace-write"));
 
     assert.strictEqual(entries.get("会话文件"), "(未启用会话存储)");
     assert.strictEqual(entries.get("模型"), "未配置");
@@ -84,7 +85,7 @@ describe("/status 的条目与排版", () => {
       },
     ]);
 
-    const entries = new Map(sessionStatusEntries(options, false));
+    const entries = new Map(sessionStatusEntries(options, "workspace-write"));
     const usage = entries.get("用量") ?? "";
 
     assert.ok(usage.includes("输入 1.2k"), `应显示输入用量，实际：${usage}`);
@@ -93,19 +94,19 @@ describe("/status 的条目与排版", () => {
   });
 
   it("sessionStatusEntries 无用量累计器时不显示用量行", () => {
-    const entries = new Map(sessionStatusEntries(createOptions(), false));
+    const entries = new Map(sessionStatusEntries(createOptions(), "workspace-write"));
     assert.strictEqual(entries.get("用量"), undefined);
   });
 
   it("trace 默认关闭，且与委派开关分开显示", () => {
-    const off = new Map(sessionStatusEntries(createOptions(), false));
+    const off = new Map(sessionStatusEntries(createOptions(), "workspace-write"));
     assert.ok(
       off.get("子 Agent")?.includes("关闭"),
       "缺省必须落在关闭一侧：trace 是磁盘上额外的敏感数据副本",
     );
 
     const on = new Map(
-      sessionStatusEntries(createOptions(), false, false, true),
+      sessionStatusEntries(createOptions(), "workspace-write", false, true),
     );
     const row = on.get("子 Agent") ?? "";
     assert.ok(row.includes("trace"), `应显示 trace 状态：${row}`);
@@ -113,7 +114,7 @@ describe("/status 的条目与排版", () => {
   });
 
   it("默认关闭：不带第三参数时 /status 显示关闭", () => {
-    const rows = new Map(sessionStatusEntries(createOptions(), false));
+    const rows = new Map(sessionStatusEntries(createOptions(), "workspace-write"));
     assert.ok(
       rows.get("子 Agent")?.includes("关闭"),
       "缺省必须落在关闭一侧，否则用户会在不知情的情况下产生委派用量",
@@ -122,7 +123,7 @@ describe("/status 的条目与排版", () => {
 
   it("/status 要显示委派被关闭，否则用户以为模型只是不想用", () => {
     const rows = new Map(
-      sessionStatusEntries(createOptions(), false, false),
+      sessionStatusEntries(createOptions(), "workspace-write", false),
     );
     const row = rows.get("子 Agent") ?? "";
 
@@ -137,7 +138,7 @@ describe("/status 的条目与排版", () => {
         usage: { input: 0, output: 0, totalTokens: 0 },
       }),
     });
-    const rows = new Map(sessionStatusEntries(options, false, true));
+    const rows = new Map(sessionStatusEntries(options, "workspace-write", true));
 
     assert.ok(rows.get("子 Agent")?.includes("未委派"));
   });
@@ -148,7 +149,7 @@ describe("/status 的条目与排版", () => {
    * 与短标签（"模型" 2 字符 / 4 列）补完后，值列的视觉起点差出 3 列。
    */
   it("所有状态标签补齐后的显示宽度一致（值列起点对齐）", () => {
-    const entries = sessionStatusEntries(createOptions(), false);
+    const entries = sessionStatusEntries(createOptions(), "workspace-write");
     const widths = new Set(
       entries.map(([label]) => displayWidth(alignLabel(label))),
     );
@@ -203,7 +204,7 @@ describe("/status 的条目与排版", () => {
     });
     await store.compactIfNedded(10, 1);
 
-    const rows = sessionStatusEntries(createOptions({ sessionStore: store }), false);
+    const rows = sessionStatusEntries(createOptions({ sessionStore: store }), "workspace-write");
     const row = rows.find(([label]) => label === "压缩状态");
 
     assert.ok(row, "失败过就应该有一行压缩状态");
@@ -236,7 +237,7 @@ describe("/status 的打印（printStatus）", () => {
     });
     const captured = capture();
     try {
-      printStatus(options, false, false, false);
+      printStatus(options, "workspace-write", false, false);
     } finally {
       captured.restore();
     }
@@ -245,7 +246,7 @@ describe("/status 的打印（printStatus）", () => {
     assert.match(text, /会话状态/);
     // 条目确实被打印（不是只打了标题）
     assert.match(text, /solo\/m1/);
-    assert.match(text, /需确认|信任/, "确认模式要么显示需确认、要么显示信任");
+    assert.match(text, /工具确认\s+workspace-write：/, "确认模式要显示当前档位及其语义");
     // 会话级操作的提示要在：用户看完状态要知道接下来能敲什么
     assert.match(text, /\/new/);
     assert.match(text, /\/sessions/);
@@ -271,7 +272,7 @@ describe("/status 的委派统计", () => {
         delegations: 3,
         usage: { input: 1_200, output: 318, totalTokens: 1_518 },
       })),
-      false,
+      "workspace-write",
       true,
     );
     const row = entries.find(([label]) => label === "子 Agent");
@@ -283,7 +284,7 @@ describe("/status 的委派统计", () => {
   });
 
   it("开启但没有 stats 查询时不留这一行（不编造数据）", () => {
-    const entries = sessionStatusEntries(optionsWith(undefined), false, true);
+    const entries = sessionStatusEntries(optionsWith(undefined), "workspace-write", true);
     assert.ok(
       !entries.some(([label]) => label === "子 Agent"),
       "没有统计来源时不该显示一行空壳",
@@ -296,7 +297,7 @@ describe("/status 的委派统计", () => {
         delegations: 1,
         usage: { input: 10, output: 5, totalTokens: 15 },
       })),
-      false,
+      "workspace-write",
       true,
       true,
     );

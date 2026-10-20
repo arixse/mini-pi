@@ -11,7 +11,13 @@
  */
 
 import type { Run } from "@minipi/core/run";
-import type { BufferedEvent, RunPhase, RunSummary, ServerEvent } from "../shared/types";
+import type {
+  BufferedEvent,
+  RunPhase,
+  RunSummary,
+  RunWorkspace,
+  ServerEvent,
+} from "../shared/types";
 
 /** 缓冲上限：一次执行的事件量在几百量级，4000 足够覆盖正常使用 */
 export const MAX_BUFFERED_EVENTS = 4_000;
@@ -35,6 +41,12 @@ export class RunRecord {
   readonly prompt: string;
   readonly modelLabel: string;
   readonly startedAt: number;
+  /** 本次执行真正使用的根目录；execute 分工地时写入 */
+  workspaceRoot = "";
+  /** 是否为本次执行单独隔离（git worktree） */
+  isolated = false;
+  /** 隔离工作区是否已被用户显式丢弃 */
+  workspaceReleased = false;
 
   status: RunPhase;
   endedAt: number | null = null;
@@ -137,7 +149,17 @@ export class RunRecord {
       tokens: this.tokens,
       contextWindow,
       pendingApprovals,
+      workspace: this.workspaceView(),
       ...(this.error ? { error: this.error } : {}),
+    };
+  }
+
+  /** 这次执行在哪干活；隔离被丢弃后 root 仍在（历史），但 released 为真 */
+  workspaceView(): RunWorkspace {
+    return {
+      root: this.workspaceRoot,
+      isolated: this.isolated,
+      released: this.workspaceReleased,
     };
   }
 }

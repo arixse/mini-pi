@@ -10,6 +10,8 @@ import chalk from "chalk";
 import type { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
 import { CONTEXT_WINDOW_SOURCE_LABEL } from "@minipi/core/provider";
 import { formatUsage } from "@minipi/core/agent/usage";
+import { describeApprovalMode } from "@minipi/core/policy";
+import type { ApprovalMode } from "@minipi/core/policy";
 import { KEEP_RECENT_MESSAGES, contextUsage, contextWindowInfo } from "./context";
 import { padToWidth, terminalWidth, wrapToWidth } from "./width";
 import type { ReplOptions } from "./options";
@@ -33,7 +35,7 @@ export function alignLabel(label: string, width = STATUS_LABEL_WIDTH): string {
 /** /status 的条目（纯数据，便于测试） */
 export function sessionStatusEntries(
   options: ReplOptions,
-  trusted: boolean,
+  approvalMode: ApprovalMode,
   // 默认关闭：与 getSubagentEnabled 同一口径，没配就是关
   subAgentEnabled = false,
   // 同上：trace 默认关（它是磁盘上额外的敏感数据副本）
@@ -62,7 +64,12 @@ export function sessionStatusEntries(
       ? ([["用量", formatUsage(options.usageTracker.snapshot())]] as Array<[string, string]>)
       : []),
     ...subAgentStatusRow(options, subAgentEnabled, subAgentTrace),
-    ["工具确认", trusted ? "🔓 信任模式（不再逐次确认）" : "🔒 需确认（/trust 切换）"],
+    // 档位名 + 一句话语义：只写"workspace-write"答不出"下一步会被怎么处理"，
+    // 而切到只读档的人恰恰需要这句话（写请求会被静默拒绝）
+    [
+      "工具确认",
+      `${approvalMode}：${describeApprovalMode(approvalMode)}（/approval 切换）`,
+    ],
     ["工作目录", options.workspaceRoot],
   ];
 }
@@ -139,14 +146,14 @@ export function sessionStatusLines(
 
 export function printStatus(
   options: ReplOptions,
-  trusted: boolean,
+  approvalMode: ApprovalMode,
   subAgentEnabled = false,
   subAgentTrace = false,
 ): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
   for (const line of sessionStatusLines(
-    sessionStatusEntries(options, trusted, subAgentEnabled, subAgentTrace),
+    sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace),
   )) {
     console.log(chalk.dim(line));
   }

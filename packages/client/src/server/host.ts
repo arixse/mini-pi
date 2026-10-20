@@ -35,6 +35,8 @@ import { buildSystemPrompt } from "@minipi/core/prompt";
 import { detectProjectStack, formatProjectStack } from "@minipi/core/projectStack";
 import { assessToolRisk } from "@minipi/core/risk";
 import { describeToolCallLines } from "@minipi/core/toolSummary";
+// 三档裁决表在内核里，且只有一份：服务端与 CLI 调的是同一个函数
+import { evaluateApprovalPolicy } from "@minipi/core/policy";
 import { appendAgentMessages, appendUserMessage, compactIfNeeded } from "@minipi/core/session";
 import { KEEP_RECENT_MESSAGES, contextOverheadTokens, resolveContextBudget } from "@minipi/core/context";
 import {
@@ -45,6 +47,7 @@ import {
 } from "@minipi/core/provider";
 import { newRunId, type RunResult } from "@minipi/core/run";
 import { RunManager } from "@minipi/core/runManager";
+import { WorkspaceManager, type Workspace } from "@minipi/core/worktree";
 import { logger } from "@minipi/core/shared/logger";
 import { ApprovalBroker, newApprovalId } from "./broker";
 import { HttpError } from "./errors";
@@ -82,6 +85,16 @@ export type WorkspaceHostOptions = {
   /** 同时执行上限，默认 1（与 CLI"回合结束后执行"同口径） */
   concurrency?: number;
   /**
+   * 每个 Run 一个隔离的 git worktree（M3）。
+   *
+   * 并行跑多个任务时，共用一个根目录意味着两个 Run 会同时写同一批文件。
+   * 开了它，`execute` 会为每个 Run 建一份独立检出；隔离不可用（没装 git、
+   * 不在仓库里、仓库没有提交）时**发送直接报错**，不静默退回共用目录。
+   */
+  isolate?: boolean;
+  /** worktree 存放根目录，默认 `<tmp>/mini-pi-worktrees` */
+  worktreesRoot?: string;
+  /**
    * 模型解析的注入点。
    *
    * 真实实现要读 `~/.mini-pi/auth.json` 并构造 SDK 客户端，单测里
@@ -117,6 +130,10 @@ export class WorkspaceHost {
   private readonly sessionManager: SessionManager;
   private readonly runManager: RunManager;
   private readonly broker = new ApprovalBroker();
+  /** 隔离开启时按 Run 分工作区；没开是 null，于是"不隔离"是一条显式分支 */
+  private readonly workspaces: WorkspaceManager | null;
+  /** 隔离不可用的原因（探测过一次就记下，发送时照着报错） */
+  private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
   private readonly now: () => number;
 
@@ -155,6 +172,11 @@ export class WorkspaceHost {
       ...(options.globalAgentsPath ? { globalAgentsPath: options.globalAgentsPath } : {}),
     });
     this.runManager = new RunManager({ concurrency: options.concurrency ?? 1 });
+    this.workspaces = options.isolate
+      ? new WorkspaceManager({
+          ...(options.worktreesRoot ? { root: options.worktreesRoot } : {}),
+        })
+      : null;
     this.contextWindow = resolveContextWindow({}).window;
   }
 
@@ -162,6 +184,13 @@ export class WorkspaceHost {
   async start(): Promise<this> {
     await this.reloadModel();
     this.subAgentEnabled = await this.settingsStore.getSubagentEnabled();
+    if (this.workspaces) {
+      // 启动时就探测：等用户按下发送才说"隔离不了"，那一刻他已经等了
+      const capability = this.workspaces.capability(this.workspaceRoot);
+      this.isolationError = capability.supported
+        ? null
+        : `无法隔离工作区（${capability.reasons.join("；")}）`;
+    }
     const latest = this.listSessionInfos();
     // 一段会话都没有就**空着**：会话文件只在第一次发送时创建（见 `send`）。
     // 原来这里会补开一个空会话，于是"点了一下新任务、什么都没说"也会在
@@ -170,10 +199,12 @@ export class WorkspaceHost {
     return this;
   }
 
-  /** 退出前收尾：跑着的全部取消，挂起的审批作废 */
+  /** 退出前收尾：跑着的全部取消，挂起的审批作废，隔离工作区全部回收 */
   close(): void {
     this.runManager.cancelAll();
     this.broker.clear();
+    // worktree 不回收会在主仓库的 .git/worktrees 里留元数据，磁盘也一直占着
+    this.workspaces?.dispose();
   }
 
   // ---------------------------------------------------------------- 状态
@@ -517,6 +548,11 @@ export class WorkspaceHost {
         this.modelError ?? "尚未配置模型：请在设置里选择服务商与模型",
       );
     }
+    // 隔离不可用（没装 git / 不在仓库里 / 仓库没有提交）时拒绝发送：
+    // "以为隔离了其实共用着"比明说不能并行更危险
+    if (this.isolationError) {
+      throw new HttpError(409, this.isolationError);
+    }
     // 不带 sessionId 就是"开一段新的"：会话在第一次发送时才落盘。
     // 于是"点了新任务但什么都没说"不会留下空文件——那是点击，不是对话
     const targetSession = sessionId ?? this.createSession().sessionId;
@@ -541,6 +577,27 @@ export class WorkspaceHost {
       .then(() => this.execute(record));
     this.chains.set(targetSession, next);
     return { runId, sessionId: targetSession };
+  }
+
+  /**
+   * 显式丢弃某个 Run 的隔离工作区（界面上的「丢弃」）。
+   *
+   * worktree 里的改动就是这次执行的产物，因此**不主动回收**：删它必须由
+   * 用户发起。任务还在跑时拒绝——那等于把正在执行的工作目录抽掉。
+   */
+  releaseWorktree(runId: string): void {
+    const record = this.record(runId);
+    if (record.status === "running" || record.status === "blocked" || record.status === "queued") {
+      throw new HttpError(409, "任务还在跑，先停止它再丢弃工作区");
+    }
+    if (!this.workspaces) {
+      throw new HttpError(409, "这个服务没有开启工作区隔离");
+    }
+    const result = this.workspaces.release(runId);
+    if (!result.ok) {
+      throw new HttpError(409, result.error ?? "回收工作区失败");
+    }
+    record.workspaceReleased = true;
   }
 
   cancel(runId: string): void {
@@ -572,6 +629,34 @@ export class WorkspaceHost {
     return record;
   }
 
+  /**
+   * 给这次执行分工地。
+   *
+   * 隔离开时建一个只属于它的 git worktree；没开隔离时返回基准目录
+   * （单任务场景多一层 worktree 只会让用户找不到自己改的文件）。
+   * 分配失败时把这次执行收尾成 failed 并返回 null——**不静默退回共用**，
+   * 那是 worktree.ts 的第一条硬规则。
+   */
+  private allocateWorkspace(record: RunRecord): Workspace | null {
+    if (!this.workspaces) {
+      record.workspaceRoot = this.workspaceRoot;
+      record.isolated = false;
+      return { baseRoot: this.workspaceRoot, root: this.workspaceRoot, isolated: false };
+    }
+    try {
+      const workspace = this.workspaces.allocate(this.workspaceRoot, {
+        runId: record.runId,
+        isolate: true,
+      });
+      record.workspaceRoot = workspace.root;
+      record.isolated = workspace.isolated;
+      return workspace;
+    } catch (error) {
+      void this.finish(record, "failed", errorMessage(error));
+      return null;
+    }
+  }
+
   private async execute(record: RunRecord): Promise<void> {
     if (record.status !== "queued") {
       return;
@@ -583,10 +668,19 @@ export class WorkspaceHost {
     }
 
     const session = this.sessionContext(record.sessionId);
+    // 先分工地再置 running：隔离不了要让这次执行带着原因结束，
+    // 而不是顶着一个"正在跑"的状态悄悄退回共用目录
+    const workspace = this.allocateWorkspace(record);
+    if (!workspace) {
+      return;
+    }
+    const runRoot = workspace.root;
     record.status = "running";
     this.push(record, { type: "run_state", status: "running" });
 
-    const systemPrompt = this.buildSystemPrompt();
+    // 提示里的"当前工作目录"必须是本次执行真正的根：隔离时模型看到的
+    // 是 worktree，写成基准目录会让它对着一个自己不写文件的路径推理
+    const systemPrompt = this.buildSystemPrompt(runRoot);
     const budget = this.compactionBudget(systemPrompt);
 
     try {
@@ -606,7 +700,7 @@ export class WorkspaceHost {
       systemPrompt,
       messages: session.messages,
       model,
-      tools: (runtime) => this.toolRegistry(runtime),
+      tools: (runtime) => this.toolRegistry(runtime, runRoot),
       subAgent: {
         enabled: this.subAgentEnabled,
         trace: false,
@@ -623,7 +717,7 @@ export class WorkspaceHost {
 
     let synced = 0;
     const result = await this.runManager.start(run, {
-      beforeToolCall: this.approvalHook(record),
+      beforeToolCall: this.approvalHook(record, runRoot),
       onTurnEnd: async (turnMessages) => {
         await appendAgentMessages(
           { store: session.store, messages: session.messages },
@@ -728,33 +822,30 @@ export class WorkspaceHost {
    * 审批钩子。
    *
    * 与 CLI 的 `createToolApproval` 同一套语义，只是"问人"的方式换成了
-   * 挂起 + HTTP 裁决。三档的界线：
-   * - `read-only`：写与执行**直接拒绝**（不是等人点头，是根本不允许）
-   * - `workspace-write`：逐次询问，可"本会话内全部允许"（CLI 的默认行为）
-   * - `full-access`：全部放行（CLI 的 /trust）
+   * 挂起 + HTTP 裁决。三档的界线**不在这个文件里**：裁决表是内核的
+   * `core/policy.ts`（M4 的验收就是"三档在两端给出同一裁决"），
+   * 这里只负责它管不了的两件事——本会话的"全部允许"，
+   * 以及把问题送到浏览器那一头。
    */
-  private approvalHook(record: RunRecord): BeforeToolCall {
+  private approvalHook(record: RunRecord, runRoot: string): BeforeToolCall {
     return async (
       call,
       context?: ToolCallContext,
     ): Promise<ToolDecision> => {
-      if (READ_ONLY_TOOLS.has(call.name)) {
-        return { action: "allow", reason: "只读工具，免确认" };
+      const verdict = evaluateApprovalPolicy(this.tier, call.name, {
+        readOnlyTools: READ_ONLY_TOOLS,
+      });
+      if (verdict.kind === "allow") {
+        return { action: "allow", reason: verdict.reason };
       }
-      if (this.tier === "read-only") {
-        return {
-          action: "block",
-          reason: "当前档位为 read-only：写操作与命令一律不执行（可在设置里切换档位）",
-        };
-      }
-      if (this.tier === "full-access") {
-        return { action: "allow", reason: "当前档位为 full-access：不再逐次确认" };
+      if (verdict.kind === "block") {
+        return { action: "block", reason: verdict.reason };
       }
       if (this.trustedSessions.has(record.sessionId)) {
         return { action: "allow", reason: "本会话内已选择全部允许" };
       }
 
-      const request = this.buildApprovalRequest(record, call, context);
+      const request = this.buildApprovalRequest(record, call, context, runRoot);
       record.status = "blocked";
       this.push(record, { type: "approval_request", request });
 
@@ -789,9 +880,12 @@ export class WorkspaceHost {
     record: RunRecord,
     call: { id: string; name: string; arguments?: Record<string, unknown> },
     context?: ToolCallContext,
+    runRoot: string = this.workspaceRoot,
   ): ApprovalRequest {
+    // 文件在不在，要按**这次执行**的根问：隔离时 worktree 里的树可能与
+    // 基准目录不同（那正是这次执行正在改的东西）
     const fileExists = (relativePath: string): boolean =>
-      workspaceFileExists(this.workspaceRoot, relativePath);
+      workspaceFileExists(runRoot, relativePath);
     const toolCall = {
       type: "toolCall" as const,
       id: call.id,
@@ -815,9 +909,9 @@ export class WorkspaceHost {
 
   // ---------------------------------------------------------------- 装配
 
-  private buildSystemPrompt(): string {
+  private buildSystemPrompt(root: string = this.workspaceRoot): string {
     return buildSystemPrompt({
-      workspaceRoot: this.workspaceRoot,
+      workspaceRoot: root,
       fixedContext: this.sessionManager.getFixedContext(),
       skillSummary: this.sessionManager.getSkillSummary(),
       projectStack: formatProjectStack(detectProjectStack(this.workspaceRoot)),
@@ -829,7 +923,7 @@ export class WorkspaceHost {
     overhead: number;
     keepRecent: number;
   } {
-    this.demoRegistry ??= this.toolRegistry(new SubAgentRuntimeProvider());
+    this.demoRegistry ??= this.toolRegistry(new SubAgentRuntimeProvider(), this.workspaceRoot);
     return {
       budget: resolveContextBudget(this.contextWindow),
       overhead: contextOverheadTokens(
@@ -847,12 +941,12 @@ export class WorkspaceHost {
    * 执行私有的——共用一份注册表会让并行的两个 Run 互相覆盖（内核的
    * `Run` 正是为此接受工厂而不是固定实例）。
    */
-  private toolRegistry(runtime: SubAgentRuntimeProvider): ToolRegistry {
-    const registry = createToolRegistry(this.workspaceRoot, {
+  private toolRegistry(runtime: SubAgentRuntimeProvider, root: string): ToolRegistry {
+    const registry = createToolRegistry(root, {
       skillLoader: this.skillLoader,
       extraTools: [
         createSubAgentTool({
-          workspaceRoot: this.workspaceRoot,
+          workspaceRoot: root,
           depth: 0,
           runtime: () => runtime.get(),
           parentRegistry: () => registry,
