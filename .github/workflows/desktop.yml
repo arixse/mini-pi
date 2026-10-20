@@ -26,7 +26,39 @@ env:
   TAG_NAME: ${{ github.ref_name }}
 
 jobs:
+  # 门禁。宁可多花几分钟，也不让"tag 打在门禁红的提交上"出一个坏安装包。
+  #
+  # 两个工作流各跑一遍，而不是让打包去等 publish 的结果：needs 只在同一个
+  # run 内有效，跨工作流依赖做不出来。而 tag 打在坏提交上时，publish.yml
+  # 会拦下 npm 包、这边却照样出包——同一个 tag 下"npm 包没发、安装包发了"，
+  # 用户装到的是两个不同来源的 1.2.3。
+  #
+  # 刻意与 publish.yml 用**同一条命令、同一套 install**（全量而不是只装
+  # 客户端包）：门禁标准一旦分岔，必然出现"一边红一边绿"，那比没有门禁更
+  # 糟——它把"该信哪个"变成了一个需要人来判的问题。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # 全量：pnpm check 跑的是整个 workspace 的测试与覆盖率，
+      # 只装 @minipi/client... 会拿到一个跑不起来的根命令。
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        run: pnpm check
+
   installer:
+    needs: gate
     # fail-fast: false：Windows 那台挂了不该连累 macOS 那台，
     # 反正两边产物互不相干，先看住能出包的那一边更有价值。
     strategy:

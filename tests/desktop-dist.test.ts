@@ -154,6 +154,26 @@ describe("桌面安装包接线", () => {
     );
   });
 
+  it("打包前必须先过门禁，且与 publish.yml 是同一条命令", () => {
+    // tag 打在门禁红的提交上时，publish.yml 会拦下 npm 包、这边却照样
+    // 出一个坏安装包——同一个 tag 下两个来源给出不同的 1.2.3。
+    const workflow = readText(REPO_ROOT, ".github", "workflows", "desktop.yml");
+    const jobs = workflow.slice(workflow.indexOf("\njobs:"));
+    assert.ok(/^\s{2}gate:/m.test(jobs), "desktop.yml 应有独立的 gate job");
+    assert.ok(
+      /^\s{4}needs:\s*gate\s*$/m.test(jobs),
+      "installer 必须 needs: gate——否则门禁只是个平行跑的摆设",
+    );
+    // 门禁标准不许分岔：两边各写一套必然出现"一边红一边绿"
+    assert.ok(/\brun: pnpm check\b/m.test(jobs), "gate 应跑 pnpm check");
+    assert.ok(
+      /\brun: pnpm check\b/m.test(
+        readText(REPO_ROOT, ".github", "workflows", "publish.yml"),
+      ),
+      "publish.yml 应跑同一条门禁",
+    );
+  });
+
   it("两份 README 都登记了打包命令", () => {
     // 文档是唯一的发现入口：测试绿着而文档没写，用户就找不到这条命令
     assert.ok(
