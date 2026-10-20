@@ -176,4 +176,11 @@ export type DirListing = {
   path: string;
   parent: string | null;
   entries: DirEntry[];
+  /**
+   * 可切换的盘符（仅 Windows 有值，形如 `["C:\\", "D:\\"]`）。
+   *
+   * `readdir` 到盘根就到底了，"上一级"走不出去，换盘只能靠这一份。
+   * 非 Windows 是空数组，前端据此不画盘符条。
+   */
+  drives: string[];
 };

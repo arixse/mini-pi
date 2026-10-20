@@ -1128,6 +1128,35 @@ svg.ic {
   color: var(--indigo-lt);
 }
 
+/* 盘符条：到盘根就没有"上一级"了，换盘从这里跳 */
+.drive-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.drive-chip {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--t4);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.drive-chip:hover:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.45);
+  color: var(--indigo-lt);
+}
+
+.drive-chip.is-on {
+  border-color: var(--indigo);
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--indigo-lt);
+}
+
 /* ---------------- 起不来的时候 ---------------- */
 
 .boot {

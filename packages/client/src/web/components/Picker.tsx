@@ -83,6 +83,25 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
         </div>
 
         <div className="modal-body">
+          {/* 盘符条：readdir 到盘根就走不动了，换盘只能从这里跳 */}
+          {listing && listing.drives.length > 0 ? (
+            <div className="drive-row">
+              {listing.drives.map((drive) => {
+                const on = listing.path.toUpperCase().startsWith(drive.toUpperCase());
+                return (
+                  <button
+                    key={drive}
+                    className={`drive-chip${on ? " is-on" : ""}`}
+                    title={`跳到 ${drive}`}
+                    disabled={busy}
+                    onClick={() => void browse(drive)}
+                  >
+                    {drive.slice(0, 2)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 8 }}>
             <input
               placeholder="目录绝对路径"
