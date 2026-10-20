@@ -147,3 +147,61 @@ jobs:
             packages/client/dist/installer/*.zip
           if-no-files-found: error
           retention-days: 30
+
+  # 把两个平台的安装包挂到 Release 上。之前它们只进 Actions artifact
+  # （30 天过期、还得去 run 页面翻），Release 页上什么都没有。
+  release:
+    needs: installer
+    # 只有 tag 触发才有 Release 可挂：手动 dispatch 时 github.ref 是分支，
+    # 拿分支名去建 Release 会得到一个指向分支的 Release——那不是我们想要的。
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 只有这一步需要写权限，因此放在 job 上而不是 workflow 上：
+    # 其余 job 保持 contents: read，不会因为一次误操作就拿到写权限。
+    permissions:
+      contents: write
+    steps:
+      # 不 checkout：gh 靠 GH_REPO 认仓库，这一步用不到源码
+      - name: 取回两个平台的产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mini-pi-desktop-*
+          path: dist
+          # 默认会按 artifact 名各建一层子目录，那样上传的是目录而不是
+          # 文件，表现是"Release 里有附件但下不下来"
+          merge-multiple: true
+
+      - name: 挂到 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(dist/*.exe dist/*.dmg dist/*.zip)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::没有取回任何安装包"
+            exit 1
+          fi
+          # 推 tag 与建 Release 是两件事，先后顺序不由我们决定：人可能
+          # 已经在网页上把 Release 建好了（那时只补附件），也可能一路
+          # 没人管（那就连 Release 一起建出来）。
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME 已存在，只补附件"
+          else
+            # GITHUB_TOKEN 建的 Release 不会再触发工作流，正好免掉递归；
+            # 代价是它不会出现在"谁发布的"里，这个可以接受。
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes
+          fi
+          # 重跑同一次 tag 会撞上同名附件，没有 --clobber 就直接失败退出
+          gh release upload "$TAG_NAME" "${FILES[@]}" --clobber
+
+      - name: 汇总
+        shell: bash
+        run: |
+          {
+            echo "### $TAG_NAME 安装包"
+            ls -1 dist | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"

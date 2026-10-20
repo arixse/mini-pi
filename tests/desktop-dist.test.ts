@@ -174,6 +174,45 @@ describe("桌面安装包接线", () => {
     );
   });
 
+  it("两个平台的产物会自动挂到 Release 上，且幂等", () => {
+    // 之前产物只进 artifact（30 天过期、还得去 run 页面翻），Release 页
+    // 上什么都没有——而那正是用户找安装包的地方。
+    const workflow = readText(REPO_ROOT, ".github", "workflows", "desktop.yml");
+    const jobs = workflow.slice(workflow.indexOf("\njobs:"));
+    assert.ok(/^\s{2}release:/m.test(jobs), "desktop.yml 应有 release job");
+    assert.ok(
+      /^\s{4}needs:\s*installer\s*$/m.test(jobs),
+      "release 必须等两个平台都出完包才跑",
+    );
+    // 手动 dispatch 时 github.ref 是分支名，拿它去建 Release 会得到一个
+    // 指向分支的 Release
+    assert.ok(
+      /^\s*if:.*startsWith\(github\.ref, 'refs\/tags\/'\)/m.test(jobs),
+      "release 只在 tag 触发时跑",
+    );
+    // 只有这一步需要写权限，放在 job 上而不是 workflow 上
+    assert.ok(
+      /^\s*permissions:\s*\n\s*contents:\s*write/m.test(jobs),
+      "release 需要 contents: write",
+    );
+    // 不 checkout，gh 得靠 GH_REPO 认仓库
+    assert.ok(/GH_REPO:/.test(jobs), "没有 checkout，gh 需要 GH_REPO");
+    // 默认按 artifact 名各建一层子目录，上传的就会是目录
+    assert.ok(
+      /merge-multiple:\s*true/.test(jobs),
+      "两个 artifact 必须合并进同一个目录",
+    );
+    // 人可能已经在网页上把 Release 建好了，那时只补附件
+    assert.ok(
+      /gh release view/.test(jobs) && /gh release create/.test(jobs),
+      "要先判断 Release 是否已存在，再决定建还是补",
+    );
+    assert.ok(
+      /--clobber/.test(jobs),
+      "重跑同一次 tag 会撞上同名附件，必须 --clobber",
+    );
+  });
+
   it("两份 README 都登记了打包命令", () => {
     // 文档是唯一的发现入口：测试绿着而文档没写，用户就找不到这条命令
     assert.ok(
