@@ -15,7 +15,7 @@ import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core
 import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
 import type { LlmModel, CompleteInput } from "@minipi/core/agent/model";
 import type { AssistantMessage } from "@minipi/core/shared/protocol";
-import type { ServerEvent, Tier } from "./types";
+import type { ServerEvent, Tier } from "../shared/types";
 
 export const TEST_MODEL_LABEL = "test/test-model";
 

@@ -12,7 +12,7 @@
  * 挂起不消耗任何东西：它只是一个没 settle 的 Promise 和一条登记记录。
  */
 
-import type { ApprovalAnswer, ApprovalRequest } from "./types";
+import type { ApprovalAnswer, ApprovalRequest } from "../shared/types";
 
 export type ApprovalOutcome = {
   answer: ApprovalAnswer;

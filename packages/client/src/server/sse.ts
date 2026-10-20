@@ -10,7 +10,7 @@
  */
 
 import type { ServerResponse } from "node:http";
-import type { BufferedEvent, ServerEvent } from "./types";
+import type { BufferedEvent, ServerEvent } from "../shared/types";
 
 /**
  * 编码一帧。

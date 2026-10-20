@@ -7,6 +7,9 @@
  *
  * 与 `describeToolCallLines` 的分工：摘要回答"这是什么事"（两端必须一字不差），
  * 预览回答"具体参数长什么样"（终端不需要、网页需要）。
+ *
+ * 住在 `shared/` 而不是 `server/`：工具卡片也要它。前端若从 `server/` 里
+ * import，这条"前端不许依赖服务端"的边界就只剩一句口头承诺了。
  */
 
 const DEFAULT_MAX_CHARS = 1_200;

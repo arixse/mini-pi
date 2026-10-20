@@ -166,6 +166,8 @@ export type AppState = {
   /** 发不出任务时给出**具体**原因，而不是让发送按钮灰着不解释 */
   sendable: boolean;
   blockReason: string | null;
+  /** 委派（子 Agent）开关：输入区那两个开关之一 */
+  subAgent: boolean;
 };
 
 export type DirEntry = { name: string; path: string };

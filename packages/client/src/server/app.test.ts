@@ -15,7 +15,7 @@ import {
   waitFor,
   type TestServer,
 } from "./testServer";
-import type { AppState, ApprovalRequest, RunSummary, SessionSummary, ServerEvent } from "./types";
+import type { AppState, ApprovalRequest, RunSummary, SessionSummary, ServerEvent } from "../shared/types";
 
 describe("App Server · 状态", () => {
   let server: TestServer;

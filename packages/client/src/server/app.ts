@@ -25,7 +25,7 @@ import {
   type RequestContext,
 } from "./http";
 import { openSse } from "./sse";
-import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "./types";
+import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "../shared/types";
 
 export type AppServerOptions = {
   workspaceRoot: string;
@@ -270,6 +270,13 @@ export class AppServer {
           throw new HttpError(400, `无法识别的审批档位：${String(payload.tier)}`);
         }
         sendJson(res, 200, { tier: this.host.setTier(payload.tier) });
+      })
+      .post("/api/options", async ({ res, body }) => {
+        const payload = asRecord(body);
+        if (payload.subAgent !== undefined) {
+          this.host.setSubAgentEnabled(payload.subAgent);
+        }
+        sendJson(res, 200, await this.host.state());
       })
       .get("/api/dirs", async ({ res, url }) => {
         sendJson(res, 200, this.host.listDir(url.searchParams.get("path")));

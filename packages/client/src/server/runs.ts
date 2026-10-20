@@ -11,7 +11,7 @@
  */
 
 import type { Run } from "@minipi/core/run";
-import type { BufferedEvent, RunPhase, RunSummary, ServerEvent } from "./types";
+import type { BufferedEvent, RunPhase, RunSummary, ServerEvent } from "../shared/types";
 
 /** 缓冲上限：一次执行的事件量在几百量级，4000 足够覆盖正常使用 */
 export const MAX_BUFFERED_EVENTS = 4_000;

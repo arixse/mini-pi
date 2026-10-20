@@ -1,0 +1,392 @@
+/**
+ * 状态归约的测试。
+ *
+ * 这里测的是"时间线不会撒谎"的那几条不变量：
+ * - 重放与历史重建算出同一个 id（否则订阅一个跑了一半的 Run 会叠成两份）
+ * - `message_end` 落到流式中的同一条上（内核会在结束时改写 timestamp）
+ * - 被拒绝 / 被取消的工具调用不会永远停在"运行中"
+ */
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { AgentMessage, AssistantMessage } from "@minipi/core/shared/protocol";
+import {
+  activeRuns,
+  addUserMessage,
+  applyRunEvent,
+  applySnapshot,
+  emptyView,
+  filterBySearch,
+  initialState,
+  itemsFromMessages,
+  messageId,
+  openSession,
+  pendingApprovals,
+  removeItem,
+  upsertItem,
+  type ClientState,
+  type TimelineItem,
+  type View,
+} from "./state";
+import type { AppState, RunSummary, ServerEvent, SessionSummary } from "../shared/types";
+
+function userMessage(text: string, timestamp = 1000): AgentMessage {
+  return { role: "user", content: [{ type: "text", text }], timestamp };
+}
+
+function assistantText(text: string, timestamp = 2000): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+    usage: { input: 1, output: 1, totalTokens: 2 },
+    timestamp,
+  };
+}
+
+function assistantToolCall(
+  toolCallId: string,
+  timestamp = 3000,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: toolCallId, name: "write_file", arguments: { path: "a.ts" } },
+    ],
+    stopReason: "toolUse",
+    usage: { input: 1, output: 1, totalTokens: 2 },
+    timestamp,
+  };
+}
+
+function toolResult(
+  toolCallId: string,
+  text: string,
+  isError = false,
+  timestamp = 4000,
+): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "write_file",
+    content: [{ type: "text", text }],
+    isError,
+    timestamp,
+  };
+}
+
+function snapshot(overrides: Partial<AppState> = {}): AppState {
+  return {
+    workspace: { root: "D:\\demo", name: "demo" },
+    tier: "workspace-write",
+    model: {
+      provider: "deepseek",
+      model: "deepseek-flash",
+      label: "deepseek / deepseek-flash",
+      contextWindow: 128000,
+      contextWindowSource: "inferred",
+    },
+    approvals: { pending: 0, oldestRunId: null },
+    runs: [],
+    sessions: [],
+    currentSessionId: "s1.jsonl",
+    sendable: true,
+    blockReason: null,
+    subAgent: false,
+    ...overrides,
+  };
+}
+
+function feed(view: View, runId: string, events: ServerEvent[]): void {
+  for (const event of events) {
+    applyRunEvent(view, runId, event);
+  }
+}
+
+function itemsOfKind(view: View, kind: TimelineItem["kind"]): TimelineItem[] {
+  return view.items.filter((item) => item.kind === kind);
+}
+
+describe("messageId", () => {
+  it("同一条消息无论从哪条路径来都算出同一个 id", () => {
+    const message = assistantText("你好");
+    assert.equal(messageId(message), messageId({ ...message }));
+  });
+
+  it("同一条 assistant 消息里的文本与工具调用各自有 id", () => {
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "我来改文件" },
+        { type: "toolCall", id: "call_1", name: "write_file", arguments: {} },
+      ],
+      stopReason: "toolUse",
+      usage: { input: 1, output: 1, totalTokens: 2 },
+      timestamp: 99,
+    };
+    assert.notEqual(messageId(message), `t:call_1`);
+    // 消息带工具调用时，以第一个工具调用的 id 作为"种类"，与纯文本消息区分开
+    assert.equal(messageId(message), "a:99:call_1");
+  });
+});
+
+describe("itemsFromMessages：历史重建", () => {
+  it("工具调用与结果按 toolCallId 配对，不按顺序猜", () => {
+    const items = itemsFromMessages([
+      userMessage("改一下"),
+      assistantToolCall("call_b"),
+      assistantToolCall("call_a", 3100),
+      toolResult("call_a", "第二个写完", false, 4100),
+      toolResult("call_b", "第一个写完", false, 4200),
+      assistantText("都改好了"),
+    ]);
+    const tools = items.filter((item): item is Extract<TimelineItem, { kind: "tool" }> => item.kind === "tool");
+    assert.equal(tools.length, 2);
+    const byId = new Map(tools.map((item) => [item.toolCallId, item]));
+    assert.equal(byId.get("call_b")?.output, "第一个写完");
+    assert.equal(byId.get("call_a")?.output, "第二个写完");
+  });
+
+  it("纯工具调用、没有正文的 assistant 消息不产生气泡", () => {
+    const items = itemsFromMessages([assistantToolCall("call_1"), toolResult("call_1", "ok")]);
+    assert.equal(items.some((item) => item.kind === "assistant"), false);
+    assert.equal(items.length, 1);
+  });
+
+  it("失败的工具结果标成 failed", () => {
+    const items = itemsFromMessages([assistantToolCall("call_1"), toolResult("call_1", "炸了", true)]);
+    const tool = items[0]! as Extract<TimelineItem, { kind: "tool" }>;
+    assert.equal(tool.status, "failed");
+  });
+});
+
+describe("applyRunEvent：流式归约", () => {
+  it("delta 逐段追加，end 之后到达的重复 delta 不再叠加", () => {
+    const view = emptyView();
+    const message = assistantText("");
+    feed(view, "run_1", [
+      { type: "message_start", message },
+      { type: "message_update", message, delta: "你" },
+      { type: "message_update", message, delta: "好" },
+      { type: "message_end", message: assistantText("你好") },
+      // 迟到的重复 delta：正文已定稿，必须忽略
+      { type: "message_update", message, delta: "你好" },
+    ]);
+    const bubbles = itemsOfKind(view, "assistant");
+    assert.equal(bubbles.length, 1);
+    assert.equal((bubbles[0] as Extract<TimelineItem, { kind: "assistant" }>).text, "你好");
+  });
+
+  it("end 时 timestamp 被内核改写也不会裂成两个气泡", () => {
+    const view = emptyView();
+    const partial = assistantText("", 1000);
+    feed(view, "run_1", [
+      { type: "message_start", message: partial },
+      { type: "message_update", message: partial, delta: "正文" },
+      // end 带着模型返回的新 timestamp（同一个对象被 assign 过）
+      { type: "message_end", message: assistantText("正文", 9999) },
+    ]);
+    const bubbles = itemsOfKind(view, "assistant");
+    assert.equal(bubbles.length, 1, "同一条回答只能有一个气泡");
+    assert.equal((bubbles[0] as Extract<TimelineItem, { kind: "assistant" }>).text, "正文");
+    assert.equal(view.streamingAssistantId, null);
+  });
+
+  it("只有工具调用的消息从头到尾都不产生气泡", () => {
+    const view = emptyView();
+    const message = assistantToolCall("call_1", 1000);
+    feed(view, "run_1", [
+      { type: "message_start", message },
+      { type: "message_end", message: { ...message, timestamp: 8888 } },
+    ]);
+    assert.equal(itemsOfKind(view, "assistant").length, 0);
+  });
+
+  it("工具卡片从 running 走到 done，输出与耗时落到同一张卡上", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "tool_execution_start", toolCallId: "call_1", toolName: "read_file", args: { path: "a.ts" } },
+      { type: "tool_execution_end", toolCallId: "call_1", toolName: "read_file", isError: false, result: { content: [{ type: "text", text: "文件内容" }] } },
+    ]);
+    const card = itemsOfKind(view, "tool")[0] as Extract<TimelineItem, { kind: "tool" }>;
+    assert.equal(card.status, "done");
+    assert.equal(card.output, "文件内容");
+    assert.equal(card.args, `{"path":"a.ts"}`);
+  });
+
+  it("被审批拒绝的调用没有 end 事件，由 turn_end 补上结论", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "tool_execution_start", toolCallId: "call_1", toolName: "run_command", args: {} },
+      {
+        type: "turn_end",
+        turn: 1,
+        message: assistantText("", 1),
+        toolResults: [
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "run_command",
+            content: [{ type: "text", text: "用户拒绝了这次调用" }],
+            isError: true,
+            timestamp: 1,
+          },
+        ],
+      },
+    ]);
+    const card = itemsOfKind(view, "tool")[0] as Extract<TimelineItem, { kind: "tool" }>;
+    assert.equal(card.status, "failed");
+    assert.equal(card.output, "用户拒绝了这次调用");
+  });
+
+  it("审批生命周期：请求置 blocked，裁决改卡片状态，run_done 把挂起的卡作废", () => {
+    const view = emptyView();
+    const request = {
+      id: "ap_1",
+      runId: "run_1",
+      toolCallId: "call_1",
+      toolName: "write_file",
+      risk: { level: "elevated" as const, reasons: ["覆盖已存在的文件"] },
+      summary: ["packages/core/src/a.ts"],
+      argsPreview: "path: a.ts",
+      createdAt: 1,
+    };
+    feed(view, "run_1", [
+      { type: "approval_request", request },
+      { type: "approval_resolved", approvalId: "ap_1", runId: "run_1", answer: "yes", source: "user" },
+      { type: "approval_request", request },
+    ]);
+    assert.equal(view.status, "blocked");
+    assert.equal(pendingApprovals(view), 1);
+
+    feed(view, "run_1", [
+      {
+        type: "tool_execution_start",
+        toolCallId: "call_2",
+        toolName: "read_file",
+        args: {},
+      },
+      { type: "run_done", status: "done", elapsedMs: 5, tokens: 10 },
+    ]);
+    assert.equal(view.status, "done");
+    assert.equal(view.activeRunId, null);
+    assert.equal(pendingApprovals(view), 0);
+    const cards = itemsOfKind(view, "approval");
+    assert.equal(cards.every((item) => (item as Extract<TimelineItem, { kind: "approval" }>).state !== "pending"), true);
+    // 取消发生在工具执行中：卡片不能永远转圈
+    const card = itemsOfKind(view, "tool")[0] as Extract<TimelineItem, { kind: "tool" }>;
+    assert.equal(card.status, "failed");
+  });
+
+  it("别人的 Run 事件不污染当前时间线的状态", () => {
+    const view = emptyView();
+    view.activeRunId = "run_1";
+    feed(view, "run_2", [{ type: "run_state", status: "running" }]);
+    assert.equal(view.status, "idle");
+  });
+
+  it("stream_gap 标记缺口，run_done 收尾流式正文", () => {
+    const view = emptyView();
+    const partial = assistantText("", 1);
+    feed(view, "run_1", [
+      { type: "message_start", message: partial },
+      { type: "message_update", message: partial, delta: "写了一半" },
+      { type: "stream_gap", firstSeq: 1, lastSeq: 9 },
+      { type: "run_done", status: "cancelled", elapsedMs: 3, tokens: 0 },
+    ]);
+    assert.equal(view.gap, true);
+    const bubble = itemsOfKind(view, "assistant")[0] as Extract<TimelineItem, { kind: "assistant" }>;
+    assert.equal(bubble.streaming, false);
+    assert.equal(bubble.locked, true);
+  });
+});
+
+describe("乐观插入与快照", () => {
+  it("addUserMessage 返回 id，removeItem 能撤回", () => {
+    const view = emptyView();
+    const id = addUserMessage(view, "第一句", false);
+    assert.equal(view.items.length, 1);
+    assert.equal(view.title, "第一句");
+    removeItem(view, id);
+    assert.equal(view.items.length, 0);
+    assert.equal(view.title, "第一句", "标题不该被撤回");
+  });
+
+  it("upsertItem 按 id 覆盖而不是追加", () => {
+    const view = emptyView();
+    upsertItem(view, { kind: "notice", id: "n1", level: "ok", text: "一" });
+    upsertItem(view, { kind: "notice", id: "n1", level: "ok", text: "二" });
+    assert.equal(view.items.length, 1);
+  });
+
+  it("applySnapshot 只在时间线还没有会话时认领 currentSessionId", () => {
+    const state: ClientState = initialState();
+    applySnapshot(state, snapshot());
+    assert.equal(state.view.sessionId, "s1.jsonl");
+    assert.equal(state.subAgent, false);
+
+    state.view.sessionId = "history.jsonl";
+    applySnapshot(state, snapshot());
+    assert.equal(state.view.sessionId, "history.jsonl", "正在看的历史不该被快照拽走");
+  });
+
+  it("openSession 挂上未结束的 Run 并标只读", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot({ currentSessionId: "other.jsonl" }));
+    const live: RunSummary = {
+      runId: "run_9",
+      title: "跑一半的任务",
+      sessionId: "s1.jsonl",
+      status: "running",
+      model: "deepseek/deepseek-flash",
+      startedAt: 1,
+      elapsedMs: null,
+      tokens: 5,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+    };
+    state.runs = [live];
+    const messages = [userMessage("历史"), assistantText("回答")];
+    // "只读"由装配层（app.ts）判断：打开的不是当前会话就传 true
+    openSession(state, "s1.jsonl", messages, { readOnly: true, liveRun: live });
+    assert.equal(state.view.readOnly, true);
+    assert.equal(state.view.activeRunId, "run_9");
+    assert.equal(state.view.items.length, 2);
+    // liveRun 的标题与模型覆盖会话默认值：运行头按 Run 回答"用谁在跑"
+    assert.equal(state.view.title, "跑一半的任务");
+    assert.equal(state.view.model, "deepseek/deepseek-flash");
+  });
+});
+
+describe("侧栏的两组过滤", () => {
+  it("activeRuns 只留没结束的", () => {
+    const state = initialState();
+    const run = (runId: string, status: RunSummary["status"]): RunSummary => ({
+      runId,
+      title: runId,
+      sessionId: "s1",
+      status,
+      model: "m",
+      startedAt: 0,
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 0,
+      pendingApprovals: 0,
+    });
+    state.runs = [run("a", "running"), run("b", "done"), run("c", "blocked"), run("d", "queued")];
+    assert.deepEqual(
+      activeRuns(state).map((item) => item.runId),
+      ["a", "c", "d"],
+    );
+  });
+
+  it("filterBySearch 大小写不敏感，空串不过滤", () => {
+    const sessions = [
+      { title: "Fix bug" },
+      { title: "写文档" },
+    ] as Array<SessionSummary & { title: string }>;
+    assert.equal(filterBySearch(sessions, "fix").length, 1);
+    assert.equal(filterBySearch(sessions, "").length, 2);
+    assert.equal(filterBySearch(sessions, "   ").length, 2);
+  });
+});

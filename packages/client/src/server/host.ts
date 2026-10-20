@@ -48,7 +48,7 @@ import { RunManager } from "@minipi/core/runManager";
 import { logger } from "@minipi/core/shared/logger";
 import { ApprovalBroker, newApprovalId } from "./broker";
 import { HttpError } from "./errors";
-import { previewToolArgs } from "./preview";
+import { previewToolArgs } from "../shared/preview";
 import { RunRecord } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
 import {
@@ -64,7 +64,7 @@ import {
   type SessionDetail,
   type SessionSummary,
   type Tier,
-} from "./types";
+} from "../shared/types";
 
 /** 模型解析的结果：三个字段一起用，单独看任何一个都答不出"用谁在跑" */
 export type ResolvedModel = {
@@ -136,6 +136,8 @@ export class WorkspaceHost {
   private contextWindow: number;
   private contextWindowSource: ContextWindowSource = "default";
   private modelError: string | null = null;
+  /** 委派开关：默认沿用 settings.json（与 CLI 的 /subagent 同一份配置） */
+  private subAgentEnabled = false;
   /** 展示用注册表：只为了拿工具定义算固定开销，不参与执行 */
   private demoRegistry: ToolRegistry | null = null;
 
@@ -159,6 +161,7 @@ export class WorkspaceHost {
   /** 读模型与当前会话；构造后必须 await 一次 */
   async start(): Promise<this> {
     await this.reloadModel();
+    this.subAgentEnabled = await this.settingsStore.getSubagentEnabled();
     const latest = this.listSessionInfos();
     if (latest.length > 0) {
       this.currentSessionId = latest[latest.length - 1]!.fileName;
@@ -209,6 +212,7 @@ export class WorkspaceHost {
       blockReason: this.model
         ? null
         : this.modelError ?? "尚未配置模型：请在设置里选择服务商与模型",
+      subAgent: this.subAgentEnabled,
     };
   }
 
@@ -355,6 +359,15 @@ export class WorkspaceHost {
     }
 
     await this.reloadModel();
+  }
+
+  /** 委派开关；与 CLI 同义（下一次执行生效，不影响已开跑的那个） */
+  setSubAgentEnabled(enabled: unknown): boolean {
+    if (typeof enabled !== "boolean") {
+      throw new HttpError(400, "subAgent 必须是布尔值");
+    }
+    this.subAgentEnabled = enabled;
+    return this.subAgentEnabled;
   }
 
   // ---------------------------------------------------------------- 会话
@@ -596,7 +609,7 @@ export class WorkspaceHost {
       model,
       tools: (runtime) => this.toolRegistry(runtime),
       subAgent: {
-        enabled: true,
+        enabled: this.subAgentEnabled,
         trace: false,
         contextBudgetTokens: budget.budget,
         sessionFilePath: session.store.getFilePath(),

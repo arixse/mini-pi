@@ -39,7 +39,10 @@ mini-pi/
 │   │       ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
 │   │       ├── exec.ts      # headless 执行（--json 输出 JSONL 事件流）
 │   │       └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
-│   └── client/          # 客户端：Web 前端与 Electron 壳（尚未实现，见 electron-client-plan.md）
+│   └── client/          # 客户端：App Server + Web 前端（M2 已落地）与 Electron 壳（M5 未实现）
+│       ├── src/server/  # HTTP + SSE 传输层（node:http 自建路由，零运行时依赖）
+│       ├── src/web/     # 原生 TS + DOM 前端（esbuild 打包，界面照 design/mockup.html）
+│       └── src/shared/  # 线上契约：只有类型，前端不 import server
 ├── tests/               # 跨包测试（文档漂移门禁）
 ├── docs/                # 文档
 └── package.json         # workspace 根（private，本身不发布）
@@ -307,11 +310,34 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 在此之前用 `noUnusedLocals` / `noUnusedParameters` 先兜住"死代码与漏用参数"这类问题
 （开启时即清出 22 处，含 2 处重构遗留的死变量）。
 
-> **前端/后端命令暂未提供**：`pnpm dev:server`、`pnpm dev:web`、`pnpm build` 属于第二阶段
-> （Web 界面 + API 服务）。该阶段尚未实现（仓库中还没有 `packages/client/src/server`、`packages/client/src`），
-> 为避免出现「文档里存在但必然失败」的命令，这些脚本暂时移除；
-> 第二阶段实现时会连同 `packages/client/src/server/index.ts`、`packages/client/src/main.tsx` 一起恢复。
+> **前端/后端命令在客户端包内**：M2（App Server + Web 前端）已落地，
+> 命令挂在 `packages/client` 上——`pnpm --filter @minipi/client run dev`（起服务）、
+> `run build:web`（esbuild 打包 `src/web` 到 `dist/web`）。
+> 服务入口是 `packages/client/src/server/entry.ts`；桌面壳（`src/electron`）属于 M5，仍未实现。
 
 ## 6. 配置
 
 配置通过 `/login` 命令设置 API Key、通过 `/model` 命令选择模型，保存在 `~/.mini-pi/` 目录中，不从环境变量读取。
+
+## 7. 客户端（M2：App Server + Web）
+
+实现与里程碑规划的偏差都有同一条理由——**客户端包零运行时依赖**：
+
+- **传输层用 `node:http` 自建路由，不用 Express**。路由器 60 行；换来的
+  是 `dependencies` 恒为空（`tests/packages.test.ts` 钉住）。SSE 带 `id:`
+  游标、心跳与断线重放，前端断线后用最新游标重开，重放区间为空——
+  `EventSource` 自带的自动重连用同一个 URL，会把增量事件重放一遍。
+- **前端用原生 TS + DOM 组装，不用 React / Vite**。打包用 esbuild
+  （CLI 已有的 devDependency）；状态归约是纯函数（`src/web/state.ts`），
+  渲染层按 id 键控更新。时间线是**会话级**的：Run 完成后发送即开新任务、
+  沿用同一会话（与 CLI「回合结束后执行」同口径）。
+- **安全模型**：只监听 `127.0.0.1`，校验 `Host` / `Origin` 挡 DNS rebinding，
+  无令牌门禁（前提写进 client README，绑 `0.0.0.0` 前必须先造出新的前提）。
+- **审批在网页与终端是同一个裁决**：风险等级与摘要由内核算好
+  （`core/risk.ts` / `describeToolCallLines`），三档裁决与 CLI 的 `y` / `N` / `a` 同义；
+  挂起不设超时，Run 被取消时挂起审批自动作废。
+- **界面基准**是 `packages/client/design/mockup.html`（深色 slate + indigo，
+  七个界面 / 23 条决策）：顶栏芯片是默认值、per-Run 模型画在运行头；
+  工具卡必须渲染参数；高危单独成块；输入区与会话同宽、默认三行高；
+  运行中发送照常入队。
+

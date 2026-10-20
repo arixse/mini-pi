@@ -70,18 +70,17 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
 | **M0 内核去 UI**           | `prompt` / `projectStack` / 上下文预算 / 风险评估 / 落盘压缩下沉到 `packages/core/src/`；`approval.ts` 拆成"结构化 risk 数据" + "各端渲染" | **纯重构，行为零变化** | 现有测试全绿 +`pnpm check`；新增 `core/hygiene.test.ts` 守依赖方向 |
 | **M1 Run 抽象 + headless** | 新增`core/run.ts` / `core/runManager.ts`；`SubAgentRuntime` 从全局改 per-run；新增 `mini-pi exec "..." --json` 输出 JSONL                  | 新增子命令，不动 REPL        | CI 能跑`exec` 并断言事件序列                                         |
-| **M2 App Server + Web**    | `packages/client/src/server`（Express + SSE）+ `packages/client/src`（Vite 代理到服务端）                                                      | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
+| **M2 App Server + Web**    | `packages/client/src/server`（`node:http` 自建路由 + SSE）+ `packages/client/src/web`（原生 TS + DOM，esbuild 打包）                              | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
 | ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                                       | 无                           | 两个 Run 并行不互相踩                                                  |
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
 | **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                          | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
 
-**进度（2026-10-20）**：M0 与 M1 已落地，CLI 行为零变化，`pnpm check` 绿灯
-（1369 用例 / 行 93.26% / 分支 93.07% / 函数 95.24%）。下一步是 M2（App Server
-
-+ Web）——那一步才会引入第一批运行时依赖，也是拆 workspace 的时点。
-
+**进度（2026-10-20）**：M0、M1 与 M2 已落地，`pnpm check` 绿灯。
+M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层最后用了
+`node:http` 自建路由 + SSE 而不是 Express，前端用了原生 TS + DOM 而不是
+React + Vite——两条都为了守住"客户端包零运行时依赖"。
 **M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
-"多一个事件订阅者"。
+"多一个事件订阅者"——M2 的 App Server 正是按这个假设接上的。
 
 ## 4. Electron 壳的最小实现
 
@@ -156,7 +155,7 @@ Electron 是**开发依赖**（上百 MB 二进制），npm 包里不带它。
 ```
 packages/core    @minipi/core     内核（private）。exports "./*" → "./src/*.ts"
 packages/cli     @minipi/mini-pi  CLI，发布的就是它。dependencies 恒为空
-packages/client  @minipi/client   客户端（private），暂无代码
+packages/client  @minipi/client   客户端（private）：src/server（M2）+ src/web（M2）+ src/shared
 ```
 
 - **包边界落在已有目录边界上**：`core/ agent/ provider/ shared/` 进 core 包，
@@ -172,6 +171,10 @@ packages/client  @minipi/client   客户端（private），暂无代码
   electron 尚未引入，`pnpm.onlyBuiltDependencies` 已预留。
 - 尚未解决、留给 M2 的：客户端产物的 `.gitignore` 规则、`build:web` /
   `build:electron` 脚本、CI 是否需要为客户端单独加一步。
+  **M2 落地时的处理**：产物走根 `.gitignore` 已有的 `dist/` 规则（无需新增）；
+  `build:web` 已就位（`build:electron` 留给 M5）；CI 不用加步骤——
+  测试 glob `packages/*/src/**/*.test.ts` 自动收集 client 的测试，
+  `pnpm check` 一条命令覆盖三个包。
 
 ## 6. 已有分支 `refactor/core-extraction` 怎么处理
 
