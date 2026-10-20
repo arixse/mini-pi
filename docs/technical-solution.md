@@ -41,9 +41,10 @@ mini-pi/
 │   │       ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
 │   │       ├── exec.ts      # headless 执行（--json 输出 JSONL 事件流）
 │   │       └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
-│   └── client/          # 客户端：App Server + Web 前端（M2 已落地）与 Electron 壳（M5 未实现）
+│   └── client/          # 客户端：App Server + Web 前端（M2）与 Electron 桌面壳（M5，均已落地）
 │       ├── src/server/  # HTTP + SSE 传输层（Express 路由 + 自写 SSE 帧）
 │       ├── src/web/     # React + Vite 前端（界面照 design/mockup.html）
+│       ├── src/electron/# 桌面壳：只做"起服务 → 开窗口 → 关窗退出"
 │       └── src/shared/  # 线上契约：只有类型，前端不 import server
 ├── tests/               # 跨包测试（文档漂移门禁）
 ├── docs/                # 文档
@@ -315,7 +316,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 > **前端/后端命令在客户端包内**：M2（App Server + Web 前端）已落地，
 > 命令挂在 `packages/client` 上——`pnpm --filter @minipi/client run dev`（起服务）、
 > `run build:web`（Vite 打包 `src/web` 到 `dist/web`，配置在 `packages/client/vite.config.ts`）。
-> 服务入口是 `packages/client/src/server/entry.ts`；桌面壳（`src/electron`）属于 M5，仍未实现。
+> 服务入口是 `packages/client/src/server/entry.ts`。
+> **M5 的桌面壳同样挂在客户端包上**（`pnpm desktop`）——`packages/cli` 不许依赖
+> `@minipi/client`，所以 `desktop` 不进 CLI；入口是
+> `packages/client/src/electron/desktopEntry.ts`，主进程产物由
+> `build:electron` 打到 `packages/client/dist-electron/main.cjs`。
 
 ## 6. 配置
 
@@ -403,3 +408,49 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   一律报错；`workspace-write` 在 headless 的 `exec` 里直接报错而不是
   静默降级成只读——"没有人能回答确认"是这个档位在那里的真相。
 
+
+## 7.3 M5：Electron 桌面壳
+
+桌面壳只承担**窗口**这一件事：起服务 → `loadURL` → 关窗退出。模型、会话、
+审批、事件流全在 App Server 里，因此 Web 前端与内核一行都没改——Electron
+只是第四个订阅同一份事件流的客户端。
+
+| 位置                                            | 职责                                                                 |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| `packages/client/src/electron/api.ts`         | 六个动作的窄接口；`isInsideElectron` / `importElectron` / `resolveElectronBinary` |
+| `packages/client/src/electron/main.ts`        | 主进程执行体：单实例锁 → 起服务 → 开窗口 → 关窗 `quit`            |
+| `packages/client/src/electron/entry.ts`       | 主进程入口，打成 `dist-electron/main.cjs`（**必须 CJS**，见下）     |
+| `packages/client/src/electron/desktop.ts`     | `desktop` 命令：拉起 Electron / 退回浏览器 / `--no-open` 无头       |
+| `packages/client/src/electron/desktopEntry.ts` | 命令的进程入口（自己起服务时驻留，等 Ctrl+C）                      |
+
+三条行为事实：
+
+- **关窗即退出**：服务活在主进程里，窗口的 `closed` 直接 `app.quit()`。
+  不这么做的话进程留着、端口一直被占，下次启动直接 EADDRINUSE。
+- **单实例**：抢不到 `requestSingleInstanceLock` 就不起第二个服务，只是把
+  已有窗口 `focus()` 到前台。锁必须在起服务**之前**抢——否则会先撞端口，
+  再弹一个连不上的空窗口。
+- **服务与 `serve` 同源**：两条路都调 `packages/client/src/server/app.ts`
+  的 `bootAppServer`，`--cwd` / `--port` / `--host` / `--isolate` /
+  `--concurrency` 是同一套选项；`desktop` 额外只认 `--no-electron` 与
+  `--no-open`。
+
+三个环境坑（都有断言）：
+
+- **主进程产物必须是 CJS**。Electron 只把内建模块注册在 **CJS 加载器**里，
+  ESM 的 `import("electron")` 解析到的是 npm 包给的入口；因此
+  `build:electron` 用 `--format=cjs --external:electron`，检测只走 `require`。
+  连带影响：esbuild 打 CJS 时 `import.meta` 是空的，前端产物不能靠
+  `import.meta.url` 找，改由 `findWebRoot()` 从 Electron 说的应用目录里找。
+- **别在普通 Node 里 `require("electron")`**。electron 30 之后它的 `index.js`
+  在二进制缺失时会**同步 spawn `install.js` 下载上百 MB**，网络不通就一直挂着。
+  因此 `importElectron()` 先用 `process.versions.electron` 判一次，
+  `resolveElectronBinary()` 只读包里的 `path.txt` + `dist/`，绝不执行入口。
+- `ELECTRON_RUN_AS_NODE` 必须从子进程环境里删掉（`electronSpawnOptions()`）：
+  某些终端常年带着它，Electron 拿到就退化成普通 Node，表现是"窗口开不出来"
+  而报错里连 Electron 的影子都没有。
+
+**降级路径**：没装 Electron（或没跑过 `build:electron`）时用 Chromium 系
+浏览器的 `--app=<url>` 开无地址栏窗口，功能齐全，只是没有"关窗即退出"与
+"单实例"；连 Chromium 都没有就退回系统默认处理器开普通标签页，并把退化
+说出口。三种情况都是明说，不静默。

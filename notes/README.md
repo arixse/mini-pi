@@ -83,3 +83,10 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 
 > Day 18 的日期与 Day 16 / Day 17 重叠：后者是同期 **main** 上的工作，
 > 前者是并行分支上的工作，合入后才归入本索引，故单列一篇而非并入既有编号。
+- `feature/m5-electron-shell`（2026-10-20）记为 [Day 30](./day30.md)：方案里的
+  最后一个里程碑——Electron 桌面壳。只新增 `packages/client/src/electron/`，
+  CLI 与内核一行没改；顺带从 `server/entry.ts` 抽出 `bootAppServer`，让
+  `serve` 与 Electron 共用一条启动路径。两个判断与方案原文不同，理由都写进了
+  方案 §4：一是 `desktop` 挂客户端包而不挂 CLI（CLI 不许依赖 client），
+  二是"能不能起 Electron"不再靠 `require("electron")` 的返回值判断——
+  electron 30 之后那个入口会同步下载上百 MB。

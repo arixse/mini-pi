@@ -1,20 +1,40 @@
 # @minipi/client
 
-Mini Pi 的**客户端**包：App Server（Express + SSE）+ Web 前端（React + Vite），
-以及 Electron 桌面壳（M5，未实现）。
+Mini Pi 的**客户端**包：App Server（Express + SSE）+ Web 前端（React + Vite）+
+Electron 桌面壳（M5）。
 
 ## 跑起来
 
 ```bash
-pnpm --filter @minipi/client run build:web  # Vite 打包前端到 dist/web
-pnpm --filter @minipi/client run dev        # 起服务（默认 127.0.0.1:4788）
-pnpm --filter @minipi/client run test       # 本包测试
+pnpm --filter @minipi/client run build:web       # Vite 打包前端到 dist/web
+pnpm --filter @minipi/client run dev             # 起服务（默认 127.0.0.1:4788）
+pnpm --filter @minipi/client run build:electron  # 打 Electron 主进程到 dist-electron/main.cjs
+pnpm --filter @minipi/client run desktop         # 起服务并开桌面窗口
+pnpm --filter @minipi/client run test            # 本包测试
 ```
+
+`pnpm desktop`（仓库根）等于"构建前端 → 构建主进程 → `desktop`"三步。
 
 启动参数：`--cwd <目录>`（工作区，默认当前目录）、`--port`、`--host`、
 `--isolate`（每个任务一个隔离的 git worktree）、`--concurrency <n>`
 （同时执行上限，1-8，默认 1）。没构建过前端时页面会提示先跑 `build:web`
 （服务端不代跑构建）。
+
+### 桌面壳
+
+`desktop` 的选项与 `dev` 完全一致，另加两个：
+
+- `--no-electron`：不用 Electron，改用系统里 Chromium 系浏览器的
+  `--app=<url>` 开无地址栏窗口；连 Chromium 都没有就退回普通标签页并明说。
+- `--no-open`：只起服务不开窗口（无头机器 / SSH 用同一条命令）。
+
+Electron 窗口的三个性质（都是断言钉住的）：**关窗即退出**（服务活在主进程
+里，不收掉下次启动直接 EADDRINUSE）、**单实例**（再敲一次只是把已有窗口叫到
+前台）、**服务与 `serve` 同源**（都走 `src/server/app.ts` 的 `bootAppServer`）。
+
+Electron 是开发依赖（上百 MB 二进制），npm 包里不带它。没装或没跑过
+`build:electron` 时 `desktop` 会明说并自动退回浏览器壳——因此"装了但二进制
+没下载"这类问题看得见，不会静默变成"窗口没出来"。
 
 `--isolate` 的三个前提与三条规则（实现在内核 `core/worktree.ts`）：
 
@@ -32,6 +52,7 @@ pnpm --filter @minipi/client run test       # 本包测试
 ```
 src/server/     App Server：Express 路由 + 自写 SSE 帧
 src/web/        前端：React + Vite，界面照 design/mockup.html 实现
+src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / desktop.ts 命令
 src/shared/     线上契约（只有类型）：服务端产什么、前端消费什么
 vite.config.ts  前端构建：src/web → dist/web
 ```
@@ -84,6 +105,15 @@ agent 交出去。密钥只写不读：保存后前端连打码的明文都拿�
 @minipi/cli  ✗  @minipi/client   （客户端之间不许互相依赖）
 ```
 
-M5 落地时要补的事：`src/electron/`、`build:electron` 脚本，并把 `electron`
-加进根 `pnpm.onlyBuiltDependencies`（pnpm 10 默认不跑依赖构建脚本，
-漏了的表现是"装上了但没二进制"）。
+最后一条是 `desktop` 命令**挂在客户端包而不是 CLI** 的直接原因：CLI 里
+写一句 `import "@minipi/client/..."` 就成环了，而这条不变量由
+`tests/packages.test.ts` 钉住。于是"桌面壳"是客户端自己的第三种开法
+（`dev` 起服务 / `desktop` 装进窗口 / `build:electron` 出主进程产物），
+与 CLI 平级。
+
+`src/electron` 内也守同一条边界：只 import `server` 与 `electron/api`，
+绝不 import `cli`。Electron 本身只出现在 `deps.electron` 后面，因此
+"单实例 / 关窗退出 / 打开哪个地址"不需要桌面就能钉住。
+
+`electron` 已加进根 `pnpm.onlyBuiltDependencies`（pnpm 10 默认不跑依赖
+构建脚本，漏了的表现是"装上了但没二进制"，`desktop` 会静默降级）。

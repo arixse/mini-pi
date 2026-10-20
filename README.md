@@ -143,6 +143,9 @@ pnpm test           # node:test，并发 4
 pnpm test:coverage  # 带覆盖率门槛：行 85% / 分支 85% / 函数 90%
 pnpm check          # typecheck + test:coverage —— CI 跑的就是这一条
 pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
+pnpm build:web      # Vite 打包前端到 packages/client/dist/web
+pnpm build:electron # 打包 Electron 主进程到 packages/client/dist-electron/main.cjs
+pnpm desktop        # 起服务并开桌面窗口（内含上面两步构建）
 ```
 
 包结构（三个包，由 workspace 管理）：
@@ -151,7 +154,7 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 | ------------------- | -------------------------------------------------------------- |
 | `packages/core`   | 内核：执行编排（Run / RunManager）、模型循环、工具、会话落盘、提示词、风险判定。不许依赖任何界面 |
 | `packages/cli`     | 命令行客户端：REPL、命令分派、审批、渲染、启动编排、`exec`。**发布到 npm 的就是它** |
-| `packages/client`  | 客户端：App Server + Web 前端（已落地，`pnpm --filter @minipi/client run dev`）与 Electron 壳（未实现，见 [electron-client-plan.md](docs/electron-client-plan.md)） |
+| `packages/client`  | 客户端：App Server + Web 前端 + Electron 桌面壳（均已落地，`pnpm --filter @minipi/client run desktop`，见 [electron-client-plan.md](docs/electron-client-plan.md)） |
 
 内核内部沿用原有分层（`packages/core/src/agent/` 等）：
 
@@ -180,16 +183,23 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
-| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 / M1 / M2 已落地，桌面壳 M5 未实现）   |
+| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M5 已全部落地）   |
 | [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、23 条已定决策（配套静态稿 `packages/client/design/mockup.html`） |
 | [开发日志索引](notes/README.md)                 | day1 ~ day28，按真实提交日期编排                                             |
 
 ## 范围
 
-CLI 与浏览器两种形态可用：`pnpm --filter @minipi/client run dev` 在本机
-`127.0.0.1:4788` 起 App Server + Web 界面（流式回复、审批、会话管理，
-界面照 `packages/client/design/mockup.html` 实现）。内核已下沉到
-`packages/core/src`，桌面壳 `packages/client/src/electron` 属于 M5，尚未实现。
+三种形态可用，共用同一份内核与同一套 HTTP + SSE 契约：
+
+- `mini-pi` —— 终端 REPL；`mini-pi exec "<提问>"` 是它的 headless 形态。
+- `pnpm --filter @minipi/client run dev` —— 在本机 `127.0.0.1:4788` 起
+  App Server + Web 界面（流式回复、审批、会话管理），浏览器打开即可，
+  界面照 `packages/client/design/mockup.html` 实现。
+- `pnpm desktop` —— 同一套服务装进一个 Electron 窗口（关窗即退出、单实例）。
+
+`desktop` 的选项与 `dev` 完全一致，另加 `--no-electron`（退回浏览器
+`--app=` 无地址栏窗口）与 `--no-open`（只起服务，无头机器用）。
+没装 Electron 或没跑过 `build:electron` 时会明说并自动退回浏览器壳。
 
 ## 许可
 
