@@ -5,10 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>mini-pi</title>
-    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <!-- 图标集：名字是固定枚举，来自 render/dom.ts 的 icon()。
+    <!-- 图标集：名字是固定枚举，来自 components/Icon.tsx 的 <Icon/>。
          内联 symbol 而不是 iconfont / 图片，是为了让 currentColor 与字号直接生效。 -->
     <svg width="0" height="0" style="position: absolute" aria-hidden="true">
       <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" /></symbol>
@@ -29,6 +28,6 @@
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></symbol>
     </svg>
     <div id="root"></div>
-    <script src="/app.js" defer></script>
+    <script type="module" src="/main.tsx"></script>
   </body>
 </html>

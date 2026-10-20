@@ -163,11 +163,10 @@ export class WorkspaceHost {
     await this.reloadModel();
     this.subAgentEnabled = await this.settingsStore.getSubagentEnabled();
     const latest = this.listSessionInfos();
-    if (latest.length > 0) {
-      this.currentSessionId = latest[latest.length - 1]!.fileName;
-    } else {
-      this.currentSessionId = this.createSession().sessionId;
-    }
+    // 一段会话都没有就**空着**：会话文件只在第一次发送时创建（见 `send`）。
+    // 原来这里会补开一个空会话，于是"点了一下新任务、什么都没说"也会在
+    // 磁盘上留下一个文件，侧栏里还多一条"新会话"
+    this.currentSessionId = latest[latest.length - 1]?.fileName ?? null;
     return this;
   }
 
@@ -454,7 +453,7 @@ export class WorkspaceHost {
     };
   }
 
-  deleteSession(sessionId: string): { currentSessionId: string } {
+  deleteSession(sessionId: string): { currentSessionId: string | null } {
     const info = this.listSessionInfos().find((item) => item.fileName === sessionId);
     if (!info) {
       throw new HttpError(404, `会话不存在：${sessionId}`);
@@ -472,11 +471,12 @@ export class WorkspaceHost {
     this.sessions.delete(sessionId);
     this.metaCache.delete(sessionId);
     this.trustedSessions.delete(sessionId);
-    // 删掉当前会话时顺手开一个新的：不留"当前会话不存在"的死角
+    // 删掉的正是当前会话就回到"没有当前会话"：下一段对话从第一次发送算起，
+    // 不再顺手补一个空文件（补出来的那条在侧栏里只是一条"新会话"）
     if (this.currentSessionId === sessionId) {
-      this.createSession();
+      this.currentSessionId = null;
     }
-    return { currentSessionId: this.currentSessionId! };
+    return { currentSessionId: this.currentSessionId };
   }
 
   private sessionContext(sessionId: string): SessionContext {
@@ -517,10 +517,9 @@ export class WorkspaceHost {
         this.modelError ?? "尚未配置模型：请在设置里选择服务商与模型",
       );
     }
-    const targetSession = sessionId ?? this.currentSessionId;
-    if (!targetSession) {
-      throw new HttpError(409, "没有可用的会话");
-    }
+    // 不带 sessionId 就是"开一段新的"：会话在第一次发送时才落盘。
+    // 于是"点了新任务但什么都没说"不会留下空文件——那是点击，不是对话
+    const targetSession = sessionId ?? this.createSession().sessionId;
     // 会话必须真实存在；顺手把"看起来像路径"的输入挡在门外
     this.sessionContext(targetSession);
     this.currentSessionId = targetSession;
@@ -884,6 +883,7 @@ export class WorkspaceHost {
       path,
       parent: parent === path ? null : parent,
       entries,
+      drives: listDrives(),
     };
   }
 
@@ -899,6 +899,32 @@ export class WorkspaceHost {
     }
     return path;
   }
+}
+
+/**
+ * Windows 盘符列表。
+ *
+ * `readdir` 到盘根就到底了（`dirname("D:\\") === "D:\\"`），"上一级"走不出
+ * 当前盘，换盘只能枚举。Node 没有列盘符的 API，逐个 `stat` 是最稳的做法：
+ * 不起子进程、不依赖已弃用的 `wmic`。非 Windows 返回空数组，前端据此
+ * 不画盘符条。
+ */
+function listDrives(): string[] {
+  if (process.platform !== "win32") {
+    return [];
+  }
+  const drives: string[] = [];
+  for (let code = 0x41; code <= 0x5a; code += 1) {
+    const root = `${String.fromCharCode(code)}:\\`;
+    try {
+      if (statSync(root).isDirectory()) {
+        drives.push(root);
+      }
+    } catch {
+      // 没接入的盘符：跳过
+    }
+  }
+  return drives;
 }
 
 /** 默认的模型解析：读 settings + auth.json，构造 SDK 客户端 */

@@ -15,7 +15,7 @@ import {
   waitFor,
   type TestServer,
 } from "./testServer";
-import type { AppState, ApprovalRequest, RunSummary, SessionSummary, ServerEvent } from "../shared/types";
+import type { AppState, ApprovalRequest, RunSummary, ServerEvent } from "../shared/types";
 
 describe("App Server · 状态", () => {
   let server: TestServer;
@@ -35,10 +35,10 @@ describe("App Server · 状态", () => {
     assert.strictEqual(state.model.label, "test / test-model");
     assert.strictEqual(state.sendable, true);
     assert.strictEqual(state.blockReason, null);
-    // 首次启动没有任何会话文件时会自动开一个，不留"当前会话不存在"的空档
-    assert.ok(state.currentSessionId, "应自动创建当前会话");
-    assert.strictEqual(state.sessions.length, 1);
-    assert.strictEqual(state.sessions[0]!.isCurrent, true);
+    // 一段会话都没有就空着：会话文件只在第一次发送时创建。
+    // 启动时补开一个空会话，等于"什么都没点"也往磁盘上写文件
+    assert.strictEqual(state.currentSessionId, null, "没有会话时不该自动补一个");
+    assert.strictEqual(state.sessions.length, 0);
   });
 
   it("没有模型时也照常起服务，只是发不出任务并给出具体原因", async () => {
@@ -370,32 +370,63 @@ describe("App Server · 审批", () => {
 });
 
 describe("App Server · 会话", () => {
-  it("新建、读取、删除；删当前会话时顺手开一个新的", async () => {
-    const server = await startTestServer();
+  it("会话在第一次发送时创建；不带 sessionId 就是开一段新的", async () => {
+    const server = await startTestServer({ responses: [textResponse("第一条回复。")] });
     try {
-      const created = await server.post<SessionSummary>("/api/sessions");
+      // 启动时一段会话都没有：此刻磁盘上是干净的
+      assert.strictEqual((await server.get<AppState>("/api/state")).sessions.length, 0);
+
+      const created = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "第一句话",
+      });
       assert.match(created.sessionId, /\.jsonl$/);
+      await server.stream(created.runId);
 
-      const detail = await server.get<{ messages: unknown[] }>(
+      const detail = await server.get<{ messages: Array<{ role: string }> }>(
         `/api/sessions/${created.sessionId}`,
       );
-      assert.deepStrictEqual(detail.messages, []);
-
-      const before = (await server.get<AppState>("/api/state")).sessions.length;
-      const after = await server.del<{ currentSessionId: string }>(
-        `/api/sessions/${created.sessionId}`,
+      assert.deepStrictEqual(
+        detail.messages.map((message) => message.role),
+        ["user", "assistant"],
       );
-      // 文件名只到秒：同一秒内删了再建会复用同一个名字，因此这里断的是
-      // "内容确实是新的"，而不是"名字不同"
-      assert.ok(after.currentSessionId);
+
       const state = await server.get<AppState>("/api/state");
-      // 删一个、补一个：总数不变，且当前会话确实是一张白纸
-      assert.strictEqual(state.sessions.length, before);
-      const current = state.sessions.find((session) => session.isCurrent);
-      assert.strictEqual(current?.messageCount, 0);
-      assert.strictEqual(current?.title, "新会话");
-      assert.strictEqual(state.currentSessionId, after.currentSessionId);
+      assert.strictEqual(state.sessions.length, 1);
+      assert.strictEqual(state.currentSessionId, created.sessionId, "发过言的那段成为当前会话");
 
+      // 再发一次仍不带 sessionId：是**新开一段**，不是接回上一段
+      const second = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "另起一段",
+      });
+      assert.notStrictEqual(second.sessionId, created.sessionId);
+      assert.strictEqual((await server.get<AppState>("/api/state")).sessions.length, 2);
+
+      // 带上 sessionId 才是续聊
+      const again = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "接着说",
+        sessionId: created.sessionId,
+      });
+      assert.strictEqual(again.sessionId, created.sessionId);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("删掉当前会话后回到『没有当前会话』，不补开空文件", async () => {
+    const server = await startTestServer({ responses: [textResponse("聊完了。")] });
+    try {
+      const created = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "随便聊聊",
+      });
+      await server.stream(created.runId);
+      const before = (await server.get<AppState>("/api/state")).sessions.length;
+      const after = await server.del<{ currentSessionId: string | null }>(
+        `/api/sessions/${created.sessionId}`,
+      );
+      assert.strictEqual(after.currentSessionId, null, "删掉当前会话不该顺手补一个新的");
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.sessions.length, before - 1);
+      assert.strictEqual(state.currentSessionId, null);
     } finally {
       await server.close();
     }
@@ -532,6 +563,29 @@ describe("App Server · 配置", () => {
       );
       assert.deepStrictEqual(listing.entries.map((entry) => entry.name), ["src"]);
       assert.ok(listing.parent.length > 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("盘符列表：Windows 上含当前盘，其他平台是空数组", async () => {
+    const server = await startTestServer();
+    try {
+      const listing = await server.get<{ path: string; drives: string[] }>(
+        `/api/dirs?path=${encodeURIComponent(server.workspace)}`,
+      );
+      assert.ok(Array.isArray(listing.drives));
+      if (process.platform === "win32") {
+        // 测试工作区在临时目录里，盘符随系统而定；这里只断"它确实在里面"
+        const root = listing.path.slice(0, 2).toUpperCase();
+        assert.ok(
+          listing.drives.some((drive) => drive.toUpperCase() === `${root}\\`),
+          `盘符列表应包含 ${root}，实际：${listing.drives.join(",")}`,
+        );
+        assert.ok(listing.drives.every((drive) => /^[A-Z]:\\$/.test(drive)), "形如 C:\\");
+      } else {
+        assert.deepStrictEqual(listing.drives, [], "非 Windows 不该出现盘符条");
+      }
     } finally {
       await server.close();
     }

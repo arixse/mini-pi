@@ -1,139 +1,23 @@
 /**
- * 极小的 HTTP 路由与静态文件服务。
+ * HTTP 层的两条通用规则：来源校验与错误归一化。
  *
- * 为什么不用 express：这个服务只有十几条端点、零中间件需求，而 `node:http`
- * 是内置的——客户端包因此一个运行时依赖都不用装。更重要的理由在发布口径上：
- * CLI 的"单文件自包含、运行时零依赖"已经踩过一次坑（把 express 写进
- * dependencies），少一个依赖就少一次被顺手带进 CLI bundle 的机会。
+ * 路由本身交给 express（`app.ts`），这里只留"express 不负责、而我们不许出错"
+ * 的那部分：
  *
- * 安全口径（与 UI 设计稿 §6 的"没有令牌门禁"配套）：
- * 服务只监听 `127.0.0.1`，但仍校验 `Host` 与 `Origin`——挡的是 DNS rebinding：
- * 恶意网页把自己的域名解析到 127.0.0.1，就能以同源身份打这个服务。
- * 这一步不向用户要任何东西（不用贴令牌），所以不该省。
+ * 1. **只接受本机来源**。服务监听 `127.0.0.1`，但仍校验 `Host` 与 `Origin`
+ *    ——挡的是 DNS rebinding：恶意网页把自己的域名解析到 127.0.0.1，
+ *    就能以同源身份打这个服务。这一步不向用户要任何东西（不用贴令牌），
+ *    所以不该省。
+ * 2. **错误必须落成 JSON**。业务分支里大部分失败是"这条请求本身不成立"
+ *    （未知档位、会话不存在、参数缺失），统一在这里转成 `{error, status}`，
+ *    前端才不用去猜 400 的响应体是什么形状。
+ *
+ * 安全口径与 UI 设计稿 §6 的"没有令牌门禁"配套。
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
-import { extname, join, normalize, sep } from "node:path";
+import type { IncomingMessage } from "node:http";
+import type { NextFunction, Request, Response } from "express";
 import { HttpError } from "./errors";
-
-export type RequestContext = {
-  req: IncomingMessage;
-  res: ServerResponse;
-  url: URL;
-  params: Record<string, string>;
-  body: unknown;
-};
-
-export type Handler = (ctx: RequestContext) => Promise<void> | void;
-
-type Route = {
-  method: string;
-  regex: RegExp;
-  keys: string[];
-  handler: Handler;
-};
-
-/** 把 `/api/runs/:id/events` 编译成正则 + 键名 */
-function compile(pattern: string): { regex: RegExp; keys: string[] } {
-  const keys: string[] = [];
-  const source = pattern
-    .split("/")
-    .map((segment) => {
-      if (!segment.startsWith(":")) {
-        return segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      }
-      keys.push(segment.slice(1));
-      return "([^/]+)";
-    })
-    .join("/");
-  return { regex: new RegExp(`^${source}$`), keys };
-}
-
-export class Router {
-  private readonly routes: Route[] = [];
-
-  add(method: string, pattern: string, handler: Handler): this {
-    const { regex, keys } = compile(pattern);
-    this.routes.push({ method: method.toUpperCase(), regex, keys, handler });
-    return this;
-  }
-
-  get(pattern: string, handler: Handler): this {
-    return this.add("GET", pattern, handler);
-  }
-
-  post(pattern: string, handler: Handler): this {
-    return this.add("POST", pattern, handler);
-  }
-
-  delete(pattern: string, handler: Handler): this {
-    return this.add("DELETE", pattern, handler);
-  }
-
-  match(method: string, pathname: string): { handler: Handler; params: Record<string, string> } | null {
-    for (const route of this.routes) {
-      if (route.method !== method.toUpperCase()) {
-        continue;
-      }
-      const found = route.regex.exec(pathname);
-      if (!found) {
-        continue;
-      }
-      const params: Record<string, string> = {};
-      route.keys.forEach((key, index) => {
-        params[key] = decodeURIComponent(found[index + 1] ?? "");
-      });
-      return { handler: route.handler, params };
-    }
-    return null;
-  }
-}
-
-/** 请求体上限：审批参数、提问都在这里，1MB 对"文本"这个用途绰绰有余 */
-const MAX_BODY_BYTES = 1_000_000;
-
-export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.byteLength;
-    if (size > MAX_BODY_BYTES) {
-      throw new HttpError(413, "请求体过大");
-    }
-    chunks.push(buffer);
-  }
-  if (size === 0) {
-    return {};
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
-  if (text.length === 0) {
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new HttpError(400, "请求体不是合法 JSON");
-  }
-}
-
-export function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": Buffer.byteLength(body),
-    // 本地服务也会被浏览器缓存 GET：状态接口必须每次现算
-    "Cache-Control": "no-store",
-  });
-  res.end(body);
-}
-
-export function sendNoContent(res: ServerResponse, status = 204): void {
-  res.writeHead(status, { "Cache-Control": "no-store" });
-  res.end();
-}
 
 /**
  * 只接受本机来源。
@@ -162,6 +46,25 @@ export function assertLocalRequest(req: IncomingMessage): void {
   }
 }
 
+/** express 中间件版：把同步 throws 交给 express 的错误管道 */
+export function localGuard(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    assertLocalRequest(req);
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * 状态接口每次现算：本地服务也会被浏览器缓存 GET，
+ * 缓存住一份"已完成"的状态会让界面停在上一秒。
+ */
+export function noStore(_req: Request, res: Response, next: NextFunction): void {
+  res.set("Cache-Control", "no-store");
+  next();
+}
+
 function isLocalHost(host: string): boolean {
   const hostname = host.startsWith("[")
     ? host.slice(1, host.indexOf("]"))
@@ -174,51 +77,54 @@ function isLocalHostname(hostname: string): boolean {
   return name === "localhost" || name === "127.0.0.1" || name === "::1" || name === "0.0.0.0";
 }
 
-const CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".map": "application/json; charset=utf-8",
-};
+/**
+ * 错误 → JSON。
+ *
+ * 5xx 才是"我们没料到"：留痕，别让前端只看到一个数字。
+ * 头已经发出去（SSE 写到一半失败）时只能收尾，不能再写状态码。
+ */
+export function errorHandler(
+  error: unknown,
+  _req: Request,
+  res: Response,
+  _next: NextFunction,
+): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  const status = statusOf(error);
+  if (status >= 500) {
+    console.error("[client] 未处理的错误:", error);
+  }
+  res.status(status).json({ error: messageOf(error), status });
+}
 
 /**
- * 静态文件。
+ * 判定状态码。
  *
- * 只服务 `rootDir` 内的文件：`normalize` 之后仍要检查前缀，挡住 `../`。
- * 找不到时返回 false，由调用方决定是 404 还是回落到 index.html。
+ * express 自带的 `express.json()` 会把"请求体不是合法 JSON"标成 400，
+ * 但它的错误对象上挂的是 `status` 而不是 `HttpError`——这里一并认，
+ * 否则坏 JSON 会被当成 500 抛回前端。
  */
-export async function serveStatic(
-  rootDir: string,
-  pathname: string,
-  res: ServerResponse,
-): Promise<boolean> {
-  const relative = pathname === "/" ? "/index.html" : pathname;
-  const target = normalize(join(rootDir, relative));
-  const root = normalize(rootDir);
-  if (target !== root && !target.startsWith(`${root}${sep}`)) {
-    return false;
+function statusOf(error: unknown): number {
+  if (error instanceof HttpError) {
+    return error.status;
   }
-  let size: number;
-  try {
-    const info = await stat(target);
-    if (!info.isFile()) {
-      return false;
-    }
-    size = info.size;
-  } catch {
-    return false;
+  const candidate = (error as { status?: unknown } | null)?.status;
+  if (typeof candidate === "number" && candidate >= 400 && candidate < 600) {
+    return candidate;
   }
-  res.writeHead(200, {
-    "Content-Type": CONTENT_TYPES[extname(target).toLowerCase()] ?? "application/octet-stream",
-    "Content-Length": size,
-    // 前端产物没有指纹，开发期改完要立刻生效；代价是每次都回源，本地无所谓
-    "Cache-Control": "no-cache",
-  });
-  createReadStream(target).pipe(res);
-  return true;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "ENOENT") {
+    return 404;
+  }
+  return 500;
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error && error.message.length > 0) {
+    return error.message;
+  }
+  return "服务端出错";
 }

@@ -312,6 +312,18 @@ describe("乐观插入与快照", () => {
     assert.equal(view.title, "第一句", "标题不该被撤回");
   });
 
+  it("同一毫秒连发两条是两条，不是一条盖住另一条", () => {
+    const view = emptyView();
+    const first = addUserMessage(view, "第一句", false);
+    const second = addUserMessage(view, "第二句", false);
+    assert.notEqual(first, second, "同一毫秒里 id 也要能区分");
+    assert.equal(view.items.length, 2);
+    assert.deepEqual(
+      view.items.map((item) => (item.kind === "user" ? item.text : "")),
+      ["第一句", "第二句"],
+    );
+  });
+
   it("upsertItem 按 id 覆盖而不是追加", () => {
     const view = emptyView();
     upsertItem(view, { kind: "notice", id: "n1", level: "ok", text: "一" });
@@ -319,15 +331,18 @@ describe("乐观插入与快照", () => {
     assert.equal(view.items.length, 1);
   });
 
-  it("applySnapshot 只在时间线还没有会话时认领 currentSessionId", () => {
+  it("applySnapshot 不把服务端当前会话按回时间线", () => {
     const state: ClientState = initialState();
     applySnapshot(state, snapshot());
-    assert.equal(state.view.sessionId, "s1.jsonl");
-    assert.equal(state.subAgent, false);
+    assert.strictEqual(state.currentSessionId, "s1.jsonl");
+    // 草稿态（点了新任务、还没说话）不能被快照认领：一认领，
+    // 下一次发送就接到那段旧对话上去了
+    assert.strictEqual(state.view.sessionId, null);
+    assert.strictEqual(state.subAgent, false);
 
     state.view.sessionId = "history.jsonl";
     applySnapshot(state, snapshot());
-    assert.equal(state.view.sessionId, "history.jsonl", "正在看的历史不该被快照拽走");
+    assert.strictEqual(state.view.sessionId, "history.jsonl", "正在看的历史不该被快照拽走");
   });
 
   it("openSession 挂上未结束的 Run 并标只读", () => {

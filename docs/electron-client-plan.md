@@ -70,15 +70,16 @@ M0 → M1 → M2 → M5 即可，M3 / M4 可以砍。
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
 | **M0 内核去 UI**           | `prompt` / `projectStack` / 上下文预算 / 风险评估 / 落盘压缩下沉到 `packages/core/src/`；`approval.ts` 拆成"结构化 risk 数据" + "各端渲染" | **纯重构，行为零变化** | 现有测试全绿 +`pnpm check`；新增 `core/hygiene.test.ts` 守依赖方向 |
 | **M1 Run 抽象 + headless** | 新增`core/run.ts` / `core/runManager.ts`；`SubAgentRuntime` 从全局改 per-run；新增 `mini-pi exec "..." --json` 输出 JSONL                  | 新增子命令，不动 REPL        | CI 能跑`exec` 并断言事件序列                                         |
-| **M2 App Server + Web**    | `packages/client/src/server`（`node:http` 自建路由 + SSE）+ `packages/client/src/web`（原生 TS + DOM，esbuild 打包）                              | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
+| **M2 App Server + Web**    | `packages/client/src/server`（Express 路由 + SSE）+ `packages/client/src/web`（React + Vite）                                                       | 新增子命令`serve`          | 浏览器里能流式看回复、点允许 / 拒绝                                    |
 | ★ M3 并行 + worktree            | `core/worktree.ts`，每个 Run 一个隔离 root                                                                                                       | 无                           | 两个 Run 并行不互相踩                                                  |
 | ★ M4 审批三档                   | `read-only` / `workspace-write`（默认）/ `full-access`                                                                                       | 无                           | 三档在两端给出同一裁决                                                 |
 | **M5 Electron 壳**         | `packages/client/src/electron`；服务端托管前端产物；`mini-pi desktop`                                                                          | 新增子命令`desktop`        | 关窗即退出、单实例、端口不残留                                         |
 
 **进度（2026-10-20）**：M0、M1 与 M2 已落地，`pnpm check` 绿灯。
-M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层最后用了
-`node:http` 自建路由 + SSE 而不是 Express，前端用了原生 TS + DOM 而不是
-React + Vite——两条都为了守住"客户端包零运行时依赖"。
+M2 的取舍与行为事实见 `docs/technical-solution.md` §7：传输层用 Express
+（SSE 帧与来源校验仍自己写），前端用 React + Vite（状态仍就地修改，
+由 `revision` 驱动重画）。"零运行时依赖"这条不变量只由 **CLI 包**承担——
+它才是要发到 npm 的那一个，由 `tests/packages.test.ts` 钉住。
 **M0 与 M1 承载全部风险。** 走完这两步，之后每加一个客户端只是
 "多一个事件订阅者"——M2 的 App Server 正是按这个假设接上的。
 
