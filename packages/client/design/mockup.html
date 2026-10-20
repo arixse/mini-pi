@@ -119,7 +119,7 @@ svg.ic { width: 1em; height: 1em; flex: none; stroke-width: 1.8; fill: none; str
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
-  height: 560px;
+  height: 604px;
 }
 .frame--narrow .body { grid-template-columns: 0 minmax(0, 1fr); }
 .sidebar {
@@ -271,9 +271,10 @@ svg.ic { width: 1em; height: 1em; flex: none; stroke-width: 1.8; fill: none; str
 }
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .composer textarea {
-  flex: 1 1 auto; min-height: 44px; max-height: 132px; resize: vertical;
+  flex: 1 1 auto; min-height: 84px; max-height: 208px; resize: vertical;
   border: 1px solid #334155; background: rgba(2,6,23,.6); border-radius: 12px;
-  padding: 9px 12px; color: var(--t2); font-family: inherit; font-size: 13.5px; outline: none;
+  padding: 11px 13px; color: var(--t2); font-family: inherit; font-size: 13.5px; outline: none;
+  line-height: 1.6;
 }
 .composer textarea:focus { border-color: rgba(99,102,241,.6); }
 .composer textarea::placeholder { color: var(--t6); }
@@ -535,7 +536,7 @@ content: …（+182 行）</pre>
 
         <footer class="composer anno-host">
           <div class="composer-row">
-            <textarea rows="1" placeholder="接着说，或 / 开头用命令">继续，把 session.ts 的落盘编排也搬下去</textarea>
+            <textarea rows="3" placeholder="接着说，或 / 开头用命令">继续，把 session.ts 的落盘编排也搬下去</textarea>
             <button class="btn-send" disabled>发送</button>
             <button class="btn btn-stop" style="padding:9px 12px"><svg class="ic" style="font-size:12px"><use href="#i-stop"/></svg></button>
           </div>
@@ -617,7 +618,7 @@ content: …（+182 行）</pre>
 
         <footer class="composer">
           <div class="composer-row">
-            <textarea rows="1" placeholder="Run 挂起中，仍可继续补充要求"></textarea>
+            <textarea rows="3" placeholder="Run 挂起中，仍可继续补充要求"></textarea>
             <button class="btn-send">发送</button>
           </div>
           <div class="composer-hint"><span>挂起期间输入仍会入队，裁决后接着走</span></div>
@@ -654,7 +655,7 @@ content: …（+182 行）</pre>
 
         <footer class="composer">
           <div class="composer-row">
-            <textarea rows="1" placeholder="配置好模型后即可开始" disabled></textarea>
+            <textarea rows="3" placeholder="配置好模型后即可开始" disabled></textarea>
             <button class="btn-send" disabled>发送</button>
           </div>
           <div class="composer-hint"><span style="color:#fcd34d">请先配置服务商与模型</span></div>
@@ -697,7 +698,7 @@ content: …（+182 行）</pre>
 
         <footer class="composer">
           <div class="composer-row">
-            <textarea rows="1" placeholder="历史会话只读；新开一个任务即可继续"></textarea>
+            <textarea rows="3" placeholder="历史会话只读；新开一个任务即可继续"></textarea>
             <button class="btn-send">新任务</button>
           </div>
         </footer>
@@ -743,7 +744,7 @@ content: …（+182 行）</pre>
           </main>
 
         <footer class="composer">
-          <div class="composer-row"><textarea rows="1" placeholder="还想改什么？"></textarea><button class="btn-send">发送</button></div>
+          <div class="composer-row"><textarea rows="3" placeholder="还想改什么？"></textarea><button class="btn-send">发送</button></div>
         </footer>
         </div>
       </section>
@@ -809,7 +810,7 @@ content: …（+182 行）</pre>
           </div>
 
         <footer class="composer">
-          <div class="composer-row"><textarea rows="1" placeholder="……"></textarea><button class="btn-send">发送</button></div>
+          <div class="composer-row"><textarea rows="3" placeholder="……"></textarea><button class="btn-send">发送</button></div>
         </footer>
         </div>
       </section>
