@@ -359,7 +359,7 @@ https://api.minimax.cn/v1/models
 | `o1-mini` | 推理模型（128K 上下文） |
 | `gpt-3.5-turbo` | 经典对话模型（16K 上下文） |
 
-> 默认列表与 `src/provider/openai.ts` 的 `getDefaultModels()` 一致；
+> 默认列表与 `packages/core/src/provider/openai.ts` 的 `getDefaultModels()` 一致；
 > `gpt-4`（裸型号，8K 上下文）等旧型号不在默认列表里。
 
 ### 接入方式
@@ -386,7 +386,7 @@ OpenAI
 
 ## 添加新供应商
 
-如需添加新的模型供应商，请参考 `src/provider/index.ts` 中的 `Provider` 接口：
+如需添加新的模型供应商，请参考 `packages/core/src/provider/index.ts` 中的 `Provider` 接口：
 
 ```typescript
 export interface Provider {
@@ -406,22 +406,22 @@ export interface Provider {
 
 ### 实现步骤
 
-1. 在 `src/provider/` 目录下创建新的 provider 文件
+1. 在 `packages/core/src/provider/` 目录下创建新的 provider 文件
 2. 实现 `Provider` 接口
-3. 在 `src/provider/index.ts` 中注册新 provider
+3. 在 `packages/core/src/provider/index.ts` 中注册新 provider
 4. **核对鉴权头与列表路径**：默认是 `Authorization: Bearer` + `baseUrl + /models`
    （`buildModelsUrl`）。两者任一不符就要在 provider 里自己处理，例如：
    - MiniMax-CN：Base URL 是 `/anthropic`，列表在 `/v1/models` → 覆写 `getModelsUrl()`；
    - Anthropic 官方：鉴权用 `x-api-key` 且要带 `anthropic-version`，列表在 `/v1/models`
      → 自定义 `fetch` 头 + 覆写 `getModelsUrl()`。
    注意 Anthropic SDK 会自己拼 `/v1`，所以 Base URL 里**不要**写 `/v1`。
-5. **同步上下文窗口推断表**：`src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
+5. **同步上下文窗口推断表**：`packages/core/src/provider/context-window.ts` 的 `CONTEXT_WINDOW_RULES`
    按模型名前缀登记各模型的上下文窗口（用于推导压缩阈值）。新供应商的模型名若认不出，
    会回退到 128k；**窗口小于 128k 的模型必须登记**，否则请求会在压缩触发前就超窗（400）。
 6. 编写单元测试
 7. 更新本文档（含 README 的提供商表格）
 8. **检查"注册顺序"假设**：新 provider 会插进 `/login`、`/model` 的选择列表，
-   任何按序号模拟按键的测试（如 `src/cli/login-model.test.ts`）都会因此错位。
+   任何按序号模拟按键的测试（如 `packages/cli/src/login-model.test.ts`）都会因此错位。
    测试里不要写死"第 N 个服务商"，改用 `getRegisteredProviders().indexOf(...)` 定位。
 
 ---

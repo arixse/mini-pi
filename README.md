@@ -14,7 +14,7 @@ mini-pi                          # 在任意项目目录下启动
 
 ```bash
 pnpm install                     # prepare 会顺带执行 build:cli，生成 bin/mini-pi-cli.cjs
-pnpm dev:cli                     # 用 tsx 直接跑 src/cli/entry.ts
+pnpm dev:cli                     # 用 tsx 直接跑 packages/cli/src/entry.ts
 pnpm build:cli && pnpm link:cli  # 打包并链接为全局命令
 node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地的 tsx）
 ```
@@ -145,16 +145,26 @@ pnpm check          # typecheck + test:coverage —— CI 跑的就是这一条
 pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 ```
 
-源码分层（`src/`）：
+包结构（三个包，由 workspace 管理）：
+
+| 包                  | 职责                                                           |
+| ------------------- | -------------------------------------------------------------- |
+| `packages/core`   | 内核：执行编排（Run / RunManager）、模型循环、工具、会话落盘、提示词、风险判定。不许依赖任何界面 |
+| `packages/cli`     | 命令行客户端：REPL、命令分派、审批、渲染、启动编排、`exec`。**发布到 npm 的就是它** |
+| `packages/client`  | 客户端：Web 前端与 Electron 壳（尚未实现，见 [electron-client-plan.md](docs/electron-client-plan.md)） |
+
+内核内部沿用原有分层（`packages/core/src/agent/` 等）：
 
 | 目录             | 职责                                                           |
 | ---------------- | -------------------------------------------------------------- |
-| `cli/`         | REPL、命令分派、审批、渲染、会话切换、启动编排                 |
 | `agent/`       | Agent 循环、消息协议、会话读写与压缩、子 Agent、Skill 加载     |
 | `agent/model/` | 两家 SDK 的流式实现、重试、错误分类、静默看门狗                |
 | `agent/tools/` | 工具注册表与实现（文件 / 搜索 / bash / verify / skill / task） |
 | `provider/`    | 7 家供应商注册、凭据与设置的原子读写、上下文窗口推断           |
 | `shared/`      | 协议类型与日志出口                                             |
+
+CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 恒为空——
+`bin/mini-pi-cli.cjs` 是 esbuild 自包含单文件，运行时零依赖。
 
 ## 相关文档
 
@@ -171,12 +181,13 @@ pnpm build:cli      # 打包为 bin/mini-pi-cli.cjs
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
 | [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 进行中，桌面壳尚未实现）           |
+| [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、23 条已定决策（配套静态稿 `packages/client/design/mockup.html`） |
 | [开发日志索引](notes/README.md)                 | day1 ~ day25，按真实提交日期编排                                             |
 
 ## 范围
 
-当前只有 CLI 一种形态。与界面无关的内核正在下沉到 `src/core`（提示词、技术栈探测、
-风险判定、上下文口径与落盘编排已在其中），`src/server` / `src/client` / `src/electron`
+当前只有 CLI 一种形态。与界面无关的内核正在下沉到 `packages/core/src`（提示词、技术栈探测、
+风险判定、上下文口径与落盘编排已在其中），`packages/client/src/server` / `packages/client/src` / `packages/client/src/electron`
 尚未实现，文档中出现的相关路径均为规划。
 
 ## 许可

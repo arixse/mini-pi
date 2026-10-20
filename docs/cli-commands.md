@@ -2,8 +2,8 @@
 
 本文档是 [cli-interaction.md](./cli-interaction.md) 的命令部分，所有命令以 `/` 开头。
 
-> 命令清单必须与 `src/cli/commands.ts` 的注册表一致（`/help` 与启动欢迎语都从那里渲染）。
-> `src/cli/commands.test.ts` 会逐条比对本文档与 `dispatch.ts` 的分派分支。
+> 命令清单必须与 `packages/cli/src/commands.ts` 的注册表一致（`/help` 与启动欢迎语都从那里渲染）。
+> `packages/cli/src/commands.test.ts` 会逐条比对本文档与 `dispatch.ts` 的分派分支。
 
 ## 5. 命令列表
 

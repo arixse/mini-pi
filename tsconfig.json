@@ -1,15 +1,9 @@
 {
-    "compilerOptions":{
-        "target": "es2024",
-        "module": "esnext",
-        "moduleResolution":"bundler",
-        "strict": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "resolveJsonModule": true,
-        "noEmit": true,
-        "noUnusedLocals": true,
-        "noUnusedParameters": true
-    },
-    "include":["src"]
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@minipi/core/*": ["./packages/core/src/*"]
+    }
+  },
+  "include": ["tests"]
 }

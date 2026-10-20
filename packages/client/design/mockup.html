@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mini-pi 客户端 UI 设计稿</title>
+<style>
+/* ---------------------------------------------------------------
+   设计令牌：M2 落地时 packages/client/src/styles.css 沿用这一套色板
+   （深底 slate-950 / 面板 slate-900 / 描边 slate-800 / 强调 indigo）
+   --------------------------------------------------------------- */
+:root {
+  --bg: #020617;
+  --panel: #0f172a;
+  --panel-2: #0b1220;
+  --border: #1e293b;
+  --border-soft: #172033;
+  --t1: #f1f5f9;
+  --t2: #e2e8f0;
+  --t3: #cbd5e1;
+  --t4: #94a3b8;
+  --t5: #64748b;
+  --t6: #475569;
+  --indigo: #6366f1;
+  --indigo-lt: #818cf8;
+  --emerald: #10b981;
+  --amber: #f59e0b;
+  --rose: #f43f5e;
+  --sky: #38bdf8;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: #0b1020;
+  color: var(--t3);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+svg.ic { width: 1em; height: 1em; flex: none; stroke-width: 1.8; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------------- 稿子外框（不属于产品本身） ---------------- */
+.spec { max-width: 1520px; margin: 0 auto; padding: 24px 20px 80px; }
+.spec-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.spec-title { font-size: 20px; font-weight: 650; color: var(--t1); margin: 0; letter-spacing: .2px; }
+.spec-sub { color: var(--t5); font-size: 12.5px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.tab {
+  appearance: none; border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--t4); padding: 6px 12px; border-radius: 999px; font-size: 12.5px;
+  cursor: pointer; font-family: inherit; transition: .15s;
+}
+.tab:hover { color: var(--t2); border-color: #2b3a55; }
+.tab[aria-selected="true"] { background: rgba(99,102,241,.15); border-color: rgba(99,102,241,.5); color: #c7d2fe; }
+.tools { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+.legend {
+  margin-top: 22px; border-top: 1px solid var(--border-soft); padding-top: 14px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px 26px;
+}
+.legend-row { display: flex; gap: 9px; font-size: 12.5px; color: var(--t4); }
+.legend-row b { color: var(--t3); font-weight: 600; }
+
+/* ---------------- 设备框 ---------------- */
+.frame-wrap { display: flex; justify-content: center; }
+.frame {
+  width: 1180px; max-width: 100%;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  overflow: hidden; box-shadow: 0 30px 70px -30px rgba(0,0,0,.8);
+  transition: width .25s ease;
+}
+.frame--mid { width: 880px; }
+.frame--narrow { width: 420px; }
+
+/* ---------------- 顶栏 ---------------- */
+.topbar {
+  height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  border-bottom: 1px solid var(--border); background: rgba(15,23,42,.6);
+  backdrop-filter: blur(6px); flex: none;
+}
+.brand { display: flex; align-items: center; gap: 6px; }
+.brand-name {
+  font-size: 14px; font-weight: 650; letter-spacing: .2px;
+  background: linear-gradient(90deg, #c7d2fe, #7dd3fc);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px;
+  font-size: 11.5px; color: var(--t4); white-space: nowrap; overflow: hidden;
+}
+.chip:hover { border-color: rgba(99,102,241,.6); color: var(--indigo-lt); }
+.chip.mono { font-family: var(--mono); font-size: 11px; }
+.chip.warn { color: #fcd34d; border-color: rgba(245,158,11,.35); }
+.pill {
+  display: inline-flex; align-items: center; gap: 5px; border-radius: 999px;
+  padding: 2px 9px; font-size: 11.5px; white-space: nowrap;
+}
+.pill-amber { background: rgba(245,158,11,.15); color: #fcd34d; box-shadow: 0 0 0 1px rgba(245,158,11,.3) inset; }
+.pill-sky { background: rgba(56,189,248,.15); color: #7dd3fc; box-shadow: 0 0 0 1px rgba(56,189,248,.3) inset; }
+.pill-emerald { background: rgba(16,185,129,.15); color: #6ee7b7; box-shadow: 0 0 0 1px rgba(16,185,129,.3) inset; }
+.pill-rose { background: rgba(244,63,94,.15); color: #fda4af; box-shadow: 0 0 0 1px rgba(244,63,94,.3) inset; }
+.pill-slate { background: #1e293b; color: var(--t4); }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  color: var(--t4); background: transparent; cursor: pointer; font-size: 15px;
+}
+.icon-btn:hover { border-color: rgba(99,102,241,.6); color: var(--indigo-lt); }
+/* 汉堡入口只在窄屏（420）出现；宽屏用屏 ① 演示的"切换侧栏"按钮 */
+.drawer-btn { display: none; }
+.frame--narrow .drawer-btn { display: inline-flex; }
+.spacer { flex: 1 1 auto; }
+.dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; flex: none; }
+
+/* ---------------- 主体 ----------------
+   用 grid 而不是 flex：输入区要和会话同宽（只占第 2 列），
+   侧栏则从第 1 列一直贯到底。flex 一行排不下"跨两行 + 只占一列"这种组合。 */
+.body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 604px;
+}
+.frame--narrow .body { grid-template-columns: 0 minmax(0, 1fr); }
+.sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  width: 268px; flex: none; border-right: 1px solid var(--border);
+  background: var(--panel-2); padding: 10px; overflow-y: auto;
+}
+.frame--narrow .sidebar {
+  position: absolute; inset: 0 auto 0 0; z-index: 20; width: 84%;
+  box-shadow: 0 0 0 9999px rgba(2,6,23,.6);
+}
+.frame--narrow .sidebar[hidden] { display: none; }
+.side-search {
+  display: flex; align-items: center; gap: 7px; border: 1px solid var(--border);
+  background: #0a1120; border-radius: 8px; padding: 5px 9px; color: var(--t5); font-size: 12px;
+}
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; border: 0; border-radius: 10px; padding: 8px 10px; cursor: pointer;
+  background: var(--indigo); color: #fff; font-size: 12.5px; font-weight: 500; font-family: inherit;
+  box-shadow: 0 1px 0 rgba(255,255,255,.08) inset;
+}
+.btn-primary:hover { background: var(--indigo-lt); }
+.side-h {
+  display: flex; align-items: center; gap: 6px; padding: 0 2px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--t5);
+}
+.side-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.side-item {
+  width: 100%; text-align: left; border: 1px solid var(--border); background: transparent;
+  border-radius: 10px; padding: 7px 9px; cursor: pointer; font-family: inherit; color: inherit;
+}
+.side-item:hover { border-color: #2b3a55; }
+.side-item.is-active { border-color: rgba(99,102,241,.55); background: rgba(99,102,241,.08); }
+.side-item .t { display: block; font-size: 12.5px; color: var(--t2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-item .m { display: flex; align-items: center; gap: 7px; margin-top: 4px; font-size: 10.5px; color: var(--t5); }
+.empty-hint {
+  border: 1px dashed var(--border); border-radius: 10px; padding: 12px;
+  text-align: center; color: var(--t6); font-size: 11.5px;
+}
+
+/* ---------------- 主区 ---------------- */
+.main { grid-column: 2; grid-row: 1; min-width: 0; overflow-y: auto; padding: 12px 14px 18px; }
+.run-head {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+  margin: 0 -2px 10px; padding: 6px 2px 8px; border-bottom: 1px solid var(--border);
+  background: rgba(2,6,23,.88); backdrop-filter: blur(6px); font-size: 12px; color: var(--t4);
+}
+.run-head .title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t3); }
+
+.row { display: flex; margin-bottom: 12px; }
+.row.right { justify-content: flex-end; }
+.row .stack { display: flex; gap: 10px; width: 100%; max-width: 85%; }
+.row.right .stack { justify-content: flex-end; }
+.avatar {
+  width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex;
+  align-items: center; justify-content: center; font-size: 13px; margin-top: 2px;
+}
+.avatar.user { background: rgba(99,102,241,.15); color: var(--indigo-lt); box-shadow: 0 0 0 1px rgba(99,102,241,.3) inset; }
+.avatar.bot { background: #1e293b; color: var(--t4); box-shadow: 0 0 0 1px #334155 inset; }
+.bubble-user {
+  background: rgba(99,102,241,.9); color: #fff; border-radius: 16px 16px 4px 16px;
+  padding: 8px 12px; font-size: 13.5px;
+}
+.bubble-bot {
+  border: 1px solid var(--border); background: rgba(30,41,59,.5); border-radius: 16px 16px 16px 4px;
+  padding: 8px 12px; font-size: 13.5px; color: var(--t2);
+}
+.bubble-bot h4 { margin: 10px 0 4px; font-size: 13.5px; color: var(--t1); }
+.bubble-bot ul { margin: 6px 0; padding-left: 20px; }
+.bubble-bot li { margin: 2px 0; }
+.bubble-bot code { font-family: var(--mono); font-size: 12px; background: rgba(2,6,23,.7); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; color: #a5b4fc; }
+.bubble-bot pre {
+  font-family: var(--mono); font-size: 12px; background: rgba(2,6,23,.75);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow-x: auto; color: var(--t3);
+}
+.caret { display: inline-block; width: 5px; height: 15px; border-radius: 2px; background: var(--indigo-lt); vertical-align: text-bottom; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .15; } }
+.copy {
+  position: absolute; top: 6px; right: 8px; opacity: 0; transition: .15s;
+  border: 1px solid var(--border); background: #0b1220; color: var(--t4);
+  border-radius: 6px; padding: 2px 6px; font-size: 11px; cursor: pointer; font-family: inherit;
+}
+.bubble-wrap { position: relative; }
+.bubble-wrap:hover .copy { opacity: 1; }
+
+/* 工具卡片 */
+.card { border: 1px solid var(--border); background: rgba(15,23,42,.6); border-radius: 12px; overflow: hidden; }
+.card-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.card-name { font-family: var(--mono); font-size: 13px; color: var(--t2); }
+.card-args {
+  padding: 5px 11px; font-family: var(--mono); font-size: 12px; color: var(--t4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-out { padding: 4px 11px 10px; }
+.card-out pre {
+  margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.65;
+  background: rgba(2,6,23,.7); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; color: var(--t3); max-height: 148px; overflow: auto; white-space: pre;
+}
+.card-out pre.err { color: #fda4af; }
+.card-more { margin-top: 6px; font-size: 12px; color: var(--t4); background: none; border: 0; cursor: pointer; padding: 0; font-family: inherit; }
+.card-more:hover { color: var(--indigo-lt); }
+
+/* 审批卡 */
+.approval { border: 1px solid rgba(245,158,11,.3); background: rgba(245,158,11,.05); border-radius: 12px; overflow: hidden; }
+.approval.high { border-color: rgba(244,63,94,.35); background: rgba(244,63,94,.06); }
+.approval-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+  border-bottom: 1px solid rgba(245,158,11,.2);
+}
+.approval.high .approval-head { border-bottom-color: rgba(244,63,94,.25); }
+.approval ul { margin: 0; padding: 7px 11px 7px 28px; font-size: 13px; color: var(--t2); }
+.approval .reasons { padding: 0 11px 7px 28px; font-size: 12px; color: #fcd34d; list-style: none; margin: 0; }
+.approval.high .reasons { color: #fda4af; }
+.approval pre {
+  margin: 0; max-height: 148px; overflow: auto; padding: 8px 11px;
+  border-top: 1px solid rgba(245,158,11,.2); border-bottom: 1px solid rgba(245,158,11,.2);
+  background: rgba(2,6,23,.5); font-family: var(--mono); font-size: 12px; color: var(--t3);
+}
+.approval.high pre { border-color: rgba(244,63,94,.25); }
+.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 11px; }
+.btn {
+  border-radius: 8px; padding: 5px 11px; font-size: 12.5px; cursor: pointer;
+  font-family: inherit; border: 1px solid transparent;
+}
+.btn-yes { background: var(--emerald); color: #04150e; font-weight: 500; }
+.btn-always { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.1); color: var(--indigo-lt); }
+.btn-no { border-color: rgba(244,63,94,.4); color: #fda4af; background: transparent; }
+.btn-ghost { border-color: var(--border); color: var(--t3); background: transparent; }
+.btn:hover { filter: brightness(1.12); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 提示条 */
+.bar { display: flex; align-items: center; gap: 8px; border-radius: 10px; padding: 7px 11px; font-size: 12.5px; margin-bottom: 12px; }
+.bar-warn { border: 1px solid rgba(245,158,11,.25); background: rgba(245,158,11,.05); color: #fde68a; }
+.bar-err { border: 1px solid rgba(244,63,94,.3); background: rgba(244,63,94,.1); color: #fda4af; }
+.bar-ok { border: 1px solid rgba(16,185,129,.2); background: rgba(16,185,129,.05); color: #6ee7b7; }
+
+/* 输入区：第 2 列、最后一行，与会话同宽；左右内边距对齐气泡（14px） */
+.composer {
+  grid-column: 2; grid-row: 2; border-top: 1px solid var(--border);
+  background: rgba(15,23,42,.6); padding: 9px 14px;
+}
+.composer-row { display: flex; align-items: flex-end; gap: 8px; }
+.composer textarea {
+  flex: 1 1 auto; min-height: 84px; max-height: 208px; resize: vertical;
+  border: 1px solid #334155; background: rgba(2,6,23,.6); border-radius: 12px;
+  padding: 11px 13px; color: var(--t2); font-family: inherit; font-size: 13.5px; outline: none;
+  line-height: 1.6;
+}
+.composer textarea:focus { border-color: rgba(99,102,241,.6); }
+.composer textarea::placeholder { color: var(--t6); }
+.kbd { font-family: var(--mono); font-size: 10px; background: #1e293b; color: var(--t5); border-radius: 4px; padding: 1px 4px; }
+.composer-hint { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 11px; color: var(--t5); }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--t4); cursor: pointer; }
+.btn-send {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 12px;
+  background: var(--indigo); color: #fff; padding: 9px 15px; font-size: 13px; font-weight: 500;
+  cursor: pointer; font-family: inherit;
+}
+.btn-stop { border: 1px solid rgba(244,63,94,.4); color: #fda4af; background: transparent; }
+
+/* 会话历史 */
+.session-head { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 6px 2px 8px; border-bottom: 1px solid var(--border); background: rgba(2,6,23,.88); font-size: 13px; color: var(--t3); margin: 0 -2px 12px; }
+
+/* 设置 / 弹层 */
+.overlay { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: rgba(2,6,23,.7); backdrop-filter: blur(3px); padding: 16px; }
+.modal {
+  width: 100%; max-width: 520px; max-height: 85%; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 30px 80px -20px #000;
+}
+.modal-head { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--t1); font-size: 14px; font-weight: 600; }
+.modal-body { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-size: 12px; color: var(--t4); }
+.field input, .field select {
+  border: 1px solid var(--border); background: #0a1120; border-radius: 8px;
+  padding: 7px 10px; color: var(--t2); font-family: inherit; font-size: 12.5px; outline: none;
+}
+.field input:focus, .field select:focus { border-color: rgba(99,102,241,.6); }
+.modal-foot { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-top: 1px solid var(--border); }
+
+/* diff */
+.diff { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,42,.5); }
+.diff-file { padding: 7px 11px; border-bottom: 1px solid var(--border-soft); font-family: var(--mono); font-size: 12px; color: var(--t3); display: flex; gap: 8px; align-items: center; }
+.diff pre { margin: 0; padding: 8px 0; font-family: var(--mono); font-size: 12px; line-height: 1.7; overflow-x: auto; }
+.diff .ln { display: block; padding: 0 11px; white-space: pre; }
+.diff .add { background: rgba(16,185,129,.1); color: #6ee7b7; }
+.diff .del { background: rgba(244,63,94,.1); color: #fda4af; }
+.diff .ctx { color: var(--t5); }
+
+/* 桌面壳 */
+.win { border: 1px solid #334155; border-radius: 12px; overflow: hidden; background: var(--bg); }
+.win-bar { height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #0b1220; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--t5); }
+.win-dots { display: flex; gap: 6px; }
+.win-dots i { width: 10px; height: 10px; border-radius: 99px; display: block; }
+.win-dots i:nth-child(1) { background: #f87171; }
+.win-dots i:nth-child(2) { background: #fbbf24; }
+.win-dots i:nth-child(3) { background: #34d399; }
+
+/* ---------------- 标注 ---------------- */
+.anno {
+  display: none; position: absolute; z-index: 60; width: 19px; height: 19px; border-radius: 99px;
+  background: var(--indigo); color: #fff; font-size: 11px; font-weight: 600;
+  align-items: center; justify-content: center; cursor: help;
+  box-shadow: 0 0 0 3px rgba(99,102,241,.22);
+}
+body.show-anno .anno { display: flex; }
+.anno-host { position: relative; }
+.anno b { font-weight: 600; }
+.note { display: none; }
+body.show-anno .legend { display: grid; }
+.legend { display: none; }
+.legend-title { display: none; }
+body.show-anno .legend-title { display: block; }
+.legend-title { margin: 22px 0 0; font-size: 13px; color: var(--t3); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 003 0"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-2.9 1.2v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.6 1.7 1.7 0 00-1.9.4l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 001.2-2.9H4a2 2 0 110-4h.2A1.7 1.7 0 005.6 6a1.7 1.7 0 00-.4-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H10a1.7 1.7 0 001-1.5V0a2 2 0 114 0v.2a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H20a2 2 0 110 4h-.2a1.7 1.7 0 00-1.4 1z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M12 9v4M12 16h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4.3L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 4.3a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 16h.01"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h8"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+</svg>
+
+<div class="spec">
+  <div class="spec-head">
+    <div>
+      <h1 class="spec-title">mini-pi 客户端 · UI 设计稿</h1>
+      <div class="spec-sub">packages/client · M2（App Server + Web）与 M5（Electron 壳）共用同一份界面 · 静态稿，不接后端</div>
+    </div>
+    <div class="tools">
+      <button class="tab" id="btn-anno" aria-pressed="false">显示设计标注</button>
+      <span style="color:var(--t6);font-size:12px">宽度</span>
+      <button class="tab" data-w="wide" aria-selected="true">1180</button>
+      <button class="tab" data-w="mid" aria-selected="false">880</button>
+      <button class="tab" data-w="narrow" aria-selected="false">420</button>
+    </div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-screen="run" aria-selected="true">① 执行中</button>
+    <button class="tab" role="tab" data-screen="approval" aria-selected="false">② 高危审批</button>
+    <button class="tab" role="tab" data-screen="idle" aria-selected="false">③ 空闲 / 空态</button>
+    <button class="tab" role="tab" data-screen="history" aria-selected="false">④ 历史会话</button>
+    <button class="tab" role="tab" data-screen="diff" aria-selected="false">⑤ 变更 diff</button>
+    <button class="tab" role="tab" data-screen="settings" aria-selected="false">⑥ 设置 · 模型</button>
+    <button class="tab" role="tab" data-screen="desktop" aria-selected="false">⑦ 桌面壳</button>
+  </div>
+
+  <div class="frame-wrap">
+    <div class="frame" id="frame">
+
+      <!-- ================= ① 执行中 ================= -->
+      <section data-screen="run">
+        <header class="topbar">
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono anno-host" title="当前工作区"><svg class="ic"><use href="#i-folder"/></svg>mini-pi<i class="anno" data-n="1">1</i></span>
+          <span class="chip mono" title="默认模型（新任务生效）">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate anno-host" title="默认审批档位（新任务生效）">workspace-write<i class="anno" data-n="2">2</i></span>
+          <span class="pill pill-amber anno-host"><svg class="ic"><use href="#i-shield"/></svg>1 个待审批<i class="anno" data-n="3">3</i></span>
+          <span class="spacer"></span>
+          <button class="icon-btn" title="通知"><svg class="ic"><use href="#i-bell"/></svg></button>
+          <button class="icon-btn" title="设置"><svg class="ic"><use href="#i-gear"/></svg></button>
+          <button class="icon-btn anno-host" data-drawer title="切换侧栏（窄屏即抽屉开关）"><svg class="ic"><use href="#i-menu"/></svg><i class="anno" data-n="11">11</i></button>
+        </header>
+
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
+            <div style="margin:14px 0 7px" class="side-h">进行中</div>
+            <ul class="side-list">
+              <li><button class="side-item is-active">
+                <span class="t">把上下文口径抽到 core，CLI 只留翻译层</span>
+                <span class="m"><span class="pill pill-sky"><i class="dot"></i>运行中</span>12.4s · 8.2k</span>
+              </button></li>
+              <li><button class="side-item">
+                <span class="t">给 searchWalk 补软链接越界用例</span>
+                <span class="m"><span class="pill pill-amber">待审批</span>1 分前</span>
+              </button></li>
+            </ul>
+            <div style="margin:16px 0 7px" class="side-h">历史会话</div>
+            <ul class="side-list">
+              <li><button class="side-item"><span class="t">2026-10-20 09:14 · 客户端化 M0</span><span class="m">42 条 · 128k</span></button></li>
+              <li><button class="side-item"><span class="t">2026-10-19 20:41 · Maker+Checker</span><span class="m">96 条 · 已压缩 2 次</span></button></li>
+              <li><button class="side-item"><span class="t">2026-10-19 11:02 · 子 Agent 预算</span><span class="m">17 条</span></button></li>
+            </ul>
+          </aside>
+
+          <main class="main">
+            <div class="run-head anno-host">
+              <span class="pill pill-sky"><i class="dot"></i>运行中</span>
+              <span class="title">把上下文口径抽到 core，CLI 只留翻译层</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
+              <span>12.4s · 8.2k / 128k</span>
+              <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px"><svg class="ic" style="font-size:11px"><use href="#i-stop"/></svg>停止</button>
+              <i class="anno" data-n="4">4</i>
+              <i class="anno" data-n="20" style="top:-6px;right:150px">20</i>
+            </div>
+
+            <div class="row right anno-host">
+              <div class="stack">
+                <div class="bubble-user">把上下文口径抽到 core，CLI 只留翻译层。终端显示方式一个字都不要改。</div>
+                <div class="avatar user">我</div>
+              </div>
+              <i class="anno" data-n="5">5</i>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack anno-host">
+                <div class="card" style="width:100%">
+                  <div class="card-head">
+                    <span class="card-name">read_file</span>
+                    <span class="pill pill-emerald">完成</span>
+                    <span class="spacer"></span>
+                    <span style="font-size:11px;color:var(--t5)">0.3s</span>
+                  </div>
+                  <div class="card-args">packages/cli/src/context.ts</div>
+                  <div class="card-out"><pre>export function resolveContextBudget(window: number): number { … }
+export function contextUsage(options) { … }</pre></div>
+                </div>
+                <i class="anno" data-n="6">6</i>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack">
+                <div class="card" style="width:100%">
+                  <div class="card-head">
+                    <span class="card-name">bash</span>
+                    <span class="pill pill-rose">失败</span>
+                    <span class="spacer"></span>
+                    <span style="font-size:11px;color:var(--t5)">18.7s · 退出码 1</span>
+                  </div>
+                  <div class="card-args">pnpm -w check</div>
+                  <div class="card-out"><pre class="err">✖ tests/packages.test.ts
+  → CLI 的 dependencies 应恒为空，发现 1 个运行时依赖</pre><button class="card-more">展开全部（42 行）</button></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack anno-host">
+                <div class="card" style="width:100%">
+                  <div class="card-head">
+                    <span class="card-name">grep</span>
+                    <span class="pill pill-sky"><i class="dot"></i>运行中</span>
+                    <span class="spacer"></span><span style="font-size:11px;color:var(--t5)">1.1s</span>
+                  </div>
+                  <div class="card-args">pattern: "resolveContextBudget|compactionBudget" · 命中 14 处</div>
+                </div>
+                <i class="anno" data-n="7">7</i>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack">
+                <div class="bubble-wrap bubble-bot" style="width:100%">
+                  <p style="margin:0 0 6px">口径拆成两层：<b>内核算数</b>，<b>终端翻译</b>。</p>
+                  <ul>
+                    <li><code>core/context.ts</code>：阈值推导、固定开销、保留条数</li>
+                    <li><code>cli/context.ts</code>：只做 <code>ReplOptions → 内核口径</code></li>
+                  </ul>
+                  <pre>// cli/context.ts —— 缩减后只剩翻译
+export const compactionBudget = (o: ReplOptions) =&gt;
+  resolveContextBudget(o.contextWindow);</pre>
+                  <span class="caret"></span>
+                  <button class="copy">复制</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack anno-host" style="max-width:92%">
+                <div class="approval" style="width:100%">
+                  <div class="approval-head">
+                    <svg class="ic" style="color:var(--amber)"><use href="#i-shield"/></svg>
+                    <span class="card-name">write_file</span>
+                    <span class="pill pill-amber">中等风险</span>
+                    <span class="spacer"></span>
+                    <span style="font-size:11px;color:var(--t5)">等待确认</span>
+                  </div>
+                  <ul><li><code>packages/core/src/context.ts</code></li></ul>
+                  <ul class="reasons"><li>覆盖已存在的文件，原内容将被替换</li></ul>
+                  <pre>path: packages/core/src/context.ts
+content: …（+182 行）</pre>
+                  <div class="approval-actions">
+                    <button class="btn btn-yes">仅本次允许</button>
+                    <button class="btn btn-always">本会话内全部允许 write_file</button>
+                    <button class="btn btn-no">拒绝</button>
+                  </div>
+                </div>
+                <i class="anno" data-n="8">8</i>
+              </div>
+            </div>
+          </main>
+
+        <footer class="composer anno-host">
+          <div class="composer-row anno-host">
+            <textarea rows="3" placeholder="接着说，或 / 开头用命令">继续，把 session.ts 的落盘编排也搬下去</textarea>
+            <button class="btn-send">发送</button>
+            <button class="btn btn-stop" style="padding:9px 12px"><svg class="ic" style="font-size:12px"><use href="#i-stop"/></svg></button>
+            <i class="anno" data-n="19" style="top:-8px;left:44%">19</i>
+            <i class="anno" data-n="21" style="top:-8px;right:120px">21</i>
+          </div>
+          <div class="composer-hint">
+            <label class="switch"><input type="checkbox" checked style="accent-color:var(--indigo)">隔离工作区（每个任务一个 worktree）</label>
+            <label class="switch"><input type="checkbox" style="accent-color:var(--indigo)">委派（允许开子 Agent）</label>
+            <span class="spacer"></span>
+            <span><span class="kbd">Enter</span> 发送</span>
+            <span><span class="kbd">Shift</span>+<span class="kbd">Enter</span> 换行</span>
+            <span><span class="kbd">Esc</span> 停止</span>
+            <span>运行中发送会排队，回合结束后执行</span>
+          </div>
+          <i class="anno" data-n="12" style="right:8px;bottom:6px">12</i>
+          <i class="anno" data-n="18" style="left:8px;bottom:6px">18</i>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ② 高危审批 ================= -->
+      <section data-screen="approval" hidden>
+        <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
+          <span class="pill pill-rose anno-host"><svg class="ic"><use href="#i-shield"/></svg>1 个待审批<i class="anno" data-n="3">3</i></span>
+          <span class="spacer"></span>
+          <button class="icon-btn"><svg class="ic"><use href="#i-bell"/></svg></button>
+          <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+        </header>
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
+            <div style="margin:14px 0 7px" class="side-h">进行中</div>
+            <ul class="side-list">
+              <li><button class="side-item is-active"><span class="t">清理构建产物后重跑单测</span><span class="m"><span class="pill pill-rose">待审批</span>已等待 42s</span></button></li>
+            </ul>
+          </aside>
+          <main class="main">
+            <div class="run-head">
+              <span class="pill pill-rose">待审批</span>
+              <span class="title">清理构建产物后重跑单测</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
+              <span>42s · 3.1k / 128k</span>
+              <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px">停止</button>
+            </div>
+
+            <div class="bar bar-err anno-host"><svg class="ic"><use href="#i-alert"/></svg>Run 已挂起：有 1 次工具调用在等你裁决<i class="anno" data-n="9">9</i></div>
+
+            <div class="row right">
+              <div class="stack"><div class="bubble-user">把 dist 和 bin 清掉，然后重跑一次 pnpm test</div><div class="avatar user">我</div></div>
+            </div>
+
+            <div class="row">
+              <div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div>
+              <div class="stack anno-host" style="max-width:92%">
+                <div class="approval high" style="width:100%">
+                  <div class="approval-head">
+                    <svg class="ic" style="color:var(--rose)"><use href="#i-alert"/></svg>
+                    <span class="card-name">bash</span>
+                    <span class="pill pill-rose">高危</span>
+                    <span class="spacer"></span>
+                    <span style="font-size:11px;color:var(--t5)">等待确认</span>
+                  </div>
+                  <ul class="reasons" style="padding-left:11px">
+                    <li>递归/强制删除（rm -rf），删除后不可恢复</li>
+                  </ul>
+                  <pre>rm -rf dist bin</pre>
+                  <div class="approval-actions">
+                    <button class="btn btn-yes">仅本次允许</button>
+                    <button class="btn btn-always">本会话内全部允许 bash</button>
+                    <button class="btn btn-no">拒绝</button>
+                  </div>
+                </div>
+                <i class="anno" data-n="10">10</i>
+              </div>
+            </div>
+
+            <div style="margin-top:6px" class="bar bar-warn"><svg class="ic"><use href="#i-shield"/></svg>高危不叠加"删除文件"这类降级理由：一次列五条会把最致命的那条淹掉</div>
+          </main>
+
+        <footer class="composer">
+          <div class="composer-row">
+            <textarea rows="3" placeholder="Run 挂起中，仍可继续补充要求"></textarea>
+            <button class="btn-send">发送</button>
+          </div>
+          <div class="composer-hint"><span>挂起期间输入仍会入队，裁决后接着走</span></div>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ③ 空闲 / 空态 ================= -->
+      <section data-screen="idle" hidden>
+        <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>未打开工作区</span>
+          <span class="chip warn anno-host"><svg class="ic"><use href="#i-alert"/></svg>未配置模型<i class="anno" data-n="13">13</i></span>
+          <span class="pill pill-slate" title="默认审批档位（新任务生效）">workspace-write</span>
+          <span class="spacer"></span>
+          <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+        </header>
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div class="empty-hint">还没有任务</div>
+          </aside>
+          <main class="main">
+            <div style="max-width:520px;margin:56px auto;text-align:center" class="anno-host">
+              <svg class="ic" style="font-size:34px;color:#334155"><use href="#i-sparkles"/></svg>
+              <h3 style="color:var(--t1);font-size:15px;margin:12px 0 6px">先选一个工作区，再配一个模型</h3>
+              <p style="color:var(--t5);font-size:12.5px;margin:0 0 16px">没有模型也能起服务，但发不出任务——空态要说清缺的是哪一样，而不是只画一片空白。</p>
+              <div style="display:flex;gap:8px;justify-content:center">
+                <button class="btn btn-ghost">选择工作区</button>
+                <button class="btn btn-always">去配置模型</button>
+              </div>
+              <i class="anno" data-n="14">14</i>
+            </div>
+          </main>
+
+        <footer class="composer">
+          <div class="composer-row">
+            <textarea rows="3" placeholder="配置好模型后即可开始" disabled></textarea>
+            <button class="btn-send" disabled>发送</button>
+          </div>
+          <div class="composer-hint"><span style="color:#fcd34d">请先选择工作区、配置服务商与模型</span></div>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ④ 历史会话 ================= -->
+      <section data-screen="history" hidden>
+        <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
+          <span class="spacer"></span>
+          <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+        </header>
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div style="margin:14px 0 7px" class="side-h">历史会话</div>
+            <ul class="side-list">
+              <li><button class="side-item is-active"><span class="t">2026-10-20 09:14 · 客户端化 M0</span><span class="m">42 条 · 128k</span></button></li>
+              <li><button class="side-item"><span class="t">2026-10-19 20:41 · Maker+Checker</span><span class="m">96 条 · 已压缩 2 次</span></button></li>
+            </ul>
+          </aside>
+          <main class="main">
+            <div class="session-head anno-host">
+              <span style="flex:1 1 auto">2026-10-20 09:14 · 客户端化 M0</span>
+              <span class="pill pill-slate">42 条</span>
+              <button class="btn btn-no" style="font-size:11.5px;padding:3px 8px" title="删除前需二次确认"><svg class="ic" style="font-size:11px"><use href="#i-trash"/></svg>删除</button>
+              <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 8px">回到当前</button>
+              <i class="anno" data-n="15">15</i>
+            </div>
+            <div class="row right"><div class="stack"><div class="bubble-user">把 prompt 和 projectStack 搬到 core 下</div><div class="avatar user">我</div></div></div>
+            <div class="row"><div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div><div class="stack"><div class="bubble-bot" style="width:100%">纯移动：四个文件连测试一起 <code>git mv</code>，只改 index.ts 的 import。</div></div></div>
+            <div class="row right"><div class="stack"><div class="bubble-user">风险判定要不要一起搬？</div><div class="avatar user">我</div></div></div>
+            <div class="row"><div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div><div class="stack"><div class="bubble-bot" style="width:100%">搬。判定是事实、着色是各端的事，分开之后终端与 Web 不会对同一条 <code>rm -rf</code> 给出不同等级。</div></div></div>
+            <div class="bar bar-ok" style="margin-top:10px"><svg class="ic"><use href="#i-check"/></svg>只读浏览：这里不能继续追问，想接着聊请开新任务</div>
+          </main>
+
+        <footer class="composer">
+          <div class="composer-row">
+            <textarea rows="3" placeholder="历史会话只读；新开一个任务即可继续"></textarea>
+            <button class="btn-send">新任务</button>
+          </div>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ⑤ 变更 diff ================= -->
+      <section data-screen="diff" hidden>
+        <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
+          <span class="spacer"></span>
+          <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+        </header>
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div style="margin:14px 0 7px" class="side-h">任务</div>
+            <ul class="side-list">
+              <li><button class="side-item is-active"><span class="t">把上下文口径抽到 core</span><span class="m"><span class="pill pill-emerald">已完成</span>1 分前</span></button></li>
+            </ul>
+          </aside>
+          <main class="main">
+            <div class="run-head">
+              <span class="pill pill-emerald">已完成</span>
+              <span class="title">把上下文口径抽到 core，CLI 只留翻译层</span>
+              <span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span>
+              <span>48.2s · 21.4k tokens · 委派 1 次</span>
+            </div>
+            <div class="bar bar-ok anno-host"><svg class="ic"><use href="#i-check"/></svg>隔离工作区：改动还没回到你的目录，确认后再落地<i class="anno" data-n="16">16</i></div>
+            <div class="diff" style="margin-bottom:12px">
+              <div class="diff-file"><svg class="ic" style="font-size:12px"><use href="#i-chevron"/></svg>packages/core/src/context.ts<span class="pill pill-emerald">+182</span></div>
+              <pre><span class="ln add">+export function resolveContextBudget(window: number) {</span><span class="ln add">+  if (!Number.isFinite(window) || window &lt;= 0) return MAX_CONTEXT_TOKENS;</span><span class="ln add">+  return Math.max(MIN_CONTEXT_BUDGET, Math.floor(window * CONTEXT_BUDGET_RATIO));</span><span class="ln add">+}</span></pre>
+            </div>
+            <div class="diff">
+              <div class="diff-file"><svg class="ic" style="font-size:12px"><use href="#i-chevron"/></svg>packages/cli/src/context.ts<span class="pill pill-rose">-96</span></div>
+              <pre><span class="ln del">-export const KEEP_RECENT_MESSAGES = 12;</span><span class="ln del">-export function resolveContextBudget(...) { … }</span><span class="ln ctx"> import { resolveContextBudget } from "@minipi/core/context";</span></pre>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-yes">合并回主工作区</button>
+              <button class="btn btn-no">丢弃这个 worktree</button>
+            </div>
+          </main>
+
+        <footer class="composer anno-host">
+          <div class="composer-row"><textarea rows="3" placeholder="还想改什么？接着追问也可以"></textarea><button class="btn-send">发送</button></div>
+          <div class="composer-hint"><span>Run 已完成：发送即开新任务、沿用此会话；diff 未落地前提示条保留</span></div>
+          <i class="anno" data-n="22" style="right:8px;bottom:6px">22</i>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ⑥ 设置 · 模型 ================= -->
+      <section data-screen="settings" hidden>
+        <header class="topbar">
+          <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+          <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+          <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+          <span class="chip mono">deepseek / deepseek-flash</span>
+          <span class="pill pill-slate">workspace-write</span>
+          <span class="spacer"></span>
+          <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+        </header>
+        <div class="body" style="position:relative">
+          <aside class="sidebar">
+            <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+            <div class="side-search"><svg class="ic"><use href="#i-search"/></svg>搜索任务名</div>
+          </aside>
+          <main class="main">
+            <div class="bar bar-warn"><svg class="ic"><use href="#i-alert"/></svg>密钥只写不读：保存后前端再也拿不到明文</div>
+          </main>
+          <div class="overlay">
+            <div class="modal anno-host">
+              <div class="modal-head"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span style="flex:1">设置 · 模型</span><button class="btn btn-ghost" style="padding:3px 8px"><svg class="ic" style="font-size:12px"><use href="#i-x"/></svg></button></div>
+              <div class="modal-body">
+                <div class="field">
+                  <label for="p">服务商</label>
+                  <select id="p"><option>deepseek</option><option>openai</option><option>anthropic</option><option>minimax-cn</option><option>kimi</option><option>zhipu</option><option>mimo</option></select>
+                </div>
+                <div class="field">
+                  <label for="k">API Key（已配置，留空表示不改）</label>
+                  <input id="k" type="password" placeholder="留空则沿用已保存的密钥" />
+                </div>
+                <div class="field">
+                  <label for="b">Base URL</label>
+                  <input id="b" placeholder="https://api.deepseek.com" />
+                </div>
+                <div class="field">
+                  <label for="m">默认模型</label>
+                  <select id="m"><option>deepseek-flash</option><option>deepseek-v4-pro</option></select>
+                </div>
+                <div class="field">
+                  <label for="w">上下文窗口</label>
+                  <input id="w" value="128000" />
+                </div>
+                <div class="field anno-host">
+                  <label>审批档位</label>
+                  <div style="display:flex;gap:8px">
+                    <button class="btn btn-ghost">read-only</button>
+                    <button class="btn btn-always" style="border-color:rgba(99,102,241,.7)">workspace-write</button>
+                    <button class="btn btn-ghost">full-access</button>
+                  </div>
+                  <span style="font-size:11.5px;color:var(--t5)">档位只影响"哪些工具还要问人"；认不出的档位服务端直接报错，不回落。切换不追溯：已挂起的审批卡仍等人裁决。</span>
+                  <i class="anno" data-n="23" style="top:-8px;right:-6px">23</i>
+                </div>
+              </div>
+              <div class="modal-foot">
+                <span style="flex:1;font-size:12px;color:var(--t5)">切换后新任务立即生效</span>
+                <button class="btn btn-ghost">拉取模型列表</button>
+                <button class="btn btn-yes">保存</button>
+              </div>
+              <i class="anno" data-n="17">17</i>
+            </div>
+          </div>
+
+        <footer class="composer">
+          <div class="composer-row"><textarea rows="3" placeholder="……"></textarea><button class="btn-send">发送</button></div>
+        </footer>
+        </div>
+      </section>
+
+      <!-- ================= ⑦ 桌面壳 ================= -->
+      <section data-screen="desktop" hidden>
+        <div style="padding:18px">
+          <div class="win">
+            <div class="win-bar">
+              <span class="win-dots"><i></i><i></i><i></i></span>
+              <span style="flex:1;text-align:center;color:var(--t4);font-size:11.5px">mini-pi — D:\Workspace\mini-pi</span>
+              <span style="font-size:11px;color:var(--t6)">127.0.0.1:4788</span>
+            </div>
+            <header class="topbar">
+              <button class="icon-btn drawer-btn" data-drawer aria-label="打开侧栏"><svg class="ic"><use href="#i-menu"/></svg></button>
+              <div class="brand"><svg class="ic" style="color:var(--indigo-lt)"><use href="#i-sparkles"/></svg><span class="brand-name">mini-pi</span></div>
+              <span class="chip mono"><svg class="ic"><use href="#i-folder"/></svg>mini-pi</span>
+              <span class="chip mono">deepseek / deepseek-flash</span>
+              <span class="pill pill-slate">workspace-write</span>
+              <span class="spacer"></span>
+              <button class="icon-btn"><svg class="ic"><use href="#i-gear"/></svg></button>
+            </header>
+            <div class="body" style="height:420px">
+              <aside class="sidebar">
+                <button class="btn-primary" style="margin-bottom:10px"><svg class="ic"><use href="#i-plus"/></svg>新任务</button>
+                <div style="margin:14px 0 7px" class="side-h">进行中</div>
+                <ul class="side-list"><li><button class="side-item is-active"><span class="t">把上下文口径抽到 core</span><span class="m"><span class="pill pill-sky">运行中</span>12.4s</span></button></li></ul>
+              </aside>
+              <main class="main">
+                <div class="run-head"><span class="pill pill-sky"><i class="dot"></i>运行中</span><span class="title">把上下文口径抽到 core</span><span class="pill pill-slate" title="这个 Run 实际用的模型">deepseek-flash</span><span>12.4s</span><button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px"><svg class="ic" style="font-size:11px"><use href="#i-stop"/></svg>停止</button></div>
+                <div class="row right"><div class="stack"><div class="bubble-user">把上下文口径抽到 core</div><div class="avatar user">我</div></div></div>
+                <div class="row"><div class="avatar bot"><svg class="ic" style="font-size:13px"><use href="#i-sparkles"/></svg></div><div class="stack"><div class="bubble-bot" style="width:100%">正在改<span class="caret"></span></div></div></div>
+              </main>
+            </div>
+          </div>
+          <p style="color:var(--t5);font-size:12.5px;margin:14px 2px 0">
+            桌面壳只做三件事：起本地服务 → 开窗口 <code style="font-family:var(--mono);font-size:11.5px">loadURL(127.0.0.1:端口)</code> → 关窗退出。
+            业务一行不写在主进程里，窗口内就是上面这份 Web 产物。
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <div class="legend-title">设计标注</div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<script>
+const NOTES = {
+  1: "工作区常驻可见：模型读写的是哪个目录，任何时候都不能靠猜。",
+  2: "当前模型与审批档位并排展示——「用谁在跑」和「敢让它做什么」是同一组信息。",
+  3: "待审批是唯一会让人干等的事件，必须有常驻计数 + 一键跳转，不能只在时间流里出现一次。",
+  4: "运行头 sticky：滚动到长输出中间时，状态、耗时、token 与「停止」始终在手边。",
+  5: "用户靠右、模型靠左，气泡最大宽度 85%——长行不贴边，窄屏也不至于只剩一列。",
+  6: "工具卡片四态：blocked / running / done / failed，配色与文字同系，靠深浅区分而不是只靠颜色。",
+  7: "参数必须渲染。只写「跑了 grep」等于让用户信任一句没有证据的话。",
+  8: "风险等级与命中原因由内核算好（core/risk.ts），前端只负责配色与按钮——两端不会对同一条命令给出不同等级。",
+  9: "挂起要显式说出来：一个「什么都不动」的界面分不清是卡住、是网络断了，还是在等你。",
+  10: "高危用 rose 并单独成块；按钮三档「仅本次 / 本会话内全部允许 / 拒绝」，与 CLI 的 y / N / a 同义，没有第四种默认。",
+  11: "窄屏侧栏收成抽屉（overlay + 半透明遮罩），不是把侧栏挤成一条。",
+  12: "输入区只放两个开关：隔离工作区、委派。其余能力靠模型调工具，不在界面上做成按钮墙。",
+  13: "没配模型也要能开：空态说清缺的是哪一样，并给直达入口，而不是一片空白。",
+  14: "空态即引导：先选工作区，再配模型，两步都给按钮。",
+  15: "历史会话只读。切过去就换 store，删除当前会话时服务端顺手开一个新的。",
+  16: "隔离工作区的 diff 要在落地前看：这是「改完再决定去留」的关键一步。",
+  17: "密钥只写不读，前端永不回显明文；档位认不出时报错而不是回落。",
+  18: "输入区与会话同宽（只占第 2 列，不横跨侧栏）：输入框是「对话的一部分」，"
+    + "不是页脚。跨过去之后视线要在侧栏宽度之外才能落笔，长会话里尤其别扭。",
+  19: "输入框默认三行高（≈84px），随内容长到约八行（208px）后内部滚动——"
+    + "给默认高度是为了让用户一开始就看出这里能写多段。",
+  20: "顶栏模型 / 档位芯片是「默认值」，对新任务生效；每个 Run 实际用的模型显示在运行头——"
+    + "多任务并行时「用谁在跑」必须按 Run 回答，一枚全局芯片答不了。",
+  21: "运行中输入照常排队（与 CLI 同一口径），发送不禁用；排队的条目在时间线里标「已入队」。"
+    + "挂起（等审批）与运行中一样可以输入。",
+  22: "Run 完成后仍可续聊：发送即开新任务、沿用同一会话；"
+    + "隔离工作区的 diff 未落地前，提示条保留。",
+  23: "档位切换不追溯：只影响之后的工具调用，已挂起的审批卡仍等人裁决，"
+    + "不自动放行也不作废。",
+};
+
+const legend = document.getElementById("legend");
+legend.innerHTML = Object.entries(NOTES)
+  .map(([n, text]) => `<div class="legend-row"><b>${n}</b><span>${text}</span></div>`)
+  .join("");
+
+const frame = document.getElementById("frame");
+document.querySelectorAll('.tabs .tab[data-screen]').forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll('.tabs .tab[data-screen]').forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+    frame.querySelectorAll(":scope > section").forEach((s) => { s.hidden = s.dataset.screen !== btn.dataset.screen; });
+  });
+});
+
+const annoBtn = document.getElementById("btn-anno");
+annoBtn.addEventListener("click", () => {
+  const on = document.body.classList.toggle("show-anno");
+  annoBtn.setAttribute("aria-pressed", String(on));
+  annoBtn.textContent = on ? "隐藏设计标注" : "显示设计标注";
+  document.querySelectorAll('.anno-host').forEach((h) => { h.style.outline = on ? "1px dashed rgba(99,102,241,.35)" : ""; });
+});
+
+document.querySelectorAll(".tools .tab[data-w]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tools .tab[data-w]").forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+    frame.classList.remove("frame--wide", "frame--mid", "frame--narrow");
+    frame.classList.add("frame--" + btn.dataset.w);
+    // 窄屏：侧栏全部收成抽屉（CSS 已备好 overlay + 遮罩），由顶栏汉堡开合
+    const narrow = btn.dataset.w === "narrow";
+    frame.querySelectorAll("section[data-screen] .sidebar").forEach((s) => { s.hidden = narrow; });
+  });
+});
+
+// 抽屉开关：窄屏的汉堡入口，以及屏 ① 那个常驻的「切换侧栏」
+document.querySelectorAll("[data-drawer]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const aside = btn.closest("section").querySelector(".sidebar");
+    if (aside) aside.hidden = !aside.hidden;
+  });
+});
+
+document.querySelectorAll("button, textarea").forEach((el) => {
+  if (el.closest(".tabs") || el.closest(".tools")) return;
+  el.addEventListener("click", (e) => {
+    if (el.tagName === "TEXTAREA") return;
+    e.preventDefault();
+  });
+});
+</script>
+</body>
+</html>

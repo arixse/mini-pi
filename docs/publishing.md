@@ -13,8 +13,8 @@ git push origin v1.0.1
 工作流：`.github/workflows/publish.yml`，依次执行
 `install → pnpm check → 定版本 → build:cli → 预检 → 打包校验 → publish`。
 
-> **定版本必须在 build 之前**：`src/cli/version.ts` 是
-> `import pkg from "../../package.json"`，esbuild 会把 `version` 字段内联进 bundle。
+> **定版本必须在 build 之前**：`packages/cli/src/version.ts` 是
+> `import pkg from "../package.json"`，esbuild 会把 `version` 字段内联进 bundle。
 > 顺序反过来时，发出去的 CLI 报的是仓库里的旧号而不是 tag 上的号——
 > 过去靠 `npm pack` 隐式重跑 `prepare` 才碰巧修好，加 `--ignore-scripts` 就会翻车。
 > 打包校验里因此有两条断言：`node <cli> --version` 与 `$VERSION` 逐字相等，
@@ -149,7 +149,7 @@ try renaming your package to '@minipi/mini-pi' and publishing with
 
 曾想把 `src` 收进包、再用 `.npmignore` 剔除测试文件，实测无效：
 npm 的规则是 `files` 字段包含的文件不能被 `.npmignore` / `.gitignore` 排除。
-而且 `src/**/*.test.ts` 这种中间带 `**` 的写法本身也匹配不到。
+而且 `packages/*/src/**/*.test.ts` 这种中间带 `**` 的写法本身也匹配不到。
 
 最终解法不是修 ignore 规则，而是重新想清楚"包里到底需要什么"——
 答案是 bundle 自包含，压根不需要 `src`。问题消失，包也从 622KB 降到 333KB。

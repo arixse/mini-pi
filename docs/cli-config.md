@@ -116,7 +116,7 @@
 
 > 「最长前缀优先」不是装饰：`glm-4-long`（1M）要是被 `glm-4`（128K）先匹配到，
 > 压缩会在远未超窗时就触发；反过来 `MiniMax-M2-her`（64K）被 `MiniMax-M2*`（204.8K）
-> 吞掉，请求会在压缩之前就 400。改表时逐条对照 `src/provider/context-window.ts`。
+> 吞掉，请求会在压缩之前就 400。改表时逐条对照 `packages/core/src/provider/context-window.ts`。
 
 > 窗口小于 128k 的模型**必须登记**，否则请求会在压缩触发前就超窗（400）。
 
@@ -154,7 +154,7 @@ JSONL 是上下文的唯一事实来源，一行损坏不会让整份会话打�
 
 ## 4. Agent 事件类型
 
-`runAgentLoop` 会发出以下事件（`src/shared/protocol.ts`）：
+`runAgentLoop` 会发出以下事件（`packages/core/src/shared/protocol.ts`）：
 
 | 事件 | 说明 |
 | ---- | ---- |

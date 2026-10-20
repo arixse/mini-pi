@@ -30,7 +30,7 @@ pnpm dev:cli
 
 ### 2.2 免安装运行
 
-`bin/mini-pi.js` 会用项目本地的 tsx 执行 `src/cli/entry.ts`：
+`bin/mini-pi.js` 会用项目本地的 tsx 执行 `packages/cli/src/entry.ts`：
 
 ```bash
 node bin/mini-pi.js
@@ -66,7 +66,7 @@ mini-pi exec "..." --cwd /path/to/dir   # 指定工作区
 
 ## 3. 启动流程
 
-CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
+CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
 
 0. **解析启动参数**：命中 `--version` / `-v` 时打印版本并立即返回。
 1. **确定工作目录**：`workspaceRoot = process.cwd()`。
@@ -85,7 +85,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 
 ### 3.1 System Prompt 组成
 
-段落顺序固定（`src/core/prompt.ts`）：
+段落顺序固定（`packages/core/src/prompt.ts`）：
 
 ```
 # 角色 → 工作区 → 工具使用 → 代码风格 → 遇到错误时 → 当前项目 → 输出
@@ -93,7 +93,7 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 # 可用 Skills（来自 Skill 元数据摘要）
 ```
 
-**技术栈**由 `src/core/projectStack.ts` 自动探测，列出模块系统、包管理器与真实存在的验证命令。
+**技术栈**由 `packages/core/src/projectStack.ts` 自动探测，列出模块系统、包管理器与真实存在的验证命令。
 不收 `dev` / `start`（长驻进程，会超时）；探测不出时整段省略。
 
 ### 3.2 启动界面示例
@@ -206,14 +206,14 @@ CLI 入口 `main()`（`src/cli/index.ts`）按以下顺序初始化：
 │ ℹ pass 372
 └ 5 行 · 71 B
 
-🔧 src/agent/model.ts                                                             ✅ 12ms
+🔧 packages/core/src/agent/model.ts                                                             ✅ 12ms
 │ @@ -313,2 +313,3 @@
 │     const tools = this.convertTools(input.tools);
 │ -   const response = await this.client.chat.completions.create({
 │ +   const response = await this.client.chat.completions.create(
 └ 1 处修改 · +1 -1
 
-📖 src/agent/tools/registry.ts                                                  ✅ 8ms · 744 行
+📖 packages/core/src/agent/tools/registry.ts                                                  ✅ 8ms · 744 行
 │ 1 │ import { existsSync, realpathSync } from "node:fs";
 │ 2 │ import { ToolDefinition, ToolResult } from "../shared/protocol";
 └ 共 744 行 · 24.2 KB · 显示前 2 行

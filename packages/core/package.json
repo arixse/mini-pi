@@ -1,0 +1,23 @@
+{
+  "name": "@minipi/core",
+  "version": "1.0.2",
+  "description": "Mini Pi 内核：执行编排（Run）、模型循环、工具、会话落盘、提示词",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test --test-concurrency=4 \"src/**/*.test.ts\""
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@types/node": "^26.3.0",
+    "chalk": "^6.0.0",
+    "openai": "^7.15.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

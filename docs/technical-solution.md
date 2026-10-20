@@ -11,33 +11,38 @@
 | AI SDK | OpenAI / Anthropic | 模型调用             |
 
 > Web / Server（Express + React + Vite）属第二阶段，**尚未实现**，依赖也未引入。
-> 实现时应复用 `src/agent` 的内核，而不是在 CLI 之上再包一层。
+> 实现时应复用 `packages/core/src/agent` 的内核，而不是在 CLI 之上再包一层。
 
 ## 2. 项目结构
 
 ```
 mini-pi/
-├── src/
-│   ├── agent/           # AI 代理核心逻辑
-│   │   ├── loop.ts      # 主循环
-│   │   ├── model/       # 模型封装（index.ts 汇总导出；config / types / errors / retry / stream / response / openai / anthropic / factory）
-│   │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
-│   │   └── sessionStore.ts # 会话存储
-│   ├── provider/        # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
-│   ├── core/            # 与界面无关的内核（客户端化的地基，M0 起陆续下沉）
-│   │   ├── prompt.ts    # 系统提示词组装；projectStack.ts 技术栈探测
-│   │   ├── risk.ts      # 工具调用的风险等级（结构化数据，不含呈现）
-│   │   └── context.ts   # 上下文窗口与压缩阈值；session.ts 落盘与压缩编排
-│   ├── cli/             # 命令行交互（内核的一个订阅者）
-│   │   ├── repl.ts      # 主循环；dispatch.ts 命令分派；turn.ts 回合执行
-│   │   ├── context.ts   # ReplOptions → 内核口径的翻译层
-│   │   ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
-│   │   └── exec.ts       # headless 执行（--json 输出 JSONL 事件流）
-│   │   └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
-│   └── shared/          # 共享模块
-│       └── protocol.ts  # 通信协议
+├── packages/
+│   ├── core/            # 内核：与界面无关，CLI 与客户端共用
+│   │   └── src/
+│   │       ├── agent/       # AI 代理核心逻辑
+│   │       │   ├── loop.ts      # 主循环
+│   │       │   ├── model/       # 模型封装（index.ts 汇总导出；config / types / errors / retry / stream / response / openai / anthropic / factory）
+│   │       │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
+│   │       │   └── sessionStore.ts # 会话存储
+│   │       ├── provider/    # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / anthropic）
+│   │       ├── shared/      # 共享模块（protocol.ts 通信协议）
+│   │       ├── run.ts       # 一次完整执行；runManager.ts 并发上限与排队
+│   │       ├── prompt.ts    # 系统提示词组装；projectStack.ts 技术栈探测
+│   │       ├── risk.ts      # 工具调用的风险等级（结构化数据，不含呈现）
+│   │       └── context.ts   # 上下文窗口与压缩阈值；session.ts 落盘与压缩编排
+│   ├── cli/             # 命令行客户端（发布到 npm 的就是它）
+│   │   └── src/
+│   │       ├── entry.ts     # 进程入口；index.ts 启动编排
+│   │       ├── repl.ts      # 主循环；dispatch.ts 命令分派；turn.ts 回合执行
+│   │       ├── context.ts   # ReplOptions → 内核口径的翻译层
+│   │       ├── toolEvents.ts # 事件 → 卡片 / 状态行；approval.ts 审批；exit.ts 退出协调
+│   │       ├── exec.ts      # headless 执行（--json 输出 JSONL 事件流）
+│   │       └── render.ts / status.ts / width.ts / ui.ts # 终端呈现
+│   └── client/          # 客户端：Web 前端与 Electron 壳（尚未实现，见 electron-client-plan.md）
+├── tests/               # 跨包测试（文档漂移门禁）
 ├── docs/                # 文档
-└── package.json
+└── package.json         # workspace 根（private，本身不发布）
 ```
 
 ## 3. 核心模块设计
@@ -76,14 +81,14 @@ mini-pi/
 - 当前已注册的提供商：7 家，名称 / SDK 类型 / 默认 Base URL 见
   [cli-config.md](./cli-config.md) §3（配置视角的唯一一张表）。
 
-> 新增供应商时除了实现 `Provider` 接口，还要同步 `src/provider/context-window.ts`
+> 新增供应商时除了实现 `Provider` 接口，还要同步 `packages/core/src/provider/context-window.ts`
 > 的推断表：窗口小于 128k 的模型若不登记，会在压缩触发前就超窗（400）。
 > 另外 Anthropic 官方的鉴权头是 `x-api-key`（不是 Bearer），且 Base URL 不带 `/v1`。
 > 各家的默认模型列表与接入细节见 [模型供应商对接](providers.md)（唯一来源），此处只保留注册概览。
 
 ### 3.2 工具层 (Tools)
 
-CLI 内置工具（`src/agent/tools/`；除 `load_skill` 外全部限制在 `workspaceRoot` 内）：
+CLI 内置工具（`packages/core/src/agent/tools/`；除 `load_skill` 外全部限制在 `workspaceRoot` 内）：
 
 | 工具               | 只读 | 说明                                                                                                                                |
 | ------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -143,7 +148,7 @@ CLI 侧由 `createInputScheduler` 保证**任意时刻只有一个回合在跑**
 
 ### 3.5 工具审批 (Approval)
 
-`src/cli/approval.ts` 把审批策略包装成 `beforeToolCall` 钩子：
+`packages/cli/src/approval.ts` 把审批策略包装成 `beforeToolCall` 钩子：
 
 - 只读工具（`list_files` / `glob` / `grep` / `read_file`）自动放行；
 - `write_file` / `edit_file` / `bash` 需用户确认，拒绝即 `block`；
@@ -208,7 +213,7 @@ Node 18 基线时期，当前基线已是 22，实现未做切换）。
 | 审批摘要 | `task` 有专属两行摘要（目标 / 角色+权限），"会不会动我的文件"必须第一眼可见                                                                     |
 | trace    | `/subagent trace on` 时每次委派写 `<会话>.sub-<id>.jsonl`（JSON Lines，含工具参数）；**默认关闭**，写失败只记 warning 不影响委派        |
 
-角色（`src/agent/roles.ts`）把**工具集 + 轮次预算 + 输出契约**绑在一起下发：
+角色（`packages/core/src/agent/roles.ts`）把**工具集 + 轮次预算 + 输出契约**绑在一起下发：
 `explore` 只读、`review` 只读且即使传 `allowWrite:true` 也不放开（契约依赖边界）、
 `implement` 带写工具且必须自述验证、`general` 为默认白板。
 
@@ -287,7 +292,7 @@ pnpm check
 | 项目             | 现状                                                                                      |
 | ---------------- | ----------------------------------------------------------------------------------------- |
 | 类型检查         | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters`           |
-| 单元测试         | `tsx --test "src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖          |
+| 单元测试         | `tsx --test "packages/*/src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖          |
 | 覆盖率门槛       | 行 85% / 分支 85% / 函数 90%，低于门槛即失败（随`pnpm check` 一起跑）                   |
 | 持续集成         | `.github/workflows/ci.yml`：install → **`pnpm check`**（push / PR / 手动触发） |
 | Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策                 |
@@ -303,9 +308,9 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 （开启时即清出 22 处，含 2 处重构遗留的死变量）。
 
 > **前端/后端命令暂未提供**：`pnpm dev:server`、`pnpm dev:web`、`pnpm build` 属于第二阶段
-> （Web 界面 + API 服务）。该阶段尚未实现（仓库中还没有 `src/server`、`src/client`），
+> （Web 界面 + API 服务）。该阶段尚未实现（仓库中还没有 `packages/client/src/server`、`packages/client/src`），
 > 为避免出现「文档里存在但必然失败」的命令，这些脚本暂时移除；
-> 第二阶段实现时会连同 `src/server/index.ts`、`src/client/main.tsx` 一起恢复。
+> 第二阶段实现时会连同 `packages/client/src/server/index.ts`、`packages/client/src/main.tsx` 一起恢复。
 
 ## 6. 配置
 

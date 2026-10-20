@@ -15,7 +15,13 @@ test-out.txt
 tmp-exp
 
 # CLI 打包产物（由 pnpm build:cli / prepare 生成，不入库）
-bin/mini-pi-cli.cjs
+# 拆分后产物落在 CLI 包内，不再是仓库根的 bin/
+packages/cli/bin/
+
+# 发布时由 CI 从仓库根复制进 CLI 包（files 白名单要它们），不入库：
+# 入库就会变成两份副本，改根上的那份时包里的那份静默过期
+packages/cli/README.md
+packages/cli/LICENSE
 
 # 本地提交信息临时文件
 .commit-msg*.tmp

@@ -8,9 +8,24 @@ importers:
 
   .:
     devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.5.1
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.13
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/cli:
+    devDependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.125.0
         version: 0.125.0
+      '@minipi/core':
+        specifier: workspace:*
+        version: link:../core
       '@types/node':
         specifier: ^26.3.0
         version: 26.5.1
@@ -20,6 +35,33 @@ importers:
       esbuild:
         specifier: ^0.25.2
         version: 0.25.12
+      openai:
+        specifier: ^7.15.0
+        version: 7.15.0
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.13
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/client:
+    devDependencies:
+      '@minipi/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/core:
+    devDependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.125.0
+        version: 0.125.0
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.5.1
+      chalk:
+        specifier: ^6.0.0
+        version: 6.0.0
       openai:
         specifier: ^7.15.0
         version: 7.15.0

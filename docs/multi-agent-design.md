@@ -3,9 +3,9 @@
 > 状态：**M0~M5 已全部落地**（`feature/multi-agent` 分支，2026-10-09 ~ 10-10 开发，
 > 2026-10-10 合入 main，记为 Day 18），其后的 A~E 修复批次也已全部落地
 > （结论与实施记录见本文第 10 节）。落地后的口径以
-> [技术方案](technical-solution.md) §3.6 与 `src/agent/subagent.ts` 为准；
+> [技术方案](technical-solution.md) §3.6 与 `packages/core/src/agent/subagent.ts` 为准；
 > 本文保留目标架构、里程碑、横切约束与修复记录，作为设计背景阅读。
-> 阅读前建议先看 [技术方案](technical-solution.md) 与 `src/agent/loop.ts`。
+> 阅读前建议先看 [技术方案](technical-solution.md) 与 `packages/core/src/agent/loop.ts`。
 
 ---
 
@@ -43,12 +43,12 @@
 
 | 既有资产 | 位置 | 复用方式 |
 | --- | --- | --- |
-| Agent 主循环 | `src/agent/loop.ts` → `runAgentLoop(options)` | **直接复用**：子 Agent 就是一次新的 `runAgentLoop` 调用，传不同的 `systemPrompt` / `messages` / `tools` / `maxTurns`，不写第二套循环 |
-| 模型接口 | `src/agent/model/` → `LlmModel.complete()` | 子 Agent 可注入不同模型（便宜模型做探索） |
-| 工具注册表 | `src/agent/tools/registry.ts` → `ToolRegistry` / `createToolRegistry()` | 子 Agent 用**过滤后的子集**；只读常量 `READ_ONLY_TOOL_NAMES` 仍是唯一事实来源 |
-| 审批钩子 | `src/cli/approval.ts` → `createToolApproval()` 产出 `BeforeToolCall` | 子 Agent 的工具调用走**同一个** `beforeToolCall`，不另开后门 |
-| 事件协议 | `src/shared/protocol.ts` → `AgentEvent` | 新增子 Agent 事件（追加可选字段，不改现有字段） |
-| 会话落盘 | `src/agent/sessionStore.ts`（`.jsonl` 条目树） | 委派在主会话里天然就是一条 `toolCall` + `toolResult`，无需新存储格式 |
+| Agent 主循环 | `packages/core/src/agent/loop.ts` → `runAgentLoop(options)` | **直接复用**：子 Agent 就是一次新的 `runAgentLoop` 调用，传不同的 `systemPrompt` / `messages` / `tools` / `maxTurns`，不写第二套循环 |
+| 模型接口 | `packages/core/src/agent/model/` → `LlmModel.complete()` | 子 Agent 可注入不同模型（便宜模型做探索） |
+| 工具注册表 | `packages/core/src/agent/tools/registry.ts` → `ToolRegistry` / `createToolRegistry()` | 子 Agent 用**过滤后的子集**；只读常量 `READ_ONLY_TOOL_NAMES` 仍是唯一事实来源 |
+| 审批钩子 | `packages/cli/src/approval.ts` → `createToolApproval()` 产出 `BeforeToolCall` | 子 Agent 的工具调用走**同一个** `beforeToolCall`，不另开后门 |
+| 事件协议 | `packages/core/src/shared/protocol.ts` → `AgentEvent` | 新增子 Agent 事件（追加可选字段，不改现有字段） |
+| 会话落盘 | `packages/core/src/agent/sessionStore.ts`（`.jsonl` 条目树） | 委派在主会话里天然就是一条 `toolCall` + `toolResult`，无需新存储格式 |
 | 取消与进程树 | `loop.ts` 的 `signal`、`tools/bash.ts` 的 `killProcessTree` | 子 Agent 用 **linked AbortController**，父取消即级联 |
 
 关键洞察：**委派本身就是一个工具调用**。子 Agent 的入参是 `toolCall.arguments`，返回值是 `toolResult.content`，因此它自动满足"assistant 的 toolCall 必须有一一对应且同序的 toolResult"这条协议约束，也自动随主会话落盘。这比另起一套"Agent 运行时 + 消息总线"轻得多。
@@ -61,7 +61,7 @@
 用户
  │
  ▼
-REPL (src/cli/repl.ts)  ── 单一 activeRun 锁，Ctrl+C → AbortController（根）
+REPL (packages/cli/src/repl.ts)  ── 单一 activeRun 锁，Ctrl+C → AbortController（根）
  │
  ▼
 runAgentLoop  [主 Agent, depth = 0]
@@ -70,7 +70,7 @@ runAgentLoop  [主 Agent, depth = 0]
  └─ 调用 task(goal, context, allowWrite) ──► beforeToolCall 审批（显示 goal/工具集/深度）
         │
         ▼
-    runSubAgent (src/agent/subagent.ts)  ── 独立 context：[systemPrompt, {goal}]
+    runSubAgent (packages/core/src/agent/subagent.ts)  ── 独立 context：[systemPrompt, {goal}]
         │  toolRegistry: 子集（默认只读，allowWrite 时补写工具）
         │  signal: 链接到父 controller 的子 controller
         │  maxTurns: 独立上限（默认 30）
@@ -100,12 +100,12 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- `src/shared/protocol.ts`
+- `packages/core/src/shared/protocol.ts`
   - 新增事件：`{type:"subagent_start"; agentId; parentId?; depth; goal}`、
     `{type:"subagent_end"; agentId; depth; ok; turns; usage; elapsedMs}`。
   - `AgentEvent` 用**联合类型追加**，不改现有成员，避免 `cli/render.ts` 的 switch 出现编译缺口。
   - 新增 `SubAgentResult` 类型：`{summary, artifacts?, usage, turns, truncated, error?}`。
-- `src/agent/subagent.ts`（先只放常量与类型）：
+- `packages/core/src/agent/subagent.ts`（先只放常量与类型）：
   - `MAX_SUBAGENT_DEPTH = 1`（可配置到 2）
   - `DEFAULT_SUBAGENT_MAX_TURNS = 30`
   - `SUBAGENT_RESULT_MAX_CHARS = 8000`
@@ -118,22 +118,22 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- 新增 `src/agent/subagent.ts` → `runSubAgent(options): Promise<SubAgentResult>`
+- 新增 `packages/core/src/agent/subagent.ts` → `runSubAgent(options): Promise<SubAgentResult>`
   - 内部调 `runAgentLoop`，传入：`systemPrompt = 子 Agent 提示词`、`messages = [{role:"user", content:[{type:"text", text: 组装后的 goal}]}]`、`toolRegistry = 子集 registry`、`maxTurns`、`signal = 子 controller`、`onEvent` 转发并标记 `agentId/depth`。
   - 结束后把最后一条 assistant 文本作为 `summary`，聚合所有 `usage`（各轮相加），记录 `turns` / `elapsedMs`。
   - 到达 `maxTurns` 时**返回 `ok:false` + 已完成的摘要**，不要抛错——父 Agent 需要看到"做到哪一步"来决定重试还是收缩目标。
-- 新增 `task` 工具（放在 `tools.ts` 旁的新文件 `src/agent/subagentTool.ts`，避免 `tools.ts` 继续膨胀）：
+- 新增 `task` 工具（放在 `tools.ts` 旁的新文件 `packages/core/src/agent/subagentTool.ts`，避免 `tools.ts` 继续膨胀）：
   - 参数：`goal`（必填，字符串）、`context`（可选，文件路径或代码片段数组）、`allowWrite`（可选布尔，默认 false）、`model`（可选，模型名）。
   - **不加入 `READ_ONLY_TOOL_NAMES`**：委派会真实消耗 token 与时间，且可能写文件，必须过审批。提示语由 `approval.ts` 的 `describeToolCall` 扩展，格式：
     `⚠️  需要确认  task [子 Agent depth=1]` / `│ 委派目标: <goal 前 120 字>（工具权限：bash / 写工具）`；
     给子 Agent 放开的 `allowWrite` / `allowBash` 会由 `assessToolRisk` 再提示一条 `elevated` 风险。
   - 结果裁剪：超过 `SUBAGENT_RESULT_MAX_CHARS` 时按现有 `capForModel` 的口径写明"已截断，共 N 字符，请让子 Agent 输出更聚焦的结论"。
-- `src/agent/tools/registry.ts`：
+- `packages/core/src/agent/tools/registry.ts`：
   - `createToolRegistry(workspaceRoot, options?)` 增加可选第二参（子 Agent 工具的依赖），保持单参调用兼容，避免改动现有测试。
   - 新增 `subsetRegistry(registry, names)` 或在 `ToolRegistry` 上加 `filter(names)`：子 Agent 注册表由父注册表派生，禁止"子 Agent 拿到父没注册的工具"。
 
 验收：主 Agent 一句"用子 Agent 读 src/agent 下所有文件并总结导出项"能跑通；主会话里只有一条 `task` 的 toolCall/toolResult。
-测试（`src/agent/subagent.test.ts`）：
+测试（`packages/core/src/agent/subagent.test.ts`）：
 
 - 子 Agent 的 `messages` 不含父历史（断言传给 fake model 的第一条消息只有 goal）；
 - 子 Agent 的工具定义里**不含** `task`（depth 到顶）；
@@ -145,10 +145,10 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- `src/agent/subagent.ts`：子 Agent 的 `beforeToolCall` **直接透传父级的钩子**，但在 `ToolCallContent` 之外多带一层上下文（depth / agentId）供 CLI 显示。实现方式：包一层
+- `packages/core/src/agent/subagent.ts`：子 Agent 的 `beforeToolCall` **直接透传父级的钩子**，但在 `ToolCallContent` 之外多带一层上下文（depth / agentId）供 CLI 显示。实现方式：包一层
   `withSubAgentContext(parentHook, {depth, agentId})`，返回新的 `BeforeToolCall`，内部仍调父钩子——**审批逻辑只有一份**。
 - 取消：`createLinkedController(parentSignal)`：父 abort → 子 abort；子 abort 不影响父。子 Agent 结束时 `finally` 里解除监听，避免监听器泄漏。
-- `src/cli/approval.ts`：`describeToolCall` 支持传入 `depth`，提示前缀加 `[子 Agent depth=N]`，让"这条 bash 是谁要跑的"可见。
+- `packages/cli/src/approval.ts`：`describeToolCall` 支持传入 `depth`，提示前缀加 `[子 Agent depth=N]`，让"这条 bash 是谁要跑的"可见。
 - `/trust` 语义：信任模式是**会话级**的，子 Agent 继承同一策略，不因为换了一层就重新变严格。
 
 验收：子 Agent 里触发 `write_file` 时终端出现带 depth 前缀的确认；Ctrl+C 在子 Agent 跑 `bash sleep 30` 时能立刻中断且不留孤儿进程。
@@ -163,12 +163,12 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- `src/cli/render.ts`：处理 `subagent_start/end`，渲染为**缩进一层的嵌套卡片**
+- `packages/cli/src/render.ts`：处理 `subagent_start/end`，渲染为**缩进一层的嵌套卡片**
   （缩进表达 depth，而不是只写在文案里）：开始是
   `🤖 委派 explore #a1b2c3d4` + 缩进一行的 goal；结束时
   `✅ 子 Agent explore #a1b2c3d4 完成` + 缩进一行的 `12 轮 · 3200 tokens · 8.4s`，
   再补一行 `用了 read_file、grep、verify_command`（没有工具调用时写"未调用任何工具"）。
-- `src/cli/repl.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
+- `packages/cli/src/repl.ts`：token 计量把子 Agent 的 `usage` **累加进本轮总量**，否则 `/status` 会显著低报成本。
 - 可选落盘：`/subagent trace on`（写 `settings.json` 的 `subagentTrace: true`，没有同名的 CLI 开关）
   时把子 Agent 的完整消息写到
   `~/.mini-pi/sessions/--<工作目录路径铺平>--/<会话>.sub-<agentId>.jsonl`；默认不写，避免磁盘与隐私噪音。
@@ -183,7 +183,7 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- 新增 `src/agent/roles.ts`：内置角色预设（纯数据，不新增依赖）
+- 新增 `packages/core/src/agent/roles.ts`：内置角色预设（纯数据，不新增依赖）
   - `explore`：只读工具、`maxTurns=20`、提示词要求输出"文件路径 + 关键符号 + 结论"，适合代码检索。
   - `implement`：含写工具、`maxTurns=40`、提示词要求"先复述改动点再动手，改完自述验证方式"。
   - `review`：只读 + `verify_command`（可跑测试/类型检查，但仍不能改文件）、`maxTurns=12`、输出"问题清单 + 严重级别 + 位置"。
@@ -197,7 +197,7 @@ runAgentLoop  [主 Agent, depth = 0]
 
 改动：
 
-- `src/agent/loop.ts` 的批次判定：目前只看 `isReadOnly(name)`。改为 `canRunConcurrently(call)`：
+- `packages/core/src/agent/loop.ts` 的批次判定：目前只看 `isReadOnly(name)`。改为 `canRunConcurrently(call)`：
   - 只读工具 → `true`（保持现状）；
   - `task` 且 `allowWrite !== true` 且后代不含写权限 → `true`；
   - 其余 → `false`。
@@ -213,7 +213,7 @@ runAgentLoop  [主 Agent, depth = 0]
 ## 5. 关键接口草图
 
 ```ts
-// src/agent/subagent.ts
+// packages/core/src/agent/subagent.ts
 export type SubAgentRole = "explore" | "implement" | "review" | "general";
 
 export type SubAgentRequest = {
@@ -249,7 +249,7 @@ export async function runSubAgent(options: RunSubAgentOptions): Promise<SubAgent
 ```
 
 ```ts
-// src/agent/subagentTool.ts
+// packages/core/src/agent/subagentTool.ts
 export function createSubAgentTool(deps: {
   workspaceRoot: string;
   model: LlmModel;
@@ -298,12 +298,12 @@ const childRegistry = parentRegistry.filter(names);         // 派生，不是�
 
 | 里程碑 | 新增/修改的测试文件 | 关键用例 |
 | --- | --- | --- |
-| M0 | `src/agent/subagent.test.ts` | 常量与类型收窄 |
-| M1 | `src/agent/subagent.test.ts` | 上下文隔离、无 `task` 自递归、父上下文不变、maxTurns 降级、结果截断标注 |
-| M2 | `src/agent/subagent.test.ts`、`src/cli/approval.test.ts` | 审批透传与 depth 前缀、级联取消、监听器不泄漏、block 不崩 |
-| M3 | `src/cli/render.test.ts`、`src/cli/status.test.ts` | 嵌套渲染、token 聚合、spinner 收尾 |
-| M4 | `src/agent/roles.test.ts` | 角色→工具集映射、冲突取严格 |
-| M5 | `src/agent/loop.test.ts`、`src/agent/tools/registry.test.ts` | 并发批次划分、结果顺序一致、预算超限返回错误结果、白名单一致性断言扩展 |
+| M0 | `packages/core/src/agent/subagent.test.ts` | 常量与类型收窄 |
+| M1 | `packages/core/src/agent/subagent.test.ts` | 上下文隔离、无 `task` 自递归、父上下文不变、maxTurns 降级、结果截断标注 |
+| M2 | `packages/core/src/agent/subagent.test.ts`、`packages/cli/src/approval.test.ts` | 审批透传与 depth 前缀、级联取消、监听器不泄漏、block 不崩 |
+| M3 | `packages/cli/src/render.test.ts`、`packages/cli/src/status.test.ts` | 嵌套渲染、token 聚合、spinner 收尾 |
+| M4 | `packages/core/src/agent/roles.test.ts` | 角色→工具集映射、冲突取严格 |
+| M5 | `packages/core/src/agent/loop.test.ts`、`packages/core/src/agent/tools/registry.test.ts` | 并发批次划分、结果顺序一致、预算超限返回错误结果、白名单一致性断言扩展 |
 
 每个里程碑收尾跑 `pnpm check`（typecheck + test），并按 `AGENTS.md` 要求提交 commit、同步 README 与 `docs/technical-solution.md`。
 

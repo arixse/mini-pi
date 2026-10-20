@@ -1,37 +1,17 @@
 {
-  "name": "@minipi/mini-pi",
+  "name": "@minipi/monorepo",
   "version": "1.0.2",
-  "description": "Mini Pi Code Agent - AI编程助手",
-  "bin": {
-    "mini-pi": "./bin/mini-pi-cli.cjs"
-  },
-  "files": [
-    "bin/mini-pi-cli.cjs",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=22"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/arixse/mini-pi.git"
-  },
-  "bugs": {
-    "url": "https://github.com/arixse/mini-pi/issues"
-  },
-  "homepage": "https://github.com/arixse/mini-pi#readme",
+  "description": "Mini Pi —— pnpm workspace 根（不发布；发布的是 packages/cli）",
+  "private": true,
   "scripts": {
-    "dev": "tsx watch src/cli/entry.ts",
-    "dev:cli": "tsx src/cli/entry.ts",
-    "build:cli": "esbuild src/cli/entry.ts --bundle --platform=node --target=node22 --outfile=bin/mini-pi-cli.cjs --format=cjs",
+    "dev": "pnpm --filter @minipi/mini-pi run dev",
+    "dev:cli": "pnpm --filter @minipi/mini-pi run dev:cli",
+    "build:cli": "pnpm --filter @minipi/mini-pi run build:cli",
+    "link:cli": "pnpm --filter @minipi/mini-pi run link:cli",
     "prepare": "npm run build:cli",
-    "link:cli": "npm link",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=4 \"src/**/*.test.ts\"",
-    "test:coverage": "tsx --test --test-concurrency=4 --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"src/**/*.test.ts\"",
+    "typecheck": "pnpm -r run typecheck && tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test --test-concurrency=4 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\"",
+    "test:coverage": "tsx --test --test-concurrency=4 --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\"",
     "check": "npm run typecheck && npm run test:coverage"
   },
   "keywords": [],
@@ -41,12 +21,11 @@
   "type": "module",
   "dependencies": {},
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
     "@types/node": "^26.3.0",
-    "chalk": "^6.0.0",
-    "esbuild": "^0.25.2",
-    "openai": "^7.15.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": []
   }
 }
