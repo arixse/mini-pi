@@ -431,6 +431,8 @@ interface Inspection {
   behind: number | null;
   ahead: number | null;
   remoteTags: string[] | null;
+  /** 远程跟踪引用不存在时记下它的名字，用于把报错说准 */
+  noRemoteBranch: string | null;
 }
 
 function inspect(ports: Ports, request: ReleaseRequest): Inspection {
@@ -440,6 +442,7 @@ function inspect(ports: Ports, request: ReleaseRequest): Inspection {
     behind: null,
     ahead: null,
     remoteTags: null,
+    noRemoteBranch: null,
   };
 
   const branch = ports.git(["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -452,8 +455,15 @@ function inspect(ports: Ports, request: ReleaseRequest): Inspection {
   }
   // A..B 是"B 里有而 A 里没有"，单边读起来没有方向歧义；
   // --left-right 那个写法要靠记忆才能分清左右各是 ahead 还是 behind
-  const behind = ports.git(["rev-list", "--count", `HEAD..${request.remote}/${request.branch}`]);
-  const ahead = ports.git(["rev-list", "--count", `${request.remote}/${request.branch}..HEAD`]);
+  // 先确认远程跟踪引用存在。少了这一步，分支还没推上去时 rev-list 会失败，
+  // 而那与"不在 git 仓库里"是同一种失败（都是 ok: false），报出来就成了
+  // "读不出仓库现状……origin 不可达"——把人引向查网络，真因却是分支没推。
+  const remoteRef = `${request.remote}/${request.branch}`;
+  if (!ports.git(["rev-parse", "--verify", "--quiet", remoteRef]).ok) {
+    return { ...empty, noRemoteBranch: remoteRef };
+  }
+  const behind = ports.git(["rev-list", "--count", `HEAD..${remoteRef}`]);
+  const ahead = ports.git(["rev-list", "--count", `${remoteRef}..HEAD`]);
   const tags = ports.git(["ls-remote", "--tags", request.remote]);
   if (!tags.ok) {
     return empty;
@@ -464,6 +474,7 @@ function inspect(ports: Ports, request: ReleaseRequest): Inspection {
     behind: behind.ok ? parseCount(behind.stdout) : null,
     ahead: ahead.ok ? parseCount(ahead.stdout) : null,
     remoteTags: parseRemoteTags(tags.stdout),
+    noRemoteBranch: null,
   };
 }
 
@@ -506,6 +517,13 @@ export async function runRelease(
   }
 
   const seen = inspect(ports, request);
+  if (seen.noRemoteBranch !== null) {
+    ports.log(
+      `发版中止：本地没有 ${seen.noRemoteBranch} 这个远程跟踪引用——${request.branch} 还没推上去，` +
+        `或者还没 fetch（试运行刻意不 fetch，所以这时先手动跑一次 git fetch ${request.remote}）`,
+    );
+    return 1;
+  }
   if (
     seen.branch === null ||
     seen.dirty === null ||

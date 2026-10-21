@@ -31,6 +31,7 @@ const LS_REMOTE =
 function baseGit(args: readonly string[]): CommandResult {
   const line = args.join(" ");
   if (line === "rev-parse --abbrev-ref HEAD") return { ok: true, stdout: "main\n", stderr: "" };
+  if (line.startsWith("rev-parse --verify --quiet ")) return OK;
   if (line === "status --porcelain") return OK;
   if (line.startsWith("rev-list --count ")) return { ok: true, stdout: "0\n", stderr: "" };
   if (line === "ls-remote --tags origin") return { ok: true, stdout: LS_REMOTE, stderr: "" };
@@ -493,6 +494,24 @@ describe("runRelease", () => {
     });
     assert.equal(await runRelease(["1.0.4"], ports), 1);
     assert.ok(ports.logs.join("\n").includes("读不出仓库现状"));
+  });
+
+  it("远程分支不存在时说清真因，而不是笼统的「读不出仓库现状」", async () => {
+    // 分支还没推上去时 rev-list 会失败，而这与"不在 git 仓库里"是同一种
+    // 失败（都只是 ok: false）。不先探一次远程跟踪引用的话，报出来的是
+    // "origin 不可达"，把人引向查网络——真因却是这个分支还没推上去。
+    const ports = fakePorts({
+      git(args) {
+        if (args[0] === "rev-parse" && args.includes("--verify")) {
+          return { ok: false, stdout: "", stderr: "" };
+        }
+        return baseGit(args);
+      },
+    });
+    assert.equal(await runRelease(["1.0.4"], ports), 1);
+    const printed = ports.logs.join("\n");
+    assert.ok(printed.includes("origin/main"), `实际输出：${printed}`);
+    assert.ok(!printed.includes("不可达"), "真因是分支没推上去，不是远程不可达");
   });
 
   it("远程没有任何 v 开头的 tag 时，bump 无从加起", async () => {
