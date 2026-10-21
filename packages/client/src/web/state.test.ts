@@ -304,6 +304,40 @@ describe("applyRunEvent：流式归约", () => {
     assert.equal(bubble.streaming, false);
     assert.equal(bubble.locked, true);
   });
+
+  it("被 maxTokens 截断要显式说出来（不能当成正常说完）", () => {
+    const view = emptyView();
+    const partial = assistantText("半句", 1000);
+    const truncated: AssistantMessage = { ...partial, stopReason: "length" };
+    feed(view, "run_1", [
+      { type: "message_start", message: assistantText("", 1000) },
+      { type: "message_update", message: partial, delta: "半句" },
+      { type: "message_end", message: truncated },
+    ]);
+
+    const notices = itemsOfKind(view, "notice");
+    assert.equal(notices.length, 1, "截断要有一条提示，且只有一条");
+    const notice = notices[0] as Extract<TimelineItem, { kind: "notice" }>;
+    assert.equal(notice.level, "warn");
+    assert.match(notice.text, /截断/);
+    assert.match(notice.text, /maxTokens/);
+  });
+
+  it("run_done 的失败原因留在时间线上，下一轮开始才清掉", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_done", status: "failed", elapsedMs: 3, tokens: 0, error: "模型返回 500" },
+    ]);
+    assert.equal(view.status, "failed");
+    assert.equal(view.runError, "模型返回 500", "失败原因不能只存在于服务端日志里");
+
+    addUserMessage(view, "再试一次", false);
+    assert.equal(view.runError, null, "用户重新提问就该清掉旧原因");
+
+    view.runError = "旧原因";
+    feed(view, "run_2", [{ type: "run_state", status: "queued" }]);
+    assert.equal(view.runError, null, "新一轮入队同样清掉旧原因");
+  });
 });
 
 describe("乐观插入与快照", () => {
@@ -327,6 +361,14 @@ describe("乐观插入与快照", () => {
       view.items.map((item) => (item.kind === "user" ? item.text : "")),
       ["第一句", "第二句"],
     );
+  });
+
+  it("替换条目会推进版本号：内容没变长也要重画", () => {
+    const view = emptyView();
+    const id = addUserMessage(view, "原话", false);
+    const before = view.items[0]!.rev ?? 0;
+    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true });
+    assert.equal(view.items[0]!.rev, before + 1);
   });
 
   it("upsertItem 按 id 覆盖而不是追加", () => {

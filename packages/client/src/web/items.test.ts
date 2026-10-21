@@ -40,6 +40,12 @@ describe("revisionOf", () => {
     assert.strictEqual(revisionOf(base), revisionOf({ ...base }));
   });
 
+  it("归约维护的版本号优先于字段指纹：长度没变也能看出改过", () => {
+    const base = { kind: "assistant" as const, id: "a", text: "甲", streaming: true, locked: false };
+    assert.notStrictEqual(revisionOf({ ...base, rev: 1 }), revisionOf({ ...base, rev: 2 }));
+    assert.strictEqual(revisionOf(base), revisionOf({ ...base, rev: undefined }));
+  });
+
   it("工具卡的状态、输出、耗时任一变化都要重画", () => {
     const base = tool();
     assert.strictEqual(revisionOf(base), revisionOf(tool()));

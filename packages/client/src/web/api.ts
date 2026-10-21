@@ -33,24 +33,62 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * REST 请求的超时上限。
+ *
+ * 本地服务正常情况下几毫秒就返回；一条请求挂着不动时，界面不该永远停在
+ * "处理中…"——按钮灰着、原因不说，是比失败更糟的状态。
+ */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
-  const text = await response.text();
-  const payload = text.length > 0 ? safeParse(text) : null;
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === "object" && "error" in payload
-        ? String((payload as { error: unknown }).error)
-        : `请求失败（HTTP ${response.status}）`;
-    throw new ApiError(response.status, message);
+  const abort = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, REQUEST_TIMEOUT_MS);
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      abort.abort();
+    } else {
+      init.signal.addEventListener("abort", () => abort.abort(), { once: true });
+    }
   }
-  return payload as T;
+
+  try {
+    const response = await fetch(path, {
+      ...init,
+      signal: abort.signal,
+      headers: {
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+    // 读 body 也算在超时之内：只等到响应头、body 卡住，界面同样是干等
+    const text = await response.text();
+    const payload = text.length > 0 ? safeParse(text) : null;
+    if (!response.ok) {
+      const message =
+        payload && typeof payload === "object" && "error" in payload
+          ? String((payload as { error: unknown }).error)
+          : `请求失败（HTTP ${response.status}）`;
+      throw new ApiError(response.status, message);
+    }
+    return payload as T;
+  } catch (error) {
+    if ((error as { name?: string } | null)?.name === "AbortError") {
+      throw new ApiError(
+        0,
+        timedOut
+          ? `请求超时（${REQUEST_TIMEOUT_MS / 1000}s）：本地服务没有响应`
+          : "请求已取消",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function safeParse(text: string): unknown {
@@ -134,10 +172,26 @@ const EVENT_TYPES = [
 export type StreamHandlers = {
   onEvent: (event: ServerEvent) => void;
   /** 连接状态变化：断线时界面要显式说出来，别让人以为卡住了 */
-  onStatus: (status: "open" | "reconnecting" | "closed") => void;
+  onStatus: (status: "open" | "reconnecting") => void;
+  /** 重连彻底失败：界面要说清原因并停止重连，而不是永远显示"正在重连" */
+  onError: (message: string) => void;
 };
 
 export type StreamHandle = { close: () => void };
+
+/**
+ * 第 n 次重连失败后等多久（毫秒）。
+ *
+ * 断线本身是常态（切页、服务端在 run_done 之后收连接），但"服务没了"时
+ * 固定 800ms 重连会一直空转，界面上只留一句"正在重连……"。
+ * 退避到 5s 封顶，超过 {@link MAX_RECONNECT_ATTEMPTS} 次就如实认输。
+ */
+export const MAX_RECONNECT_ATTEMPTS = 5;
+
+export function reconnectDelay(failures: number): number {
+  const exponent = Math.max(0, failures - 1);
+  return Math.min(500 * 2 ** exponent, 5_000);
+}
 
 /**
  * 订阅一条 Run 的事件流。
@@ -153,6 +207,7 @@ export function subscribeRun(
   let source: EventSource | null = null;
   let closed = false;
   let retryTimer: number | null = null;
+  let failures = 0;
 
   const open = (): void => {
     if (closed) {
@@ -161,23 +216,34 @@ export function subscribeRun(
     source = new EventSource(
       `/api/runs/${encodeURIComponent(runId)}/events?cursor=${current}`,
     );
-    source.onopen = () => handlers.onStatus("open");
+    source.onopen = () => {
+      failures = 0;
+      handlers.onStatus("open");
+    };
     source.onerror = () => {
       // 服务端主动收尾（run_done 之后 50ms）也会走到这里：
       // 已经收到终态就不再重连，否则会无限空转
       if (closed) {
         return;
       }
-      handlers.onStatus("reconnecting");
       source?.close();
       source = null;
+      failures += 1;
+      if (failures > MAX_RECONNECT_ATTEMPTS) {
+        // Run 可能已经随服务重启消失：这时继续重连只是无意义地空转，
+        // 把"刷新页面"这个真正能恢复的动作告诉用户
+        closed = true;
+        handlers.onError("事件流已断开：这个任务可能已随服务重启消失。刷新页面可重新加载。");
+        return;
+      }
+      handlers.onStatus("reconnecting");
       if (retryTimer !== null) {
         return;
       }
       retryTimer = window.setTimeout(() => {
         retryTimer = null;
         open();
-      }, 800);
+      }, reconnectDelay(failures));
     };
 
     for (const type of EVENT_TYPES) {
@@ -196,7 +262,6 @@ export function subscribeRun(
         if (payload.type === "run_done") {
           // 终态之后没有更多事件：主动收掉连接，别等浏览器反复重连
           handle.close();
-          handlers.onStatus("closed");
         }
       });
     }

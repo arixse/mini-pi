@@ -6,16 +6,16 @@
  * 于是这些用例测的是真的接线，不是某个 spy 被调用了几次。
  *
  * 三条最容易坏、且坏了不会报错的：
- * - Esc 的**收起顺序**（先关浮层，最后才停任务）——反过来的体验是
- *   "想关弹窗结果把任务停了"
- * - 乐观插入的用户消息：失败要撤回，成功要让位给服务端发回来的那条
+ * - Esc 的**收起顺序**（浮层 → 待删确认 → 抽屉），并且**绝不停任务**
+ * - 乐观插入的用户消息：失败要撤回并把正文还回输入框，成功要让位给服务端那条
  * - 提示条会自动消失，且不会把后一条误清掉
  */
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import type { AgentMessage } from "@minipi/core/shared/protocol";
 import { AppController } from "./controller";
-import type { AppState } from "../shared/types";
+import type { AppState, SessionDetail } from "../shared/types";
 import type { ClientState } from "./state";
 
 /** 假的 EventSource：只记下订阅，不真的连 */
@@ -65,6 +65,19 @@ const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 };
+
+const jsonResponse = (body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+function sessionDetail(sessionId: string, text: string): SessionDetail {
+  const messages: AgentMessage[] = [
+    { role: "user", content: [{ type: "text", text }], timestamp: 1 },
+  ];
+  return { sessionId, messages, messageCount: 1, compactedCount: 0 };
+}
 
 function snapshot(overrides: Partial<AppState> = {}): AppState {
   return {
@@ -121,7 +134,7 @@ describe("AppController", () => {
     assert.match(controller.store.current.error ?? "", /服务没起/);
   });
 
-  it("Esc 一路往上收：先浮层，再待删确认，最后才是停任务", async () => {
+  it("Esc 只收界面层：浮层 → 待删确认 → 抽屉，最后一层也不停任务", async () => {
     installFetch({
       "/api/state": { body: snapshot() },
       "/api/runs/": { body: {} },
@@ -129,14 +142,16 @@ describe("AppController", () => {
     await controller.boot();
     await settle();
 
-    // 三层同时开着：一次 Esc 只收最上面那层
+    // 四层同时开着：一次 Esc 只收最上面那层
     controller.store.update((state) => {
       state.ui.settings = true;
       state.ui.picker = true;
       state.ui.deleteTarget = "s1";
+      state.ui.sidebar = true;
       state.view.activeRunId = "run_1";
     });
     await settle();
+    requested.length = 0;
 
     controller.handleEscape();
     await settle();
@@ -151,12 +166,17 @@ describe("AppController", () => {
     await settle();
     assert.strictEqual(controller.store.current.ui.deleteTarget, null);
 
-    // 浮层都收完了才轮到停任务：这里发一次取消
     controller.handleEscape();
     await settle();
+    assert.strictEqual(controller.store.current.ui.sidebar, false, "抽屉也收");
+
+    // 全部收完后 Esc 什么都不该做——尤其不能停掉正在跑的任务
+    controller.handleEscape();
+    await settle();
+    assert.deepStrictEqual(requested, [], "Esc 不该发取消请求");
     assert.ok(
-      (controller.store.current.banner?.text ?? "").includes("已请求停止"),
-      "最后一层 Esc 才去停任务",
+      !(controller.store.current.banner?.text ?? "").includes("已请求停止"),
+      "Esc 不再停任务",
     );
   });
 
@@ -181,6 +201,30 @@ describe("AppController", () => {
       "发送失败要把乐观插入的那条撤掉",
     );
     assert.match(controller.store.current.banner?.text ?? "", /尚未配置模型/);
+  });
+
+  it("发送失败把正文还回输入框，而不是让用户重打一遍", async () => {
+    const restored: string[] = [];
+    controller.attachComposer({
+      current: {
+        clear: () => undefined,
+        focus: () => undefined,
+        restore: (text) => restored.push(text),
+      },
+    });
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/runs": { status: 409, body: { error: "尚未配置模型" } },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.send("  这段字不能丢  ");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+
+    assert.deepStrictEqual(restored, ["  这段字不能丢  "], "失败时正文原样回填");
+    assert.strictEqual(controller.store.current.view.items.length, 0, "乐观条目仍要撤回");
   });
 
   it("发送成功后订阅事件流（游标从 0 起，补齐断线期间的事件）", async () => {
@@ -251,6 +295,92 @@ describe("AppController", () => {
     );
     assert.strictEqual(controller.store.current.view.items.length, 2);
     assert.strictEqual(controller.store.current.view.sessionId, "s1.jsonl");
+  });
+
+  it("快速切会话：慢响应回来时不能盖掉后点的那一段", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/state")) {
+        return jsonResponse(snapshot({ currentSessionId: null }));
+      }
+      if (url.includes("/api/sessions/slow.jsonl")) {
+        // 先点的那个慢：80ms 后才回来
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return jsonResponse(sessionDetail("slow.jsonl", "慢的那段"));
+      }
+      if (url.includes("/api/sessions/fast.jsonl")) {
+        return jsonResponse(sessionDetail("fast.jsonl", "快的那段"));
+      }
+      return new Response(JSON.stringify({ error: "没有这个接口" }), { status: 404 });
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.actions.openSession("slow.jsonl");
+    controller.actions.openSession("fast.jsonl");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await settle();
+
+    assert.strictEqual(
+      controller.store.current.view.sessionId,
+      "fast.jsonl",
+      "最终应当停在最后点的那个会话上",
+    );
+    const first = controller.store.current.view.items[0];
+    assert.strictEqual(first?.kind, "user");
+    assert.match(
+      first?.kind === "user" ? first.text : "",
+      /快的那段/,
+      "时间线内容也必须来自后点的那次请求",
+    );
+  });
+
+  it("有活跃 Run 时 tick 会周期性拉一次状态（全局事件流落地前的兜底）", async () => {
+    const running: AppState["runs"][number] = {
+      runId: "run_bg",
+      title: "后台任务",
+      sessionId: "s1.jsonl",
+      status: "running",
+      model: "test/test-model",
+      startedAt: 1,
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: { root: "D:/ws", isolated: false, released: false },
+    };
+    installFetch({ "/api/state": { body: snapshot({ runs: [running] }) } });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    controller.tick(10_000);
+    await settle();
+    assert.strictEqual(
+      requested.filter((item) => item.url.includes("/api/state")).length,
+      1,
+      "有任务在跑时要补拉状态",
+    );
+
+    controller.tick(11_000);
+    await settle();
+    assert.strictEqual(
+      requested.filter((item) => item.url.includes("/api/state")).length,
+      1,
+      "同一个轮询窗口内不重复发请求",
+    );
+  });
+
+  it("没有活跃 Run 时不轮询：空闲时一个请求都不发", async () => {
+    installFetch({ "/api/state": { body: snapshot() } });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    controller.tick(10_000);
+    await settle();
+
+    assert.deepStrictEqual(requested, []);
   });
 
   it("提示条会自动消失，且不误清后一条", async () => {

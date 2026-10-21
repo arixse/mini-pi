@@ -16,6 +16,12 @@ import type { TimelineItem, ToolStatus } from "./state";
  * 按引用比较会永远认为没变。于是用指纹代替引用：指纹不变就不重画这一条。
  */
 export function revisionOf(item: TimelineItem): string {
+  // 归约里维护的版本号最准：任何就地修改都由 `bump()` 推进它，
+  // 于是"长度没变、内容变了"（例如 message_end 用权威正文覆盖）不会漏画。
+  // 历史重建出来的条目没有版本号，退回下面的字段指纹。
+  if (item.rev !== undefined) {
+    return `r${item.rev}`;
+  }
   switch (item.kind) {
     case "user":
       return `${item.text.length}:${item.queued}`;
