@@ -175,6 +175,7 @@ const EVENT_TYPES = [
   "approval_request",
   "approval_resolved",
   "stream_gap",
+  "journal_ready",
   "run_done",
 ] as const;
 

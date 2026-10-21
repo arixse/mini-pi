@@ -182,10 +182,20 @@ describe("App Server · 全局事件流", () => {
         "顺序要是状态在前、结束在后",
       );
       assert.ok(
-        frames.every((frame) => frame.runId === created.runId),
+        frames
+          .filter((frame) => frame.event.type !== "journal_ready")
+          .every((frame) => frame.runId === created.runId),
         "每一帧都要能回答'这是哪个 Run'",
       );
-      assert.ok(frames.every((frame) => frame.seq > 0), "应用级序号从 1 起");
+      assert.ok(
+        frames
+          .filter((frame) => frame.event.type !== "journal_ready")
+          .every((frame) => frame.seq > 0),
+        "事件的应用级序号从 1 起（ready 是连接级标记，序号随游标）",
+      );
+      const ready = frames.find((frame) => frame.event.type === "journal_ready");
+      assert.ok(ready, "建流要发 ready，前端收到它才敢弹通知");
+      assert.strictEqual(ready.runId, "", "ready 是连接级标记，不属于任何 Run");
     } finally {
       await server.close();
     }
@@ -198,7 +208,11 @@ describe("App Server · 全局事件流", () => {
       await server.stream(created.runId);
 
       const frames = await server.journal({ cursor: null, until: 300 });
-      assert.deepStrictEqual(frames, [], "首屏已经拿过状态，末端起流不该再补一遍");
+      assert.deepStrictEqual(
+        frames.map((frame) => frame.event.type),
+        ["journal_ready"],
+        "首屏已经拿过状态，末端起流不该再补历史——只该收到 ready",
+      );
     } finally {
       await server.close();
     }
@@ -221,6 +235,7 @@ describe("App Server · 全局事件流", () => {
         frames.some((frame) => frame.event.type === "run_done"),
         "补完缺口仍要把还在缓冲里的事件发出来",
       );
+      assert.strictEqual(frames.at(-1)?.event.type, "journal_ready");
     } finally {
       await server.close();
     }

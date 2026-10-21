@@ -203,6 +203,22 @@ svg.ic {
   color: var(--indigo-lt);
 }
 
+.notify-btn {
+  position: relative;
+}
+
+/* 通知开着时的小绿点：光靠图标透明度看不出状态 */
+.notify-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--emerald);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
 .drawer-btn {
   display: none;
 }

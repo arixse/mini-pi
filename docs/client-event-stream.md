@@ -111,6 +111,9 @@ data: {"runId":"","event":{"type":"stream_gap","firstSeq":9,"lastSeq":57}}
 
   前端收到它只需做一件事：重新拉 `/api/state`（控制事件丢了不会丢正文，
   状态是幂等的）。
+- 补历史放完后发一帧 `journal_ready`（`runId` 为空串）：前端收到它之前**不弹系统通知**，
+  否则刷新页面会把缓冲里的旧挂起、旧结束重新提醒一遍。断线重连同样先补历史再 ready；
+  已经弹过的 `tag` 由前端去重。
 - **不因 `run_done` 收连接**：这条流活到页面关闭。
 - 心跳 20s，与 per-run 流相同；连接计入 `AppServer.streams`，`stop()` 时统一断开。
 

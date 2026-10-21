@@ -53,6 +53,32 @@ class FakeEventSource {
   close(): void {}
 }
 
+/** 假的系统通知：只记录弹出内容，不碰操作系统 */
+class FakeNotification {
+  static permission: "default" | "granted" | "denied" = "granted";
+  static requestResult: "granted" | "denied" = "granted";
+  static requests = 0;
+  static created: FakeNotification[] = [];
+  title: string;
+  options: { body?: string; tag?: string } | undefined;
+  onclick: (() => void) | null = null;
+  constructor(title: string, options?: { body?: string; tag?: string }) {
+    this.title = title;
+    this.options = options;
+    FakeNotification.created.push(this);
+  }
+  static async requestPermission(): Promise<string> {
+    FakeNotification.requests += 1;
+    return FakeNotification.requestResult;
+  }
+  static reset(): void {
+    FakeNotification.permission = "granted";
+    FakeNotification.requestResult = "granted";
+    FakeNotification.requests = 0;
+    FakeNotification.created = [];
+  }
+}
+
 type Route = { status?: number; body?: unknown };
 
 /** 假 fetch 打过的每一次请求：用来断言"这个动作根本没发请求" */
@@ -129,14 +155,17 @@ describe("AppController", () => {
 
   beforeEach(() => {
     (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    (globalThis as { Notification?: unknown }).Notification = FakeNotification;
     FakeEventSource.all = [];
     FakeEventSource.last = null;
+    FakeNotification.reset();
     requested.length = 0;
     controller = new AppController();
   });
 
   afterEach(() => {
     delete (globalThis as { EventSource?: unknown }).EventSource;
+    delete (globalThis as { Notification?: unknown }).Notification;
   });
 
   it("boot 把服务端快照并进状态", async () => {
@@ -627,6 +656,114 @@ describe("AppController", () => {
     assert.match(controller.store.current.banner?.text ?? "", /已合并/);
     assert.strictEqual(controller.store.current.runs[0]?.workspace.merged, true);
     assert.strictEqual(controller.store.current.view.workspace?.merged, true);
+  });
+
+  it("通知：后台挂起只提醒一次；正在看的 Run 不提醒；切走后结束会提醒", async () => {
+    const run: AppState["runs"][number] = {
+      runId: "run_bg",
+      title: "后台任务",
+      sessionId: "s1.jsonl",
+      status: "running",
+      model: "test/test-model",
+      startedAt: 1,
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
+    };
+    installFetch({ "/api/state": { body: snapshot({ runs: [run] }) } });
+    await controller.boot();
+    await settle();
+
+    // 权限已授予（Fake 的默认）：点一次铃铛就开
+    await controller.actions.toggleNotifications();
+    await settle();
+    assert.strictEqual(controller.store.current.notifications.enabled, true);
+
+    const global = FakeEventSource.all.find((source) => source.url.includes("/api/events"));
+    assert.ok(global);
+    global.emit("journal_ready", { runId: "", event: { type: "journal_ready" } }, 0);
+
+    const request = {
+      id: "ap_1",
+      runId: "run_bg",
+      toolCallId: "call_1",
+      toolName: "write_file",
+      risk: { level: "none", reasons: [] },
+      summary: [],
+      argsPreview: "",
+      createdAt: 1,
+    };
+    global.emit(
+      "approval_request",
+      { runId: "run_bg", event: { type: "approval_request", request } },
+      1,
+    );
+    await settle();
+    assert.strictEqual(FakeNotification.created.length, 1);
+    assert.match(FakeNotification.created[0]!.title, /裁决/);
+
+    // 同一条挂起重放（断线/重连）不再弹
+    global.emit(
+      "approval_request",
+      { runId: "run_bg", event: { type: "approval_request", request } },
+      2,
+    );
+    await settle();
+    assert.strictEqual(FakeNotification.created.length, 1, "同一条挂起只提醒一次");
+
+    // 正在看这个 Run：卡就在眼前，不弹
+    controller.store.update((state) => {
+      state.view.activeRunId = "run_bg";
+    });
+    global.emit(
+      "approval_request",
+      {
+        runId: "run_bg",
+        event: { type: "approval_request", request: { ...request, id: "ap_2" } },
+      },
+      3,
+    );
+    await settle();
+    assert.strictEqual(FakeNotification.created.length, 1, "正在看的 Run 不弹");
+
+    // 切走之后它跑完了：要提醒
+    controller.store.update((state) => {
+      state.view.activeRunId = null;
+    });
+    global.emit(
+      "run_done",
+      { runId: "run_bg", event: { type: "run_done", status: "done", elapsedMs: 1200, tokens: 1 } },
+      4,
+    );
+    await settle();
+    assert.strictEqual(FakeNotification.created.length, 2);
+    assert.match(FakeNotification.created[1]!.title, /完成/);
+
+    // 让合并刷新定时器落完，别影响下一条用例
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await settle();
+  });
+
+  it("通知权限被拒：说清开不了，开关保持关闭", async () => {
+    installFetch({ "/api/state": { body: snapshot() } });
+    await controller.boot();
+    await settle();
+
+    controller.store.update((state) => {
+      state.notifications.permission = "default";
+      state.notifications.enabled = false;
+    });
+    FakeNotification.requestResult = "denied";
+
+    await controller.actions.toggleNotifications();
+    await settle();
+
+    assert.strictEqual(FakeNotification.requests, 1, "第一次点铃铛才申请权限");
+    assert.strictEqual(controller.store.current.notifications.enabled, false);
+    assert.strictEqual(controller.store.current.notifications.permission, "denied");
+    assert.match(controller.store.current.banner?.text ?? "", /没有拿到通知权限/);
   });
 
   it("丢弃失败（任务还在跑）时把服务端的原因原样说出来", async () => {

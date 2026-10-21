@@ -125,6 +125,13 @@ export type ServerEvent =
    * 把半截时间线当成完整的。正常使用几乎不会出现（缓冲 4000 条）。
    */
   | { type: "stream_gap"; firstSeq: number; lastSeq: number }
+  /**
+   * 全局流的"补历史已放完"标记（连接级，`runId` 为空串）。
+   *
+   * 只走 `/api/events`：前端收到它之前不弹系统通知——否则刷新页面会把
+   * 缓冲里的历史挂起/结束事件重新提醒一遍。
+   */
+  | { type: "journal_ready" }
   | {
       type: "run_done";
       status: RunPhase;
