@@ -493,6 +493,12 @@ export class AppServer {
     for (const entry of backlog.items) {
       stream.sendEnvelope(entry);
     }
+    // 补历史放完再告诉前端"可以开始提醒了"：否则刷新页面会把旧的挂起重新弹一遍
+    stream.sendEnvelope({
+      seq: this.journal.lastSeq,
+      runId: "",
+      event: { type: "journal_ready" },
+    });
 
     const unsubscribe = this.journal.subscribe((entry) => stream.sendEnvelope(entry));
 

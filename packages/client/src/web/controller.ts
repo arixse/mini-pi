@@ -23,6 +23,16 @@ import {
 import { ClientStore } from "./store";
 import type { Actions, SaveModelInput } from "./actions";
 import { textOf } from "./format";
+import {
+  approvalNotification,
+  detectNotifications,
+  doneNotification,
+  persistNotifications,
+  requestNotificationPermission,
+  shouldNotifyApproval,
+  shouldNotifyRunDone,
+  showSystemNotification,
+} from "./notify";
 import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
 
 /**
@@ -82,9 +92,22 @@ export class AppController {
   private globalStream: StreamHandle | null = null;
   /** 合并应用级事件触发的状态刷新 */
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 应用级流"补历史"完成之前不弹通知。
+   *
+   * 首连游标是 0，服务端会把缓冲里的旧挂起/结束重放一遍；不挡住的话，
+   * 每刷新一次页面就会把几天前的审批重新提醒一遍。
+   */
+  private notificationsArmed = false;
+  /** 已弹过的 tag：重连、重放、多标签页都不会把同一条提醒两遍 */
+  private readonly notified = new Set<string>();
 
   constructor() {
     this.actions = this.createActions();
+    // 环境探测放在构造时：顶栏铃铛一开始就要知道能不能点
+    this.store.update((state) => {
+      state.notifications = detectNotifications();
+    });
   }
 
   attachComposer(ref: ComposerRef): void {
@@ -204,6 +227,12 @@ export class AppController {
    * 同一个审批卡就会按两次。
    */
   private onGlobalEvent(envelope: RunEventEnvelope): void {
+    if (envelope.event.type === "journal_ready") {
+      // 补历史放完了：从这之后的事件才值得打扰用户
+      this.notificationsArmed = true;
+      return;
+    }
+
     let needsRefresh = false;
     // 走 store.update 而不是直接改：状态是就地修改的，没有这一步
     // 侧栏状态要等到下一次刷新才重画
@@ -213,6 +242,118 @@ export class AppController {
     if (needsRefresh) {
       this.scheduleRefresh();
     }
+    if (this.notificationsArmed) {
+      this.maybeNotify(envelope);
+    }
+  }
+
+  /**
+   * 该不该弹、弹什么。
+   *
+   * 只处理"需要人知道"的两类：审批挂起与后台 Run 结束。
+   * 正在看的那个 Run 且页面在前台时不弹——审批卡就在眼前。
+   */
+  private maybeNotify(envelope: RunEventEnvelope): void {
+    const state = this.store.current;
+    const notify = state.notifications;
+    if (!notify.supported || !notify.enabled || notify.permission !== "granted") {
+      return;
+    }
+    const hidden = typeof document !== "undefined" && document.hidden === true;
+    const viewedRunId = state.view.activeRunId;
+    const event = envelope.event;
+
+    if (event.type === "approval_request") {
+      if (!shouldNotifyApproval(viewedRunId, envelope.runId, hidden)) {
+        return;
+      }
+      const run = state.runs.find((item) => item.runId === envelope.runId);
+      this.notifyOnce(
+        approvalNotification({
+          approvalId: event.request.id,
+          runTitle: run?.title ?? "任务",
+          toolName: event.request.toolName,
+        }),
+        envelope.runId,
+      );
+      return;
+    }
+
+    if (event.type === "run_done") {
+      if (!shouldNotifyRunDone(viewedRunId, envelope.runId, hidden, event.status)) {
+        return;
+      }
+      const run = state.runs.find((item) => item.runId === envelope.runId);
+      this.notifyOnce(
+        doneNotification({
+          runId: envelope.runId,
+          runTitle: run?.title ?? "任务",
+          status: event.status,
+          elapsedMs: event.elapsedMs,
+        }),
+        envelope.runId,
+      );
+    }
+  }
+
+  private notifyOnce(
+    text: { title: string; body: string; tag: string },
+    runId: string,
+  ): void {
+    if (this.notified.has(text.tag)) {
+      return;
+    }
+    this.notified.add(text.tag);
+    // 通知只是提醒，不是审计：攒太多就从头丢，别让它变成另一个内存桶
+    if (this.notified.size > 200) {
+      this.notified.clear();
+    }
+    showSystemNotification(text, () => {
+      if (typeof window !== "undefined") {
+        window.focus();
+      }
+      void this.openRun(runId);
+    });
+  }
+
+  /**
+   * 通知开关。
+   *
+   * 第一次点铃铛才申请权限（浏览器要求用户手势）；之后就是开/关偏好。
+   * 权限被拒时只说"开不了"并说明去哪改，不反复弹权限框。
+   */
+  private async toggleNotifications(): Promise<void> {
+    const notify = this.store.current.notifications;
+    if (!notify.supported) {
+      this.banner("warn", "当前环境不支持系统通知");
+      return;
+    }
+    if (notify.permission === "denied") {
+      this.banner("warn", "浏览器已拒绝通知权限：请在浏览器设置里允许后再试");
+      return;
+    }
+    if (notify.permission === "default") {
+      const permission = await requestNotificationPermission();
+      this.store.update((state) => {
+        state.notifications.permission = permission;
+        state.notifications.enabled = permission === "granted";
+      });
+      if (permission !== "granted") {
+        persistNotifications(false);
+        this.banner("warn", "没有拿到通知权限：任务挂起时只会更新标题角标");
+        return;
+      }
+      persistNotifications(true);
+      this.banner("ok", "已开启系统通知：任务挂起或结束时提醒你");
+      return;
+    }
+
+    const enabled = !notify.enabled;
+    this.store.update((state) => {
+      state.notifications.enabled = enabled;
+    });
+    persistNotifications(enabled);
+    this.banner("ok", enabled ? "已开启系统通知" : "已关闭系统通知");
   }
 
   /** 合并 100ms 内的多次刷新请求（一轮里常连着来审批、裁决、结束三条） */
@@ -730,6 +871,7 @@ export class AppController {
           await this.refreshState(true);
         }
       },
+      toggleNotifications: () => this.toggleNotifications(),
       openPicker: () => {
         this.store.update((state) => {
           state.ui.picker = true;

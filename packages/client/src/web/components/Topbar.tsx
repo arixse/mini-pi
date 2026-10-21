@@ -7,6 +7,7 @@
  */
 
 import { useActions, useClient } from "../store";
+import { notificationButtonTitle } from "../notify";
 import { Icon } from "./Icon";
 
 export function Topbar(): React.ReactElement {
@@ -71,6 +72,16 @@ export function Topbar(): React.ReactElement {
 
       <span className="spacer" />
 
+      <button
+        className="icon-btn notify-btn"
+        title={notificationButtonTitle(state.notifications)}
+        aria-label="通知"
+        style={{ opacity: state.notifications.enabled ? 1 : 0.55 }}
+        onClick={() => void actions.toggleNotifications()}
+      >
+        <Icon name="bell" />
+        {state.notifications.enabled ? <span className="notify-dot" /> : null}
+      </button>
       <button className="icon-btn" title="设置" onClick={() => actions.openSettings()}>
         <Icon name="gear" />
       </button>

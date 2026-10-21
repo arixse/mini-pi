@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AppController, type ComposerHandle } from "./controller";
+import { titleFor } from "./notify";
 import { ClientProvider, useActions, useClient } from "./store";
 import { Boot } from "./components/Boot";
 import { Composer } from "./components/Composer";
@@ -54,6 +55,14 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
     const timer = window.setInterval(() => controller.tick(), 1000);
     return () => window.clearInterval(timer);
   }, [controller]);
+
+  // 有待裁决时在标签页标题上留一个数字：人切到别的页也能看见
+  const title = titleFor(state.approvals);
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = title;
+    }
+  }, [title]);
 
   return (
     <div className={`app${state.ui.sidebar ? " nav-open" : ""}`}>

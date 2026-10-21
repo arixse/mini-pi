@@ -40,6 +40,8 @@ export type Actions = {
   setSubAgent: (enabled: boolean) => Promise<void>;
   /** 隔离开关：只影响之后新发的任务；环境不支持时服务端 409 */
   setIsolate: (enabled: boolean) => Promise<void>;
+  /** 通知开关：第一次点会申请权限（必须在用户手势里），之后是开/关 */
+  toggleNotifications: () => Promise<void>;
   openPicker: () => void;
   closePicker: () => void;
   switchWorkspace: (path: string) => Promise<void>;

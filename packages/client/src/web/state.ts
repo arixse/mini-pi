@@ -28,6 +28,7 @@ import type {
   WorkspaceView,
 } from "../shared/types";
 import { textOf } from "./format";
+import type { NotifyState } from "./notify";
 
 export type ToolStatus = "running" | "done" | "failed";
 
@@ -125,6 +126,8 @@ export type ClientState = {
   isolate: boolean;
   /** 隔离不可用的原因；有值时开关打不开 */
   isolateError: string | null;
+  /** 系统通知：环境支持、权限、用户偏好（权限必须由点击铃铛申请） */
+  notifications: NotifyState;
   approvals: number;
   oldestApprovalRunId: string | null;
   runs: RunSummary[];
@@ -194,6 +197,7 @@ export function initialState(): ClientState {
     subAgent: false,
     isolate: false,
     isolateError: null,
+    notifications: { supported: false, permission: "default", enabled: false },
     approvals: 0,
     oldestApprovalRunId: null,
     runs: [],
