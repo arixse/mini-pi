@@ -13,5 +13,5 @@
   // 只有 `tests`（那是给 `tsc -p tsconfig.json` 用的，不该顺带把整个仓库
   // 再类型检查一遍），而 `tsx --test` 跑的是 packages/* 下的用例，
   // 于是这里单独给测试运行器一份"覆盖 packages"的配置。
-  "include": ["tests", "packages"]
+  "include": ["tests", "packages", "scripts"]
 }

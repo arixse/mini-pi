@@ -15,10 +15,11 @@
     "dist": "pnpm --filter @minipi/client run dist",
     "dist:win": "pnpm --filter @minipi/client run dist:win",
     "dist:mac": "pnpm --filter @minipi/client run dist:mac",
+    "release": "tsx scripts/release.ts",
     "prepare": "npm run build:cli",
     "typecheck": "pnpm -r run typecheck && tsc --noEmit -p tsconfig.json",
-    "test": "tsx --tsconfig tsconfig.test.json --test --test-concurrency=4 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\"",
-    "test:coverage": "tsx --tsconfig tsconfig.test.json --test --test-concurrency=4 --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-exclude=\"**/*.tsx\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\"",
+    "test": "tsx --tsconfig tsconfig.test.json --test --test-concurrency=4 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\" \"scripts/*.test.ts\"",
+    "test:coverage": "tsx --tsconfig tsconfig.test.json --test --test-concurrency=4 --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/shim/*.cjs\" --test-coverage-exclude=\"**/*.tsx\" --test-coverage-lines=85 --test-coverage-branches=85 --test-coverage-functions=90 \"packages/*/src/**/*.test.ts\" \"tests/*.test.ts\" \"scripts/*.test.ts\"",
     "check": "npm run typecheck && npm run test:coverage"
   },
   "keywords": [],
