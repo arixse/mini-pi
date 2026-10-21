@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { bootAppServer } from "./app";
+import { EventJournal } from "./journal";
 import {
   scriptedModel,
   startTestServer,
@@ -150,6 +151,73 @@ describe("App Server · 执行与事件流", () => {
       body: JSON.stringify({ prompt: "   " }),
     });
     assert.strictEqual(empty.status, 400);
+  });
+});
+
+describe("App Server · 全局事件流", () => {
+  it("补的是控制事件（带 runId），不补正文；run_done 之后连接仍然活着", async () => {
+    const server = await startTestServer({ responses: [textResponse("做完了")] });
+    try {
+      // 先建流再开跑：既测补历史，也测"订阅期间实时到达"
+      const collecting = server.journal({ cursor: 0, until: 800 });
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "跑一下" });
+      await server.stream(created.runId);
+      const frames = await collecting;
+
+      const types = frames.map((frame) => frame.event.type);
+      assert.ok(types.includes("run_state"), `应补到状态：${types.join(",")}`);
+      assert.ok(types.includes("run_done"), `应补到结束：${types.join(",")}`);
+      assert.ok(
+        !types.some((type) => type === "message_update" || type.startsWith("tool_execution")),
+        `正文与工具明细不该进全局流：${types.join(",")}`,
+      );
+      assert.ok(
+        types.indexOf("run_state") < types.lastIndexOf("run_done"),
+        "顺序要是状态在前、结束在后",
+      );
+      assert.ok(
+        frames.every((frame) => frame.runId === created.runId),
+        "每一帧都要能回答'这是哪个 Run'",
+      );
+      assert.ok(frames.every((frame) => frame.seq > 0), "应用级序号从 1 起");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("不带 cursor 时从末尾起流：不重放已经发生的事件", async () => {
+    const server = await startTestServer({ responses: [textResponse("好")] });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "跑" });
+      await server.stream(created.runId);
+
+      const frames = await server.journal({ cursor: null, until: 300 });
+      assert.deepStrictEqual(frames, [], "首屏已经拿过状态，末端起流不该再补一遍");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("游标被挤出缓冲时先发 stream_gap，runId 为空串", async () => {
+    const server = await startTestServer({
+      responses: [textResponse("好")],
+      // 容量调到 1：一轮执行有 queued / running / done 三条控制事件，必然挤出
+      journal: new EventJournal({ capacity: 1 }),
+    });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "跑" });
+      await server.stream(created.runId);
+
+      const frames = await server.journal({ cursor: 0, until: 400 });
+      assert.strictEqual(frames[0]?.event.type, "stream_gap", "续不上要先说出来");
+      assert.strictEqual(frames[0]?.runId, "", "缺口是连接级提示，不属于任何 Run");
+      assert.ok(
+        frames.some((frame) => frame.event.type === "run_done"),
+        "补完缺口仍要把还在缓冲里的事件发出来",
+      );
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -898,6 +966,7 @@ async function startNoModelServer(): Promise<TestServer> {
     del: async <T>(path: string): Promise<T> =>
       (await (await raw(path, { method: "DELETE" })).json()) as T,
     stream: async () => [],
+    journal: async () => [],
     close: async () => {
       await app.stop();
       const { rmSync } = await import("node:fs");

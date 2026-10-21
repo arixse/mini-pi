@@ -10,7 +10,7 @@
  */
 
 import type { ServerResponse } from "node:http";
-import type { BufferedEvent, ServerEvent } from "../shared/types";
+import type { BufferedEvent, RunEventEnvelope, ServerEvent } from "../shared/types";
 
 /**
  * 编码一帧。
@@ -20,17 +20,35 @@ import type { BufferedEvent, ServerEvent } from "../shared/types";
  * JSON 序列化会把换行转义成 `\n`，所以这里只需处理 JSON 之外的意外情况。
  */
 export function encodeFrame(seq: number, event: ServerEvent): string {
-  const payload = JSON.stringify(event) ?? "{}";
-  const lines = payload.split("\n").map((line) => `data: ${line}`);
-  return `id: ${seq}\nevent: ${event.type}\n${lines.join("\n")}\n\n`;
+  return encode(seq, event.type, event);
+}
+
+/**
+ * 全局流的一帧：`data` 里多一层 `runId`。
+ *
+ * 帧格式（`id`/`event`/`data`）与 per-run 流完全一致，只有 payload 不同；
+ * 解析端因此可以共用同一套重连与游标逻辑。
+ */
+export function encodeEnvelopeFrame(entry: { seq: number } & RunEventEnvelope): string {
+  return encode(entry.seq, entry.event.type, entry);
+}
+
+function encode(seq: number, type: string, payload: unknown): string {
+  const body = JSON.stringify(payload) ?? "{}";
+  // SSE 规定每个换行都要单独带 `data:`。JSON 会把字符串里的换行转义成 `\n`，
+  // 这里只防一个意外：payload 本身被格式化过（多行 JSON）。
+  const lines = body.split("\n").map((line) => `data: ${line}`);
+  return `id: ${seq}\nevent: ${type}\n${lines.join("\n")}\n\n`;
 }
 
 /** 心跳：注释行不会触发前端事件，只用来把"连接已死"尽早暴露成写失败 */
 export const HEARTBEAT_FRAME = ": ping\n\n";
 
 export type SseStream = {
-  /** 发一个带游标的事件 */
+  /** 发一个带 Run 内游标的事件 */
   send: (item: BufferedEvent) => void;
+  /** 发一个带应用级游标的全局流事件 */
+  sendEnvelope: (entry: { seq: number } & RunEventEnvelope) => void;
   /** 发心跳；连接已断开时返回 false，调用方据此收尾 */
   ping: () => boolean;
   end: () => void;
@@ -66,6 +84,12 @@ export function openSse(res: ServerResponse): SseStream {
         return;
       }
       res.write(encodeFrame(item.seq, item.event));
+    },
+    sendEnvelope: (entry) => {
+      if (closed || res.writableEnded) {
+        return;
+      }
+      res.write(encodeEnvelopeFrame(entry));
     },
     ping: () => {
       if (closed || res.writableEnded) {

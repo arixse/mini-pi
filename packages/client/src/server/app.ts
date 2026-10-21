@@ -22,6 +22,7 @@ import type { Server } from "node:http";
 import { HttpError, requireString } from "./errors";
 import { WorkspaceHost, errorMessage, type WorkspaceHostOptions } from "./host";
 import { errorHandler, localGuard, noStore } from "./http";
+import { EventJournal } from "./journal";
 import { openSse } from "./sse";
 import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "../shared/types";
 import type { ServeArgs } from "./serveArgs";
@@ -54,6 +55,13 @@ export type AppServerOptions = {
    * 应用里换了三次工作区，重启一问又回到最初那个。
    */
   workspaceMemory?: WorkspaceMemory;
+  /**
+   * 应用级事件日志；缺省新建一个。
+   *
+   * 注入点只给测试（容量调小以覆盖 `gap`）：生产路径永远是默认实例，
+   * 它必须挂在 AppServer 上——切工作区换的是 Host，不是"这个应用"。
+   */
+  journal?: EventJournal;
   now?: () => number;
 };
 
@@ -106,6 +114,8 @@ export class AppServer {
   private readonly options: AppServerOptions;
   private readonly webRoot: string;
   private readonly rememberWorkspace: WorkspaceMemory;
+  /** 全局 `run_state` / 审批 / 结束事件；正文增量不进来 */
+  private readonly journal: EventJournal;
   private server: Server | null = null;
   /** 进行中的 SSE 连接：关闭服务时要一起断掉，否则进程不退出 */
   private readonly streams = new Set<() => void>();
@@ -114,6 +124,7 @@ export class AppServer {
     this.options = options;
     this.webRoot = options.webRoot ?? defaultWebRoot();
     this.rememberWorkspace = options.workspaceMemory ?? nullWorkspaceMemory;
+    this.journal = options.journal ?? new EventJournal();
     this.host = this.createHost(options.workspaceRoot, options.tier);
     this.registerRoutes();
   }
@@ -146,6 +157,7 @@ export class AppServer {
     }
     this.streams.clear();
     this.host.close();
+    this.journal.clear();
     const server = this.server;
     this.server = null;
     if (!server) {
@@ -197,6 +209,8 @@ export class AppServer {
       ...(this.options.resolveModel ? { resolveModel: this.options.resolveModel } : {}),
       ...(this.options.providerService ? { providerService: this.options.providerService } : {}),
       ...(this.options.settingsStore ? { settingsStore: this.options.settingsStore } : {}),
+      // Host 只负责把控制事件交出来；日志归 AppServer，切工作区时不跟着换
+      onRunEvent: (runId, event) => this.journal.push(runId, event),
       ...(this.options.now ? { now: this.options.now } : {}),
     });
   }
@@ -246,6 +260,16 @@ export class AppServer {
     app.get("/api/runs/:id/events", (req, res, next) => {
       try {
         this.streamEvents(req, res);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    // 应用级事件流：所有 Run 的控制事件（见 docs/client-event-stream.md）。
+    // 与 per-run 流并存：正文与工具卡仍走那一条，这条只回答"别的任务怎么了"
+    app.get("/api/events", (req, res, next) => {
+      try {
+        this.streamJournal(req, res);
       } catch (error) {
         next(error);
       }
@@ -407,6 +431,62 @@ export class AppServer {
       }
     }, HEARTBEAT_INTERVAL_MS);
     // 心跳不该拖住进程退出
+    heartbeat.unref?.();
+
+    let closed = false;
+    const teardown = (): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+      this.streams.delete(teardown);
+      stream.end();
+    };
+
+    this.streams.add(teardown);
+    req.on("close", teardown);
+    req.on("error", teardown);
+  }
+
+  /**
+   * 应用级事件流。
+   *
+   * 与 per-run 流的差别只有三点：`data` 里多一层 `runId`、`id` 是应用级序号、
+   * 不因 `run_done` 收连接。断线由前端带游标重连，缺口用 `stream_gap` 明说。
+   */
+  private streamJournal(req: Request, res: Response): void {
+    const raw = req.query.cursor;
+    const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : undefined;
+    // 不带游标 = 从当前末尾开始：首屏已经拿过 `/api/state`，没必要再重放一遍
+    const cursor =
+      text === undefined ? this.journal.lastSeq : Math.max(0, Math.floor(Number(text) || 0));
+
+    const stream = openSse(res);
+    const backlog = this.journal.since(cursor);
+    if (backlog.gap) {
+      stream.sendEnvelope({
+        seq: cursor,
+        runId: "",
+        event: {
+          type: "stream_gap",
+          firstSeq: this.journal.firstSeq,
+          lastSeq: this.journal.lastSeq,
+        },
+      });
+    }
+    for (const entry of backlog.items) {
+      stream.sendEnvelope(entry);
+    }
+
+    const unsubscribe = this.journal.subscribe((entry) => stream.sendEnvelope(entry));
+
+    const heartbeat = setInterval(() => {
+      if (!stream.ping()) {
+        teardown();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
     heartbeat.unref?.();
 
     let closed = false;

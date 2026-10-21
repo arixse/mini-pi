@@ -132,7 +132,7 @@
 | 风险等级、命中原因 | 内核（`packages/core/src/risk.ts`），前端只配色 |
 | 工具调用的摘要文案 | 内核 `describeToolCall`，终端与 Web 说同一句话 |
 | 执行编排、取消、并发上限 | 内核（`packages/core/src/run.ts`、`runManager.ts`） |
-| 事件流 | 服务端 SSE，按游标续传；断流由前端补一次并给出提示条 |
+| 事件流 | 服务端 SSE，按游标续传；当前 Run 的正文走 per-run 流，所有 Run 的生命周期与审批走 `/api/events`（见 [client-event-stream.md](./client-event-stream.md)） |
 | 前端不做的 | 不评估风险、不压缩会话、不直连模型、不读密钥明文 |
 
 判据是"这条语义两端必须一致"：凡是一致性有代价的，都由内核产出**数据**，前端只做**呈现**。
