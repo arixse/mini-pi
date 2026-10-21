@@ -216,7 +216,8 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
 | [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M5 已全部落地）   |
-| [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、23 条已定决策（配套静态稿 `packages/client/design/mockup.html`） |
+| [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、24 条已定决策（配套静态稿 `packages/client/design/mockup.html`） |
+| [客户端事件流](docs/client-event-stream.md)      | 两条 SSE 的分工：当前 Run 的正文与所有 Run 的控制事件，以及游标、缺口与降级语义 |
 | [开发日志索引](notes/README.md)                 | day1 ~ day28，按真实提交日期编排                                             |
 
 ## 范围

@@ -18,17 +18,38 @@ import { AppController } from "./controller";
 import type { AppState, SessionDetail } from "../shared/types";
 import type { ClientState } from "./state";
 
-/** 假的 EventSource：只记下订阅，不真的连 */
+/** 假的 EventSource：记下订阅，并能手动投递一帧（测试里模拟服务端推送） */
 class FakeEventSource {
   static last: FakeEventSource | null = null;
+  /** 页面里同时活着几条流：per-run 一条 + 应用级一条 */
+  static all: FakeEventSource[] = [];
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   url: string;
+  private readonly handlers = new Map<
+    string,
+    Array<(event: MessageEvent<string>) => void>
+  >();
   constructor(url: string) {
     this.url = url;
     FakeEventSource.last = this;
+    FakeEventSource.all.push(this);
   }
-  addEventListener(): void {}
+  addEventListener(type: string, handler: (event: MessageEvent<string>) => void): void {
+    const list = this.handlers.get(type) ?? [];
+    list.push(handler);
+    this.handlers.set(type, list);
+  }
+  /** 投递一帧：`data` 是 JSON 负载，`id` 是 SSE 游标 */
+  emit(type: string, data: unknown, id: number): void {
+    const message = {
+      data: JSON.stringify(data),
+      lastEventId: String(id),
+    } as MessageEvent<string>;
+    for (const handler of this.handlers.get(type) ?? []) {
+      handler(message);
+    }
+  }
   close(): void {}
 }
 
@@ -106,6 +127,8 @@ describe("AppController", () => {
 
   beforeEach(() => {
     (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    FakeEventSource.all = [];
+    FakeEventSource.last = null;
     requested.length = 0;
     controller = new AppController();
   });
@@ -335,7 +358,7 @@ describe("AppController", () => {
     );
   });
 
-  it("有活跃 Run 时 tick 会周期性拉一次状态（全局事件流落地前的兜底）", async () => {
+  it("boot 后建立应用级事件流：后台 Run 的状态变化不再等轮询", async () => {
     const running: AppState["runs"][number] = {
       runId: "run_bg",
       title: "后台任务",
@@ -352,35 +375,84 @@ describe("AppController", () => {
     installFetch({ "/api/state": { body: snapshot({ runs: [running] }) } });
     await controller.boot();
     await settle();
-    requested.length = 0;
 
-    controller.tick(10_000);
-    await settle();
-    assert.strictEqual(
-      requested.filter((item) => item.url.includes("/api/state")).length,
-      1,
-      "有任务在跑时要补拉状态",
+    const global = FakeEventSource.all.find((source) => source.url.includes("/api/events"));
+    assert.ok(global, "首屏之后要有一条应用级流");
+    assert.match(global.url, /\/api\/events\?cursor=0/);
+
+    const before = controller.store.getRevision();
+    global.emit(
+      "run_state",
+      { runId: "run_bg", event: { type: "run_state", status: "blocked" } },
+      7,
     );
-
-    controller.tick(11_000);
     await settle();
+
+    assert.ok(controller.store.getRevision() > before, "状态改了就必须让 React 重画");
+    assert.strictEqual(controller.store.current.runs[0]?.status, "blocked");
     assert.strictEqual(
-      requested.filter((item) => item.url.includes("/api/state")).length,
-      1,
-      "同一个轮询窗口内不重复发请求",
+      controller.store.current.view.items.length,
+      0,
+      "后台事件不该往当前时间线塞卡片",
     );
   });
 
-  it("没有活跃 Run 时不轮询：空闲时一个请求都不发", async () => {
-    installFetch({ "/api/state": { body: snapshot() } });
+  it("后台的审批与结束事件合并成一次状态刷新", async () => {
+    let current: AppState["runs"][number] = {
+      runId: "run_bg",
+      title: "后台任务",
+      sessionId: "s1.jsonl",
+      status: "running",
+      model: "test/test-model",
+      startedAt: 1,
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: { root: "D:/ws", isolated: false, released: false },
+    };
+    installFetch({ "/api/state": () => ({ body: snapshot({ runs: [current] }) }) });
     await controller.boot();
     await settle();
     requested.length = 0;
 
-    controller.tick(10_000);
+    const global = FakeEventSource.all.find((source) => source.url.includes("/api/events"));
+    assert.ok(global);
+    const request = {
+      id: "ap_1",
+      runId: "run_bg",
+      toolCallId: "call_1",
+      toolName: "write_file",
+      risk: { level: "none", reasons: [] },
+      summary: [],
+      argsPreview: "",
+      createdAt: 1,
+    };
+    global.emit(
+      "approval_request",
+      { runId: "run_bg", event: { type: "approval_request", request } },
+      8,
+    );
+    current = { ...current, status: "done", elapsedMs: 12, tokens: 3 };
+    global.emit(
+      "run_done",
+      {
+        runId: "run_bg",
+        event: { type: "run_done", status: "done", elapsedMs: 12, tokens: 3 },
+      },
+      9,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await settle();
 
-    assert.deepStrictEqual(requested, []);
+    assert.strictEqual(
+      requested.filter((item) => item.url.includes("/api/state")).length,
+      1,
+      "合并窗口内的两条事件只该刷新一次",
+    );
+    assert.strictEqual(controller.store.current.runs[0]?.status, "done");
+    assert.strictEqual(controller.store.current.runs[0]?.elapsedMs, 12);
   });
 
   it("提示条会自动消失，且不误清后一条", async () => {

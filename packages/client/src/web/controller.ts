@@ -9,10 +9,11 @@
  * `ComposerHandle` 接回来——只有这两件事，其余一律走状态。
  */
 
-import { ApiError, api, subscribeRun, type StreamHandle } from "./api";
+import { ApiError, api, subscribeEvents, subscribeRun, type StreamHandle } from "./api";
 import {
   addUserMessage,
   applyRunEvent,
+  applyRunMetaEvent,
   applyRunWorkspace,
   applySnapshot,
   emptyView,
@@ -22,7 +23,7 @@ import {
 import { ClientStore } from "./store";
 import type { Actions, SaveModelInput } from "./actions";
 import { textOf } from "./format";
-import type { ApprovalAnswer, ServerEvent, Tier } from "../shared/types";
+import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
 
 /**
  * 输入区暴露给动作层的三个命令：清空、聚焦、把没发出去的字还回去。
@@ -42,13 +43,12 @@ export type ComposerRef = { current: ComposerHandle | null };
 const BANNER_TTL_MS = 6000;
 
 /**
- * 有活跃 Run 时的状态轮询间隔。
+ * 应用级事件触发的状态刷新合并窗口。
  *
- * 现在的事件流是"按 Run"订阅的，当前没订阅的 Run 发生了什么，界面收不到。
- * 全局事件流（`/api/events`）落地前先用一次轻量轮询兜住后台状态与待审批数；
- * 落地后这段连同 `tick` 里的轮询分支一起删掉。
+ * 一轮里常连着来几条（审批请求 → 裁决 → 结束），每条都拉 `/api/state`
+ * 纯属浪费；100ms 足够把它们并成一次，又不会让侧栏看起来卡着不动。
  */
-const STATE_POLL_MS = 5_000;
+const REFRESH_DEBOUNCE_MS = 100;
 
 export class AppController {
   readonly store = new ClientStore();
@@ -76,10 +76,12 @@ export class AppController {
    * 先发的请求可能后回来——代次对不上就丢弃，否则最终显示的是"上上次"点的会话。
    */
   private viewEpoch = 0;
-  /** 上次主动轮询状态的时间；有活跃 Run 才轮询（见 STATE_POLL_MS） */
-  private lastPollAt = 0;
   /** `/api/state` 的请求代次：乱序回来的旧快照不能盖掉新的 */
   private stateSeq = 0;
+  /** 应用级事件流：常驻，活到页面关闭（见 docs/client-event-stream.md） */
+  private globalStream: StreamHandle | null = null;
+  /** 合并应用级事件触发的状态刷新 */
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.actions = this.createActions();
@@ -103,6 +105,8 @@ export class AppController {
         applySnapshot(state, snapshot);
         state.error = null;
       });
+      // 首份快照之后立刻建全局流：快照与建流之间发生的事件必须补上
+      this.startGlobalStream();
       if (snapshot.currentSessionId) {
         await this.openSession(snapshot.currentSessionId);
       }
@@ -116,7 +120,7 @@ export class AppController {
   /**
    * 重新拉一份全量状态（不碰时间线，避免正在看的内容闪一下）。
    *
-   * `quiet` 给轮询用：网络抖一下不该每 5 秒弹一条错误提示；
+   * `quiet` 给后台同步用：网络抖一下不该每 100ms 弹一条错误提示；
    * 反过来，用户动作触发的刷新必须把失败说出来。
    */
   private async refreshState(quiet = false): Promise<void> {
@@ -151,26 +155,74 @@ export class AppController {
   }
 
   /**
-   * 外部定时器每秒调一次：走字 + 兜底轮询。
+   * 外部定时器每秒调一次：让运行中的耗时走字。
    *
-   * 走字只在"正在看一个未结束的 Run"时有必要；轮询则只在这个服务还有
-   * 活跃 Run 时才有必要（空闲时一个请求都不发）。
+   * 后台状态不再靠这里轮询：应用级事件流（`/api/events`）会把别的 Run 的
+   * 状态/审批/结束送过来，见 `startGlobalStream`。
    */
-  tick(now: number = Date.now()): void {
-    const state = this.store.current;
-    const view = state.view;
+  tick(): void {
+    const view = this.store.current.view;
     if (view.activeRunId !== null && view.status !== "done") {
       this.store.touch();
     }
+  }
 
-    const hasActiveRun = state.runs.some(
-      (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
-    );
-    if (!hasActiveRun || now - this.lastPollAt < STATE_POLL_MS) {
+  // ------------------------------------------------------------ 应用级事件流
+
+  /**
+   * 建一条常驻的应用级流。
+   *
+   * 首帧游标用 0：`/api/state` 与建流之间有一个窗口，这期间的控制事件必须补；
+   * 控制事件很小，重放无害。断线重连由 `subscribeEvents` 带着最新游标做。
+   */
+  private startGlobalStream(): void {
+    if (this.globalStream) {
       return;
     }
-    this.lastPollAt = now;
-    void this.refreshState(true);
+    this.globalStream = subscribeEvents(0, {
+      onEvent: (envelope) => this.onGlobalEvent(envelope),
+      onStatus: (status) => {
+        this.store.update((state) => {
+          state.globalNote = status === "reconnecting" ? "后台事件流断开，正在重连……" : null;
+        });
+      },
+      onError: (message) => {
+        // 停止自动重连：把"刷新页面可恢复"留在界面上，而不是无限转圈
+        this.globalStream = null;
+        this.store.update((state) => {
+          state.globalNote = message;
+        });
+      },
+    });
+  }
+
+  /**
+   * 应用级事件只改 `runs` 与（必要时）拉状态，不碰时间线。
+   *
+   * 当前 Run 的正文/卡片由 per-run 流归约；这里要是也应用一遍，
+   * 同一个审批卡就会按两次。
+   */
+  private onGlobalEvent(envelope: RunEventEnvelope): void {
+    let needsRefresh = false;
+    // 走 store.update 而不是直接改：状态是就地修改的，没有这一步
+    // 侧栏状态要等到下一次刷新才重画
+    this.store.update((state) => {
+      needsRefresh = applyRunMetaEvent(state, envelope.runId, envelope.event);
+    });
+    if (needsRefresh) {
+      this.scheduleRefresh();
+    }
+  }
+
+  /** 合并 100ms 内的多次刷新请求（一轮里常连着来审批、裁决、结束三条） */
+  private scheduleRefresh(): void {
+    if (this.refreshTimer !== null) {
+      return;
+    }
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      void this.refreshState(true);
+    }, REFRESH_DEBOUNCE_MS);
   }
 
   // ------------------------------------------------------------ 会话 / Run

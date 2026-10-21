@@ -233,6 +233,13 @@ function Banners(): React.ReactElement {
           {view.streamNote}
         </div>
       ) : null}
+      {state.globalNote ? (
+        // 后台同步断了不影响当前这一轮，但"别的任务停在旧状态"必须说出来
+        <div className="bar bar-warn">
+          <Icon name="alert" />
+          {state.globalNote}
+        </div>
+      ) : null}
       {view.gap ? (
         <div className="bar bar-warn">
           <Icon name="alert" />

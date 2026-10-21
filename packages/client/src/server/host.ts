@@ -51,6 +51,7 @@ import { WorkspaceManager, type Workspace } from "@minipi/core/worktree";
 import { logger } from "@minipi/core/shared/logger";
 import { ApprovalBroker, newApprovalId } from "./broker";
 import { HttpError } from "./errors";
+import { isRunMetaEvent } from "./journal";
 import { previewToolArgs } from "../shared/preview";
 import { RunRecord } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
@@ -109,6 +110,12 @@ export type WorkspaceHostOptions = {
    */
   providerService?: ModelProviderService;
   settingsStore?: SettingsStore;
+  /**
+   * 控制事件的旁路出口：AppServer 用它喂应用级日志（`/api/events`）。
+   *
+   * 只送 `isRunMetaEvent` 认可的那几类；正文增量仍然只走 per-run 流。
+   */
+  onRunEvent?: (runId: string, event: ServerEvent) => void;
   now?: () => number;
 };
 
@@ -135,6 +142,7 @@ export class WorkspaceHost {
   /** 隔离不可用的原因（探测过一次就记下，发送时照着报错） */
   private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
+  private readonly onRunEvent: ((runId: string, event: ServerEvent) => void) | undefined;
   private readonly now: () => number;
 
   private readonly records = new Map<string, RunRecord>();
@@ -165,6 +173,7 @@ export class WorkspaceHost {
     this.providerService = options.providerService ?? new ModelProviderService();
     this.settingsStore = options.settingsStore ?? new SettingsStore();
     this.resolveModelImpl = options.resolveModel ?? defaultResolveModel;
+    this.onRunEvent = options.onRunEvent;
     this.skillLoader = new SkillLoader(this.workspaceRoot);
     this.sessionManager = new SessionManager(this.workspaceRoot, {
       skillLoader: this.skillLoader,
@@ -793,7 +802,11 @@ export class WorkspaceHost {
   }
 
   private push(record: RunRecord, event: ServerEvent): void {
+    // 先给 per-run 流（正文与卡片都靠它），再把控制事件抄一份给应用级日志
     record.push(event);
+    if (isRunMetaEvent(event)) {
+      this.onRunEvent?.(record.runId, event);
+    }
   }
 
   private modelLabel(): string {

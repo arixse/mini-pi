@@ -334,6 +334,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   （`src/server/sse.ts`）：带 `id:` 游标、心跳与断线重放，前端断线后用最新
   游标重开，重放区间为空——`EventSource` 自带的自动重连用同一个 URL，
   会把增量事件重放一遍。来源校验同样自己写（`src/server/http.ts`）。
+- **两条事件流，各管一件事**：`/api/runs/:id/events` 送当前 Run 的完整事件
+  （正文、工具卡），`/api/events` 送所有 Run 的生命周期与审批（应用级序号、
+  可续传、不因 `run_done` 收连接）。全局流因此能回答"别的任务怎么了"，
+  而不必把正文增量复制一份给没在看的 Run。取舍与协议见
+  [client-event-stream.md](./client-event-stream.md)。
 - **前端用 React + Vite**，但**状态刻意就地修改**（`src/web/state.ts`），
   再由 `store.ts` 的 `revision` 告诉 React"该重画了"：流式输出每秒几十条
   `message_update`，每来一条克隆整棵时间线纯属浪费。通知按帧合并，

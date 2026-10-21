@@ -134,6 +134,15 @@ export type ServerEvent =
 /** 已缓冲的事件 + 它的游标（游标就是 seq，1 起） */
 export type BufferedEvent = { seq: number; event: ServerEvent };
 
+/**
+ * `/api/events` 的一帧：哪条 Run 的哪个事件。
+ *
+ * 全局流用**应用级**序号（在 SSE 的 `id:` 里），不是 Run 内序号；
+ * 两者编号空间互不相干，别混用。`runId` 为空串表示这是连接级提示
+ * （目前只有 `stream_gap`）。
+ */
+export type RunEventEnvelope = { runId: string; event: ServerEvent };
+
 export type SessionSummary = {
   /** 文件名（含 .jsonl），同时用作 REST 里的会话标识 */
   sessionId: string;

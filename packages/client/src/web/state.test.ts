@@ -14,6 +14,7 @@ import {
   activeRuns,
   addUserMessage,
   applyRunEvent,
+  applyRunMetaEvent,
   applySnapshot,
   emptyView,
   filterBySearch,
@@ -453,6 +454,93 @@ describe("乐观插入与快照", () => {
       isolated: true,
       released: true,
     });
+  });
+});
+
+describe("applyRunMetaEvent：应用级事件只改 runs", () => {
+  const run: RunSummary = {
+    runId: "run_bg",
+    title: "后台任务",
+    sessionId: "s1.jsonl",
+    status: "running",
+    model: "test/test-model",
+    startedAt: 1,
+    elapsedMs: null,
+    tokens: 0,
+    contextWindow: 128000,
+    pendingApprovals: 2,
+    workspace: { root: "D:/ws", isolated: false, released: false },
+  };
+
+  function withRun(): ClientState {
+    const state = initialState();
+    state.runs = [{ ...run }];
+    return state;
+  }
+
+  it("run_state 直接改侧栏状态，不要求刷新，也不碰时间线", () => {
+    const state = withRun();
+    const needsRefresh = applyRunMetaEvent(state, "run_bg", {
+      type: "run_state",
+      status: "blocked",
+    });
+
+    assert.strictEqual(needsRefresh, false);
+    assert.strictEqual(state.runs[0]!.status, "blocked");
+    assert.strictEqual(state.view.items.length, 0);
+  });
+
+  it("run_done 落状态并要求刷新（工作区与失败原因只有服务端有）", () => {
+    const state = withRun();
+    const needsRefresh = applyRunMetaEvent(state, "run_bg", {
+      type: "run_done",
+      status: "failed",
+      elapsedMs: 42,
+      tokens: 99,
+      error: "模型返回 500",
+    });
+
+    assert.strictEqual(needsRefresh, true);
+    assert.strictEqual(state.runs[0]!.status, "failed");
+    assert.strictEqual(state.runs[0]!.elapsedMs, 42);
+    assert.strictEqual(state.runs[0]!.tokens, 99);
+    assert.strictEqual(state.runs[0]!.pendingApprovals, 0);
+  });
+
+  it("审批事件只要求刷新：计数以服务端为准，不在前端自己加减", () => {
+    const state = withRun();
+    const needsRefresh = applyRunMetaEvent(state, "run_bg", {
+      type: "approval_resolved",
+      approvalId: "ap_1",
+      runId: "run_bg",
+      answer: "yes",
+      source: "user",
+    });
+
+    assert.strictEqual(needsRefresh, true);
+    assert.strictEqual(state.runs[0]!.pendingApprovals, 2, "脏活交给 /api/state");
+  });
+
+  it("不认识的 Run 与缺口都要求刷新（另一个标签页 / 服务重启）", () => {
+    const state = withRun();
+    assert.strictEqual(
+      applyRunMetaEvent(state, "run_other", { type: "run_state", status: "running" }),
+      true,
+    );
+    assert.strictEqual(
+      applyRunMetaEvent(state, "run_bg", { type: "stream_gap", firstSeq: 1, lastSeq: 9 }),
+      true,
+    );
+  });
+
+  it("正文类事件不归这里管：返回 false，时间线交给 per-run 流", () => {
+    const state = withRun();
+    const needsRefresh = applyRunMetaEvent(state, "run_bg", {
+      type: "message_update",
+      message: assistantText(""),
+      delta: "字",
+    });
+    assert.strictEqual(needsRefresh, false);
   });
 });
 

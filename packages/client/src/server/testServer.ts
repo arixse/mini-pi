@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { AppServer } from "./app";
+import type { EventJournal } from "./journal";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
 import type { WorkspaceMemory } from "./workspaceMemory";
@@ -90,7 +91,15 @@ export type TestServer = {
     runId: string,
     options?: { cursor?: number; until?: number; onEvent?: (event: ServerEvent) => void },
   ) => Promise<ServerEvent[]>;
+  /** 收应用级事件流，直到超时（它不会因 run_done 收连接）；`cursor: null` 测"不带游标" */
+  journal: (options?: { cursor?: number | null; until?: number }) => Promise<JournalFrame[]>;
   close: () => Promise<void>;
+};
+
+export type JournalFrame = {
+  seq: number;
+  runId: string;
+  event: ServerEvent;
 };
 
 export type TestServerOptions = {
@@ -112,6 +121,8 @@ export type TestServerOptions = {
    * 测试不该碰，因此这里和其他存储一样必须可注入。
    */
   workspaceMemory?: WorkspaceMemory;
+  /** 注入小容量的应用级日志，用来覆盖 `gap` 路径 */
+  journal?: EventJournal;
 };
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
@@ -160,6 +171,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(worktreesRoot ? { worktreesRoot } : {}),
     ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
     ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
+    ...(options.journal ? { journal: options.journal } : {}),
     settingsStore,
     providerService,
     resolveModel: async () => ({
@@ -207,6 +219,13 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       streamOptions.onEvent,
     );
 
+  const journal = (journalOptions: { cursor?: number | null; until?: number } = {}): Promise<
+    JournalFrame[]
+  > => {
+    const query = journalOptions.cursor === null ? "" : `?cursor=${journalOptions.cursor ?? 0}`;
+    return collectJournal(`${running.url}/api/events${query}`, journalOptions.until ?? 300);
+  };
+
   return {
     url: running.url,
     workspace,
@@ -218,6 +237,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     post,
     del,
     stream,
+    journal,
     close: async () => {
       await app.stop();
       rmSync(root, { recursive: true, force: true });
@@ -236,9 +256,65 @@ export async function collectEvents(
   timeoutMs: number,
   onEvent?: (event: ServerEvent) => void,
 ): Promise<ServerEvent[]> {
+  const events: ServerEvent[] = [];
+  const parse = (frame: RawFrame): ServerEvent | null =>
+    parseJson<ServerEvent>(frame.data);
+  await collectFrames(url, timeoutMs, {
+    // 边到边回调：审批用例要靠 `onEvent` 在流还没结束时就能看到 approval_request
+    onFrame: (frame) => {
+      const event = parse(frame);
+      if (event) {
+        events.push(event);
+        onEvent?.(event);
+      }
+    },
+    stopWhen: (frame) => parse(frame)?.type === "run_done",
+  });
+  return events;
+}
+
+/**
+ * 读 `/api/events` 直到超时。
+ *
+ * 与 per-run 流相反，它不会因 `run_done` 收连接，所以只能靠超时收口；
+ * 返回的每一帧带应用级 `seq`（SSE 的 `id:`）与 `runId`。
+ */
+export async function collectJournal(url: string, timeoutMs: number): Promise<JournalFrame[]> {
+  const frames = await collectFrames(url, timeoutMs);
+  const entries: JournalFrame[] = [];
+  for (const frame of frames) {
+    const envelope = parseJson<{ runId?: unknown; event?: unknown }>(frame.data);
+    if (!envelope || typeof envelope.runId !== "string" || !envelope.event) {
+      continue;
+    }
+    entries.push({
+      seq: frame.id ?? 0,
+      runId: envelope.runId,
+      event: envelope.event as ServerEvent,
+    });
+  }
+  return entries;
+}
+
+type RawFrame = { id: number | null; data: string };
+
+/**
+ * SSE 读帧。
+ *
+ * `stopWhen` 为真时主动收掉连接（per-run 流的 `run_done`）；超时则把已经
+ * 收到的帧交回去——"这条流本来就不该有事件"这种断言才有办法写。
+ */
+async function collectFrames(
+  url: string,
+  timeoutMs: number,
+  options: {
+    stopWhen?: (frame: RawFrame) => boolean;
+    onFrame?: (frame: RawFrame) => void;
+  } = {},
+): Promise<RawFrame[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const events: ServerEvent[] = [];
+  const frames: RawFrame[] = [];
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.body) {
@@ -252,9 +328,8 @@ export async function collectEvents(
       try {
         chunk = await reader.read();
       } catch {
-        // 超时主动 abort：把已经收到的交回去，由断言判断够不够。
-        // 抛出去的话，"某条流本来就不该有事件"这种用例没法表达。
-        return events;
+        // 超时主动 abort：把已经收到的交回去，由断言判断够不够
+        return frames;
       }
       const { value, done } = chunk;
       if (done) {
@@ -263,30 +338,36 @@ export async function collectEvents(
       buffer += decoder.decode(value, { stream: true });
       let boundary = buffer.indexOf("\n\n");
       while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary);
+        const raw = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
-        const event = parseFrame(frame);
-        if (event) {
-          events.push(event);
-          onEvent?.(event);
-          if (event.type === "run_done") {
+        const frame = parseFrame(raw);
+        if (frame) {
+          frames.push(frame);
+          options.onFrame?.(frame);
+          if (options.stopWhen?.(frame)) {
             await reader.cancel();
-            return events;
+            return frames;
           }
         }
         boundary = buffer.indexOf("\n\n");
       }
     }
-    return events;
+    return frames;
   } finally {
     clearTimeout(timer);
   }
 }
 
-function parseFrame(frame: string): ServerEvent | null {
+function parseFrame(frame: string): RawFrame | null {
   const dataLines: string[] = [];
+  let id: number | null = null;
   for (const line of frame.split("\n")) {
-    if (line.startsWith("data: ")) {
+    if (line.startsWith("id: ")) {
+      const parsed = Number(line.slice(4));
+      if (Number.isFinite(parsed)) {
+        id = parsed;
+      }
+    } else if (line.startsWith("data: ")) {
       dataLines.push(line.slice(6));
     } else if (line === "data:") {
       dataLines.push("");
@@ -295,7 +376,15 @@ function parseFrame(frame: string): ServerEvent | null {
   if (dataLines.length === 0) {
     return null;
   }
-  return JSON.parse(dataLines.join("\n")) as ServerEvent;
+  return { id, data: dataLines.join("\n") };
+}
+
+function parseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
 /** 轮询直到条件成立：执行在后台跑，没有"完成"回调可等 */

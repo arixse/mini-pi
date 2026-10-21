@@ -15,6 +15,7 @@ import type {
   ApprovalRequest,
   DirListing,
   ProviderView,
+  RunEventEnvelope,
   RunSummary,
   ServerEvent,
   SessionDetail,
@@ -177,6 +178,13 @@ export type StreamHandlers = {
   onError: (message: string) => void;
 };
 
+/** 应用级流：每帧多一个 `runId`，其余语义与 per-run 流相同 */
+export type GlobalStreamHandlers = {
+  onEvent: (envelope: RunEventEnvelope) => void;
+  onStatus: (status: "open" | "reconnecting") => void;
+  onError: (message: string) => void;
+};
+
 export type StreamHandle = { close: () => void };
 
 /**
@@ -193,6 +201,12 @@ export function reconnectDelay(failures: number): number {
   return Math.min(500 * 2 ** exponent, 5_000);
 }
 
+type WireHandlers = {
+  onPayload: (payload: unknown) => void;
+  onStatus: (status: "open" | "reconnecting") => void;
+  onError: (message: string) => void;
+};
+
 /**
  * 订阅一条 Run 的事件流。
  *
@@ -203,7 +217,65 @@ export function subscribeRun(
   cursor: number,
   handlers: StreamHandlers,
 ): StreamHandle {
-  let current = cursor;
+  return connect(
+    (next) => `/api/runs/${encodeURIComponent(runId)}/events?cursor=${next}`,
+    cursor,
+    {
+      onPayload: (payload) => handlers.onEvent(payload as ServerEvent),
+      onStatus: handlers.onStatus,
+      onError: handlers.onError,
+    },
+    "事件流已断开：这个任务可能已随服务重启消失。刷新页面可重新加载。",
+    // 终态之后没有更多事件：主动收掉连接，别等浏览器反复重连
+    (payload) => (payload as ServerEvent).type === "run_done",
+  );
+}
+
+/**
+ * 订阅应用级事件流（`/api/events`）。
+ *
+ * 一帧是 `{ runId, event }`；`stream_gap` 的 `runId` 是空串。
+ * 断线与退避和 per-run 流共用同一套逻辑，区别只有"不会因 run_done 收连接"。
+ */
+export function subscribeEvents(cursor: number, handlers: GlobalStreamHandlers): StreamHandle {
+  return connect(
+    (next) => `/api/events?cursor=${next}`,
+    cursor,
+    {
+      onPayload: (payload) => {
+        const envelope = payload as Partial<RunEventEnvelope> | null;
+        if (
+          !envelope ||
+          typeof envelope.runId !== "string" ||
+          typeof envelope.event !== "object" ||
+          envelope.event === null
+        ) {
+          return;
+        }
+        handlers.onEvent(envelope as RunEventEnvelope);
+      },
+      onStatus: handlers.onStatus,
+      onError: handlers.onError,
+    },
+    "后台事件流已断开：任务状态可能不再自动更新。刷新页面可恢复。",
+  );
+}
+
+/**
+ * 两条流共用的连接/重连/游标逻辑。
+ *
+ * `stopOn` 返回真时主动收掉连接（per-run 流在 `run_done` 之后收）；
+ * 全局流不传，它就活到页面关闭。重连沿用同一个游标，因此断线期间的事件
+ * 会被服务端补一次，而不是靠浏览器重放整段。
+ */
+function connect(
+  urlFor: (cursor: number) => string,
+  initialCursor: number,
+  handlers: WireHandlers,
+  fatalMessage: string,
+  stopOn?: (payload: unknown) => boolean,
+): StreamHandle {
+  let current = initialCursor;
   let source: EventSource | null = null;
   let closed = false;
   let retryTimer: number | null = null;
@@ -213,9 +285,7 @@ export function subscribeRun(
     if (closed) {
       return;
     }
-    source = new EventSource(
-      `/api/runs/${encodeURIComponent(runId)}/events?cursor=${current}`,
-    );
+    source = new EventSource(urlFor(current));
     source.onopen = () => {
       failures = 0;
       handlers.onStatus("open");
@@ -230,10 +300,10 @@ export function subscribeRun(
       source = null;
       failures += 1;
       if (failures > MAX_RECONNECT_ATTEMPTS) {
-        // Run 可能已经随服务重启消失：这时继续重连只是无意义地空转，
-        // 把"刷新页面"这个真正能恢复的动作告诉用户
+        // 这时继续重连只是无意义地空转：把"刷新页面"这个真正能恢复的动作
+        // 告诉用户，并停止自动重连
         closed = true;
-        handlers.onError("事件流已断开：这个任务可能已随服务重启消失。刷新页面可重新加载。");
+        handlers.onError(fatalMessage);
         return;
       }
       handlers.onStatus("reconnecting");
@@ -252,15 +322,14 @@ export function subscribeRun(
         if (message.lastEventId) {
           current = Number(message.lastEventId);
         }
-        let payload: ServerEvent;
+        let payload: unknown;
         try {
-          payload = JSON.parse(message.data) as ServerEvent;
+          payload = JSON.parse(message.data) as unknown;
         } catch {
           return;
         }
-        handlers.onEvent(payload);
-        if (payload.type === "run_done") {
-          // 终态之后没有更多事件：主动收掉连接，别等浏览器反复重连
+        handlers.onPayload(payload);
+        if (stopOn?.(payload)) {
           handle.close();
         }
       });

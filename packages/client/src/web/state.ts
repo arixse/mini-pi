@@ -135,6 +135,13 @@ export type ClientState = {
     deleteTarget: string | null;
   };
   banner: Banner;
+  /**
+   * 应用级事件流的断线提示。
+   *
+   * 与 `view.streamNote` 分开：那个说的是"当前这一轮的流断了"，
+   * 这个说的是"别的任务的状态可能不再自动更新"。两者的处置也不一样。
+   */
+  globalNote: string | null;
 };
 
 export function emptyView(): View {
@@ -183,6 +190,7 @@ export function initialState(): ClientState {
     view: emptyView(),
     ui: { settings: false, picker: false, sidebar: false, deleteTarget: null },
     banner: null,
+    globalNote: null,
   };
 }
 
@@ -343,6 +351,49 @@ export function applySnapshot(state: ClientState, snapshot: ServerSnapshot): voi
   // `view.sessionId === null` 是"草稿"——点了新任务、还没说话，此时悄悄
   // 按回服务端的当前会话，下一次发送就会接到那段旧对话上去。
   // 真正要认领当前会话的地方是启动与换工作区（controller 显式 openSession）。
+}
+
+/**
+ * 应用级事件（`/api/events`）对**应用状态**的影响。
+ *
+ * 只动 `runs` 上的状态，不碰时间线：当前 Run 的正文与卡片由 per-run 流归约，
+ * 全局流只回答"别的任务怎么了"。
+ *
+ * @returns 是否还需要拉一次 `/api/state`——审批计数、`oldestRunId`、
+ *   隔离工作区与失败原因这些仍以服务端为准，前端不自己加减（否则两个标签页
+ *   各裁一次，计数就会对不上）。
+ */
+export function applyRunMetaEvent(
+  state: ClientState,
+  runId: string,
+  event: ServerEvent,
+): boolean {
+  if (event.type === "stream_gap") {
+    return true;
+  }
+  const run = state.runs.find((item) => item.runId === runId);
+  if (!run) {
+    // 可能是另一个标签页刚建的 Run，或者刚切过工作区：拉一次把它带进来
+    return true;
+  }
+
+  switch (event.type) {
+    case "run_state":
+      // 侧栏状态立刻变；剩余字段（工作区等）这一条事件里没有，但也不必为此刷新
+      run.status = event.status;
+      return false;
+    case "run_done":
+      run.status = event.status;
+      run.elapsedMs = event.elapsedMs;
+      run.tokens = event.tokens;
+      run.pendingApprovals = 0;
+      return true;
+    case "approval_request":
+    case "approval_resolved":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
