@@ -53,6 +53,8 @@ export interface Ports {
   /** 返回 null 表示没查成（网络问题），那不是障碍，只是少一道防线 */
   registryHasVersion(pkg: string, version: string): Promise<boolean | null>;
   readPackage(): { name: string } | null;
+  /** 读出这些文件的内容；读不着的（权限、路径没了）直接不在结果里 */
+  readSources(files: readonly string[]): Map<string, string>;
   /**
    * 把版本号写进这些 package.json，返回**实际改动**的那些（相对仓库根）。
    * 版本本来就已经对上的文件不算改动——那次发版没有版本提交可打。
@@ -428,6 +430,17 @@ function repoRoot(): string {
  * writeVersions 而不碰仓库。默认取仓库根。
  */
 export function createDefaultPorts(root: string = repoRoot()): Ports {
+  const readSources = (files: readonly string[]): Map<string, string> => {
+    const sources = new Map<string, string>();
+    for (const file of files) {
+      try {
+        sources.set(file, readFileSync(join(root, file), "utf8"));
+      } catch {
+        // 名单里的文件少一个（比如哪天核心包被删）不该让发版卡住，跳过即可
+      }
+    }
+    return sources;
+  };
   return {
     git(args) {
       const result = spawnSync("git", [...args], { encoding: "utf8", maxBuffer: 8 << 20 });
@@ -474,17 +487,10 @@ export function createDefaultPorts(root: string = repoRoot()): Ports {
         return null;
       }
     },
+    readSources,
     writeVersions(files, version) {
-      const sources = new Map<string, string>();
-      for (const file of files) {
-        try {
-          sources.set(file, readFileSync(join(root, file), "utf8"));
-        } catch {
-          // 名单里的文件少一个（比如哪天核心包被删）不该让发版卡住，跳过即可
-        }
-      }
       const done: string[] = [];
-      for (const [file, content] of applyVersions(sources, version)) {
+      for (const [file, content] of applyVersions(readSources(files), version)) {
         try {
           writeFileSync(join(root, file), content);
           done.push(file);
@@ -756,10 +762,28 @@ export async function runRelease(
     }
   }
 
-  const commands = planCommands(request, version, seen.ahead, versionCommit.length > 0);
+  // 试运行也得知道会不会有版本提交，否则计划里会漏掉"推分支"那一步——
+  // 而那一步正是真跑时必做的。读文件是只读的，这里用它算出会改到几个。
+  const pending = request.dryRun
+    ? [...applyVersions(ports.readSources(VERSION_FILES), version).keys()]
+    : [];
+
+  const commands = planCommands(
+    request,
+    version,
+    seen.ahead,
+    request.dryRun ? pending.length > 0 : versionCommit.length > 0,
+  );
   if (request.dryRun) {
     ports.log(`试运行：将发布 ${version}（tag ${tag}）`);
-    ports.log(`  将把版本 ${version} 写进 ${VERSION_FILES.length} 个 package.json 并提交`);
+    if (pending.length > 0) {
+      ports.log(`  将把版本 ${version} 写进 ${pending.length} 个 package.json 并提交：`);
+      for (const file of pending) {
+        ports.log(`    ${file}`);
+      }
+    } else {
+      ports.log("  四个 package.json 已经在这个版本上，不会产生版本提交");
+    }
     for (const command of commands) {
       ports.log(`  将执行：git ${command.join(" ")}`);
     }

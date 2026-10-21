@@ -30,6 +30,9 @@ import {
 } from "./release";
 
 const OK: CommandResult = { ok: true, stdout: "", stderr: "" };
+/** 四个包在假仓库里的初始版本，落后于要发的号，于是每次发版都有版本提交可打 */
+const PACKAGE_AT = (version: string) =>
+  ["{", '  "name": "x",', `  "version": "${version}"`, "}", ""].join("\r\n");
 const REMOTE_TAGS = ["v0.0.10", "v0.0.11", "v1.0.0", "v1.0.1", "v1.0.2", "v1.0.3"];
 const LS_REMOTE =
   "aaa\trefs/tags/v1.0.2\nbbb\trefs/tags/v1.0.3\nccc\trefs/tags/v1.0.3^{}\nddd\trefs/heads/main\n";
@@ -76,6 +79,10 @@ function fakePorts(overrides: Partial<Ports> = {}): Ports & Recorder {
     },
     registryHasVersion: overrides.registryHasVersion ?? (async () => false),
     readPackage: overrides.readPackage ?? (() => ({ name: "@minipi/mini-pi" })),
+    readSources:
+      overrides.readSources ??
+      ((files: readonly string[]) =>
+        new Map(files.map((file) => [file, PACKAGE_AT("1.0.2")]))),
     writeVersions:
       overrides.writeVersions ??
       ((files: readonly string[]) => files.map((file) => file)),
@@ -563,9 +570,33 @@ describe("runRelease", () => {
     });
     await runRelease(["1.0.4", "--dry-run"], ports);
     const printed = ports.logs.join("\n");
-    assert.ok(printed.includes("git push origin main"));
-    assert.ok(printed.includes("git tag v1.0.4"));
+    // 推分支必须在打 tag 之前出现：真跑时就是这个顺序，计划里漏了它就是
+    // 给人看一份与实况不符的清单
+    const pushBranch = printed.indexOf("git push origin main");
+    const tag = printed.indexOf("git tag v1.0.4");
+    assert.ok(pushBranch > 0 && tag > pushBranch, `实际输出：${printed}`);
     assert.ok(printed.includes("git push origin v1.0.4"));
+  });
+
+  it("试运行列出会改到的具体文件，而不是笼统说四个", async () => {
+    // 试运行不写文件，但它得**读**文件——否则算不出会不会有版本提交，
+    // 也就不知道该不该把"推分支"列进计划。这条钉住的是"计划可信"这件事。
+    const ports = fakePorts();
+    await runRelease(["1.0.4", "--dry-run"], ports);
+    const printed = ports.logs.join("\n");
+    assert.ok(printed.includes("package.json"), "该列出具体文件");
+    assert.ok(printed.includes("git push origin main"), "有版本提交就该有推分支");
+  });
+
+  it("版本已经对上时，试运行直说没有版本提交", async () => {
+    const ports = fakePorts({
+      readSources: (files: readonly string[]) =>
+        new Map(files.map((file) => [file, PACKAGE_AT("1.0.4")])),
+    });
+    await runRelease(["1.0.4", "--dry-run"], ports);
+    const printed = ports.logs.join("\n");
+    assert.ok(printed.includes("不会产生版本提交"));
+    assert.ok(!printed.includes("git push origin main"), "没有东西可推时别列它");
   });
 
   it("真跑会把 tag 推上去，并给出三条链接", async () => {
