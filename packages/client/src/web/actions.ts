@@ -21,6 +21,11 @@ export type Actions = {
   stop: () => void;
   /** 丢弃某个 Run 的隔离工作区（M3）：跑着的任务服务端会拒绝 */
   discardWorktree: (runId: string) => Promise<void>;
+  /** 打开某个隔离 Run 的变更面板（读 diff） */
+  openDiff: (runId: string) => void;
+  closeDiff: () => void;
+  /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
+  mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
   openSession: (sessionId: string) => void;
   openRun: (runId: string) => void;
@@ -33,6 +38,8 @@ export type Actions = {
   saveModel: (input: SaveModelInput) => Promise<void>;
   setTier: (tier: Tier) => Promise<void>;
   setSubAgent: (enabled: boolean) => Promise<void>;
+  /** 隔离开关：只影响之后新发的任务；环境不支持时服务端 409 */
+  setIsolate: (enabled: boolean) => Promise<void>;
   openPicker: () => void;
   closePicker: () => void;
   switchWorkspace: (path: string) => Promise<void>;

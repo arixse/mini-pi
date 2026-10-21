@@ -143,6 +143,7 @@ export class AppController {
   private async reload(): Promise<void> {
     this.viewEpoch += 1;
     this.closeStream();
+    this.closeDiff();
     this.pendingUsers = [];
     this.store.update((state) => {
       state.view = emptyView();
@@ -386,6 +387,78 @@ export class AppController {
   }
 
   /**
+   * 打开某个隔离 Run 的变更面板。
+   *
+   * 数据放在 store 里而不是组件本地：请求的竞态（连点两个 Run）由这里守，
+   * 组件只负责把算好的 patch 摆出来。
+   */
+  private async openDiff(runId: string): Promise<void> {
+    this.store.update((state) => {
+      state.ui.diffRunId = runId;
+      state.diff = null;
+      state.diffError = null;
+      state.diffLoading = true;
+    });
+    try {
+      const diff = await api.runDiff(runId);
+      this.store.update((state) => {
+        if (state.ui.diffRunId !== runId) {
+          return; // 用户已经关掉或换了一条
+        }
+        state.diff = diff;
+      });
+    } catch (error) {
+      this.store.update((state) => {
+        if (state.ui.diffRunId !== runId) {
+          return;
+        }
+        state.diffError = describe(error, "读取变更失败");
+      });
+    } finally {
+      this.store.update((state) => {
+        if (state.ui.diffRunId === runId) {
+          state.diffLoading = false;
+        }
+      });
+    }
+  }
+
+  private closeDiff(): void {
+    this.store.update((state) => {
+      state.ui.diffRunId = null;
+      state.diff = null;
+      state.diffError = null;
+      state.diffLoading = false;
+    });
+  }
+
+  /**
+   * 把隔离改动合并回基准工作区。
+   *
+   * 失败（多半是主工作区也改了同一个文件）不关面板：用户正看着 diff，
+   * 跳走就断了上下文；错误同时落到面板与提示条。
+   */
+  private async mergeWorktree(runId: string): Promise<void> {
+    try {
+      const result = await api.mergeWorktree(runId);
+      this.banner("ok", `已合并回工作区：${result.files.length} 个文件`);
+      this.closeDiff();
+      await this.refreshState();
+      this.store.update((state) => {
+        const run = state.runs.find((item) => item.runId === runId);
+        if (run) {
+          applyRunWorkspace(state.view, run);
+        }
+      });
+    } catch (error) {
+      this.store.update((state) => {
+        state.diffError = describe(error, "合并失败");
+      });
+      this.fail(error);
+    }
+  }
+
+  /**
    * 新任务 = 本地换一块白板。
    *
    * **不发请求**：会话在第一次发送时才创建（服务端 `send` 不带 sessionId
@@ -396,6 +469,7 @@ export class AppController {
     // 让还在路上的"打开会话"作废：它回来时不该把白板换回旧对话
     this.viewEpoch += 1;
     this.closeStream();
+    this.closeDiff();
     this.pendingUsers = [];
     this.store.update((state) => {
       state.view = emptyView();
@@ -580,6 +654,10 @@ export class AppController {
       this.actions.closePicker();
       return;
     }
+    if (state.ui.diffRunId) {
+      this.actions.closeDiff();
+      return;
+    }
     if (state.ui.deleteTarget) {
       this.actions.cancelDelete();
       return;
@@ -596,6 +674,9 @@ export class AppController {
       send: (text) => void this.send(text),
       stop: () => void this.stop(),
       discardWorktree: (runId) => this.discardWorktree(runId),
+      openDiff: (runId) => void this.openDiff(runId),
+      closeDiff: () => this.closeDiff(),
+      mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
       openSession: (sessionId) => void this.openSession(sessionId),
       openRun: (runId) => void this.openRun(runId),
@@ -638,6 +719,16 @@ export class AppController {
       setSubAgent: async (enabled: boolean) => {
         const snapshot = await api.setSubAgent(enabled);
         this.store.update((state) => applySnapshot(state, snapshot));
+      },
+      setIsolate: async (enabled: boolean) => {
+        try {
+          const snapshot = await api.setIsolate(enabled);
+          this.store.update((state) => applySnapshot(state, snapshot));
+        } catch (error) {
+          this.fail(error);
+          // 服务端会把打不开的原因记进 isolateError：拉一次让开关旁边看得到
+          await this.refreshState(true);
+        }
       },
       openPicker: () => {
         this.store.update((state) => {

@@ -118,6 +118,8 @@ function snapshot(overrides: Partial<AppState> = {}): AppState {
     sendable: true,
     blockReason: null,
     subAgent: false,
+    isolate: false,
+    isolateError: null,
     ...overrides,
   } as AppState;
 }
@@ -370,7 +372,7 @@ describe("AppController", () => {
       tokens: 0,
       contextWindow: 128000,
       pendingApprovals: 0,
-      workspace: { root: "D:/ws", isolated: false, released: false },
+      workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
     };
     installFetch({ "/api/state": { body: snapshot({ runs: [running] }) } });
     await controller.boot();
@@ -409,7 +411,7 @@ describe("AppController", () => {
       tokens: 0,
       contextWindow: 128000,
       pendingApprovals: 0,
-      workspace: { root: "D:/ws", isolated: false, released: false },
+      workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
     };
     installFetch({ "/api/state": () => ({ body: snapshot({ runs: [current] }) }) });
     await controller.boot();
@@ -508,7 +510,7 @@ describe("AppController", () => {
       tokens: 5,
       contextWindow: 128000,
       pendingApprovals: 0,
-      workspace: { root: "D:/wt/run_1", isolated: true, released: true },
+      workspace: { root: "D:/wt/run_1", isolated: true, released: true, merged: false },
     };
     installFetch({
       "/api/state": { body: snapshot({ runs: [run] }) },
@@ -518,7 +520,13 @@ describe("AppController", () => {
     await settle();
     requested.length = 0;
     controller.store.update((state) => {
-      state.view.workspace = { runId: "run_1", root: "D:/wt/run_1", isolated: true, released: false };
+      state.view.workspace = {
+        runId: "run_1",
+        root: "D:/wt/run_1",
+        isolated: true,
+        released: false,
+        merged: false,
+      };
     });
 
     await controller.actions.discardWorktree("run_1");
@@ -531,6 +539,94 @@ describe("AppController", () => {
     assert.match(controller.store.current.banner?.text ?? "", /已丢弃/, "成功要有明确反馈");
     // 本地只负责乐观发起，"已丢弃"这三个字要以服务端为准
     assert.strictEqual(controller.store.current.view.workspace?.released, true);
+  });
+
+  it("隔离开关：打开后把服务端状态合并回来；打不开时把原因留在界面上", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/options": { body: snapshot({ isolate: true }) },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.setIsolate(true);
+    await settle();
+
+    assert.strictEqual(controller.store.current.isolate, true);
+    assert.ok(
+      requested.some(
+        (item) => item.url.includes("/api/options") && item.body.includes('"isolate":true'),
+      ),
+      "开关要真的发给服务端",
+    );
+
+    // 不支持的环境：409 + 原因；服务端状态里也会带着 isolateError
+    installFetch({
+      "/api/state": {
+        body: snapshot({ isolate: false, isolateError: "无法隔离工作区（未找到可用的 git）" }),
+      },
+      "/api/options": {
+        status: 409,
+        body: { error: "无法隔离工作区（未找到可用的 git）" },
+      },
+    });
+    await controller.actions.setIsolate(true);
+    await settle();
+
+    assert.strictEqual(controller.store.current.isolate, false, "打不开就不该假装打开");
+    assert.match(controller.store.current.banner?.text ?? "", /无法隔离工作区/);
+    assert.match(controller.store.current.isolateError ?? "", /未找到可用的 git/);
+  });
+
+  it("变更面板：读 diff；合并成功后关面板、刷新成「已合并」", async () => {
+    let merged = false;
+    const run: AppState["runs"][number] = {
+      runId: "run_1",
+      title: "写个文件",
+      sessionId: "s1.jsonl",
+      status: "done",
+      model: "test/test-model",
+      startedAt: 1,
+      elapsedMs: 10,
+      tokens: 5,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: { root: "D:/wt/run_1", isolated: true, released: false, merged: false },
+    };
+    installFetch({
+      "/api/state": () => ({
+        body: snapshot({
+          runs: [{ ...run, workspace: { ...run.workspace, merged } }],
+        }),
+      }),
+      "/api/runs/run_1/diff": {
+        body: {
+          runId: "run_1",
+          files: ["a.txt"],
+          patch: "diff --git a/a.txt b/a.txt\n+hello",
+        },
+      },
+      "/api/runs/run_1/merge": () => {
+        merged = true;
+        return { body: { files: ["a.txt"] } };
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openDiff("run_1");
+    await settle();
+    assert.strictEqual(controller.store.current.ui.diffRunId, "run_1");
+    assert.deepStrictEqual(controller.store.current.diff?.files, ["a.txt"]);
+    assert.match(controller.store.current.diff?.patch ?? "", /\+hello/);
+
+    await controller.actions.mergeWorktree("run_1");
+    await settle();
+
+    assert.strictEqual(controller.store.current.ui.diffRunId, null, "成功后关面板");
+    assert.match(controller.store.current.banner?.text ?? "", /已合并/);
+    assert.strictEqual(controller.store.current.runs[0]?.workspace.merged, true);
+    assert.strictEqual(controller.store.current.view.workspace?.merged, true);
   });
 
   it("丢弃失败（任务还在跑）时把服务端的原因原样说出来", async () => {

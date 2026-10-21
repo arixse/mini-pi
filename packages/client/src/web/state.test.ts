@@ -94,6 +94,8 @@ function snapshot(overrides: Partial<AppState> = {}): AppState {
     sendable: true,
     blockReason: null,
     subAgent: false,
+    isolate: false,
+    isolateError: null,
     ...overrides,
   };
 }
@@ -106,7 +108,7 @@ function feed(view: View, runId: string, events: ServerEvent[]): void {
 
 /** 默认不隔离（老行为）；要断言隔离 UI 的用例自己覆盖 */
 function runWorkspace(overrides: Partial<RunSummary["workspace"]> = {}): RunSummary["workspace"] {
-  return { root: "D:\\demo", isolated: false, released: false, ...overrides };
+  return { root: "D:\\demo", isolated: false, released: false, merged: false, ...overrides };
 }
 
 function itemsOfKind(view: View, kind: TimelineItem["kind"]): TimelineItem[] {
@@ -379,6 +381,20 @@ describe("乐观插入与快照", () => {
     assert.equal(view.items.length, 1);
   });
 
+  it("applySnapshot 带上隔离开关与不可用原因", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot({ isolate: true, isolateError: null }));
+    assert.strictEqual(state.isolate, true);
+    assert.strictEqual(state.isolateError, null);
+
+    applySnapshot(
+      state,
+      snapshot({ isolate: false, isolateError: "无法隔离工作区（未找到可用的 git）" }),
+    );
+    assert.strictEqual(state.isolate, false);
+    assert.match(state.isolateError ?? "", /未找到可用的 git/);
+  });
+
   it("applySnapshot 不把服务端当前会话按回时间线", () => {
     const state: ClientState = initialState();
     applySnapshot(state, snapshot());
@@ -425,6 +441,7 @@ describe("乐观插入与快照", () => {
       root: "D:\\wt\\run_9",
       isolated: true,
       released: false,
+      merged: false,
     });
   });
 
@@ -453,6 +470,7 @@ describe("乐观插入与快照", () => {
       root: "D:\\wt\\run_10",
       isolated: true,
       released: true,
+      merged: false,
     });
   });
 });
@@ -469,7 +487,7 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
     tokens: 0,
     contextWindow: 128000,
     pendingApprovals: 2,
-    workspace: { root: "D:/ws", isolated: false, released: false },
+    workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
   };
 
   function withRun(): ClientState {

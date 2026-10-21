@@ -11,6 +11,7 @@ import { AppController, type ComposerHandle } from "./controller";
 import { ClientProvider, useActions, useClient } from "./store";
 import { Boot } from "./components/Boot";
 import { Composer } from "./components/Composer";
+import { DiffPanel } from "./components/DiffPanel";
 import { Picker } from "./components/Picker";
 import { Settings } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
@@ -65,6 +66,7 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
       </div>
       <Settings />
       <Picker />
+      <DiffPanel />
       <Boot />
     </div>
   );

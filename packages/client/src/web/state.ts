@@ -18,6 +18,7 @@ import type { AgentMessage } from "@minipi/core/shared/protocol";
 import type {
   AppState as ServerSnapshot,
   ApprovalRequest,
+  RunDiff,
   RunPhase,
   RunSummary,
   RunWorkspace,
@@ -120,6 +121,10 @@ export type ClientState = {
   blockReason: string | null;
   /** 委派（子 Agent）开关：输入区两个开关之一，服务端持有真值 */
   subAgent: boolean;
+  /** 隔离工作区开关（只影响之后的任务） */
+  isolate: boolean;
+  /** 隔离不可用的原因；有值时开关打不开 */
+  isolateError: string | null;
   approvals: number;
   oldestApprovalRunId: string | null;
   runs: RunSummary[];
@@ -133,7 +138,13 @@ export type ClientState = {
     sidebar: boolean;
     /** 待二次确认删除的会话 */
     deleteTarget: string | null;
+    /** 正在看变更的 Run；null 表示面板关着 */
+    diffRunId: string | null;
   };
+  /** 变更面板的数据（与 ui.diffRunId 同一条 Run） */
+  diff: RunDiff | null;
+  diffLoading: boolean;
+  diffError: string | null;
   banner: Banner;
   /**
    * 应用级事件流的断线提示。
@@ -181,6 +192,8 @@ export function initialState(): ClientState {
     sendable: false,
     blockReason: "正在连接本地服务……",
     subAgent: false,
+    isolate: false,
+    isolateError: null,
     approvals: 0,
     oldestApprovalRunId: null,
     runs: [],
@@ -188,7 +201,10 @@ export function initialState(): ClientState {
     currentSessionId: null,
     search: "",
     view: emptyView(),
-    ui: { settings: false, picker: false, sidebar: false, deleteTarget: null },
+    ui: { settings: false, picker: false, sidebar: false, deleteTarget: null, diffRunId: null },
+    diff: null,
+    diffLoading: false,
+    diffError: null,
     banner: null,
     globalNote: null,
   };
@@ -342,6 +358,8 @@ export function applySnapshot(state: ClientState, snapshot: ServerSnapshot): voi
   state.sendable = snapshot.sendable;
   state.blockReason = snapshot.blockReason;
   state.subAgent = snapshot.subAgent;
+  state.isolate = snapshot.isolate;
+  state.isolateError = snapshot.isolateError;
   state.approvals = snapshot.approvals.pending;
   state.oldestApprovalRunId = snapshot.approvals.oldestRunId;
   state.runs = snapshot.runs;

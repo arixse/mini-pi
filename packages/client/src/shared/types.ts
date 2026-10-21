@@ -49,6 +49,8 @@ export type RunWorkspace = {
   isolated: boolean;
   /** 已点过丢弃：按钮变灰，防止回收一个已回收的目录 */
   released: boolean;
+  /** 已把改动合并回基准工作区：按钮变灰，防止同一份 patch 应用两遍 */
+  merged: boolean;
 };
 
 export type RunSummary = {
@@ -202,6 +204,23 @@ export type AppState = {
   blockReason: string | null;
   /** 委派（子 Agent）开关：输入区那两个开关之一 */
   subAgent: boolean;
+  /** 隔离工作区开关：每个新任务一个 git worktree（只影响之后的任务） */
+  isolate: boolean;
+  /** 隔离不可用的原因（未开启隔离时为 null；切换失败时也会留在这里） */
+  isolateError: string | null;
+};
+
+/**
+ * 一次隔离执行的变更。
+ *
+ * `patch` 是 unified diff（可能被服务端截断并附一句"完整内容在哪"）；
+ * `files` 来自 `git status --porcelain`，含新建文件——合并时按同一份 patch 应用，
+ * 所以"看到的"就是"会合进去的"。
+ */
+export type RunDiff = {
+  runId: string;
+  patch: string;
+  files: string[];
 };
 
 export type DirEntry = { name: string; path: string };

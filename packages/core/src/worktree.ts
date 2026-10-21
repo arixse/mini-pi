@@ -21,7 +21,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -85,6 +85,18 @@ export type WorkspaceDiff = {
 
 export type ReleaseResult = {
   ok: boolean;
+  error?: string;
+};
+
+/**
+ * 合并结果。
+ *
+ * 失败时**不回收 worktree**：那里面就是这次执行的产物，冲突要由人来看。
+ * `files` 是这次改动涉及的文件（失败时也返回，方便界面列出来）。
+ */
+export type MergeResult = {
+  ok: boolean;
+  files: string[];
   error?: string;
 };
 
@@ -282,6 +294,91 @@ export class WorkspaceManager {
       files: parseStatusFiles(status.status === 0 ? status.stdout : ""),
       isolated: true,
     };
+  }
+
+  /**
+   * 把这次执行的改动**应用回**基准工作区。
+   *
+   * 用 patch 而不是 merge 分支：
+   * - 不给用户凭空造一个提交；
+   * - 先 `--check` 再 apply，冲突时一个文件都不会被改到一半；
+   * - 失败时保留 worktree，冲突文件由 `files` 列出，用户处理后再试。
+   *
+   * patch 走临时文件而不是 stdin：`CommandRunner` 只有 args/cwd，
+   * 为一次合并去扩展整条命令接口，不如多写一个临时文件。
+   */
+  merge(runId: string): MergeResult {
+    const workspace = this.workspaces.get(runId);
+    if (!workspace) {
+      return { ok: false, files: [], error: "没有找到该工作区" };
+    }
+    if (!workspace.isolated) {
+      return { ok: false, files: [], error: "这个任务没有隔离工作区" };
+    }
+
+    // 与 diff 同一套取法：否则新建的文件不会进 patch
+    this.run(["-C", workspace.root, "add", "-N", "."], workspace.root);
+    const patch = this.run(["-C", workspace.root, "diff", "HEAD"], workspace.root);
+    const status = this.run(
+      ["-C", workspace.root, "status", "--porcelain", "-uall"],
+      workspace.root,
+    );
+    const files = parseStatusFiles(status.status === 0 ? status.stdout : "");
+    if (patch.status !== 0) {
+      return {
+        ok: false,
+        files,
+        error: `生成 diff 失败：${(patch.stderr || patch.stdout).trim()}`,
+      };
+    }
+    if (patch.stdout.trim().length === 0) {
+      return { ok: true, files }; // 没改动：合并是空操作，不是失败
+    }
+
+    // baseRoot 可能是仓库里的子目录，而 patch 的路径相对仓库根
+    const top = this.run(
+      ["-C", workspace.baseRoot, "rev-parse", "--show-toplevel"],
+      workspace.baseRoot,
+    );
+    const applyRoot =
+      top.status === 0 && top.stdout.trim().length > 0
+        ? top.stdout.trim()
+        : workspace.baseRoot;
+
+    const patchFile = join(
+      tmpdir(),
+      `mini-pi-merge-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.patch`,
+    );
+    writeFileSync(patchFile, patch.stdout, "utf8");
+    try {
+      const check = this.run(
+        ["-C", applyRoot, "apply", "--check", "--whitespace=nowarn", patchFile],
+        applyRoot,
+      );
+      if (check.status !== 0) {
+        return {
+          ok: false,
+          files,
+          error:
+            "无法合并：主工作区可能已有未提交改动，或与本次改动冲突。" +
+            (check.stderr || check.stdout).trim(),
+        };
+      }
+      const applied = this.run(
+        ["-C", applyRoot, "apply", "--whitespace=nowarn", patchFile],
+        applyRoot,
+      );
+      if (applied.status !== 0) {
+        return {
+          ok: false,
+          files,
+          error: `合并失败：${(applied.stderr || applied.stdout).trim()}`,
+        };
+      }
+      return { ok: true, files };
+    } finally {
+      rmSync(patchFile, { force: true });
+    }
   }
 
   /**

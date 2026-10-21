@@ -128,7 +128,24 @@ function RunHead(): React.ReactElement | null {
             已丢弃
           </span>
         ) : (
-          <DiscardWorktree runId={workspace.runId} root={workspace.root} />
+          <>
+            {workspace.merged ? (
+              <span className="pill pill-emerald" title="改动已合并回基准工作区">
+                已合并
+              </span>
+            ) : (
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: "11.5px", padding: "3px 9px" }}
+                title="查看这次执行改了什么；合并在审阅之后"
+                onClick={() => actions.openDiff(workspace.runId)}
+              >
+                <Icon name="copy" size={11} />
+                变更
+              </button>
+            )}
+            <DiscardWorktree runId={workspace.runId} root={workspace.root} />
+          </>
         )
       ) : null}
       {view.activeRunId && busy ? (

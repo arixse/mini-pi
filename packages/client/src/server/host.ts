@@ -62,6 +62,7 @@ import {
   type ApprovalRequest,
   type DirListing,
   type ProviderView,
+  type RunDiff,
   type RunPhase,
   type RunSummary,
   type ServerEvent,
@@ -137,8 +138,10 @@ export class WorkspaceHost {
   private readonly sessionManager: SessionManager;
   private readonly runManager: RunManager;
   private readonly broker = new ApprovalBroker();
-  /** 隔离开启时按 Run 分工作区；没开是 null，于是"不隔离"是一条显式分支 */
-  private readonly workspaces: WorkspaceManager | null;
+  /** 隔离工作区管理器；即使当前没开隔离也创建，开关与历史 Run 的丢弃都要用它 */
+  private readonly workspaces: WorkspaceManager;
+  /** 下一次执行是否隔离；运行中切换只影响之后的任务 */
+  private isolate: boolean;
   /** 隔离不可用的原因（探测过一次就记下，发送时照着报错） */
   private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
@@ -181,11 +184,10 @@ export class WorkspaceHost {
       ...(options.globalAgentsPath ? { globalAgentsPath: options.globalAgentsPath } : {}),
     });
     this.runManager = new RunManager({ concurrency: options.concurrency ?? 1 });
-    this.workspaces = options.isolate
-      ? new WorkspaceManager({
-          ...(options.worktreesRoot ? { root: options.worktreesRoot } : {}),
-        })
-      : null;
+    this.isolate = options.isolate ?? false;
+    this.workspaces = new WorkspaceManager({
+      ...(options.worktreesRoot ? { root: options.worktreesRoot } : {}),
+    });
     this.contextWindow = resolveContextWindow({}).window;
   }
 
@@ -193,7 +195,7 @@ export class WorkspaceHost {
   async start(): Promise<this> {
     await this.reloadModel();
     this.subAgentEnabled = await this.settingsStore.getSubagentEnabled();
-    if (this.workspaces) {
+    if (this.isolate) {
       // 启动时就探测：等用户按下发送才说"隔离不了"，那一刻他已经等了
       const capability = this.workspaces.capability(this.workspaceRoot);
       this.isolationError = capability.supported
@@ -213,7 +215,7 @@ export class WorkspaceHost {
     this.runManager.cancelAll();
     this.broker.clear();
     // worktree 不回收会在主仓库的 .git/worktrees 里留元数据，磁盘也一直占着
-    this.workspaces?.dispose();
+    this.workspaces.dispose();
   }
 
   // ---------------------------------------------------------------- 状态
@@ -252,11 +254,18 @@ export class WorkspaceHost {
         ? null
         : this.modelError ?? "尚未配置模型：请在设置里选择服务商与模型",
       subAgent: this.subAgentEnabled,
+      isolate: this.isolate,
+      isolateError: this.isolationError,
     };
   }
 
   getTier(): Tier {
     return this.tier;
+  }
+
+  /** 当前隔离开关（切工作区时要带过去，别让用户的选择悄悄复位） */
+  getIsolate(): boolean {
+    return this.isolate;
   }
 
   /**
@@ -409,6 +418,32 @@ export class WorkspaceHost {
     return this.subAgentEnabled;
   }
 
+  /**
+   * 隔离开关。
+   *
+   * 打开前先探测一次：不支持就**拒绝打开并说明原因**，而不是先开、等发送时
+   * 再 409——后者会让人以为开关已经生效。关闭总是允许的：启动时带了
+   * `--isolate` 但环境不支持，用户总得有条路退回共用目录。
+   */
+  setIsolate(enabled: unknown): boolean {
+    if (typeof enabled !== "boolean") {
+      throw new HttpError(400, "isolate 必须是布尔值");
+    }
+    if (!enabled) {
+      this.isolate = false;
+      this.isolationError = null;
+      return this.isolate;
+    }
+    const capability = this.workspaces.capability(this.workspaceRoot);
+    if (!capability.supported) {
+      this.isolationError = `无法隔离工作区（${capability.reasons.join("；")}）`;
+      throw new HttpError(409, this.isolationError);
+    }
+    this.isolate = true;
+    this.isolationError = null;
+    return this.isolate;
+  }
+
   // ---------------------------------------------------------------- 会话
 
   private listSessionInfos(): Array<{ fileName: string; path: string; sizeBytes: number; timestamp: string }> {
@@ -558,8 +593,9 @@ export class WorkspaceHost {
       );
     }
     // 隔离不可用（没装 git / 不在仓库里 / 仓库没有提交）时拒绝发送：
-    // "以为隔离了其实共用着"比明说不能并行更危险
-    if (this.isolationError) {
+    // "以为隔离了其实共用着"比明说不能并行更危险。开关关掉时不拦：
+    // 环境不支持隔离的人总得有条路退回共用目录
+    if (this.isolate && this.isolationError) {
       throw new HttpError(409, this.isolationError);
     }
     // 不带 sessionId 就是"开一段新的"：会话在第一次发送时才落盘。
@@ -599,14 +635,69 @@ export class WorkspaceHost {
     if (record.status === "running" || record.status === "blocked" || record.status === "queued") {
       throw new HttpError(409, "任务还在跑，先停止它再丢弃工作区");
     }
-    if (!this.workspaces) {
-      throw new HttpError(409, "这个服务没有开启工作区隔离");
+    if (record.workspaceReleased) {
+      throw new HttpError(409, "这个任务的隔离工作区已经丢弃过了");
+    }
+    if (!record.isolated) {
+      throw new HttpError(409, "这个任务没有隔离工作区（隔离只对开启后新发的任务生效）");
     }
     const result = this.workspaces.release(runId);
     if (!result.ok) {
       throw new HttpError(409, result.error ?? "回收工作区失败");
     }
     record.workspaceReleased = true;
+  }
+
+  /**
+   * 这次隔离执行改了什么（运行头的「变更」）。
+   *
+   * 只给隔离工作区：非隔离时 `git diff` 会混进用户自己的未提交改动。
+   * 跑着的时候拒绝——`git add -N` 会写 worktree 的索引，别和执行抢同一个目录。
+   */
+  runDiff(runId: string): RunDiff {
+    const record = this.record(runId);
+    if (record.status === "running" || record.status === "blocked" || record.status === "queued") {
+      throw new HttpError(409, "任务还在跑，先停止它再看变更");
+    }
+    if (record.workspaceReleased) {
+      throw new HttpError(409, "这个任务的隔离工作区已经丢弃过了");
+    }
+    if (!record.isolated) {
+      throw new HttpError(409, "这个任务没有隔离工作区（隔离只对开启后新发的任务生效）");
+    }
+    const diff = this.workspaces.diff(runId);
+    if (!diff) {
+      throw new HttpError(409, "这个任务的隔离工作区已经不在了");
+    }
+    return { runId, patch: diff.patch, files: diff.files };
+  }
+
+  /**
+   * 把隔离改动合并回基准工作区。
+   *
+   * 冲突不自动解决：报错、保留 worktree、列出涉及的文件，由用户处理后再试。
+   * 合并成功后**不回收** worktree——删除仍然只能由「丢弃」显式发起。
+   */
+  mergeWorktree(runId: string): { files: string[] } {
+    const record = this.record(runId);
+    if (record.status === "running" || record.status === "blocked" || record.status === "queued") {
+      throw new HttpError(409, "任务还在跑，先停止它再合并");
+    }
+    if (record.workspaceReleased) {
+      throw new HttpError(409, "这个任务的隔离工作区已经丢弃过了");
+    }
+    if (!record.isolated) {
+      throw new HttpError(409, "这个任务没有隔离工作区（隔离只对开启后新发的任务生效）");
+    }
+    if (record.workspaceMerged) {
+      throw new HttpError(409, "这个任务的改动已经合并过了");
+    }
+    const result = this.workspaces.merge(runId);
+    if (!result.ok) {
+      throw new HttpError(409, result.error ?? "合并失败");
+    }
+    record.workspaceMerged = true;
+    return { files: result.files };
   }
 
   cancel(runId: string): void {
@@ -647,7 +738,7 @@ export class WorkspaceHost {
    * 那是 worktree.ts 的第一条硬规则。
    */
   private allocateWorkspace(record: RunRecord): Workspace | null {
-    if (!this.workspaces) {
+    if (!this.isolate) {
       record.workspaceRoot = this.workspaceRoot;
       record.isolated = false;
       return { baseRoot: this.workspaceRoot, root: this.workspaceRoot, isolated: false };
