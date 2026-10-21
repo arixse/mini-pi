@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -53,6 +53,11 @@ export interface Ports {
   /** 返回 null 表示没查成（网络问题），那不是障碍，只是少一道防线 */
   registryHasVersion(pkg: string, version: string): Promise<boolean | null>;
   readPackage(): { name: string } | null;
+  /**
+   * 把版本号写进这些 package.json，返回**实际改动**的那些（相对仓库根）。
+   * 版本本来就已经对上的文件不算改动——那次发版没有版本提交可打。
+   */
+  writeVersions(files: readonly string[], version: string): string[];
   log(line: string): void;
 }
 
@@ -212,6 +217,25 @@ export function parseCount(output: string): number | null {
   return Number(trimmed);
 }
 
+/**
+ * 读出文本里的顶层 version 字段。
+ *
+ * 走 JSON.parse 而不是正则：这个文件是要被改的，读它时必须拿到权威值，
+ * 正则从文本里抠出来的"像是版本号的串"算不上权威。
+ */
+function readVersion(source: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(source);
+    if (typeof parsed !== "object" || parsed === null) {
+      return null;
+    }
+    const version = (parsed as { version?: unknown }).version;
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 从远程地址里取出 `owner/repo`，用于拼出 Actions 与 Release 的链接 */
 export function parseRemoteSlug(url: string): string | null {
   const trimmed = url.trim().replace(/\.git$/, "");
@@ -224,6 +248,87 @@ export function parseRemoteSlug(url: string): string | null {
     return `${http[1]}/${http[2]}`;
   }
   return null;
+}
+
+/** 要对齐版本号的四个 package.json（相对仓库根），根包在最前 */
+export const VERSION_FILES = [
+  "package.json",
+  "packages/cli/package.json",
+  "packages/client/package.json",
+  "packages/core/package.json",
+] as const;
+
+/**
+ * 只改 package.json 里那个 version 字段，别的一个字节都不动。
+ *
+ * 不做 `JSON.parse` 再 `JSON.stringify`（哪怕缩进一致也不行）：这几个文件
+ * 是 **CRLF** 行尾，而 JSON.stringify 只吐 LF——实测结果是改一个版本号
+ * 会把 42 行全部重写一遍，diff 里全是噪音，真正要看的那一行反而看不见。
+ * 而且它还会顺手规范化掉别的东西（比如非 ASCII 的转义），那属于没人要求的改动。
+ *
+ * 因此走定点替换，并且只认**缩进最浅**的那个 version 键：顶层键在 2 个
+ * 空格处，嵌套的（真有的话）在 4 个以上，取最浅的那个就是顶层。
+ */
+export function replacePackageVersion(source: string, version: string): string | null {
+  const pattern = /^([ \t]*)"version": "[^"]*"/gm;
+  let best: { indent: string; start: number; end: number } | null = null;
+  for (const matched of source.matchAll(pattern)) {
+    const indent = matched[1] ?? "";
+    const start = matched.index ?? 0;
+    if (best === null || indent.length < best.indent.length) {
+      best = { indent, start, end: start + matched[0].length };
+    }
+  }
+  if (best === null) {
+    return null;
+  }
+  // 只切掉旧的键值对，行尾的 \r\n 在匹配范围之外，自然被留下来
+  return (
+    source.slice(0, best.start) +
+    `${best.indent}"version": "${version}"` +
+    source.slice(best.end)
+  );
+}
+
+/**
+ * 算出每个文件该变成什么，返回**有改动**的那部分（`文件 → 新内容`）。
+ *
+ * 落盘不在这里。分开的原因是这个循环有三条跳过路径（版本已对上、没有
+ * version 键、改出来读不回来），而它们只有真去写文件才会走到——那不能在
+ * 测试里做。抽出来之后逻辑可测，端口只剩薄薄一层 IO。
+ */
+export function applyVersions(
+  sources: ReadonlyMap<string, string>,
+  version: string,
+): Map<string, string> {
+  const changed = new Map<string, string>();
+  for (const [file, raw] of sources) {
+    if (readVersion(raw) === version) {
+      continue;
+    }
+    const next = replacePackageVersion(raw, version);
+    if (next === null) {
+      continue;
+    }
+    // 改完先自己读一遍：只改了文本不保证改对了，读回来的才是结果。
+    // 这条与"定点替换"是一体两面——不做全量重序列化，就得有别的手段
+    // 确认改出来的仍是合法 JSON、且版本确实是目标值。
+    if (readVersion(next) !== version) {
+      continue;
+    }
+    changed.set(file, next);
+  }
+  return changed;
+}
+
+/** 版本提交的信息。subject 与 body 分开，交给 `git commit -m -m` */
+export function versionCommitMessage(version: string): [string, string] {
+  return [
+    `chore: 发版 ${version}`,
+    "版本号以 tag 为唯一事实来源，但仓库里的 package.json 记的是上一次\n" +
+      "有人手改的号，从不随发布更新。这个提交把它对齐到即将打的那个 tag 上：\n" +
+      "git log 因此看得出每一版的号，本机打包出的安装包文件名也不再恒为旧号。",
+  ];
 }
 
 export interface ReleaseEnv {
@@ -284,15 +389,21 @@ export function releaseProblems(
 }
 
 /**
- * 真正会改动外部世界的命令。
+ * 真正会改动外部世界的命令（版本提交不在这里，它必须在打 tag 之前就落定）。
  *
  * 先推分支、再打 tag、最后推 tag：顺序反过来的话，推上去的 tag 指向一个
  * 远程还不认识的提交（推 tag 本身会把对象带过去，但 origin/main 会一直
  * 落在这条 tag 之前，别人 clone 下来的主干里没有这次发布的内容）。
  */
-export function planCommands(request: ReleaseRequest, version: string, ahead: number): string[][] {
+export function planCommands(
+  request: ReleaseRequest,
+  version: string,
+  ahead: number,
+  hasVersionCommit = false,
+): string[][] {
   const commands: string[][] = [];
-  if (ahead > 0) {
+  // 有了版本提交就一定要推，哪怕本地原本与远程同步——那一个提交正是要送上去的东西
+  if (ahead > 0 || hasVersionCommit) {
     commands.push(["push", request.remote, request.branch]);
   }
   commands.push(["tag", `v${version}`]);
@@ -312,7 +423,11 @@ function repoRoot(): string {
   return dirname(dirname(fileURLToPath(url)));
 }
 
-export function createDefaultPorts(): Ports {
+/**
+ * `root` 只是为了让它能被真测：传一个临时目录进去，就能在真文件上跑
+ * writeVersions 而不碰仓库。默认取仓库根。
+ */
+export function createDefaultPorts(root: string = repoRoot()): Ports {
   return {
     git(args) {
       const result = spawnSync("git", [...args], { encoding: "utf8", maxBuffer: 8 << 20 });
@@ -348,7 +463,7 @@ export function createDefaultPorts(): Ports {
     },
     readPackage() {
       try {
-        const raw = readFileSync(join(repoRoot(), "packages/cli/package.json"), "utf8");
+        const raw = readFileSync(join(root, "packages/cli/package.json"), "utf8");
         const parsed: unknown = JSON.parse(raw);
         if (typeof parsed !== "object" || parsed === null) {
           return null;
@@ -358,6 +473,26 @@ export function createDefaultPorts(): Ports {
       } catch {
         return null;
       }
+    },
+    writeVersions(files, version) {
+      const sources = new Map<string, string>();
+      for (const file of files) {
+        try {
+          sources.set(file, readFileSync(join(root, file), "utf8"));
+        } catch {
+          // 名单里的文件少一个（比如哪天核心包被删）不该让发版卡住，跳过即可
+        }
+      }
+      const done: string[] = [];
+      for (const [file, content] of applyVersions(sources, version)) {
+        try {
+          writeFileSync(join(root, file), content);
+          done.push(file);
+        } catch {
+          // 落不了盘就不算改动：宁可少一个版本号没对齐，也别报一个没发生过的提交
+        }
+      }
+      return done;
     },
     log(line) {
       process.stdout.write(`${line}\n`);
@@ -593,9 +728,38 @@ export async function runRelease(
     ports.log("提示：registry 查不动（网络问题），少了这道防线，其余检查都过了");
   }
 
-  const commands = planCommands(request, version, seen.ahead);
+  // 版本提交一定要在打 tag 之前落到位：tag 必须指向"版本号已经对齐"的那个
+  // 提交，否则 CI 虽然会用 tag 重新覆盖一次，仓库本身却永远停在旧号上。
+  let versionCommit: string[] = [];
+  if (!request.dryRun) {
+    const changed = ports.writeVersions(VERSION_FILES, version);
+    if (changed.length > 0) {
+      const [subject, body] = versionCommitMessage(version);
+      // add 只加改到的那几个文件，不用 -A：脚本此刻不应该把别人的东西卷进来
+      for (const command of [
+        ["add", ...changed],
+        ["commit", "-m", subject, "-m", body],
+      ]) {
+        const result = ports.git(command);
+        if (!result.ok) {
+          // 提交卡住时改动已经 staged 了，得说清楚怎么退回原状，
+          // 否则人只看到"发版失败了"，却不知道仓库停在一个脏状态上
+          ports.log(`发版中止：git ${command[0]} 失败`);
+          if (result.stderr.trim() !== "") {
+            ports.log(`  ${result.stderr.trim()}`);
+          }
+          ports.log(`  （已暂存的文件：git restore --staged ${changed.join(" ")} 可撤回）`);
+          return 1;
+        }
+      }
+      versionCommit = ["commit"];
+    }
+  }
+
+  const commands = planCommands(request, version, seen.ahead, versionCommit.length > 0);
   if (request.dryRun) {
     ports.log(`试运行：将发布 ${version}（tag ${tag}）`);
+    ports.log(`  将把版本 ${version} 写进 ${VERSION_FILES.length} 个 package.json 并提交`);
     for (const command of commands) {
       ports.log(`  将执行：git ${command.join(" ")}`);
     }

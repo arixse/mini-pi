@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -7,8 +10,10 @@ import {
   type ReleaseEnv,
   type ReleaseRequest,
   type Semver,
+  applyVersions,
   bumpVersion,
   compareSemver,
+  VERSION_FILES,
   createDefaultPorts,
   isBumpLevel,
   latestTagVersion,
@@ -19,7 +24,9 @@ import {
   parseSemver,
   planCommands,
   releaseProblems,
+  replacePackageVersion,
   runRelease,
+  versionCommitMessage,
 } from "./release";
 
 const OK: CommandResult = { ok: true, stdout: "", stderr: "" };
@@ -39,6 +46,8 @@ function baseGit(args: readonly string[]): CommandResult {
     return { ok: true, stdout: "git@github.com:arixse/mini-pi.git\n", stderr: "" };
   }
   if (line.startsWith("tag --list ")) return OK;
+  if (line.startsWith("add ")) return OK;
+  if (line.startsWith("commit ")) return OK;
   if (line.startsWith("fetch ")) return OK;
   if (line.startsWith("push ")) return OK;
   if (line.startsWith("tag v")) return OK;
@@ -67,6 +76,9 @@ function fakePorts(overrides: Partial<Ports> = {}): Ports & Recorder {
     },
     registryHasVersion: overrides.registryHasVersion ?? (async () => false),
     readPackage: overrides.readPackage ?? (() => ({ name: "@minipi/mini-pi" })),
+    writeVersions:
+      overrides.writeVersions ??
+      ((files: readonly string[]) => files.map((file) => file)),
     log(line: string): void {
       logs.push(line);
     },
@@ -81,19 +93,169 @@ function fakePorts(overrides: Partial<Ports> = {}): Ports & Recorder {
  * 这条断言会永远绿——因为它会连读操作一起被过滤掉，什么都查不出来。
  */
 function isMutation(call: string[]): boolean {
-  if (call[0] === "push" || call[0] === "fetch") return true;
+  if (["push", "fetch", "add", "commit"].includes(call[0] ?? "")) return true;
   return call[0] === "tag" && !(call[1] ?? "").startsWith("--");
 }
 function mutationsOf(ports: Ports & Recorder): string[] {
   return ports.gitCalls.filter(isMutation).map((call) => call.join(" "));
 }
 
-/** 顺序断言只关心推上去的那几步，fetch 在这之前就已经跑完了 */
-function pushedOf(ports: Ports & Recorder): string[] {
+/**
+ * 发版全过程的改动步骤，顺序即断言对象。
+ *
+ * add 的文件清单与 commit 的 -m 文案都折叠掉：它们不该被这条断言钉住
+ * （那会让改个提交措辞也要动测试），真正要看的是"先推版本、再打 tag"这个次序。
+ */
+function stepsOf(ports: Ports & Recorder): string[] {
   return ports.gitCalls
     .filter((call) => isMutation(call) && call[0] !== "fetch")
-    .map((call) => call.join(" "));
+    .map((call) => {
+      if (call[0] === "add") return "add <files>";
+      if (call[0] === "commit") return "commit <msg>";
+      return call.join(" ");
+    });
 }
+
+describe("replacePackageVersion", () => {
+  const crlf = (lines: string[]) => lines.join("\r\n");
+
+  it("只动 version 那一行，别的一个字节都不变", () => {
+    const source = crlf(['{', '  "name": "x",', '  "version": "1.0.2",', '  "private": true', '}', '']);
+    const got = replacePackageVersion(source, "1.0.4") as string;
+    assert.equal(
+      got,
+      crlf(['{', '  "name": "x",', '  "version": "1.0.4",', '  "private": true', '}', '']),
+    );
+  });
+
+  it("保住 CRLF 行尾", () => {
+    // 用 JSON.parse → JSON.stringify 的写法会把它全变成 LF：那等于为了改一个
+    // 版本号把整个文件重写一遍，diff 里全是噪音。这条就是把那个写法钉死在外面。
+    const source = crlf(['{', '  "version": "1.0.2"', '}', '']);
+    const got = replacePackageVersion(source, "1.0.4") as string;
+    assert.ok(got.includes("\r\n"), "CRLF 必须留下");
+    assert.ok(!/[^\r]\n/.test(got), "不该出现孤立的 LF");
+  });
+
+  it("认缩进最浅的那个 version，不会被嵌套的同名键骗到", () => {
+    const source = crlf([
+      '{',
+      '  "version": "1.0.2",',
+      '  "nested": {',
+      '    "version": "9.9.9"',
+      '  }',
+      '}',
+      '',
+    ]);
+    const got = replacePackageVersion(source, "1.0.4") as string;
+    assert.ok(got.includes('"version": "1.0.4"'));
+    assert.ok(got.includes('"version": "9.9.9"'), "嵌套的那个不该被改");
+  });
+
+  it("没有 version 键时返回 null，而不是塞一个进去", () => {
+    assert.equal(replacePackageVersion('{\r\n  "name": "x"\r\n}', "1.0.4"), null);
+  });
+
+  it("改动后整份仍是可解析的 JSON，且版本读出来就是目标值", () => {
+    const source = crlf(['{', '  "name": "x",', '  "version": "1.0.2"', '}', '']);
+    const got = replacePackageVersion(source, "1.0.4") as string;
+    assert.equal((JSON.parse(got) as { version: string }).version, "1.0.4");
+  });
+});
+
+describe("applyVersions", () => {
+  const file = (version: string) =>
+    ['{', `  "name": "x",`, `  "version": "${version}"`, '}', ''].join("\r\n");
+
+  it("版本不同的文件进改动名单，内容换成新版本", () => {
+    const got = applyVersions(new Map([["a/package.json", file("1.0.2")]]), "1.0.4");
+    assert.deepEqual([...got.keys()], ["a/package.json"]);
+    assert.ok((got.get("a/package.json") ?? "").includes('1.0.4'));
+  });
+
+  it("版本已经对上的不算改动——那次发版没有版本提交可打", () => {
+    const got = applyVersions(new Map([["a/package.json", file("1.0.4")]]), "1.0.4");
+    assert.deepEqual([...got.keys()], []);
+  });
+
+  it("没有 version 键的文件被跳过，而不是塞一个进去", () => {
+    const got = applyVersions(new Map([["a/package.json", '{\r\n  "name": "x"\r\n}']]), "1.0.4");
+    assert.deepEqual([...got.keys()], []);
+  });
+
+  it("不是合法 JSON 的文件被跳过，绝不带着坏内容往外写", () => {
+    const got = applyVersions(new Map([["a/package.json", "{ 坏了"]]), "1.0.4");
+    assert.deepEqual([...got.keys()], []);
+  });
+
+  it("四个文件里只对上不了的那几个动手", () => {
+    const sources = new Map([
+      ["package.json", file("1.0.2")],
+      ["packages/cli/package.json", file("1.0.4")],
+      ["packages/client/package.json", file("1.0.2")],
+      ["packages/core/package.json", file("1.0.2")],
+    ]);
+    const got = applyVersions(sources, "1.0.4");
+    assert.deepEqual([...got.keys()].sort(), [
+      "package.json",
+      "packages/client/package.json",
+      "packages/core/package.json",
+    ]);
+  });
+});
+
+describe("版本提交", () => {
+  it("四个包都在名单里，根包在最前", () => {
+    assert.equal(VERSION_FILES.length, 4);
+    assert.equal(VERSION_FILES[0], "package.json");
+    for (const file of VERSION_FILES) {
+      assert.ok(file.endsWith("package.json"), `${file} 不是 package.json`);
+    }
+  });
+
+  it("提交信息带版本号，且说明了对齐的目的", () => {
+    const [subject, body] = versionCommitMessage("1.0.4");
+    assert.equal(subject, "chore: 发版 1.0.4");
+    assert.ok(body.includes("tag"));
+  });
+
+  it("试运行不写文件也不提交", async () => {
+    let written: string[] = [];
+    const ports = fakePorts({
+      writeVersions: (files) => {
+        written = [...files];
+        return [...files];
+      },
+    });
+    await runRelease(["1.0.4", "--dry-run"], ports);
+    assert.deepEqual(written, [], "试运行连文件都不该碰");
+    assert.deepEqual(mutationsOf(ports), []);
+  });
+
+  it("版本已经对上时不再产生空提交", async () => {
+    const ports = fakePorts({ writeVersions: () => [] });
+    assert.equal(await runRelease(["1.0.4"], ports), 0);
+    assert.deepEqual(stepsOf(ports), ["tag v1.0.4", "push origin v1.0.4"],
+      "没有版本提交时就不该去推一个空提交");
+  });
+
+  it("提交卡住时说清楚怎么撤回已暂存的文件", async () => {
+    const ports = fakePorts({
+      git(args) {
+        if (args[0] === "commit") {
+          return { ok: false, stdout: "", stderr: "hook rejected" };
+        }
+        return baseGit(args);
+      },
+    });
+    assert.equal(await runRelease(["1.0.4"], ports), 1);
+    const printed = ports.logs.join("\n");
+    assert.ok(printed.includes("hook rejected"));
+    assert.ok(printed.includes("git restore --staged"), "不说这句，人就不知道仓库停在脏状态");
+    // 走到这里 tag 还没打，这正是"先落版本、再发版"想要的顺序
+    assert.deepEqual(mutationsOf(ports).filter((c) => c.startsWith("tag v")), []);
+  });
+});
 
 describe("parseArgs", () => {
   it("显式版本号", () => {
@@ -409,7 +571,13 @@ describe("runRelease", () => {
   it("真跑会把 tag 推上去，并给出三条链接", async () => {
     const ports = fakePorts();
     assert.equal(await runRelease(["1.0.4"], ports), 0);
-    assert.deepEqual(pushedOf(ports), ["tag v1.0.4", "push origin v1.0.4"]);
+    assert.deepEqual(stepsOf(ports), [
+      "add <files>",
+      "commit <msg>",
+      "push origin main",
+      "tag v1.0.4",
+      "push origin v1.0.4",
+    ]);
     const printed = ports.logs.join("\n");
     assert.ok(printed.includes("releases/tag/v1.0.4"));
     assert.ok(printed.includes("npmjs.com/package/@minipi/mini-pi/v/1.0.4"));
@@ -425,7 +593,9 @@ describe("runRelease", () => {
       },
     });
     await runRelease(["1.0.4"], ports);
-    assert.deepEqual(pushedOf(ports), [
+    assert.deepEqual(stepsOf(ports), [
+      "add <files>",
+      "commit <msg>",
       "push origin main",
       "tag v1.0.4",
       "push origin v1.0.4",
@@ -435,7 +605,7 @@ describe("runRelease", () => {
   it("版本已存在时中止，且一条命令都不执行", async () => {
     const ports = fakePorts();
     assert.equal(await runRelease(["1.0.3"], ports), 1);
-    assert.deepEqual(pushedOf(ports), [], "中止了就不该再动仓库");
+    assert.deepEqual(stepsOf(ports), [], "中止了就不该再动仓库");
     assert.ok(ports.logs.join("\n").includes("发版中止"));
   });
 
@@ -574,5 +744,49 @@ describe("createDefaultPorts", () => {
       (process.stdout as { write: typeof process.stdout.write }).write = original;
     }
     assert.equal(captured, "probe-line\n");
+  });
+
+  it("writeVersions 落到真文件上，且只动该动的那些", () => {
+    // 端口里的 IO 不经这一趟就永远没被跑到：注入假端口的用例走的是另一条路，
+    // 而"读不着的跳过 / 落不了盘就不算"这两条只有真文件才验得到。
+    const root = mkdtempSync(join(tmpdir(), "minipi-release-"));
+    try {
+      const write = (file: string, version: string) => {
+        const full = join(root, file);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(
+          full,
+          ["{", '  "name": "x",', `  "version": "${version}"`, "}", ""].join("\r\n"),
+        );
+      };
+      const cli = "packages/cli/package.json";
+      write("package.json", "1.0.2");
+      write(cli, "1.0.4"); // 已经对上，不该被算进改动
+      const changed = createDefaultPorts(root).writeVersions(["package.json", cli], "1.0.4");
+      assert.deepEqual(changed, ["package.json"]);
+      assert.ok(readFileSync(join(root, "package.json"), "utf8").includes('"1.0.4"'));
+      // 行尾必须还在：重序列化成 LF 会把整个文件翻一遍
+      assert.ok(readFileSync(join(root, "package.json"), "utf8").includes("\r\n"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("名单里的文件少一个时跳过，不让发版卡住", () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-release-"));
+    try {
+      mkdirSync(join(root, "packages", "cli"), { recursive: true });
+      writeFileSync(
+        join(root, "packages/cli/package.json"),
+        ["{", '  "name": "x",', '  "version": "1.0.2"', "}", ""].join("\r\n"),
+      );
+      const changed = createDefaultPorts(root).writeVersions(
+        ["package.json", "packages/cli/package.json"],
+        "1.0.4",
+      );
+      assert.deepEqual(changed, ["packages/cli/package.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
