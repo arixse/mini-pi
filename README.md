@@ -165,6 +165,17 @@ runner 各打各的，最后把安装包挂到这个 tag 的 Release 上——Re
 就自动建出来；人先建好写了变更说明的话，它只补附件。详见
 `docs/publishing.md`。
 
+发版不用手敲 `git tag` + `git push`：
+
+```bash
+pnpm release --dry-run patch   # 先看计划，不动任何东西
+pnpm release patch             # 打 tag 并推，剩下的交给 CI
+```
+
+它替掉的不只是两行敲键——那两行命令**前面**该有的检查一条都没有（工作区
+脏、不在 main、落后远程、版本已存在、版本号不合法），每一条的代价都是
+推送之后才看得见。
+
 包结构（三个包，由 workspace 管理）：
 
 | 包                  | 职责                                                           |
