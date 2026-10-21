@@ -59,6 +59,7 @@ function permissive(patch = "", status = ""): CommandRunner & { calls: RecordedC
   return scripted((args) => {
     if (args[0] === "--version") return ok("git version 2.55.0");
     if (args.includes("--is-inside-work-tree")) return ok("true");
+    if (args.includes("--show-toplevel")) return ok("/repo");
     if (args.includes("status")) return ok(status);
     if (args.includes("diff")) return ok(patch);
     return ok("abc123");
@@ -247,6 +248,73 @@ describe("WorkspaceManager（假命令出口）", () => {
     assert.match(diff?.patch ?? "", /完整内容见/);
   });
 
+  it("merge：没有改动时是空操作，不下 apply", () => {
+    const run = permissive("", "");
+    const manager = new WorkspaceManager({ root: "/wt", run });
+    manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
+
+    const result = manager.merge("run_abc12345");
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.files, []);
+    assert.strictEqual(
+      run.calls.some((call) => call.args.includes("apply")),
+      false,
+      "没改动就不该往主工作区写任何东西",
+    );
+  });
+
+  it("merge：先 --check 再 apply，冲突时一个文件都不动", () => {
+    const run = scripted((args) => {
+      if (args[0] === "--version") return ok("git version 2.55.0");
+      if (args.includes("--is-inside-work-tree")) return ok("true");
+      if (args.includes("--show-toplevel")) return ok("/repo");
+      if (args.includes("status")) return ok(" M a.txt\n");
+      if (args.includes("diff")) return ok("diff --git a/a.txt b/a.txt\n");
+      if (args.includes("apply") && args.includes("--check")) {
+        return fail("error: patch failed: a.txt:1");
+      }
+      return ok();
+    });
+    const manager = new WorkspaceManager({ root: "/wt", run });
+    manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
+
+    const result = manager.merge("run_abc12345");
+
+    assert.strictEqual(result.ok, false);
+    assert.deepStrictEqual(result.files, ["a.txt"], "失败时也要把涉及的文件列出来");
+    assert.match(result.error ?? "", /冲突|未提交改动/);
+    const applies = run.calls.filter((call) => call.args.includes("apply"));
+    assert.strictEqual(applies.length, 1, "check 没过就不该再 apply");
+  });
+
+  it("merge：check 通过后应用，且先 add -N（新文件也要合）", () => {
+    const run = permissive("diff --git a/a.txt b/a.txt\n", " M a.txt\n");
+    const manager = new WorkspaceManager({ root: "/wt", run });
+    manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
+
+    const result = manager.merge("run_abc12345");
+
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.files, ["a.txt"]);
+    const applies = run.calls.filter((call) => call.args.includes("apply"));
+    assert.strictEqual(applies.length, 2);
+    assert.ok(applies[0]!.args.includes("--check"), "check 必须在 apply 之前");
+    const addAt = run.calls.findIndex((call) => call.args.includes("add"));
+    const diffAt = run.calls.findIndex((call) => call.args.includes("diff"));
+    assert.ok(addAt >= 0 && addAt < diffAt);
+  });
+
+  it("merge：非隔离 / 未知工作区都明确失败", () => {
+    const manager = new WorkspaceManager({ root: "/wt", run: permissive() });
+    manager.allocate("/repo", { runId: "plain", isolate: false });
+
+    assert.strictEqual(manager.merge("plain").ok, false);
+    assert.match(manager.merge("plain").error ?? "", /没有隔离工作区/);
+    assert.strictEqual(manager.merge("nope").ok, false);
+    assert.match(manager.merge("nope").error ?? "", /没有找到/);
+  });
+
   it("dispose：回收全部，退出时不留 .git/worktrees 元数据", () => {
     const run = permissive();
     const manager = new WorkspaceManager({ root: "/wt", run });
@@ -319,6 +387,63 @@ describe("WorkspaceManager（真 git）", () => {
       // 回收后磁盘上不该再留下目录
       assert.strictEqual(existsSync(a.root), false);
       assert.strictEqual(existsSync(b.root), false);
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(wtRoot, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "合并：把改动应用回基准仓库，worktree 保留到用户丢弃",
+    withGit,
+    () => {
+      const repo = seedRepo();
+      const wtRoot = tempDir("mini-pi-wt-merge-");
+      const manager = new WorkspaceManager({ root: wtRoot });
+      const workspace = manager.allocate(repo, { runId: "run_merge1111", isolate: true });
+      writeFileSync(join(workspace.root, "README.md"), "hello\nworld\n");
+      writeFileSync(join(workspace.root, "new.txt"), "new\n");
+
+      const result = manager.merge("run_merge1111");
+
+      assert.strictEqual(result.ok, true, result.error ?? "合并应成功");
+      assert.deepStrictEqual(result.files.slice().sort(), ["README.md", "new.txt"]);
+      // 行尾由 git 的 autocrlf 决定（Windows 上可能是 CRLF），断言内容时归一化
+      const text = (path: string): string =>
+        readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+      assert.strictEqual(text(join(repo, "README.md")), "hello\nworld\n");
+      assert.strictEqual(text(join(repo, "new.txt")), "new\n");
+      assert.strictEqual(existsSync(workspace.root), true, "合并后仍保留 worktree");
+
+      manager.dispose();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(wtRoot, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "合并冲突：报错、保留 worktree、主工作区一个字都不改",
+    withGit,
+    () => {
+      const repo = seedRepo();
+      const wtRoot = tempDir("mini-pi-wt-conflict-");
+      const manager = new WorkspaceManager({ root: wtRoot });
+      const workspace = manager.allocate(repo, { runId: "run_conflict1", isolate: true });
+      writeFileSync(join(workspace.root, "README.md"), "agent\n");
+      // 主工作区在隔离期间自己改了同一个文件：patch 的上下文对不上
+      writeFileSync(join(repo, "README.md"), "user\n");
+
+      const result = manager.merge("run_conflict1");
+
+      assert.strictEqual(result.ok, false);
+      assert.match(result.error ?? "", /冲突|未提交改动/);
+      assert.strictEqual(
+        readFileSync(join(repo, "README.md"), "utf8"),
+        "user\n",
+        "冲突时不能把主工作区改成半截",
+      );
+      assert.strictEqual(existsSync(workspace.root), true, "冲突要保留 worktree 等人处理");
+
+      manager.dispose();
       rmSync(repo, { recursive: true, force: true });
       rmSync(wtRoot, { recursive: true, force: true });
     },

@@ -9,7 +9,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
@@ -23,7 +23,13 @@ import {
   waitFor,
   type TestServer,
 } from "./testServer";
-import type { AppState, ApprovalRequest, RunSummary, ServerEvent } from "../shared/types";
+import type {
+  AppState,
+  ApprovalRequest,
+  RunDiff,
+  RunSummary,
+  ServerEvent,
+} from "../shared/types";
 
 describe("App Server · 状态", () => {
   let server: TestServer;
@@ -714,7 +720,164 @@ describe("App Server · 工作区隔离（M3）", () => {
       // 没开隔离就没有什么可丢的：明说，而不是假装删掉了什么
       const dropped = await server.raw(`/api/runs/${created.runId}/worktree`, { method: "DELETE" });
       assert.strictEqual(dropped.status, 409);
-      assert.match((await dropped.json() as { error: string }).error, /没有开启工作区隔离/);
+      assert.match((await dropped.json() as { error: string }).error, /没有隔离工作区/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("隔离开关：环境不支持时拒绝打开，并留下原因；关掉后照常共用目录", async () => {
+    const server = await startTestServer({ responses: [textResponse("好")] });
+    try {
+      const before = await server.get<AppState>("/api/state");
+      assert.strictEqual(before.isolate, false);
+      assert.strictEqual(before.isolateError, null);
+
+      const enable = await server.raw("/api/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isolate: true }),
+      });
+      assert.strictEqual(enable.status, 409);
+      assert.match(((await enable.json()) as { error: string }).error, /无法隔离工作区/);
+
+      const after = await server.get<AppState>("/api/state");
+      assert.strictEqual(after.isolate, false, "打不开就不该假装打开");
+      assert.ok(after.isolateError, "原因要留在状态里，界面才解释得清");
+
+      // 关掉总是允许的：这是启动时带了 --isolate 但环境不支持的唯一退路
+      const disable = await server.post<AppState>("/api/options", { isolate: false });
+      assert.strictEqual(disable.isolate, false);
+      assert.strictEqual(disable.isolateError, null);
+
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "照常跑" });
+      await server.stream(created.runId);
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.workspace.isolated, false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("隔离开关只影响之后的任务：打开后新任务隔离，关掉后回到共用目录", withGit, async () => {
+    const server = await startTestServer({
+      initGit: true,
+      tier: "full-access",
+      responses: [textResponse("好")],
+    });
+    try {
+      const on = await server.post<AppState>("/api/options", { isolate: true });
+      assert.strictEqual(on.isolate, true);
+      assert.strictEqual(on.isolateError, null);
+
+      const isolated = await server.post<{ runId: string }>("/api/runs", { prompt: "隔离的" });
+      await server.stream(isolated.runId);
+      const isolatedSummary = await server.get<RunSummary>(`/api/runs/${isolated.runId}`);
+      assert.strictEqual(isolatedSummary.workspace.isolated, true);
+      assert.notStrictEqual(isolatedSummary.workspace.root, server.workspace);
+
+      const off = await server.post<AppState>("/api/options", { isolate: false });
+      assert.strictEqual(off.isolate, false);
+
+      const plain = await server.post<{ runId: string }>("/api/runs", { prompt: "共用的" });
+      await server.stream(plain.runId);
+      const plainSummary = await server.get<RunSummary>(`/api/runs/${plain.runId}`);
+      assert.strictEqual(plainSummary.workspace.isolated, false);
+      assert.strictEqual(plainSummary.workspace.root, server.workspace);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("变更与合并：diff 列出改动，合并后文件落到基准工作区，重复合并 409", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "a.txt", content: "hello" }, "call_1"),
+        textResponse("写好了"),
+      ],
+    });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "建个文件" });
+      await server.stream(created.runId);
+
+      const diff = await server.get<RunDiff>(`/api/runs/${created.runId}/diff`);
+      assert.ok(diff.files.includes("a.txt"), `变更里应有 a.txt：${diff.files.join(",")}`);
+      assert.match(diff.patch, /a\.txt/);
+      assert.match(diff.patch, /\+hello/);
+
+      const merged = await server.post<{ files: string[] }>(
+        `/api/runs/${created.runId}/merge`,
+      );
+      assert.ok(merged.files.includes("a.txt"));
+      assert.strictEqual(readFileSync(join(server.workspace, "a.txt"), "utf8"), "hello");
+
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.workspace.merged, true);
+      assert.strictEqual(summary.workspace.released, false, "合并不等于丢弃");
+
+      const again = await server.raw(`/api/runs/${created.runId}/merge`, { method: "POST" });
+      assert.strictEqual(again.status, 409);
+      assert.match(((await again.json()) as { error: string }).error, /已经合并/);
+
+      const dropped = await server.raw(`/api/runs/${created.runId}/worktree`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(dropped.status, 204);
+
+      const afterDrop = await server.raw(`/api/runs/${created.runId}/diff`);
+      assert.strictEqual(afterDrop.status, 409);
+      assert.match(((await afterDrop.json()) as { error: string }).error, /丢弃过/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("合并冲突：409、主工作区不被改坏、worktree 保留", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "a.txt", content: "agent" }, "call_1"),
+        textResponse("写好了"),
+      ],
+    });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "建个文件" });
+      await server.stream(created.runId);
+      // 主工作区在隔离期间自己创建了同名文件：patch 落不下去
+      writeFileSync(join(server.workspace, "a.txt"), "user");
+
+      const response = await server.raw(`/api/runs/${created.runId}/merge`, {
+        method: "POST",
+      });
+      assert.strictEqual(response.status, 409);
+      assert.match(((await response.json()) as { error: string }).error, /无法合并/);
+      assert.strictEqual(readFileSync(join(server.workspace, "a.txt"), "utf8"), "user");
+
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.workspace.merged, false);
+      assert.strictEqual(summary.workspace.released, false);
+      assert.strictEqual(existsSync(summary.workspace.root), true, "冲突要保留 worktree");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("非隔离任务没有 diff / 合并入口：409 而不是给一份混着别人改动的 patch", async () => {
+    const server = await startTestServer({ responses: [textResponse("好")] });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "在吗" });
+      await server.stream(created.runId);
+
+      const diff = await server.raw(`/api/runs/${created.runId}/diff`);
+      assert.strictEqual(diff.status, 409);
+      assert.match(((await diff.json()) as { error: string }).error, /没有隔离工作区/);
+
+      const merge = await server.raw(`/api/runs/${created.runId}/merge`, { method: "POST" });
+      assert.strictEqual(merge.status, 409);
+      assert.match(((await merge.json()) as { error: string }).error, /没有隔离工作区/);
     } finally {
       await server.close();
     }

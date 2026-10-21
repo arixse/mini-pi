@@ -15,6 +15,7 @@ import type {
   ApprovalRequest,
   DirListing,
   ProviderView,
+  RunDiff,
   RunEventEnvelope,
   RunSummary,
   ServerEvent,
@@ -112,6 +113,12 @@ export const api = {
   /** 丢弃这个 Run 的隔离工作区（M3）；跑着的时候服务端会 409 */
   discardWorktree: (runId: string): Promise<void> =>
     request<void>(`/api/runs/${encodeURIComponent(runId)}/worktree`, { method: "DELETE" }),
+  /** 这次隔离执行改了什么；非隔离 / 跑着 / 已丢弃都是 409 */
+  runDiff: (runId: string): Promise<RunDiff> =>
+    request<RunDiff>(`/api/runs/${encodeURIComponent(runId)}/diff`),
+  /** 把隔离改动应用回基准工作区；冲突时 409，worktree 保留 */
+  mergeWorktree: (runId: string): Promise<{ files: string[] }> =>
+    post(`/api/runs/${encodeURIComponent(runId)}/merge`),
   runSummaries: (): Promise<RunSummary[]> => request<RunSummary[]>("/api/runs"),
 
   approvals: (): Promise<ApprovalRequest[]> => request<ApprovalRequest[]>("/api/approvals"),
@@ -137,6 +144,7 @@ export const api = {
   }): Promise<AppState> => post("/api/model", payload),
   setTier: (tier: Tier): Promise<{ tier: Tier }> => post("/api/tier", { tier }),
   setSubAgent: (enabled: boolean): Promise<AppState> => post("/api/options", { subAgent: enabled }),
+  setIsolate: (enabled: boolean): Promise<AppState> => post("/api/options", { isolate: enabled }),
 
   dirs: (path?: string): Promise<DirListing> =>
     request<DirListing>(`/api/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`),

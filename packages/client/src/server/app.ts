@@ -172,7 +172,7 @@ export class AppServer {
     if (root === this.host.workspaceRoot) {
       return;
     }
-    const next = this.createHost(root, this.host.getTier());
+    const next = this.createHost(root, this.host.getTier(), this.host.getIsolate());
     await next.start();
     const previous = this.host;
     this.host = next;
@@ -195,13 +195,14 @@ export class AppServer {
     }
   }
 
-  private createHost(workspaceRoot: string, tier?: Tier): WorkspaceHost {
+  private createHost(workspaceRoot: string, tier?: Tier, isolate?: boolean): WorkspaceHost {
     return new WorkspaceHost({
       workspaceRoot,
       ...(this.options.sessionsDir ? { sessionsDir: this.options.sessionsDir } : {}),
       ...(this.options.globalAgentsPath ? { globalAgentsPath: this.options.globalAgentsPath } : {}),
       ...(tier ? { tier } : {}),
-      ...(this.options.isolate ? { isolate: true } : {}),
+      // 切工作区时沿用用户当前的开关；没给才回落到启动参数
+      ...((isolate ?? this.options.isolate ?? false) ? { isolate: true } : {}),
       ...(this.options.worktreesRoot ? { worktreesRoot: this.options.worktreesRoot } : {}),
       ...(this.options.concurrency !== undefined
         ? { concurrency: this.options.concurrency }
@@ -255,6 +256,15 @@ export class AppServer {
     app.delete("/api/runs/:id/worktree", wrap((req, res) => {
       this.host.releaseWorktree(pathParam(req.params.id));
       res.status(204).end();
+    }));
+
+    // 隔离改动的审阅与落地：先看 diff，再决定合并还是丢弃
+    app.get("/api/runs/:id/diff", wrap((req, res) => {
+      res.json(this.host.runDiff(pathParam(req.params.id)));
+    }));
+
+    app.post("/api/runs/:id/merge", wrap((req, res) => {
+      res.json(this.host.mergeWorktree(pathParam(req.params.id)));
     }));
 
     app.get("/api/runs/:id/events", (req, res, next) => {
@@ -331,6 +341,10 @@ export class AppServer {
       const payload = asRecord(req.body);
       if (payload.subAgent !== undefined) {
         this.host.setSubAgentEnabled(payload.subAgent);
+      }
+      if (payload.isolate !== undefined) {
+        // 不支持时这里 409 并带上原因；state 里的 isolateError 也会同时更新
+        this.host.setIsolate(payload.isolate);
       }
       res.json(await this.host.state());
     }));

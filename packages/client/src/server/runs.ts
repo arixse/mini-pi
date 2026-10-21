@@ -47,6 +47,8 @@ export class RunRecord {
   isolated = false;
   /** 隔离工作区是否已被用户显式丢弃 */
   workspaceReleased = false;
+  /** 隔离改动是否已合并回基准工作区 */
+  workspaceMerged = false;
 
   status: RunPhase;
   endedAt: number | null = null;
@@ -160,6 +162,7 @@ export class RunRecord {
       root: this.workspaceRoot,
       isolated: this.isolated,
       released: this.workspaceReleased,
+      merged: this.workspaceMerged,
     };
   }
 }

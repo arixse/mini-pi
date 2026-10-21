@@ -88,9 +88,11 @@ M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端
 
 - **M3 并行 + worktree**：裁决落在 `core/worktree.ts` 的 `WorkspaceManager`
   （三条硬规则：隔离不可用就报错不静默共用、不主动回收、diff 只给隔离
-  工作区）。服务端 `serve --isolate` 开启，每个 Run 一个独立检出，
-  `--concurrency <n>` 放开并行上限；运行头显示「隔离工作区」与「丢弃」
-  （`DELETE /api/runs/:id/worktree`）。目录名后缀取 runId **后** 8 位——
+  工作区）。服务端 `serve --isolate` 或界面开关开启，每个 Run 一个独立检出，
+  `--concurrency <n>` 放开并行上限；运行头显示「隔离工作区」「变更」与「丢弃」
+  （`GET /api/runs/:id/diff`、`POST /api/runs/:id/merge`、
+  `DELETE /api/runs/:id/worktree`）。合并不造提交，冲突先 `--check` 拦下并保留
+  worktree。目录名后缀取 runId **后** 8 位——
   取头会把一半熵浪费在同一个 `run` 前缀上，同一毫秒连发两个 Run 会撞目录。
 - **M4 审批三档**：裁决表只有一份，在内核 `core/policy.ts`
   （`evaluateApprovalPolicy`）；CLI 与服务端都调它，客户端的 `Tier`

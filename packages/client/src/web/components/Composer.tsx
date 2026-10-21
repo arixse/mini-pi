@@ -133,10 +133,17 @@ function ComposerHint({
     <div className="composer-hint">
       <label
         className="switch"
-        title="隔离工作区（每个任务一个 worktree）尚未落地：当前所有任务都在同一个工作目录里跑"
+        title={
+          state.isolateError ??
+          "每个任务一个独立 git worktree；改动在运行头的「变更」里审阅后合并，主工作区在合并前不受影响"
+        }
       >
-        <input type="checkbox" disabled />
-        隔离工作区（M3 落地）
+        <input
+          type="checkbox"
+          checked={state.isolate}
+          onChange={(event) => void actions.setIsolate(event.target.checked)}
+        />
+        隔离工作区
       </label>
       <label className="switch" title="允许模型把活派给子 Agent">
         <input

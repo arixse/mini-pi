@@ -141,7 +141,9 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
   // 隔离开时，worktree 只能从"有提交的仓库"建；没有 git 的环境下这条
   // 探测会直接失败，正是隔离不可用要报错的那条路径（用例据此断言 409）
   let worktreesRoot: string | undefined;
-  if (options.isolate) {
+  // initGit 可以在不隔离时单独打开：用来测"隔离开关从关到开"（需要仓库有提交）
+  if (options.isolate || options.initGit) {
+    // 即使当前不隔离也指到临时目录：开关随时可能被打开，别写到真实 tmp 根
     worktreesRoot = join(root, "worktrees");
     // 默认建仓库；不建是为了构造"隔离不可用"——探不到 HEAD 时 send 必须 409
     if (options.initGit !== false) {
