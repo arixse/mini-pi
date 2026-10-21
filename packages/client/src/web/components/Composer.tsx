@@ -52,6 +52,11 @@ export function Composer({
     handleRef.current = {
       clear: () => setText(""),
       focus: () => inputRef.current?.focus(),
+      // 发送失败时把正文还回来；用户已经重新打了字就不覆盖
+      restore: (text: string) => {
+        setText((previous) => (previous.trim().length > 0 ? previous : text));
+        inputRef.current?.focus();
+      },
     };
     return () => {
       handleRef.current = null;
@@ -79,7 +84,7 @@ export function Composer({
         <textarea
           ref={inputRef}
           rows={3}
-          placeholder="接着说，或 / 开头用命令"
+          placeholder="接着说……（Enter 发送，Shift+Enter 换行）"
           aria-label="输入消息"
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -89,7 +94,7 @@ export function Composer({
               submit();
               return;
             }
-            // Esc 交给上层统一处理（关浮层 / 停任务），别在这里吞掉
+            // Esc 交给上层统一处理（只收浮层，不停任务），别在这里吞掉
           }}
         />
         <button
@@ -103,7 +108,7 @@ export function Composer({
         {mode === "busy" ? (
           <button
             className="btn btn-stop"
-            title="停止这个任务（Esc）"
+            title="停止这个任务"
             style={{ padding: "9px 12px", borderRadius: 12 }}
             onClick={() => actions.stop()}
           >
@@ -155,9 +160,6 @@ function ComposerHint({
           </span>
           <span>
             <span className="kbd">Shift</span>+<span className="kbd">Enter</span> 换行
-          </span>
-          <span>
-            <span className="kbd">Esc</span> 停止
           </span>
           {mode === "busy" ? (
             <span className="take-me">运行中发送会排队，当前回合结束后执行</span>

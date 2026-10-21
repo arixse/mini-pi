@@ -263,7 +263,12 @@ describe("electronSpawnOptions", () => {
     try {
       const options = electronSpawnOptions();
       assert.ok(!("ELECTRON_RUN_AS_NODE" in options.env));
-      assert.ok("PATH" in options.env, "只删这一项，其余照旧");
+      // Windows 上环境变量的键名大小写不固定（这台机器就写作 `Path`）：
+      // 展开成普通对象后 `"PATH" in env` 会误判，按不区分大小写查
+      assert.ok(
+        Object.keys(options.env).some((key) => key.toUpperCase() === "PATH"),
+        "只删这一项，其余照旧",
+      );
     } finally {
       if (saved === undefined) {
         delete process.env.ELECTRON_RUN_AS_NODE;

@@ -214,6 +214,13 @@ function Banners(): React.ReactElement {
           {`任务已挂起：有 ${pending} 次工具调用在等你裁决`}
         </div>
       ) : null}
+      {view.status === "failed" && view.runError ? (
+        // 状态徽标只说"失败"，原因必须单独说出来，否则用户只能去翻服务端日志
+        <div className="bar bar-err">
+          <Icon name="alert" />
+          {`任务失败：${view.runError}`}
+        </div>
+      ) : null}
       {state.banner ? (
         <div className={`bar bar-${state.banner.level === "error" ? "err" : state.banner.level}`}>
           <Icon name="alert" />

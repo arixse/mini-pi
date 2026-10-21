@@ -10,7 +10,7 @@
  * 会永远认为没变，于是整条时间线每次 delta 都要重画。
  */
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { Actions } from "../actions";
 import type { TimelineItem } from "../state";
 import {
@@ -19,7 +19,7 @@ import {
   noticeTone,
   toolStatusMeta,
 } from "../items";
-import { riskMeta, toolMetaLine } from "../format";
+import { formatDuration, riskMeta, toolMetaLine } from "../format";
 import { Icon, Dot } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -189,7 +189,11 @@ function ApprovalCard({
             <span className={`pill pill-${risk.tone}`}>{risk.label}</span>
             <span className="spacer" />
             <span style={{ fontSize: 11, color: "var(--t5)" }}>
-              {approvalStatusText(item.state)}
+              {pending ? (
+                <Waiting since={request.createdAt} />
+              ) : (
+                approvalStatusText(item.state)
+              )}
             </span>
           </div>
 
@@ -254,4 +258,20 @@ function ApprovalCard({
       </div>
     </div>
   );
+}
+
+/**
+ * 挂起时长。
+ *
+ * 审批卡是 memo 的，父级不会因为"过了一秒"而重画；这里自带一个 1s 的
+ * 本地定时器，只让这一行字走，不牵动整条时间线。
+ * 设计稿第 9 条：等待要显式说出来，并实时显示等了多久。
+ */
+function Waiting({ since }: { since: number }): React.ReactElement {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <>{`已等待 ${formatDuration(now - since)}`}</>;
 }

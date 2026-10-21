@@ -24,13 +24,31 @@ import type { Actions, SaveModelInput } from "./actions";
 import { textOf } from "./format";
 import type { ApprovalAnswer, ServerEvent, Tier } from "../shared/types";
 
-/** 输入区暴露给动作层的两个命令：清空与聚焦 */
-export type ComposerHandle = { clear: () => void; focus: () => void };
+/**
+ * 输入区暴露给动作层的三个命令：清空、聚焦、把没发出去的字还回去。
+ *
+ * 第三个是为"发送失败"准备的：请求失败时正文必须回到输入框，
+ * 而不是让用户重打一遍（`restore` 只在输入框为空时生效，不会覆盖新输入）。
+ */
+export type ComposerHandle = {
+  clear: () => void;
+  focus: () => void;
+  restore: (text: string) => void;
+};
 
 /** 装着句柄的引用：动作层不认识 React，只认"有个 current" */
 export type ComposerRef = { current: ComposerHandle | null };
 
 const BANNER_TTL_MS = 6000;
+
+/**
+ * 有活跃 Run 时的状态轮询间隔。
+ *
+ * 现在的事件流是"按 Run"订阅的，当前没订阅的 Run 发生了什么，界面收不到。
+ * 全局事件流（`/api/events`）落地前先用一次轻量轮询兜住后台状态与待审批数；
+ * 落地后这段连同 `tick` 里的轮询分支一起删掉。
+ */
+const STATE_POLL_MS = 5_000;
 
 export class AppController {
   readonly store = new ClientStore();
@@ -51,6 +69,17 @@ export class AppController {
   /** 首屏只认第一次调用：React 严格模式的双次挂载不该起两遍 */
   private booted: Promise<void> | null = null;
   private bannerTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 视图代次。
+   *
+   * 切会话是异步的（先取会话详情，再换时间线）。用户手快连点两下时，
+   * 先发的请求可能后回来——代次对不上就丢弃，否则最终显示的是"上上次"点的会话。
+   */
+  private viewEpoch = 0;
+  /** 上次主动轮询状态的时间；有活跃 Run 才轮询（见 STATE_POLL_MS） */
+  private lastPollAt = 0;
+  /** `/api/state` 的请求代次：乱序回来的旧快照不能盖掉新的 */
+  private stateSeq = 0;
 
   constructor() {
     this.actions = this.createActions();
@@ -84,18 +113,31 @@ export class AppController {
     }
   }
 
-  /** 重新拉一份全量状态（不碰时间线，避免正在看的内容闪一下） */
-  private async refreshState(): Promise<void> {
+  /**
+   * 重新拉一份全量状态（不碰时间线，避免正在看的内容闪一下）。
+   *
+   * `quiet` 给轮询用：网络抖一下不该每 5 秒弹一条错误提示；
+   * 反过来，用户动作触发的刷新必须把失败说出来。
+   */
+  private async refreshState(quiet = false): Promise<void> {
+    const seq = ++this.stateSeq;
     try {
       const snapshot = await api.state();
+      // 慢响应可能晚于更新的那一份回来：以最后发出的请求为准
+      if (seq !== this.stateSeq) {
+        return;
+      }
       this.store.update((state) => applySnapshot(state, snapshot));
     } catch (error) {
-      this.fail(error);
+      if (!quiet) {
+        this.fail(error);
+      }
     }
   }
 
   /** 换工作区 / 首屏之后的彻底重来：时间线与事件流全部丢弃重建 */
   private async reload(): Promise<void> {
+    this.viewEpoch += 1;
     this.closeStream();
     this.pendingUsers = [];
     this.store.update((state) => {
@@ -108,19 +150,39 @@ export class AppController {
     }
   }
 
-  /** 运行中的耗时要走字：只在这一种状态下由外部定时器驱动重画 */
-  tick(): void {
-    const view = this.store.current.view;
+  /**
+   * 外部定时器每秒调一次：走字 + 兜底轮询。
+   *
+   * 走字只在"正在看一个未结束的 Run"时有必要；轮询则只在这个服务还有
+   * 活跃 Run 时才有必要（空闲时一个请求都不发）。
+   */
+  tick(now: number = Date.now()): void {
+    const state = this.store.current;
+    const view = state.view;
     if (view.activeRunId !== null && view.status !== "done") {
       this.store.touch();
     }
+
+    const hasActiveRun = state.runs.some(
+      (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
+    );
+    if (!hasActiveRun || now - this.lastPollAt < STATE_POLL_MS) {
+      return;
+    }
+    this.lastPollAt = now;
+    void this.refreshState(true);
   }
 
   // ------------------------------------------------------------ 会话 / Run
 
   private async openSession(sessionId: string): Promise<void> {
+    const epoch = ++this.viewEpoch;
     try {
       const detail = await api.session(sessionId);
+      // 请求回来时用户可能已经点了别的会话或新任务：这一份不再算数
+      if (epoch !== this.viewEpoch) {
+        return;
+      }
       const live = this.liveRunOf(sessionId);
       // 最近的一条 Run（不论结束没结束）：运行头的隔离信息要靠它
       // （任务跑完了，「丢弃」按钮还得在）
@@ -142,6 +204,10 @@ export class AppController {
         this.closeStream();
       }
     } catch (error) {
+      // 被更晚的一次点击取代的请求，失败也不该弹提示
+      if (epoch !== this.viewEpoch) {
+        return;
+      }
       this.fail(error);
     }
   }
@@ -170,6 +236,10 @@ export class AppController {
     }
     if (this.store.current.view.sessionId !== found.sessionId) {
       await this.openSession(found.sessionId);
+      // 打开期间用户可能又切走了：不要把这条 Run 硬按到别的会话的头上
+      if (this.store.current.view.sessionId !== found.sessionId) {
+        return;
+      }
     }
     this.store.update((state) => {
       state.view.activeRunId = found.runId;
@@ -218,6 +288,9 @@ export class AppController {
       if (this.pendingUsers.some((item) => item.id === optimisticId)) {
         this.store.update((state) => removeItem(state.view, optimisticId));
         this.pendingUsers = this.pendingUsers.filter((item) => item.id !== optimisticId);
+        // 请求没成立：把刚打的字还回输入框，别让用户重打一遍
+        // （只在输入框仍为空时生效，不会覆盖用户已经重新输入的内容）
+        this.composer?.current?.restore(text);
       }
       this.fail(error);
     } finally {
@@ -268,6 +341,8 @@ export class AppController {
    * 什么都没说"也会在磁盘上留下一个空文件，侧栏里还多一条"新会话"。
    */
   private newTask(): void {
+    // 让还在路上的"打开会话"作废：它回来时不该把白板换回旧对话
+    this.viewEpoch += 1;
     this.closeStream();
     this.pendingUsers = [];
     this.store.update((state) => {
@@ -289,6 +364,7 @@ export class AppController {
       });
       await this.refreshState();
       if (wasOpen) {
+        this.viewEpoch += 1;
         this.closeStream();
         this.store.update((state) => {
           state.view = emptyView();
@@ -342,6 +418,15 @@ export class AppController {
         this.store.update((state) => {
           // 断线要显式说出来，别让人以为卡住了
           state.view.streamNote = status === "reconnecting" ? "事件流断开，正在重连……" : null;
+        });
+      },
+      onError: (message) => {
+        // 重连无望（多半是这个 Run 已随服务重启消失）：停止重连，
+        // 把原因留在界面上，而不是让"正在重连"无限转下去
+        this.stream = null;
+        this.streamedRunId = null;
+        this.store.update((state) => {
+          state.view.streamNote = message;
         });
       },
     });
@@ -427,8 +512,11 @@ export class AppController {
   // ------------------------------------------------------------ 键盘
 
   /**
-   * Esc 一路往上收：先关浮层，再取消待删的确认，最后才是停任务。
-   * 反过来会很糟——用户想关个弹窗，结果把正在跑的任务停了。
+   * Esc 只收界面层：浮层 → 待删确认 → 抽屉。
+   *
+   * **不停任务**。Esc 是"退出当前这层"的通用手势，在输入框里按一下就把
+   * 正在跑的任务停掉，代价远大于它省下的那一次点击；停任务只能由停止按钮
+   * 或动作层显式发起（`actions.stop`）。
    */
   handleEscape(): void {
     const state = this.store.current;
@@ -444,8 +532,8 @@ export class AppController {
       this.actions.cancelDelete();
       return;
     }
-    if (state.view.activeRunId) {
-      void this.stop();
+    if (state.ui.sidebar) {
+      this.actions.closeSidebar();
     }
   }
 

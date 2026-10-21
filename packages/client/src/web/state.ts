@@ -30,7 +30,16 @@ import { textOf } from "./format";
 
 export type ToolStatus = "running" | "done" | "failed";
 
-export type TimelineItem =
+export type TimelineItem = {
+  /**
+   * 就地修改的版本号。
+   *
+   * 条目对象是可变且就地修改的，React 的 memo 按引用比较永远认为没变；
+   * 用"正文长度"之类的指纹又会漏掉"长度没变、内容变了"的情况。
+   * 凡是改过这个条目就 +1，`revisionOf` 优先认它（见 items.ts）。
+   */
+  rev?: number;
+} & (
   | { kind: "user"; id: string; text: string; queued: boolean; locked: boolean }
   /** `locked` 表示正文已定稿（来自历史或 message_end）；此后的 delta 一律忽略 */
   | { kind: "assistant"; id: string; text: string; streaming: boolean; locked: boolean }
@@ -51,7 +60,8 @@ export type TimelineItem =
       request: ApprovalRequest;
       state: "pending" | "approved" | "always" | "rejected" | "stale";
     }
-  | { kind: "notice"; id: string; level: "ok" | "warn" | "error"; text: string };
+  | { kind: "notice"; id: string; level: "ok" | "warn" | "error"; text: string }
+);
 
 export type View = {
   sessionId: string | null;
@@ -72,6 +82,13 @@ export type View = {
   gap: boolean;
   /** 断流提示：SSE 断了、重连中…… */
   streamNote: string | null;
+  /**
+   * 这个 Run 的失败原因（服务端 `run_done.error`）。
+   *
+   * 状态徽标只说"失败"，不说为什么；没有这一项，用户只能去翻服务端日志。
+   * 为空表示没有失败，或服务端没给原因。
+   */
+  runError: string | null;
   /**
    * 正在流式输出的 assistant 消息 id。
    *
@@ -135,6 +152,7 @@ export function emptyView(): View {
     readOnly: false,
     gap: false,
     streamNote: null,
+    runError: null,
     streamingAssistantId: null,
     workspace: null,
   };
@@ -189,10 +207,22 @@ export function messageId(message: AgentMessage): string {
   return `a:${time}:${kind}`;
 }
 
+/**
+ * 就地修改一个条目，并把版本号推进一步。
+ *
+ * 不用"长度/状态"这类指纹代替它：`message_end` 可能用同样长度、不同内容的
+ * 权威正文覆盖流式累积的文本，那时指纹不变，界面就会停在半句话上。
+ */
+function bump(item: TimelineItem): void {
+  item.rev = (item.rev ?? 0) + 1;
+}
+
 /** 按 id 就地替换或追加（幂等 upsert） */
 export function upsertItem(view: View, item: TimelineItem): TimelineItem {
   const index = view.items.findIndex((existing) => existing.id === item.id);
   if (index >= 0) {
+    // 替换也是"改过"：把旧条目的版本号接过来再 +1，否则内容变了指纹却退回旧值
+    item.rev = (view.items[index]!.rev ?? 0) + 1;
     view.items[index] = item;
   } else {
     view.items.push(item);
@@ -350,6 +380,7 @@ export function openSession(
   }
   const head = options.liveRun ?? options.run ?? null;
   view.workspace = head ? { runId: head.runId, ...head.workspace } : null;
+  view.runError = options.run?.error ?? null;
   state.view = view;
 }
 
@@ -374,6 +405,8 @@ export function addUserMessage(view: View, text: string, queued: boolean): strin
   // 前一条覆盖掉。服务端回来的消息仍按 `messageId`（`u:<时间戳>`）幂等
   // 落地，与这个占位 id 无关——它只在对不上时被撤回。
   const id = `u:${stamp}#${optimisticSeq}`;
+  // 上一轮的失败原因不该跟着新消息继续挂在时间线上
+  view.runError = null;
   upsertItem(view, {
     kind: "user",
     id,
@@ -408,6 +441,10 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         return;
       }
       view.status = event.status;
+      // 新的一轮开始：上一轮的失败原因不该继续挂着
+      if (event.status === "queued" || event.status === "running") {
+        view.runError = null;
+      }
       if (event.status === "running" && view.startedAt === null) {
         view.startedAt = Date.now();
       }
@@ -460,6 +497,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       if (!item.locked) {
         item.text += event.delta;
         item.streaming = true;
+        bump(item);
       }
       return;
     }
@@ -478,11 +516,21 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         item.text = text;
         item.streaming = false;
         item.locked = true;
+        bump(item);
       } else if (text.trim().length > 0) {
         upsertItem(view, { kind: "assistant", id, text, streaming: false, locked: true });
       } else if (findItem(view, "assistant", messageId(event.message))) {
         // id 漂移过且正文为空：把旧占位清掉，别留一张空气泡
         removeItem(view, messageId(event.message));
+      }
+      // 被 maxTokens 截断不是"正常说完"：不说出来的话，用户会以为模型只答了半句
+      if (event.message.stopReason === "length") {
+        upsertItem(view, {
+          kind: "notice",
+          id: `trunc:${id}`,
+          level: "warn",
+          text: "输出达到长度上限被截断：这条回复不完整。可调大 maxTokens 后重新提问",
+        });
       }
       return;
     }
@@ -533,6 +581,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         }
         existing.status = result.isError ? "failed" : "done";
         existing.output = result.content.map((part) => part.text).join("\n");
+        bump(existing);
       }
       return;
     }
@@ -591,6 +640,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
             : event.answer === "always"
               ? "always"
               : "rejected";
+      bump(item);
       return;
     }
 
@@ -603,6 +653,9 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       view.status = event.status;
       view.elapsedMs = event.elapsedMs;
       view.streamingAssistantId = null;
+      view.streamNote = null;
+      // 失败原因只有这一处能拿到；不存下来，界面就只剩一个"失败"徽标
+      view.runError = event.error ?? null;
       if (event.tokens > 0) {
         view.tokens = event.tokens;
       }
@@ -613,9 +666,11 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         if (item.kind === "assistant" && item.streaming) {
           item.streaming = false;
           item.locked = true;
+          bump(item);
         }
         if (item.kind === "approval" && item.state === "pending") {
           item.state = "stale";
+          bump(item);
         }
         if (item.kind === "tool" && item.status === "running") {
           // 取消发生在工具执行中：没有 end 事件，别让它一直转圈
@@ -623,6 +678,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
           if (!item.output) {
             item.output = "任务已结束，这次调用没有结果";
           }
+          bump(item);
         }
       }
       return;
