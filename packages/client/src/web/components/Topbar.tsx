@@ -27,7 +27,7 @@ export function Topbar(): React.ReactElement {
       </button>
 
       <div className="brand">
-        <Icon name="sparkles" />
+        <Icon name="logo" size={18} />
         <span className="brand-name">mini-pi</span>
       </div>
 
@@ -72,6 +72,16 @@ export function Topbar(): React.ReactElement {
 
       <span className="spacer" />
 
+      {/* 供应商入口：handoff §2 顶栏右组第一枚（供应商 / 通知 / 设置 / 主题 / 侧栏）。
+         直接落到模型页——供应商配置就住在那里 */}
+      <button
+        className="icon-btn"
+        title="模型供应商设置"
+        aria-label="模型供应商设置"
+        onClick={() => actions.openSettings()}
+      >
+        <Icon name="gateway" />
+      </button>
       <button
         className="icon-btn notify-btn"
         title={notificationButtonTitle(state.notifications)}

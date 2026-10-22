@@ -211,13 +211,34 @@ function ModelPicker(): React.ReactElement {
     };
   }, [open, providers]);
 
+  // 候选 = 所有已配置 API Key 的供应商的**全部**模型，不止一家、也不止一个。
+  // 设计意图（用户原话"已配置 apiKey 的模型都可以选择"）：某家配了密钥，
+  // 它的每个模型都得能选，而不是只列出" providers() 返回的 selectedModel
+  // 那一个"——那样下拉里就永远只有当前默认一家的一个模型。
+  // 当前默认模型永远在列表里；defaultModels 之外用户另存过的模型（自建网关等）
+  // 也一并补进来。去重避免同一 provider/model 出现两次。
   const entries: Array<{ provider: string; model: string }> = [];
+  const seen = new Set<string>();
+  const offer = (provider: string, model: string): void => {
+    const key = `${provider}/${model}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    entries.push({ provider, model });
+  };
   if (state.model.provider && state.model.model) {
-    entries.push({ provider: state.model.provider, model: state.model.model });
+    offer(state.model.provider, state.model.model);
   }
   for (const item of providers ?? []) {
-    if (item.hasApiKey && item.selectedModel && item.name !== state.model.provider) {
-      entries.push({ provider: item.name, model: item.selectedModel });
+    if (!item.hasApiKey) {
+      continue;
+    }
+    for (const model of item.defaultModels) {
+      offer(item.name, model);
+    }
+    if (item.selectedModel) {
+      offer(item.name, item.selectedModel);
     }
   }
 

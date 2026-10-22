@@ -107,8 +107,8 @@ function EmptyGuide(): React.ReactElement {
   return (
     <div className="empty-guide">
       <div className="eg-brand">
-        <Icon name="sparkles" size={20} color="var(--Client-accent-text)" />
-        Mini Pi
+        <Icon name="logo" size={26} color="var(--Client-accent-text)" />
+        mini-pi
       </div>
       <p className="eg-text">选择一个目录作为工作区：之后的任务、会话与改动，都发生在它里面。</p>
       <button className="btn btn-yes" onClick={() => actions.openPicker()}>
