@@ -100,7 +100,7 @@ macOS 两个 runner 上各打各的，产物挂在工作流运行记录里（30 
 
 ```
 src/server/     App Server：Express 路由 + 自写 SSE 帧；workspaceMemory.ts 记"上次用哪个工作区"
-src/web/        前端：React + Vite，界面照 design/mockup.html 实现
+src/web/        前端：React + Vite，界面照 docs/client-visual-handoff.md 的画布实现
 src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / workspace.ts 选工作区 / desktop.ts 命令
 src/shared/     线上契约（只有类型）：服务端产什么、前端消费什么
 vite.config.ts  前端构建：src/web → dist/web
@@ -129,7 +129,10 @@ agent 交出去。密钥只写不读：保存后前端连打码的明文都拿�
 
 ## 界面
 
-`design/mockup.html` 是唯一视觉基准（深色 slate + indigo，七个界面、23 条决策）。
+视觉基准是 Ardot 画布 `738920616583250`（十帧：上排五帧 Dark、下排五帧 Light，
+每帧 1280×900），交接说明与十屏验收要点见 `docs/client-visual-handoff.md`；
+色板是 `design/tokens.css`，深浅只是根节点 `data-theme` 的区别。
+`design/mockup.html` 是本次重做之前的旧稿，已废弃。
 实现要点：时间线是**会话级**的（Run 完成后可续聊）、按 id 幂等归约
 （刷新/重连/重放不会叠出两份）、工具卡必须渲染参数、风险等级由内核算好前端只配色。
 

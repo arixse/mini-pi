@@ -2,8 +2,11 @@
 
 > **状态**：已落地（M0–M6）。App Server、Web 前端与 Electron 壳都在 `packages/client` 里；
 > 下面的取舍仍是实现依据，行为事实以代码与 [客户端 README](../packages/client/README.md) 为准。
-> 配套静态稿：[`packages/client/design/mockup.html`](../packages/client/design/mockup.html)
-> ——自包含单文件，浏览器直接打开，七个界面可切换、可开设计标注、可切 1180 / 880 / 420 三个宽度。
+> 视觉交互稿：Ardot 画布 `738920616583250`（十帧：上排五帧 Dark、下排五帧 Light，
+> 每帧 1280×900）。开发交接说明、十屏验收要点与内核缺口见
+> [client-visual-handoff.md](./client-visual-handoff.md)，色板是
+> [`packages/client/design/tokens.css`](../packages/client/design/tokens.css)。
+> 旧静态稿 `packages/client/design/mockup.html` 已被本次重做取代，不要参考。
 >
 > **这一篇只写"为什么这么设计"**：目标与原则、组件与状态清单、已定决策及其理由。
 > 终态的交互细节与接口语义，落地后以 [cli-interaction.md](./cli-interaction.md)（命令行为）、

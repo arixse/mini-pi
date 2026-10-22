@@ -1,0 +1,102 @@
+/*
+ * mini-pi 客户端设计 Token —— 由视觉交互稿导出的唯一色源。
+ *
+ * 深浅两套是同一套 token 的两个 mode：Dark 为默认（:root），Light 覆盖在
+ * [data-theme="light"] 上。组件里**不要**写死色值，只引用这里的变量。
+ *
+ * 命名与画布变量一一对应：--Client-<组>-<角色>，例如画布上的 bg/canvas
+ * 对应 --Client-bg-canvas。切换主题只换根节点上的 data-theme，不重画。
+ *
+ * 色值带 8 位十六进制（RRGGBBAA）。不需要透明时用 FF 结尾。
+ */
+
+:root {
+  /* 背景：从画布到输入框四层，亮度依次抬升 */
+  --Client-bg-canvas: #0B0D10FF;
+  --Client-bg-sidebar: #0E1116FF;
+  --Client-bg-raised: #15191FFF;
+  --Client-bg-code: #0A0D11FF;
+  --Client-bg-hover: #1A1F26FF;
+  --Client-bg-input: #101318FF;
+
+  /* 文字：四级，inverse 用于实心按钮上的反白 */
+  --Client-text-primary: #E8ECEFFF;
+  --Client-text-secondary: #9AA4AEFF;
+  --Client-text-tertiary: #6B757FFF;
+  --Client-text-inverse: #0B0D10FF;
+
+  /* 描边：subtle 只做分区，default 做控件边框，strong 做强调边框 */
+  --Client-border-subtle: #1C222AFF;
+  --Client-border-default: #29313BFF;
+  --Client-border-strong: #3B444FFF;
+
+  /* 主色：solid 做动作，soft 做选中/气泡底，text 做链接与行内强调 */
+  --Client-accent-solid: #4C8DFFFF;
+  --Client-accent-soft: #12243FFF;
+  --Client-accent-text: #85AEFFFF;
+
+  /* 语义色：soft 是底、text 是字、solid 是实心块 */
+  --Client-warn-soft: #2A2114FF;
+  --Client-warn-text: #E9B866FF;
+  --Client-warn-solid: #D99A2BFF;
+
+  --Client-danger-soft: #2D1618FF;
+  --Client-danger-text: #F5838BFF;
+  --Client-danger-solid: #E5484DFF;
+
+  --Client-ok-soft: #10241CFF;
+  --Client-ok-text: #52C68CFF;
+  --Client-ok-solid: #30A46CFF;
+
+  /* diff 专用：底色、字色、装订线三件套 */
+  --Client-diff-add-bg: #0E2A1EFF;
+  --Client-diff-add-text: #66D9A0FF;
+  --Client-diff-del-bg: #2D1618FF;
+  --Client-diff-del-text: #FF9CA3FF;
+  --Client-diff-gutter: #4B5560FF;
+
+  /* 遮罩 */
+  --Client-scrim: #0000009E;
+}
+
+[data-theme="light"] {
+  --Client-bg-canvas: #F1F3F5FF;
+  --Client-bg-sidebar: #F7F8FAFF;
+  --Client-bg-raised: #FFFFFFFF;
+  --Client-bg-code: #F4F6F8FF;
+  --Client-bg-hover: #EDEFF3FF;
+  --Client-bg-input: #FFFFFFFF;
+
+  --Client-text-primary: #14181CFF;
+  --Client-text-secondary: #5A6672FF;
+  --Client-text-tertiary: #8A949FFF;
+  --Client-text-inverse: #FFFFFFFF;
+
+  --Client-border-subtle: #E8EBEFFF;
+  --Client-border-default: #D6DBE2FF;
+  --Client-border-strong: #BCC4CEFF;
+
+  --Client-accent-solid: #1F6FEBFF;
+  --Client-accent-soft: #E8F0FEFF;
+  --Client-accent-text: #1F6FEBFF;
+
+  --Client-warn-soft: #FDF3E3FF;
+  --Client-warn-text: #8A5A08FF;
+  --Client-warn-solid: #B45309FF;
+
+  --Client-danger-soft: #FDECECFF;
+  --Client-danger-text: #B42318FF;
+  --Client-danger-solid: #D1242FFF;
+
+  --Client-ok-soft: #E6F6EEFF;
+  --Client-ok-text: #067647FF;
+  --Client-ok-solid: #067647FF;
+
+  --Client-diff-add-bg: #E6F6EEFF;
+  --Client-diff-add-text: #087443FF;
+  --Client-diff-del-bg: #FDECECFF;
+  --Client-diff-del-text: #B42318FF;
+  --Client-diff-gutter: #9AA4AEFF;
+
+  --Client-scrim: #0B0D1057;
+}
