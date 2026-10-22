@@ -492,6 +492,39 @@ describe("乐观插入与快照", () => {
       merged: false,
     });
   });
+
+  it("openSession 带上这段会话的历史用量与步数；跑着的 Run 的用量优先", () => {
+    const state = initialState();
+    // 历史会话：服务端回看时算好的两个数字，顶部那两枚指标就靠它们
+    openSession(state, "s1.jsonl", [userMessage("历史"), assistantText("回答")], {
+      tokens: 4321,
+      steps: 3,
+    });
+    assert.equal(state.view.tokens, 4321);
+    assert.equal(state.view.steps, 3, "「步数」说的是这段会话自己的回合数");
+
+    // 没给就是 0：新建的空会话确实什么都没发生过
+    openSession(state, "s2.jsonl", []);
+    assert.equal(state.view.tokens, 0);
+    assert.equal(state.view.steps, 0);
+
+    // 会话还挂着一个没跑完的 Run：用量以它为准（那位是实时的）
+    const live: RunSummary = {
+      runId: "run_11",
+      title: "跑一半的任务",
+      sessionId: "s3.jsonl",
+      status: "running",
+      model: "m",
+      startedAt: 1,
+      elapsedMs: null,
+      tokens: 999,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      workspace: runWorkspace(),
+    };
+    openSession(state, "s3.jsonl", [], { tokens: 4321, steps: 3, liveRun: live });
+    assert.equal(state.view.tokens, 999, "liveRun 的用量覆盖会话的历史值");
+  });
 });
 
 describe("applyRunMetaEvent：应用级事件只改 runs", () => {

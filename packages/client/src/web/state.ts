@@ -498,6 +498,10 @@ export function openSession(
     readOnly?: boolean;
     liveRun?: RunSummary | null;
     run?: RunSummary | null;
+    /** 这段会话当前上下文的占用（历史会话由服务端回看时算好） */
+    tokens?: number;
+    /** 这段会话当前上下文里的模型回合数（同上） */
+    steps?: number;
     /** 这段会话属于哪个工作区；缺省 = 活动根 */
     root?: string;
   } = {},
@@ -510,6 +514,10 @@ export function openSession(
   view.readOnly = options.readOnly ?? false;
   view.contextWindow = state.model.contextWindow;
   view.model = state.model.label;
+  // 历史用量与步数：切回一段旧会话时，顶部那两枚指标要说"这段历史占了
+  // 多大事"。不填的话它们只能是 0 和「—」，看着像这段会话是空的
+  view.tokens = options.tokens ?? 0;
+  view.steps = options.steps ?? 0;
   if (options.liveRun) {
     view.activeRunId = options.liveRun.runId;
     view.status = options.liveRun.status;

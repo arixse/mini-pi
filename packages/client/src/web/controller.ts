@@ -442,6 +442,8 @@ export class AppController {
           liveRun: live,
           run: recent,
           root: targetRoot,
+          tokens: detail.tokens,
+          steps: detail.turns,
         });
         state.ui.sidebar = false;
       });

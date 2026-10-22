@@ -185,6 +185,21 @@ export type SessionDetail = {
   messages: AgentMessage[];
   messageCount: number;
   compactedCount: number;
+  /**
+   * 这段会话**当前**上下文的占用（token 估算）。
+   *
+   * 与跑着的 Run 的 `run.tokens` 同源（都是 `estimateContextTokens`），
+   * 于是"看历史"和"看正在跑的"是同一把尺子。历史会话以前不带这一项，
+   * 状态行只能显示 0——看着像"这段会话什么都没发生过"。
+   */
+  tokens: number;
+  /**
+   * 当前上下文里的模型回合数（一问一答算一步）。
+   *
+   * 压缩掉的那些轮次不计：它们已经被摘要替代、不在上下文里了，与
+   * `tokens` 的口径保持一致（两者说的都是"现在还剩多少"）。
+   */
+  turns: number;
 };
 
 export type ProviderView = {

@@ -119,11 +119,22 @@ const jsonResponse = (body: unknown): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-function sessionDetail(sessionId: string, text: string): SessionDetail {
+function sessionDetail(
+  sessionId: string,
+  text: string,
+  usage: { tokens?: number; turns?: number } = {},
+): SessionDetail {
   const messages: AgentMessage[] = [
     { role: "user", content: [{ type: "text", text }], timestamp: 1 },
   ];
-  return { sessionId, messages, messageCount: 1, compactedCount: 0 };
+  return {
+    sessionId,
+    messages,
+    messageCount: 1,
+    compactedCount: 0,
+    tokens: usage.tokens ?? 0,
+    turns: usage.turns ?? 0,
+  };
 }
 
 function snapshot(overrides: Partial<AppState> = {}): AppState {
@@ -389,6 +400,30 @@ describe("AppController", () => {
       /快的那段/,
       "时间线内容也必须来自后点的那次请求",
     );
+  });
+
+  it("打开历史会话：顶部那两枚指标拿到这段会话自己的用量与步数", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/state")) {
+        return jsonResponse(snapshot({ currentSessionId: null }));
+      }
+      if (url.includes("/api/sessions/old.jsonl")) {
+        return jsonResponse(sessionDetail("old.jsonl", "很久以前的一段", { tokens: 4321, turns: 7 }));
+      }
+      return new Response(JSON.stringify({ error: "没有这个接口" }), { status: 404 });
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.actions.openSession("old.jsonl");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+
+    const view = controller.store.current.view;
+    assert.strictEqual(view.sessionId, "old.jsonl");
+    assert.strictEqual(view.tokens, 4321, "历史用量来自服务端回看时算好的那个");
+    assert.strictEqual(view.steps, 7);
   });
 
   it("boot 后建立应用级事件流：后台 Run 的状态变化不再等轮询", async () => {

@@ -583,7 +583,14 @@ export class WorkspaceHost {
     );
   }
 
-  /** 历史会话只读回看：切过去只换 view，不动当前会话 */
+  /**
+   * 历史会话只读回看：切过去只换 view，不动当前会话。
+   *
+   * 除了消息还带回**这段会话现在的用量与回合数**（`tokens` / `turns`）：
+   * 顶部状态行的两枚指标问的就是"这段历史占了多大事"，只给消息的话
+   * 前端只能显示 0 和「—」——等于说这段会话什么都没发生过。
+   * 两者都按**当前上下文**（含压缩摘要）算，与跑着的 Run 同一把尺子。
+   */
   readSession(sessionId: string): SessionDetail {
     const context = this.sessionContext(sessionId);
     const summary = this.sessionSummaries().find((item) => item.sessionId === sessionId);
@@ -592,6 +599,8 @@ export class WorkspaceHost {
       messages: context.messages,
       messageCount: summary?.messageCount ?? context.messages.length,
       compactedCount: summary?.compactedCount ?? 0,
+      tokens: context.store.estimateContextTokens(),
+      turns: countTurns(context.messages),
     };
   }
 
@@ -1180,6 +1189,20 @@ export class WorkspaceHost {
     }
     return path;
   }
+}
+
+/**
+ * 一段上下文里的模型回合数（顶部状态行的「步数」）。
+ *
+ * 数 assistant 消息而不是"有正文的回答"：只有工具调用、没有正文的那一条
+ * 同样是模型的一次回合，漏掉它会让"点了工具之后"的步数不涨。工具结果
+ * 是 toolResult 消息，本来就不在这一数里。
+ *
+ * 压缩过的会话只数得出现在上下文里的部分——被摘要替代的那些轮次已经
+ * 不在上下文里了，与 `tokens` 同样只回答"现在还剩多少"。
+ */
+function countTurns(messages: readonly AgentMessage[]): number {
+  return messages.filter((message) => message.role === "assistant").length;
 }
 
 /**

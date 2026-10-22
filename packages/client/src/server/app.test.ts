@@ -575,6 +575,72 @@ describe("App Server · 会话", () => {
     }
   });
 
+  it("会话详情带这段会话的历史用量与回合数（顶部两枚指标的数据来源）", async () => {
+    const server = await startTestServer({
+      sessions: [
+        {
+          fileName: "2026-10-19T20-41-00.jsonl",
+          lines: [
+            JSON.stringify({
+              type: "session",
+              version: 1,
+              id: "s1",
+              cwd: "/tmp",
+              timestamp: "2026-10-19T20:41:00.000Z",
+            }),
+            JSON.stringify({
+              type: "message",
+              id: "m1",
+              parentId: null,
+              timestamp: "2026-10-19T20:41:00.000Z",
+              message: {
+                role: "user",
+                content: [{ type: "text", text: "把 prompt 搬到 core 下" }],
+                timestamp: 1,
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              id: "m2",
+              parentId: "m1",
+              timestamp: "2026-10-19T20:41:01.000Z",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "好，我去看一下目录结构" }],
+                stopReason: "stop",
+                usage: { input: 1, output: 1, totalTokens: 2 },
+                timestamp: 2,
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              id: "m3",
+              parentId: "m2",
+              timestamp: "2026-10-19T20:41:02.000Z",
+              message: {
+                role: "toolResult",
+                toolCallId: "t1",
+                toolName: "read_file",
+                content: [{ type: "text", text: "ok" }],
+                isError: false,
+                timestamp: 3,
+              },
+            }),
+          ],
+        },
+      ],
+    });
+    try {
+      const detail = await server.get<{ tokens: number; turns: number }>(
+        "/api/sessions/2026-10-19T20-41-00.jsonl",
+      );
+      assert.ok(detail.tokens > 0, "这段会话有内容，用量就不该是 0");
+      assert.strictEqual(detail.turns, 1, "一条 assistant 就是一步；工具结果不算");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("不存在的会话是 404，路径穿越打不进来", async () => {
     const server = await startTestServer();
     try {
