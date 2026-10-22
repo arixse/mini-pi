@@ -1,20 +1,22 @@
 /**
  * 变更面板：隔离工作区里的 diff，和"落地 / 放弃"的那两下。
  *
- * 四条来自设计稿与 worktree 规则：
+ * 五条来自设计稿与 worktree 规则：
  * - **先看后合**：diff 是运行头的「变更」，合并必须在这里发生；
  * - **冲突不自动解决**：服务端 409 原样显示（保留 worktree），面板不关，
  *   用户还能继续看是哪几个文件；
  * - **合并 ≠ 丢弃**：合并成功后 worktree 仍在，删不删由「放弃变更」另行决定；
  * - **行级上色**：增删行走 diff 专用五件套令牌，不复用语义色——语义色
- *   在别处表示"对/错"，而 diff 的行只是"这行加了 / 那行减了"。
+ *   在别处表示"对/错"，而 diff 的行只是"这行加了 / 那行减了"；
+ * - **主列内嵌，不是断层模态**（设计稿第 3 页）：面板画在主列里，带描边，
+ *   无遮罩——侧栏、状态行与输入区都在场，看 diff 不等于离开这个界面。
  *
  * 数据由动作层取（`openDiff`），组件只负责摆：请求竞态与状态都在 store 里。
  */
 
 import { useState } from "react";
 import { useActions, useClient } from "../store";
-import { diffStats, parseDiffRows } from "../format";
+import { diffStats, diffStatsByFile, parseDiffRows } from "../format";
 import { Icon } from "./Icon";
 
 export function DiffPanel(): React.ReactElement | null {
@@ -34,6 +36,8 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
   const files = diff?.files ?? [];
   const rows = diff ? parseDiffRows(diff.patch) : [];
   const stats = diff ? diffStats(diff.patch) : { additions: 0, deletions: 0 };
+  // 文件条右侧的 +48 −6：patch 里按块统计（口径与面板头一致）
+  const perFile = new Map(diffStatsByFile(diff?.patch ?? "").map((s) => [s.file, s]));
   const run = state.runs.find((item) => item.runId === runId);
   const released = run?.workspace.released ?? false;
   const merged = run?.workspace.merged ?? false;
@@ -50,8 +54,8 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
   };
 
   return (
-    <div className="overlay" onClick={() => actions.closeDiff()}>
-      <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
+    <div className="diff-panel" role="dialog" aria-label="变更面板">
+      <div className="diff-card">
         <div className="modal-head">
           <Icon name="copy" color="var(--Client-accent-text)" />
           <span style={{ flex: 1 }}>
@@ -89,11 +93,20 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
 
           {files.length > 0 ? (
             <div className="diff-files">
-              {files.map((file) => (
-                <code key={file} className="diff-file">
-                  {file}
-                </code>
-              ))}
+              {files.map((file) => {
+                const st = perFile.get(file);
+                return (
+                  <code key={file} className="diff-file">
+                    <span className="diff-file-path">{file}</span>
+                    {st && (st.additions > 0 || st.deletions > 0) ? (
+                      <span className="diff-stat">
+                        <span className="add">{`+${st.additions}`}</span>
+                        <span className="del">{`−${st.deletions}`}</span>
+                      </span>
+                    ) : null}
+                  </code>
+                );
+              })}
             </div>
           ) : null}
 

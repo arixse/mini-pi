@@ -41,10 +41,42 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
     void controller.boot();
   }, [controller]);
 
+  /*
+   * 全局键盘（空态稿公示的三组 + Esc）。
+   *
+   * - Esc：只收浮层，不停任务（见 handleEscape）；
+   * - Ctrl+N：新任务；Ctrl+,：打开设置——这两组直接走动作层；
+   * - Ctrl+K：聚焦侧栏搜索。侧栏收起时先把它拉开——对一个 display:none
+   *   的输入框调 focus() 是空操作，等一帧再聚焦（React 提交之后）。
+   */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         controller.handleEscape();
+        return;
+      }
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "k") {
+        event.preventDefault();
+        if (!controller.store.current.ui.sidebar) {
+          controller.actions.toggleSidebar();
+        }
+        window.requestAnimationFrame(() => {
+          document.querySelector<HTMLInputElement>(".side-search input")?.focus();
+        });
+        return;
+      }
+      if (key === "n") {
+        event.preventDefault();
+        controller.actions.newTask();
+        return;
+      }
+      if (event.key === ",") {
+        event.preventDefault();
+        controller.actions.openSettings();
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -68,16 +100,25 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
   return (
     <div className={`app${state.ui.sidebar ? " nav-open" : ""}`}>
       <Topbar />
-      <Statusbar />
       <div className="body">
         <Sidebar />
         <div className="drawer-mask" onClick={() => actions.closeSidebar()} />
-        <Timeline />
-        <Composer handleRef={composerRef} />
+        {/*
+         * 主列：状态行 / 会话 / 输入区三层，设计稿第 1 页的纵向结构。
+         * 状态行属于主列而不是通栏——分隔线从侧栏右缘起（§2）。
+         * 变更面板绝对定位盖在会话这一层上：侧栏、状态行与输入区都在场。
+         */}
+        <div className="main-col">
+          <Statusbar />
+          <div className="main-stage">
+            <Timeline />
+            <DiffPanel />
+          </div>
+          <Composer handleRef={composerRef} />
+        </div>
       </div>
       <Settings />
       <Picker />
-      <DiffPanel />
       <Boot />
     </div>
   );

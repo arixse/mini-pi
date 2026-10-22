@@ -12,8 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pendingApprovals } from "../state";
 import { revisionOf } from "../items";
 import { useActions, useClient, useRevision } from "../store";
-import { formatDuration, formatTokens, statusMeta } from "../format";
-import { Icon, StatusRing } from "./Icon";
+import { Icon } from "./Icon";
 import { TimelineItemRow } from "./TimelineItems";
 
 /** 距底多少像素算"贴着底部看" */
@@ -71,7 +70,6 @@ export function Timeline(): React.ReactElement {
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
       <div className="main-inner">
-        {/* <RunHead /> */}
         <Banners />
         {state.view.sessionId === null && state.view.items.length === 0 ? (
           <div className="empty-hint draft-hint">
@@ -116,141 +114,6 @@ function EmptyGuide(): React.ReactElement {
         选择目录…
       </button>
     </div>
-  );
-}
-
-function RunHead(): React.ReactElement | null {
-  const state = useClient();
-  const actions = useActions();
-  const view = state.view;
-  if (view.sessionId === null && view.items.length === 0) {
-    return null;
-  }
-
-  const meta = statusMeta(view.status);
-  const parts: string[] = [];
-  if (view.startedAt !== null) {
-    const elapsed = view.elapsedMs ?? Date.now() - view.startedAt;
-    parts.push(formatDuration(elapsed));
-  }
-  if (view.contextWindow > 0) {
-    parts.push(`${formatTokens(view.tokens)} / ${formatTokens(view.contextWindow)}`);
-  }
-  const busy = view.status === "running" || view.status === "blocked" || view.status === "queued";
-  const workspace = view.workspace;
-  const isolated = workspace?.isolated === true;
-
-  return (
-    <div className="run-head">
-      <span className={`pill pill-${meta.tone}`}>
-        {/* 状态环：待裁决是暂停形、运行中在转圈；pill 的文字是双重编码 */}
-        <StatusRing phase={view.status} />
-        {meta.label}
-      </span>
-      <span className="title">{view.title || "新任务"}</span>
-      {view.model ? (
-        <span className="pill pill-slate" title="这个任务实际用的模型">
-          {view.model}
-        </span>
-      ) : null}
-      {isolated && workspace ? (
-        <span className="pill pill-sky" title={`隔离工作区：${workspace.root}`}>
-          <Icon name="folder" size={11} />
-          隔离工作区
-        </span>
-      ) : null}
-      <span>{parts.join(" · ")}</span>
-      {isolated && workspace && !busy ? (
-        workspace.released ? (
-          <span className="pill pill-slate" title={`已删除：${workspace.root}`}>
-            已丢弃
-          </span>
-        ) : (
-          <>
-            {workspace.merged ? (
-              <span className="pill pill-emerald" title="改动已合并回基准工作区">
-                已合并
-              </span>
-            ) : (
-              <button
-                className="btn btn-ghost"
-                style={{ fontSize: "11.5px", padding: "3px 9px" }}
-                title="查看这次执行改了什么；合并在审阅之后"
-                onClick={() => actions.openDiff(workspace.runId)}
-              >
-                <Icon name="copy" size={11} />
-                变更
-              </button>
-            )}
-            <DiscardWorktree runId={workspace.runId} root={workspace.root} />
-          </>
-        )
-      ) : null}
-      {view.activeRunId && busy ? (
-        <button
-          className="btn btn-ghost"
-          style={{ fontSize: "11.5px", padding: "3px 9px" }}
-          onClick={() => actions.stop()}
-        >
-          <Icon name="stop" size={11} />
-          停止
-        </button>
-      ) : null}
-      {!busy && view.readOnly ? (
-        <button
-          className="btn btn-ghost"
-          style={{ fontSize: "11.5px", padding: "3px 9px" }}
-          onClick={() => actions.newTask()}
-        >
-          <Icon name="plus" size={11} />
-          回到当前
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * 「丢弃」：删掉这个任务的隔离工作区。
- *
- * 两步确认放在按钮自己身上，不弹窗——隔离工作区里是这次执行的全部产物，
- * 删了不可恢复；但运行头是常驻元素，弹一次框等于把人从当前上下文里拽出来。
- * 动作层只认"点了确认"那一下（`actions.discardWorktree`）。
- */
-function DiscardWorktree({ runId, root }: { runId: string; root: string }): React.ReactElement {
-  const actions = useActions();
-  const [confirming, setConfirming] = useState(false);
-  const compact = { fontSize: "11.5px", padding: "3px 9px" };
-
-  if (confirming) {
-    return (
-      <>
-        <button
-          className="btn btn-no"
-          style={compact}
-          onClick={() => {
-            setConfirming(false);
-            void actions.discardWorktree(runId);
-          }}
-        >
-          确认丢弃
-        </button>
-        <button className="btn btn-ghost" style={compact} onClick={() => setConfirming(false)}>
-          取消
-        </button>
-      </>
-    );
-  }
-  return (
-    <button
-      className="btn btn-ghost"
-      style={compact}
-      title={`删除隔离工作区 ${root}（其中的改动不可恢复）`}
-      onClick={() => setConfirming(true)}
-    >
-      <Icon name="trash" size={11} />
-      丢弃
-    </button>
   );
 }
 

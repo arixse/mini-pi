@@ -46,39 +46,58 @@ export function Sidebar(): React.ReactElement {
       </div>
 
       {state.workspace.root ? (
-        <div className="tree">
-          <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
+        <>
+          {/* 分区标题：右侧的 + 与根行点击同义——都是换/选目录。
+              空态稿的提示语点名了这个入口，不能只有藏在行点击里的那一条路 */}
+          <div className="side-head">
+            <span>工作区</span>
             <button
-              className="tree-twist"
-              title={rootOpen ? "收起会话树" : "展开会话树"}
-              aria-label={rootOpen ? "收起会话树" : "展开会话树"}
-              onClick={() => setRootOpen((open) => !open)}
-            >
-              <Icon name="chevron" size={12} />
-            </button>
-            <button
-              className="tree-main"
-              title={`工作区：${state.workspace.root}（点击更换）`}
+              className="side-head-add"
+              title="选择工作区目录"
+              aria-label="选择工作区目录"
               onClick={() => actions.openPicker()}
             >
-              <Icon name="folder" size={13} />
-              <span className="tree-label">{state.workspace.name || "未打开工作区"}</span>
+              <Icon name="plus" size={13} />
             </button>
           </div>
-
-          {rootOpen ? (
-            <div className="tree-kids">
-              {groups.length === 0 ? (
-                <div className="empty-hint" style={{ marginLeft: 18 }}>
-                  {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
-                </div>
-              ) : null}
-              {groups.map((group) => (
-                <SessionNode key={group.session.sessionId} group={group} state={state} />
-              ))}
+          <div className="tree">
+            <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
+              <button
+                className="tree-twist"
+                title={rootOpen ? "收起会话树" : "展开会话树"}
+                aria-label={rootOpen ? "收起会话树" : "展开会话树"}
+                onClick={() => setRootOpen((open) => !open)}
+              >
+                <Icon name="chevron" size={12} />
+              </button>
+              <button
+                className="tree-main"
+                title={`工作区：${state.workspace.root}（点击更换）`}
+                onClick={() => actions.openPicker()}
+              >
+                <Icon name="folder" size={13} />
+                <span className="tree-label">{state.workspace.name || "未打开工作区"}</span>
+              </button>
+              {/* 根行右侧的计数：这里有多少段会话，收起时也看得见 */}
+              <span className="tree-count" title={`${state.sessions.length} 段会话`}>
+                {state.sessions.length}
+              </span>
             </div>
-          ) : null}
-        </div>
+
+            {rootOpen ? (
+              <div className="tree-kids">
+                {groups.length === 0 ? (
+                  <div className="empty-hint" style={{ marginLeft: 18 }}>
+                    {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
+                  </div>
+                ) : null}
+                {groups.map((group) => (
+                  <SessionNode key={group.session.sessionId} group={group} state={state} />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </>
       ) : (
         // 还没有工作区：侧栏只留一句提示（交接稿 §3「05 空态引导」）
         <div className="empty-hint" style={{ margin: "2px 2px 0" }}>
@@ -195,7 +214,18 @@ function RunNode({ run, state }: { run: RunSummary; state: ClientState }): React
         <span className="tree-label">{run.title}</span>
         <span className="tree-meta">{elapsed}</span>
       </button>
-      {items.length > 0 ? <RowMenu items={items} /> : null}
+      {/* 行操作 hover 才出现（§4）：+ 接着写这段会话，··· 是行菜单 */}
+      <span className="row-acts">
+        <button
+          className="row-act"
+          title="在这段会话接着写"
+          aria-label="在这段会话接着写"
+          onClick={() => void actions.continueSession(run.sessionId)}
+        >
+          <Icon name="plus" size={12} />
+        </button>
+        {items.length > 0 ? <RowMenu items={items} /> : null}
+      </span>
     </div>
   );
 }

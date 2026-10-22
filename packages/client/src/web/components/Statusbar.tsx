@@ -1,7 +1,7 @@
 /**
- * 状态栏（视觉交接稿 §2：36px，三枚指标）。
+ * 状态行（视觉交接稿 §2：36px，三枚指标，属于主列）。
  *
- * - **指标-模型**：当前这个任务实际用的模型。顶栏芯片答的是"新任务
+ * - **指标-模型**：当前这个任务实际用的模型。输入区的下拉答的是"新任务
  *   用什么"（设计稿第 20 条），这里答的是"现在这个在用谁"——两者
  *   不是一回事，侧栏里多个 Run 并存时尤其不能混。
  * - **指标-上下文**：token 占用 / 窗口，附进度槽；超八成换警戒色。
@@ -10,20 +10,25 @@
  *
  * 这一条不放在运行头里：运行头跟着 Run 走，而"我在哪、用谁、占到
  * 多少"是**整个界面**的常驻上下文，切会话、看历史时都该在场。
+ * 但它只属于主列（分隔线从侧栏右缘起），且没有工作区时整个不渲染——
+ * 空态稿（第 5 页）里主列只有品牌引导，没有一行指标。
  */
 
 import { useClient } from "../store";
-import { CONTEXT_WARN_PCT, contextPercent, formatTokens, statusMeta } from "../format";
+import { CONTEXT_WARN_PCT, contextPercent, formatTokens } from "../format";
 import { Icon } from "./Icon";
 
-export function Statusbar(): React.ReactElement {
+export function Statusbar(): React.ReactElement | null {
   const state = useClient();
   const view = state.view;
+  // 还没有工作区：空态引导自己说明一切，一行指标反而像误渲染
+  if (!state.workspace.root) {
+    return null;
+  }
   // 运行头讲的那个 Run 的模型优先；没有在看的任务时退回默认值
   const model = view.model ?? state.model.label;
   const window = view.contextWindow > 0 ? view.contextWindow : state.model.contextWindow;
   const pct = contextPercent(view.tokens, window);
-  const meta = statusMeta(view.status);
 
   return (
     <div className="statusbar">
@@ -56,11 +61,6 @@ export function Statusbar(): React.ReactElement {
       <span className="status-metric" title="模型回合数：一问一答算一步">
         <span className="k">步数</span>
         <span className="v">{view.steps > 0 ? `${view.steps} 步` : "—"}</span>
-      </span>
-      <span className="spacer" />
-      <span className="status-metric">
-        <span className="k">状态</span>
-        <span className="v">{meta.label}</span>
       </span>
     </div>
   );

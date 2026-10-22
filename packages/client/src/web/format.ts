@@ -74,6 +74,23 @@ export function formatSessionTime(timestamp: string): string {
   return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}`;
 }
 
+/**
+ * 时钟：`14:02`（指令气泡里的时间戳）。
+ *
+ * 只要时分：气泡里放"2026-10-22 14:02:33"会把一条短消息撑成两行，
+ * 而"哪一天"由侧栏的会话行说。取本地时区——这一刻是给人看的当下，
+ * 不是审计线索。0 与非法值给空串：没有时间戳就不画那一行。
+ */
+export function formatClock(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "";
+  }
+  const date = new Date(ms);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 export type StatusMeta = { label: string; tone: Tone };
 
 /** 状态徽标：颜色与文字**双重编码**，色弱用户与截图场景都读得出来 */
@@ -249,4 +266,86 @@ export function diffStats(patch: string): { additions: number; deletions: number
     }
   }
   return { additions, deletions };
+}
+
+export type FileDiffStats = { file: string; additions: number; deletions: number };
+
+/** `a/<路径> b/<路径>`：取 b 侧那份（路径里允许空格，git 会给它加引号） */
+function gitDiffPath(rest: string): string | null {
+  const quoted = /^"a\/(.+)" "b\/(.+)"$/.exec(rest);
+  if (quoted) {
+    return quoted[2]!;
+  }
+  const plain = /^a\/(.+) b\/(.+)$/.exec(rest);
+  return plain ? plain[2]! : null;
+}
+
+/** 去掉 `+++ ` 行的 `b/` 前缀与可能的引号；`/dev/null`（整文件删除）没有 b 侧 */
+function plusPath(rest: string): string | null {
+  const path = rest.trim().replace(/^"(.*)"$/, "$1");
+  if (path === "/dev/null") {
+    return null;
+  }
+  return path.startsWith("b/") ? path.slice(2) : path;
+}
+
+/**
+ * 每个文件各自的增删行数（变更面板文件条上的 `+48 −6`）。
+ *
+ * 按 `diff --git` 块切分，块内统计挂在它自己的 `+++ b/<路径>` 上——口径与
+ * {@link diffStats} 一致：文件头（`---` / `+++` / `index`）不算增删行。
+ * 服务端 `RunDiff.files` 来自 `git status`，与 patch 里的路径同源；
+ * patch 被截断（`MAX_DIFF_CHARS`）时统计也是截断的，不假装完整。
+ */
+export function diffStatsByFile(patch: string): FileDiffStats[] {
+  const order: string[] = [];
+  const counts = new Map<string, { additions: number; deletions: number }>();
+  const slot = (file: string | null): void => {
+    if (file === null || counts.has(file)) {
+      return;
+    }
+    order.push(file);
+    counts.set(file, { additions: 0, deletions: 0 });
+  };
+
+  let current: string | null = null;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      current = gitDiffPath(line.slice("diff --git ".length));
+      slot(current);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      // +++ 是这个块的权威路径：diff --git 行对不出路径时（坏 patch）由它兜底。
+      // 整文件删除（+++ /dev/null）没有 b 侧：保持 diff --git 给的 a 侧路径，
+      // 让删除行仍能记到那个文件头上，而不是凭空丢掉统计
+      const path = plusPath(line.slice(4));
+      if (path !== null) {
+        current = path;
+      }
+      slot(current);
+      continue;
+    }
+    if (
+      line.startsWith("--- ") ||
+      line.startsWith("index ") ||
+      line.startsWith("@@") ||
+      line.startsWith("\\")
+    ) {
+      continue;
+    }
+    if (current === null) {
+      continue;
+    }
+    const entry = counts.get(current);
+    if (!entry) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      entry.additions += 1;
+    } else if (line.startsWith("-")) {
+      entry.deletions += 1;
+    }
+  }
+  return order.map((file) => ({ file, ...counts.get(file)! }));
 }

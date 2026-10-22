@@ -74,6 +74,19 @@ export function Composer({
     };
   }, [handleRef]);
 
+  // 忙时同一个按钮就是停止键：两种状态一个位置，不玩"按钮跳来跳去"
+  const stopping = mode === "busy";
+  const sendDisabled = stopping
+    ? false
+    : mode === "blocked" || text.trim().length === 0;
+
+  /*
+   * 发送：忙时**不禁用**（设计稿第 21 条）。
+   *
+   * 运行中按 Enter / Tab 发出去的那条不会插队——服务端 `RunManager`
+   * 的并发上限是 1，它自动排到当前回合后面，时间线上标「已入队」。
+   * 所以"能不能发"和"现在忙不忙"是两件事：忙只把按钮换成停止键。
+   */
   const submit = (): void => {
     if (mode === "blocked") {
       return;
@@ -89,12 +102,6 @@ export function Composer({
     actions.send(trimmed);
   };
 
-  // 忙时同一个按钮就是停止键：两种状态一个位置，不玩"按钮跳来跳去"
-  const stopping = mode === "busy";
-  const sendDisabled = stopping
-    ? false
-    : mode === "blocked" || text.trim().length === 0;
-
   return (
     <footer className="composer">
       <div className="composer-inner">
@@ -105,12 +112,24 @@ export function Composer({
         <textarea
           ref={inputRef}
           rows={3}
-          placeholder="接着说……（Enter 发送，Shift+Enter 换行）"
+          placeholder="接着说，或按 Tab 排队下一条..."
           aria-label="输入消息"
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              submit();
+              return;
+            }
+            /*
+             * Tab 排下一条：placeholder 里明示的能力（设计稿第 1/5 页）。
+             *
+             * 发出去的那条不插队——服务端并发上限是 1，它排到当前回合
+             * 后面，时间线上标「已入队」并可撤回。空着的时候不劫持 Tab：
+             * 键盘用户还要靠它走出输入框，那时候劫持等于把焦点关在里面。
+             */
+            if (event.key === "Tab" && !event.shiftKey && text.trim().length > 0) {
               event.preventDefault();
               submit();
               return;
@@ -148,7 +167,7 @@ export function Composer({
             <span className="composer-block">{state.blockReason ?? "暂时发不出任务"}</span>
           ) : null}
           {mode === "readonly" ? <span>历史会话只读；点「新任务」开一段新的</span> : null}
-          {mode === "ready" || stopping ? (
+          {mode === "ready" ? (
             <>
               <span className="composer-hint">
                 <span className="kbd">Enter</span> 发送
@@ -158,6 +177,7 @@ export function Composer({
               </span>
             </>
           ) : null}
+          {stopping ? <span className="composer-hint">运行中 · 输入照常排队</span> : null}
 
           <button
             className={`btn-send${stopping ? " is-stop" : ""}`}

@@ -18,6 +18,7 @@ import { ClientProvider, ClientStore } from "./store";
 import { initialState, type TimelineItem } from "./state";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { DiffPanel } from "./components/DiffPanel";
+import { Statusbar } from "./components/Statusbar";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
 
@@ -90,16 +91,37 @@ function approval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
 }
 
 describe("前端组件树", () => {
-  it("首屏渲染不抛错，且顶栏三枚芯片都在", () => {
+  it("首屏渲染不抛错：主列三层骨架都在", () => {
     const html = renderToStaticMarkup(createElement(App));
 
     assert.match(html, /class="app"/, "根容器要挂上");
     assert.match(html, /class="topbar"/);
-    assert.match(html, /class="statusbar"/, "状态栏常驻：模型 / 上下文 / 步数");
+    assert.match(html, /class="main-col"/, "主列三层：状态行 / 会话 / 输入区");
     assert.match(html, /class="sidebar"/);
     assert.match(html, /class="composer"/);
-    assert.match(html, /未打开工作区/, "还没拿到状态时应如实说工作区未打开");
+    // 还没有工作区：状态行整个不渲染（空态稿第 5 页主列只有引导）
+    assert.doesNotMatch(html, /class="statusbar"/);
+    assert.match(html, /还没有工作区/, "还没拿到状态时应如实说工作区未打开");
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
+  });
+
+  it("状态行属于主列且只有三枚指标：模型 / 上下文 / 步数", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Statusbar),
+      ),
+    );
+    assert.match(html, /class="statusbar"/);
+    assert.match(html, />模型</);
+    assert.match(html, />上下文</);
+    assert.match(html, />步数</);
+    assert.doesNotMatch(html, />状态</, "设计稿只有三枚指标，不画第四个");
   });
 
   it("没有工作区时主区是品牌引导：一句话 + 选择目录", () => {
@@ -107,7 +129,7 @@ describe("前端组件树", () => {
 
     assert.match(html, /class="empty-guide"/, "主区放品牌引导，不是一片空白");
     assert.match(html, /选择目录/);
-    assert.match(html, /Mini Pi/);
+    assert.match(html, /mini-pi/);
     // 侧栏只留一句提示，不摆一棵空树
     assert.match(html, /还没有工作区/);
   });
@@ -142,7 +164,7 @@ describe("变更面板", () => {
     };
     const diff: RunDiff = {
       runId: "run_1",
-      files: ["src/a.ts"],
+      files: ["src/a.ts", "src/b.ts"],
       patch: [
         "diff --git a/src/a.ts b/src/a.ts",
         "--- a/src/a.ts",
@@ -151,6 +173,13 @@ describe("变更面板", () => {
         " keep",
         "-old",
         "+new",
+        "+newer",
+        "diff --git a/src/b.ts b/src/b.ts",
+        "--- a/src/b.ts",
+        "+++ b/src/b.ts",
+        "@@ -1 +1,2 @@",
+        "keep",
+        "+added",
       ].join("\n"),
     };
     store.update((state) => {
@@ -174,11 +203,26 @@ describe("变更面板", () => {
     assert.match(html, /class="diff-row diff-del"/, "删除行要带 diff-del");
     assert.match(html, /class="diff-row diff-meta"/, "文件头不当成增删行");
     assert.match(html, /class="diff-row diff-hunk"/);
-    assert.match(html, /\+1/, "面板头给出增行数");
-    assert.match(html, /−1/, "面板头给出删行数");
+    assert.match(html, /\+3/, "面板头给出整体增行数");
+    assert.match(html, /−1/, "面板头给出整体删行数");
+    assert.match(html, /\+2/, "文件条给出每个文件自己的增行数");
+    assert.match(html, /src\/b\.ts[\s\S]*?\+1/, "第二个文件条也带统计");
     assert.match(html, /应用变更/);
     assert.match(html, /放弃变更/);
     assert.match(html, /返回/);
+  });
+
+  it("面板画在主列里：内嵌面板而非遮罩模态", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.match(html, /class="diff-panel"/, "主列内嵌容器");
+    assert.match(html, /class="diff-card"/, "带描边的卡片");
+    assert.doesNotMatch(html, /class="overlay"/, "不铺全屏遮罩——侧栏与输入区都在场");
   });
 
   it("没打开时什么都不渲染", () => {
@@ -201,11 +245,27 @@ describe("时间线条目的 markup", () => {
       text: "顺手把测试也补了",
       queued: true,
       locked: true,
+      at: 0,
       runId: "run_q",
     });
     assert.match(html, /bubble-user queued/, "空心描边气泡（与已执行的实心区分）");
     assert.match(html, /已入队 · 当前回合结束后执行/);
     assert.match(html, /撤回/);
+    assert.doesNotMatch(html, /bubble-time/, "入队中的那条不画时刻");
+  });
+
+  it("已执行的消息气泡内带发出时刻（14:02）", () => {
+    // 本地时区 2026-10-22 14:02（构造时固定时分，跨时区跑也只断言格式）
+    const html = renderItem({
+      kind: "user",
+      id: "u:1#2",
+      text: "跑一遍测试",
+      queued: false,
+      locked: true,
+      at: new Date(2026, 9, 22, 14, 2).getTime(),
+      runId: null,
+    });
+    assert.match(html, /bubble-time[^<]*>14:02</);
   });
 
   it("工具调用是单行：生命周期标记 + 名称 + 参数 + 耗时", () => {
@@ -225,6 +285,35 @@ describe("时间线条目的 markup", () => {
     assert.match(html, /grep/);
     assert.match(html, /TODO/, "参数必须渲染（设计稿第 7 条）");
     assert.match(html, /0.3s/);
+  });
+
+  it("输出被裁过才给「查看完整输出 / 复制」：短输出不摆链接", () => {
+    const long = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const collapsed = renderItem({
+      kind: "tool",
+      id: "t:2",
+      toolCallId: "2",
+      name: "bash",
+      args: "ls",
+      status: "done",
+      output: long,
+      startedAt: 0,
+      durationMs: 10,
+    });
+    assert.match(collapsed, /查看完整输出/, "长输出给看全的入口");
+    assert.match(collapsed, /复制/, "并给复制");
+    const short = renderItem({
+      kind: "tool",
+      id: "t:3",
+      toolCallId: "3",
+      name: "bash",
+      args: "ls",
+      status: "done",
+      output: "a.ts",
+      startedAt: 0,
+      durationMs: 10,
+    });
+    assert.doesNotMatch(short, /tool-links/, "短输出全在眼前，链接只是噪音");
   });
 
   it("审批卡四个动作：允许一次 / 本会话全部允许 / 拒绝（非隔离没有看变更）", () => {

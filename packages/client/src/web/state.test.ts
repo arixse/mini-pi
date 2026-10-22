@@ -386,7 +386,7 @@ describe("乐观插入与快照", () => {
     const view = emptyView();
     const id = addUserMessage(view, "原话", false);
     const before = view.items[0]!.rev ?? 0;
-    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true, runId: null });
+    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true, at: 0, runId: null });
     assert.equal(view.items[0]!.rev, before + 1);
   });
 

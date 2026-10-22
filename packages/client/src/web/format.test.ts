@@ -10,6 +10,8 @@ import {
   CONTEXT_WARN_PCT,
   contextPercent,
   diffStats,
+  diffStatsByFile,
+  formatClock,
   formatDuration,
   formatSessionTime,
   formatTokens,
@@ -243,5 +245,68 @@ describe("diffStats", () => {
 
   it("空 patch 两个都是 0", () => {
     assert.deepEqual(diffStats(""), { additions: 0, deletions: 0 });
+  });
+});
+
+describe("diffStatsByFile", () => {
+  it("按块统计：每个文件各自 +x −y，口径与 diffStats 一致（文件头不算）", () => {
+    const patch = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,2 +1,3 @@",
+      " keep",
+      "-gone",
+      "+one",
+      "+two",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "--- a/src/b.ts",
+      "+++ b/src/b.ts",
+      "@@ -1 +1,2 @@",
+      "keep",
+      "+added",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [
+      { file: "src/a.ts", additions: 2, deletions: 1 },
+      { file: "src/b.ts", additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it("整文件删除（+++ /dev/null）记到 a 侧路径上", () => {
+    const patch = [
+      "diff --git a/src/dead.ts b/src/dead.ts",
+      "--- a/src/dead.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [{ file: "src/dead.ts", additions: 0, deletions: 1 }]);
+  });
+
+  it("路径带空格时 git 的引号写法也能对上", () => {
+    const patch = [
+      'diff --git "a/my file.ts" "b/my file.ts"',
+      '--- "a/my file.ts"',
+      '+++ "b/my file.ts"',
+      "@@ -1 +1 @@",
+      "+x",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [{ file: "my file.ts", additions: 1, deletions: 0 }]);
+  });
+
+  it("空 patch 给空数组", () => {
+    assert.deepEqual(diffStatsByFile(""), []);
+  });
+});
+
+describe("formatClock", () => {
+  it("只要时分（气泡里放全日期会把短消息撑成两行）", () => {
+    assert.equal(formatClock(new Date(2026, 9, 22, 14, 2).getTime()), "14:02");
+    assert.equal(formatClock(new Date(2026, 9, 22, 8, 5).getTime()), "08:05");
+  });
+
+  it("0 与非法值给空串：没有时间戳就不画那一行", () => {
+    assert.equal(formatClock(0), "");
+    assert.equal(formatClock(Number.NaN), "");
   });
 });

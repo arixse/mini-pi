@@ -7,7 +7,7 @@
  *   **空心描边气泡**，附元信息行与「撤回」；
  * - 工具调用：**单行**，生命周期标记 ● 运行中 / ✓ 完成 / ✖ 错误，
  *   不套三层盒子；参数必须渲染（设计稿第 7 条），结果超 6 行或超长
- *   才给"展开全部"；
+ *   才给「查看完整输出 / 复制」；
  * - 审批块：warn-soft 底，动作行四个（允许一次 / 本会话全部允许 /
  *   拒绝 / 看变更）；高危单独换 danger-soft，不叠加降级理由（第 10 条）；
  * - 模型正文：助手气泡，流式期间按纯文本渲染（半截 ``` 会让代码块
@@ -21,7 +21,7 @@ import { memo, useEffect, useState } from "react";
 import type { Actions } from "../actions";
 import type { TimelineItem, ToolStatus } from "../state";
 import { approvalStatusText, describeArgs, noticeTone } from "../items";
-import { formatDuration, riskMeta, toolMetaLine } from "../format";
+import { formatClock, formatDuration, riskMeta, toolMetaLine } from "../format";
 import { useClient } from "../store";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -110,6 +110,10 @@ export const TimelineItemRow = memo(
  * 已入队的那条是**空心描边气泡**（区别于已执行的实心），元信息行说明
  * "当前回合结束后执行"，并给「撤回」——内核对排队中的 Run 直接出队，
  * 前端只负责把这个出口接到 UI 上（handoff §5 缺口 3）。
+ *
+ * 气泡内左下角带发出时刻（`14:02`）：同一段会话里连发几条时，"哪条是
+ * 刚说的"靠它对。入队中的那条不画——它的时刻还没有意义（执行顺序由
+ * 队列定，不由说出时刻定），元信息行已经把该说的说了。
  */
 function UserBlock({
   item,
@@ -118,11 +122,13 @@ function UserBlock({
   item: Extract<TimelineItem, { kind: "user" }>;
   actions: Actions;
 }): React.ReactElement {
+  const clock = item.queued ? "" : formatClock(item.at);
   return (
     <div className="row right">
       <div className="stack">
         <div className={`bubble-user${item.queued ? " queued" : ""}`}>
           {item.text}
+          {clock ? <span className="bubble-time">{clock}</span> : null}
           {item.queued ? (
             <span className="queued-meta">
               已入队 · 当前回合结束后执行
@@ -181,10 +187,21 @@ function ToolCard({
         {hasOutput ? (
           <>
             <pre className={`tool-out${item.status === "failed" ? " err" : ""}`}>{shown}</pre>
+            {/* 输出被裁过才给这两个链接：看全的入口与复制。短输出本来就
+                全在眼前，再摆一排链接只是噪音（设计稿第 2 页同此） */}
             {long ? (
-              <button className="tool-more" onClick={() => onToggle(item.id)}>
-                {expanded ? "收起" : `展开全部（${lines.length} 行）`}
-              </button>
+              <div className="tool-links">
+                <button className="tool-more" onClick={() => onToggle(item.id)}>
+                  {expanded ? "收起" : "查看完整输出"}
+                </button>
+                <button
+                  className="tool-more"
+                  title="复制这段输出"
+                  onClick={() => void navigator.clipboard?.writeText(item.output)}
+                >
+                  复制
+                </button>
+              </div>
             ) : null}
           </>
         ) : null}

@@ -50,6 +50,13 @@ export type TimelineItem = {
       queued: boolean;
       locked: boolean;
       /**
+       * 发出这一刻的墙钟（epoch ms，指令气泡里的 `14:02`）。
+       *
+       * 历史消息取服务端消息自带的 timestamp；乐观插入的那条取本地时钟——
+       * 它只活到服务端把同一条消息发回来为止，精确到分足够。
+       */
+      at: number;
+      /**
        * 这条消息对应的 Run（发送成功后由服务端分配）。
        *
        * 撤回要点名它：排队中的 Run 内核直接出队并给 cancelled 结论。
@@ -331,6 +338,7 @@ export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineIt
         text: textOf(message),
         queued: false,
         locked: true,
+        at: message.timestamp,
         runId: null,
       });
       continue;
@@ -523,6 +531,7 @@ export function addUserMessage(view: View, text: string, queued: boolean): strin
     text,
     queued,
     locked: true,
+    at: stamp,
     runId: null,
   });
   if (!view.title) {
@@ -612,6 +621,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
           text: textOf(event.message),
           queued: false,
           locked: true,
+          at: event.message.timestamp,
           runId: null,
         });
       }
