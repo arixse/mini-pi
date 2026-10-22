@@ -159,14 +159,6 @@ function SessionNode({
         <span className="tree-meta">{meta.join(" · ")}</span>
       </button>
       <span className="row-acts">
-        <button
-          className="row-act"
-          title="在这段会话接着写"
-          aria-label="在这段会话接着写"
-          onClick={() => void actions.continueSession(group.session.sessionId)}
-        >
-          <Icon name="plus" size={12} />
-        </button>
         <RowMenu
           items={[
             {

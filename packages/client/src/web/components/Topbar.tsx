@@ -93,9 +93,6 @@ export function Topbar(): React.ReactElement {
       >
         <Icon name={state.theme === "dark" ? "sun" : "moon"} />
       </button>
-      <button className="icon-btn" title="切换侧栏" onClick={() => actions.toggleSidebar()}>
-        <Icon name="menu" />
-      </button>
     </header>
   );
 }

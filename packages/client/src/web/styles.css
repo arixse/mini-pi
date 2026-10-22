@@ -440,6 +440,7 @@ svg.ic {
 
 .tree-row {
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 5px;
   width: 100%;
@@ -493,6 +494,7 @@ svg.ic {
 
 /* 行里的主点击目标：铺满除行操作外的全部宽度 */
 .tree-main {
+  max-width:80%;
   display: flex;
   align-items: center;
   gap: 6px;
