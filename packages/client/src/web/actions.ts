@@ -5,7 +5,7 @@
  * 这样渲染函数可以被当成纯函数测（给定状态 + 假 actions，断言 DOM 结构）。
  */
 
-import type { ApprovalAnswer, Tier } from "../shared/types";
+import type { ApprovalAnswer, ProviderView, Tier } from "../shared/types";
 
 export type SaveModelInput = {
   provider: string;
@@ -59,6 +59,19 @@ export type Actions = {
   openSettings: () => void;
   closeSettings: () => void;
   saveModel: (input: SaveModelInput) => Promise<void>;
+  /**
+   * 只存供应商凭据、不设默认模型（自定义供应商区的「添加」）。
+   *
+   * 返回刷新后的供应商列表：调用方要立刻把新条目摆到界面上，
+   * 再让用户进去选模型——顺序不能颠倒。
+   */
+  addCustomProvider: (input: {
+    provider: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }) => Promise<ProviderView[]>;
+  /** 删掉一个自定义供应商；默认模型指着它时服务端会一并清掉 */
+  removeProvider: (name: string) => Promise<void>;
   setTier: (tier: Tier) => Promise<void>;
   setSubAgent: (enabled: boolean) => Promise<void>;
   /** 隔离开关：只影响之后新发的任务；环境不支持时服务端 409 */

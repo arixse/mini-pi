@@ -316,6 +316,17 @@ export class AppServer {
       res.json(await this.host.providers());
     }));
 
+    // 只存凭据、不设默认模型：自定义供应商先"能进"，再选模型
+    app.post("/api/providers", wrap(async (req, res) => {
+      await this.host.configureProvider(asRecord(req.body));
+      res.json(await this.host.providers());
+    }));
+
+    app.delete("/api/providers/:name", wrap(async (req, res) => {
+      await this.host.deleteCustomProvider(pathParam(req.params.name));
+      res.json(await this.host.state());
+    }));
+
     app.get("/api/models", wrap(async (req, res) => {
       const provider = req.query.provider;
       if (typeof provider !== "string" || provider.length === 0) {

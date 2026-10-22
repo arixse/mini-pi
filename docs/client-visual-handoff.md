@@ -81,15 +81,19 @@
 
 ## 5. 内核缺口（开发前要补）
 
-1. **自定义供应商**：现在 `ModelProviderService.saveProviderConfig()` 只接受**已注册**的
-   provider 名，自定义名称会被直接抛错。需要一个可配置名称与 baseUrl 的
-   `OpenAICompatibleProvider` 槽位，存成独立条目、不覆盖 OpenAI 官方的凭据。
-2. **权限页**：审批档位（只读 / 工作区写 / 完全访问）目前没有独立的界面归属，
-   稿子只画了输入框内的临时切换。要做成设置里的一级分类。
-3. **排队条目取消**：`RunManager.cancelRun` 已明确"排队中的 Run 直接出队并给 cancelled
-   结论"，客户端只需要把这个出口接到 UI 上。
-4. **状态栏上下文用量**：分母来自 `settings.json` 的 `contextWindow`，缺省按模型名推断
-   （见 [providers.md](./providers.md) 的上下文窗口推断表）。
+1. **自定义供应商**（已补）：`ModelProviderService.saveProviderConfig()` 原先只接受**已注册**的
+   provider 名，自定义名称会被直接抛错。现在未注册名 + Base URL 会当场建成一个
+   OpenAI 兼容的 `CustomProvider` 槽位，存成 auth.json 里带 `custom` 标记的独立条目，
+   不覆盖官方凭据；`loadCustomProviders()` 负责重启后注册回来，CLI 与客户端
+   经同一个收口（`createModelFromSettings` / host `start()`）加载。细节见
+   [providers.md](./providers.md) 的自定义供应商一节。
+2. **权限页**（已补）：审批档位（只读 / 工作区写 / 完全访问）做成设置里的一级分类，
+   与供应商页并列；输入框内的临时切换保留在发送区。
+3. **排队条目取消**（已补）：`RunManager.cancelRun` 对排队中的 Run 直接出队并给 cancelled
+   结论；客户端侧栏行菜单的「取消任务」与排队气泡上的「撤回」都接到这个出口。
+4. **状态栏上下文用量**（已补）：分母来自 `settings.json` 的 `contextWindow`，缺省按模型名推断
+   （见 [providers.md](./providers.md) 的上下文窗口推断表）；状态栏常驻显示百分比，
+   ≥80% 变色提示。
 
 ## 6. 文案红线
 

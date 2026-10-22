@@ -980,6 +980,14 @@ export class AppController {
         const snapshot = await api.saveModel(input);
         this.store.update((state) => applySnapshot(state, snapshot));
       },
+      addCustomProvider: async (input) => {
+        // 只发凭据：这一发不碰默认模型，选模型是用户下一步的事
+        return api.configureProvider(input);
+      },
+      removeProvider: async (name: string) => {
+        const snapshot = await api.removeProvider(name);
+        this.store.update((state) => applySnapshot(state, snapshot));
+      },
       setTier: async (tier: Tier) => {
         await api.setTier(tier);
         this.store.update((state) => {

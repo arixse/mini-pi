@@ -1514,11 +1514,17 @@ svg.ic {
   max-width: 880px;
 }
 
+/* 设置面板：一行供应商 + 展开的凭据区，比默认的 560 宽一档 */
+.modal-settings {
+  max-width: 680px;
+}
+
 /* ---------------- 设置：一级分类 + 供应商行 ---------------- */
 
 .settings-shell {
   display: grid;
   grid-template-columns: 128px minmax(0, 1fr);
+  flex: 1;
   min-height: 0;
 }
 
@@ -1619,6 +1625,22 @@ svg.ic {
   color: var(--Client-text-tertiary);
 }
 
+/* 当前默认模型指着这家：比"已配置"再强一档，用主色 */
+.p-state.is-cur {
+  color: var(--Client-accent-text);
+}
+
+/* 「自定义」小徽标：名称旁边一个弱 chip，不抢配置状态的位置 */
+.p-tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: var(--Client-accent-soft);
+  color: var(--Client-accent-text);
+}
+
 .provider-editor {
   border: 1px solid var(--Client-border-subtle);
   border-radius: var(--r-card);
@@ -1627,6 +1649,52 @@ svg.ic {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 编辑区底行动作：提示在左、动作在右，删除紧贴保存之前 */
+.provider-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 权限页三选一：整行可点，名称 + 一句话说明 */
+.tier-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid var(--Client-border-subtle);
+  background: var(--Client-bg-input);
+  border-radius: var(--r-card);
+  padding: 10px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--Client-text-primary);
+}
+
+.tier-row:hover {
+  border-color: var(--Client-border-strong);
+}
+
+.tier-row.is-on {
+  border-color: var(--Client-accent-solid);
+  background: var(--Client-accent-soft);
+}
+
+.tier-row .tier-name {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.tier-row.is-on .tier-name {
+  color: var(--Client-accent-text);
+}
+
+.tier-row .tier-hint {
+  font-size: 11.5px;
+  color: var(--Client-text-tertiary);
 }
 
 /* 自定义供应商区：名称 / Base URL / API Key */

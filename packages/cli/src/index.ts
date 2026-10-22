@@ -138,6 +138,10 @@ export async function createModelFromSettings(
   providerService: ModelProviderService,
   settingsStore: SettingsStore,
 ): Promise<{ model: LlmModel | null; providerName: string | null; modelName: string | null }> {
+  // 客户端里配的自定义供应商存在 auth.json 里，但槽位是内存对象：不先注册
+  // 回来，默认模型指着自建网关时下面第一跳就抛"Provider not found"。
+  // 放在这个收口里而不是每个构造处：exec 与 REPL 两条启动路径都经过它
+  await providerService.loadCustomProviders();
   // 1. 从 settings.json 读取 defaultModel
   const parsed = await settingsStore.parseDefaultModel();
   // 输出上限（可选）：settings.json 的 maxTokens，非法值由 SettingsStore 过滤

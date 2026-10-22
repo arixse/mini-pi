@@ -92,6 +92,28 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(result.modelName, "gpt-4");
   });
 
+  it("should resolve a custom provider saved by the client", async () => {
+    // 客户端「自定义供应商」存下来的形状：auth.json 里带 custom 标记的独立条目
+    await writeFile(
+      providerFilePath,
+      JSON.stringify({
+        "公司网关": {
+          apiKey: "gw-key",
+          baseUrl: "https://gw.example.com/v1",
+          custom: true,
+        },
+      }),
+      "utf-8",
+    );
+    await settingsStore.setDefaultModel("公司网关/gw-model");
+
+    const result = await createModelFromSettings(providerService, settingsStore);
+
+    assert.ok(result.model, "自建网关的槽位要能注册回来并解析出模型");
+    assert.strictEqual(result.providerName, "公司网关");
+    assert.strictEqual(result.modelName, "gw-model");
+  });
+
   it("should auto-create default config when provider has apiKey but no defaultModel", async () => {
     // 保存 provider 配置（有 apiKey），但不设置 defaultModel
     await providerService.saveProviderConfig("openai", {

@@ -6,6 +6,7 @@ import { MiMoProvider } from "./mimo";
 import { KimiProvider } from "./kimi";
 import { ZhipuProvider } from "./zhipu";
 import { AnthropicProvider } from "./anthropic";
+import { CustomProvider } from "./custom";
 
 export interface Provider {
   /** 获取Provider名称 */
@@ -43,6 +44,26 @@ export function buildModelsUrl(baseUrl: string): string {
 }
 
 /**
+ * 自定义供应商名的底线。
+ *
+ * `"/"` 是 settings 里「供应商/模型」的分隔符，名字里带它会把默认模型
+ * 解析撕成三段（parseDefaultModel 只认两段）；超长名字只是把 auth.json
+ * 撑得难读，一并挡住。
+ */
+function assertCustomProviderName(name: string): void {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    throw new Error("自定义供应商名不能为空");
+  }
+  if (trimmed.includes("/")) {
+    throw new Error(`自定义供应商名不能包含 "/"：${name}`);
+  }
+  if (trimmed.length > 64) {
+    throw new Error("自定义供应商名太长（上限 64 个字符）");
+  }
+}
+
+/**
  * ModelProviderService类
  * 1. 提供模型服务商注册方法，各个模型服务商的Provider向该类注册模型服务商
  * 2. 实现获取已注册的模型服务商列表方法
@@ -51,6 +72,13 @@ export function buildModelsUrl(baseUrl: string): string {
  */
 export class ModelProviderService {
   private providers: Map<string, Provider> = new Map();
+  /**
+   * 当前内存里哪些名字是自定义供应商槽位。
+   *
+   * 单独记一份而不是每次去 store 翻标记：`saveProviderConfig` 改地址时
+   * 要立刻知道"这是自建网关，得把内存槽位也换掉"，那次读取是热路径。
+   */
+  private customNames: Set<string> = new Set();
   private store: ProviderStore;
   
   constructor(store?: ProviderStore) {
@@ -122,14 +150,74 @@ export class ModelProviderService {
    * 保存Provider配置
    * @param providerName Provider名称
    * @param config 配置信息
+   *
+   * 未注册的名字走**自定义供应商槽位**：带上 Base URL 就当场建成一个
+   * OpenAI 兼容的 Provider（名称与地址都由用户给），存成 auth.json 里
+   * 独立的一条，不覆盖任何官方供应商的凭据。没给 Base URL 仍然报错——
+   * 猜一个地址出来比拒绝更糟。
    */
   async saveProviderConfig(providerName: string, config: { apiKey?: string; baseUrl?: string; model?: string }): Promise<void> {
-    const provider = this.providers.get(providerName);
-    if (!provider) {
-      throw new Error(`Provider '${providerName}' not found`);
+    const baseUrl = config.baseUrl?.trim();
+    if (!this.providers.has(providerName)) {
+      // 未注册的名字 = 自定义供应商槽位：必须带 Base URL 才建得起来
+      // （名称与地址都由用户给，协议固定 OpenAI 兼容）
+      if (!baseUrl) {
+        throw new Error(`Provider '${providerName}' not found`);
+      }
+      assertCustomProviderName(providerName);
+      this.customNames.add(providerName);
+      this.registerProvider(new CustomProvider(providerName, baseUrl));
+      // 打上 custom 标记：重启后靠它把槽位重新注册回来
+      await this.store.saveConfig(providerName, { ...config, custom: true });
+      return;
     }
-    
+
+    if (this.customNames.has(providerName) && baseUrl) {
+      // 自建网关改地址：内存里的槽位必须跟着换，否则本次运行仍连旧地址
+      this.registerProvider(new CustomProvider(providerName, baseUrl));
+    }
     await this.store.saveConfig(providerName, config);
+  }
+
+  /**
+   * 把上次存下来的自定义供应商重新注册回来（重启后内存槽位就没了）。
+   *
+   * 只认 store 里带 `custom` 标记、且当前还没注册的条目——官方供应商
+   * 重新注册一遍没有意义，自建网关重名覆盖官方更是事故。
+   */
+  async loadCustomProviders(): Promise<void> {
+    const all = await this.store.getAllConfigs();
+    for (const [name, config] of Object.entries(all)) {
+      if (config.custom !== true || this.hasProvider(name) || !config.baseUrl) {
+        continue;
+      }
+      this.customNames.add(name);
+      this.registerProvider(new CustomProvider(name, config.baseUrl));
+    }
+  }
+
+  /**
+   * 删掉一个自定义供应商（store 条目 + 内存槽位）。
+   *
+   * 官方供应商不在这条路上：它们的配置归"换个密钥"管，整个删掉会把
+   * 默认 baseUrl 一起弄丢。
+   */
+  async deleteCustomProvider(providerName: string): Promise<void> {
+    const config = await this.store.getConfig(providerName);
+    if (config.custom !== true) {
+      throw new Error(`「${providerName}」不是自定义供应商，不能删除`);
+    }
+    await this.store.deleteConfig(providerName);
+    this.providers.delete(providerName);
+    this.customNames.delete(providerName);
+  }
+
+  /**
+   * 这个名字是不是自定义供应商槽位（界面据此显示「自定义」徽标）。
+   * 与删除闸门同一个判据，避免两处判断漂移。
+   */
+  isCustomProvider(providerName: string): boolean {
+    return this.customNames.has(providerName);
   }
   
   /**
@@ -144,10 +232,12 @@ export class ModelProviderService {
     }
     
     const providerConfig = await this.store.getConfig(providerName)
+    // custom 是持久化内部标记，不外泄；其余字段逐一列出，store 里将来
+    // 加了别的内部键也不会悄悄漏给调用方
     return {
-      ...providerConfig,
-      // 如果 store 中没有 baseUrl，使用 provider 的默认 baseUrl
+      apiKey: providerConfig.apiKey,
       baseUrl: providerConfig.baseUrl || provider.getBaseUrl(),
+      model: providerConfig.model,
       sdkType: provider.getSdkType()
     }
   }
@@ -218,3 +308,4 @@ export { MiMoProvider } from "./mimo";
 export { KimiProvider } from "./kimi";
 export { ZhipuProvider } from "./zhipu";
 export { AnthropicProvider } from "./anthropic";
+export { CustomProvider } from "./custom";
