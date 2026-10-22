@@ -471,7 +471,9 @@ client-workspace.json` 里记着的目录还在（直接开，不问）→ 都�
 用户**取消就退出**，不替他挑一个目录。界面里打开 / 聚焦工作区
 （`POST /api/workspace` → `AppServer.openWorkspace`，多工作区见
 [client-multi-workspace.md](./client-multi-workspace.md)）同样更新记忆，
-否则"在应用里换了三次、重启一问又回到最初那个"。记忆文件放 `~/.mini-pi/`
+但**启动自带的初始根不记**——serve 的默认当前目录、显式 `--cwd` 都不是
+一次明确的选择，聚焦它不能把它记进列表，否则"在哪儿敲的命令"会把列表
+越积越脏；它本来就在记忆里时（桌面壳形状）照常记，聚焦要能更新 `active`。记忆文件放 `~/.mini-pi/`
 而不是 Electron 的 userData：浏览器形态没有 userData 却也要读它，
 且它与 `auth.json` / `settings.json` 同目录，用户找得到、删得掉。
 多工作区之后记忆从"记一个"变"记一组"（`{ roots, active }`，读到旧格式

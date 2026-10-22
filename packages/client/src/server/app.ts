@@ -144,6 +144,16 @@ export class AppServer {
   private readonly options: AppServerOptions;
   private readonly webRoot: string;
   private readonly rememberWorkspace: WorkspaceMemory;
+  /**
+   * 启动自带的初始根（构造时唯一那个）。它**不是用户的一次明确选择**——
+   * serve 的默认当前目录、显式 `--cwd` 都一样——聚焦它不该把它记进
+   * 工作区列表，否则"在哪儿敲的命令"就会永久混进列表。
+   * 例外：它本来就在记忆里（桌面壳的初始根 = 记忆的 active）时照常记，
+   * 活动根要跟上。见 `rememberedRoots`。
+   */
+  private readonly initialRoot: string;
+  /** 记忆列表里已有的根（启动恢复时填入）；空集 = 记忆里没有可用条目 */
+  private readonly rememberedRoots = new Set<string>();
   /** 全局 `run_state` / 审批 / 结束事件；正文增量不进来 */
   private readonly journal: EventJournal;
   private readonly maxWorkspaces: number;
@@ -169,6 +179,7 @@ export class AppServer {
         ? Math.floor(options.globalConcurrency ?? DEFAULT_GLOBAL_CONCURRENCY)
         : DEFAULT_GLOBAL_CONCURRENCY;
     const initial = WorkspaceHost.assertWorkspaceRoot(options.workspaceRoot);
+    this.initialRoot = initial;
     this.hosts.set(initial, this.createHost(initial, options.tier));
     this.activeRoot = initial;
     this.registerRoutes();
@@ -388,11 +399,19 @@ export class AppServer {
   /**
    * 记下这次选择，供桌面壳下次启动使用。
    *
+   * 启动自带的初始根不在此列（见 `initialRoot`）：它是 serve 的默认
+   * 当前目录或一次性的 `--cwd`，不是"我要把这个目录加进工作区"——
+   * 默默记下它，列表就会被"在哪儿敲的命令"越积越脏。它已经在记忆里时
+   * （桌面壳形状）照常记，聚焦切换要能更新 `active`。
+   *
    * 失败**不影响切换本身**：宿主已经换过来了，会话在跑、页面能用，
    * 唯独"下次自动开这个目录"这条会失效。为一条便利功能把一次成功的
    * 切换报成失败是不划算的，因此只把原因写进日志。
    */
   private async remember(root: string): Promise<void> {
+    if (root === this.initialRoot && !this.rememberedRoots.has(root)) {
+      return;
+    }
     try {
       await this.rememberWorkspace.remember(root);
     } catch (error) {
@@ -423,6 +442,11 @@ export class AppServer {
    * - 超出同时打开上限的也保留：这是"这次没开"，不是"不再要了"。
    */
   async restoreWorkspaces(remembered: RememberedWorkspaces): Promise<void> {
+    // 先记下记忆里有哪些根：初始根在其中时（桌面壳形状）聚焦它要照常
+    // 更新 active，不能被"启动自带的不记"规则误伤
+    for (const root of remembered.roots) {
+      this.rememberedRoots.add(root);
+    }
     for (const root of remembered.roots) {
       if (this.hosts.has(root)) {
         continue;

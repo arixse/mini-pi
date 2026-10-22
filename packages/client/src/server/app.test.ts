@@ -1157,6 +1157,67 @@ describe("App Server · 多工作区", () => {
     }
   });
 
+  /**
+   * serve 的默认当前目录不是"用户添加的工作区"：在哪儿敲的命令是随机的，
+   * 默默记进列表会让它越积越脏（真实文件里曾混进仓库根与包目录）。
+   * 聚焦它（侧栏点工作区名走的就是这条路）也不该记。
+   */
+  it("启动自带的当前目录不进记忆列表：聚焦它也不记", async () => {
+    const remembered: string[] = [];
+    const server = await startTestServer({
+      workspaceMemory: {
+        list: async () => null,
+        remember: async (path) => void remembered.push(path),
+        forget: async () => undefined,
+      },
+    });
+    const second = makeWorkspace("second");
+    try {
+      // 用户显式添加的照常记
+      await server.post("/api/workspace", { path: second });
+      assert.deepStrictEqual(remembered, [second]);
+
+      // 聚焦回启动自带的初始根：只挪焦点，不进列表
+      await server.post("/api/workspace", { path: server.workspace });
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.activeRoot, server.workspace, "焦点确实挪回来了");
+      assert.deepStrictEqual(remembered, [second], "当前目录不该被记进列表");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("初始根本来就在记忆里（桌面壳形状）时，聚焦它照常更新 active", async () => {
+    const remembered: string[] = [];
+    const server = await startTestServer({
+      workspaceMemory: {
+        list: async () => ({ roots: [server.workspace], active: server.workspace }),
+        remember: async (path) => void remembered.push(path),
+        forget: async () => undefined,
+      },
+    });
+    const second = makeWorkspace("second");
+    try {
+      await server.app.restoreWorkspaces({
+        roots: [server.workspace, second],
+        active: server.workspace,
+      });
+      await server.post("/api/workspace", { path: second });
+      assert.deepStrictEqual(remembered, [second]);
+      // 桌面壳靠这条把"上次活动的"带过启动：切回初始根必须更新记忆
+      await server.post("/api/workspace", { path: server.workspace });
+      assert.deepStrictEqual(
+        remembered,
+        [second, server.workspace],
+        "初始根已在记忆里，聚焦它要更新 active",
+      );
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
   it("打开数有上限：超限 409，让用户先关一个而不是悄悄挤掉", async () => {
     const server = await startTestServer({ maxWorkspaces: 2 });
     const second = makeWorkspace("second");
