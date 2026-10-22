@@ -1,8 +1,9 @@
 # 客户端视觉交互稿 · 交接说明
 
-> 本文是**视觉稿定稿后的开发交接物**。界面结构、组件状态与 26 条已定决策见
-> [client-ui-design.md](./client-ui-design.md)，本文只讲"稿子怎么读、哪些必须照做、
-> 哪些是内核缺口"。事件口径见 [client-event-stream.md](./client-event-stream.md)。
+> 本文是**视觉稿定稿后的开发交接物**。本文讲"稿子怎么读、哪些必须照做、
+> 哪些是内核缺口"；**界面结构以本文 §2/§3 为准**，26 条已定决策的**设计理由**见
+> [client-ui-design.md](./client-ui-design.md)，事件口径见
+> [client-event-stream.md](./client-event-stream.md)。
 
 ## 1. 物料清单
 
@@ -123,8 +124,9 @@
 硬约束：
 1. 色值只允许引用 packages/client/design/tokens.css 的变量，禁止写死色值；
    深浅切换只切根节点的 data-theme。
-2. 界面结构、组件状态与口径以 docs/client-ui-design.md 的 26 条决策为准；
-   排队、审批、diff、侧栏 hover 四个交互以 handoff 文档 §4 为准。
+2. 界面结构与组件状态以本文件 §2/§3 为准；26 条已定决策的设计理由见
+   docs/client-ui-design.md（重做后第 1/2/4/20 条的载体已跟着结构更新）；
+   排队、审批、diff、侧栏 hover 四个交互以本文 §4 为准。
 3. 不要参考 packages/client/design/mockup.html，它是被本次设计取代的旧稿。
 4. 单文件不超过 1000 行，改动先开分支，每提交独立过 pnpm check。
 
