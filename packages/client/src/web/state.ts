@@ -29,6 +29,7 @@ import type {
 } from "../shared/types";
 import { textOf } from "./format";
 import type { NotifyState } from "./notify";
+import { initialTheme, type ThemeMode } from "./theme";
 
 export type ToolStatus = "running" | "done" | "failed";
 
@@ -42,7 +43,27 @@ export type TimelineItem = {
    */
   rev?: number;
 } & (
-  | { kind: "user"; id: string; text: string; queued: boolean; locked: boolean }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      queued: boolean;
+      locked: boolean;
+      /**
+       * 发出这一刻的墙钟（epoch ms，指令气泡里的 `14:02`）。
+       *
+       * 历史消息取服务端消息自带的 timestamp；乐观插入的那条取本地时钟——
+       * 它只活到服务端把同一条消息发回来为止，精确到分足够。
+       */
+      at: number;
+      /**
+       * 这条消息对应的 Run（发送成功后由服务端分配）。
+       *
+       * 撤回要点名它：排队中的 Run 内核直接出队并给 cancelled 结论。
+       * 为 null 表示请求还在路上——那时撤回只能本地撤（见 controller.recall）。
+       */
+      runId: string | null;
+    }
   /** `locked` 表示正文已定稿（来自历史或 message_end）；此后的 delta 一律忽略 */
   | { kind: "assistant"; id: string; text: string; streaming: boolean; locked: boolean }
   | {
@@ -75,6 +96,13 @@ export type View = {
   model: string | null;
   tokens: number;
   contextWindow: number;
+  /**
+   * 模型回合数（状态栏的"指标-步数"）。
+   *
+   * 直接取 `turn_start` 事件里的回合序号而不是自己累加：重放一段历史时
+   * 累加会多数一遍，而序号本身就是权威值。
+   */
+  steps: number;
   /** 运行头里的耗时：开始时记墙钟，结束后用服务端给的 elapsedMs */
   startedAt: number | null;
   elapsedMs: number | null;
@@ -115,6 +143,13 @@ export type ClientState = {
   ready: boolean;
   /** 首屏加载失败的致命错误（服务没起、JSON 坏了） */
   error: string | null;
+  /**
+   * 主题：只影响根节点上的 `data-theme`（见 theme.ts）。
+   *
+   * 初始值取"用户选过的 > 系统偏好 > 深色"——构造时尚无 DOM 的环境
+   * （服务端渲染、单测）里 `initialTheme` 自己会退到深色。
+   */
+  theme: ThemeMode;
   workspace: WorkspaceView;
   tier: Tier;
   model: ServerSnapshot["model"];
@@ -168,6 +203,7 @@ export function emptyView(): View {
     model: null,
     tokens: 0,
     contextWindow: 0,
+    steps: 0,
     startedAt: null,
     elapsedMs: null,
     readOnly: false,
@@ -183,6 +219,13 @@ export function initialState(): ClientState {
   return {
     ready: false,
     error: null,
+    theme: initialTheme(
+      typeof localStorage === "undefined" ? null : localStorage,
+      // matchMedia 的返回是 MediaQueryList（matches 是属性），包一层对齐 ThemePrefers
+      typeof matchMedia === "undefined"
+        ? null
+        : { matches: (query: string) => matchMedia(query).matches },
+    ),
     workspace: { root: "", name: "" },
     tier: "workspace-write",
     model: {
@@ -295,6 +338,8 @@ export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineIt
         text: textOf(message),
         queued: false,
         locked: true,
+        at: message.timestamp,
+        runId: null,
       });
       continue;
     }
@@ -486,6 +531,8 @@ export function addUserMessage(view: View, text: string, queued: boolean): strin
     text,
     queued,
     locked: true,
+    at: stamp,
+    runId: null,
   });
   if (!view.title) {
     view.title = text.split("\n")[0]!.slice(0, 48);
@@ -502,6 +549,21 @@ export function removeItem(view: View, id: string): void {
 }
 
 /**
+ * 把服务端分配的 runId 记到那条乐观消息上。
+ *
+ * 发送是两步的：先乐观插入（用户立刻看见自己说了什么），请求回来才有
+ * runId。撤回按钮要点名具体哪一条 Run，所以这一步不能省——没有它，
+ * "撤回"只能本地撤，排队里的任务照样会跑。
+ */
+export function attachQueuedRun(view: View, id: string, runId: string): void {
+  const item = findItem(view, "user", id);
+  if (item) {
+    item.runId = runId;
+    bump(item);
+  }
+}
+
+/**
  * 单条 Run 事件的归约。
  *
  * `runId` 由订阅方传入：`run_state` / `run_done` 这两个事件不带 runId，
@@ -509,6 +571,15 @@ export function removeItem(view: View, id: string): void {
  */
 export function applyRunEvent(view: View, runId: string, event: ServerEvent): void {
   switch (event.type) {
+    case "turn_start": {
+      // 回合序号是权威值：重放历史时直接认它，不自己累加
+      if (view.activeRunId !== null && view.activeRunId !== runId) {
+        return;
+      }
+      view.steps = event.turn;
+      return;
+    }
+
     case "run_state": {
       if (view.activeRunId !== null && view.activeRunId !== runId) {
         return;
@@ -550,6 +621,8 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
           text: textOf(event.message),
           queued: false,
           locked: true,
+          at: event.message.timestamp,
+          runId: null,
         });
       }
       return;
@@ -776,6 +849,50 @@ export function activeRuns(state: ClientState): RunSummary[] {
   return state.runs.filter(
     (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
   );
+}
+
+/**
+ * 侧栏树的一层：会话为节点，它名下的 Run 是叶子。
+ *
+ * 服务端的 `runs` 是内存里最近的若干条（ newest first ），`sessions` 是
+ * 磁盘上的全部会话；两者按 sessionId 归并。没有 Run 的会话仍然是节点——
+ * 一段只有历史的会话不该从树上消失。
+ */
+export type SessionGroup = { session: SessionSummary; runs: RunSummary[] };
+
+/**
+ * 侧栏树：按搜索词过滤，命中会话时它的 Run 整组保留。
+ *
+ * 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有）。
+ * 纯函数：组件只摆，这里算——过滤口径因此可以单测。
+ */
+export function sessionGroups(state: ClientState): SessionGroup[] {
+  const keyword = state.search.trim().toLowerCase();
+  const bySession = new Map<string, RunSummary[]>();
+  for (const run of state.runs) {
+    const list = bySession.get(run.sessionId);
+    if (list) {
+      list.push(run);
+    } else {
+      bySession.set(run.sessionId, [run]);
+    }
+  }
+  const groups = state.sessions.map((session) => ({
+    session,
+    runs: bySession.get(session.sessionId) ?? [],
+  }));
+  if (keyword.length === 0) {
+    return groups;
+  }
+  return groups
+    .map((group) => {
+      const sessionHit = group.session.title.toLowerCase().includes(keyword);
+      const runs = sessionHit
+        ? group.runs
+        : group.runs.filter((run) => run.title.toLowerCase().includes(keyword));
+      return { session: group.session, runs };
+    })
+    .filter((group) => group.runs.length > 0 || group.session.title.toLowerCase().includes(keyword));
 }
 
 /** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */

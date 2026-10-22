@@ -193,6 +193,9 @@ export class WorkspaceHost {
 
   /** 读模型与当前会话；构造后必须 await 一次 */
   async start(): Promise<this> {
+    // 先把上次存下来的自定义供应商注册回来，再读默认模型：否则
+    // settings 指向自建网关时，这一次 reloadModel 会解析不到供应商
+    await this.providerService.loadCustomProviders();
     await this.reloadModel();
     this.subAgentEnabled = await this.settingsStore.getSubagentEnabled();
     if (this.isolate) {
@@ -327,6 +330,7 @@ export class WorkspaceHost {
         hasApiKey: Boolean(config.apiKey),
         defaultModels: provider.getDefaultModels?.() ?? [],
         selectedModel: parsed?.providerName === name ? parsed.modelName : null,
+        custom: this.providerService.isCustomProvider(name),
       });
     }
     return views;
@@ -365,13 +369,16 @@ export class WorkspaceHost {
    * - **密钥只写不读**：请求里没有 `apiKey` 就沿用已保存的那把，
    *   传空串等同"不改"（前端把"已配置"显示成留空即不改）。
    * - **供应商必须已注册**：认不出就报错，不回落到第一个。
+   *   唯一的例外是自定义供应商：名字没注册过、但带着 Base URL，
+   *   内核会当场建成 OpenAI 兼容槽位（见 saveProviderConfig）。
    * - **上下文窗口清空 = 回到推断**，不是写成 0。
    */
   async configureModel(input: Record<string, unknown>): Promise<void> {
     const providerName = String(input.provider ?? "").trim();
     const modelName = String(input.model ?? "").trim();
-    if (!this.providerService.hasProvider(providerName)) {
-      throw new HttpError(400, `未知的供应商：${providerName}`);
+    const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+    if (!this.providerService.hasProvider(providerName) && baseUrl.length === 0) {
+      throw new HttpError(400, `未知的供应商：${providerName}（新供应商请连同 Base URL 一起给出）`);
     }
     if (modelName.length === 0) {
       throw new HttpError(400, "模型名不能为空");
@@ -407,6 +414,55 @@ export class WorkspaceHost {
     }
 
     await this.reloadModel();
+  }
+
+  /**
+   * 只存供应商凭据，不设默认模型（自定义供应商区的「添加」走这里）。
+   *
+   * 与 {@link configureModel} 的分工：那边一定挑一个模型当默认，这边
+   * 只把"这家网关怎么进"记下来——用户往往得先能看到模型列表才知道
+   * 填哪个模型名，一上来就逼他选模型是把顺序颠倒了。
+   */
+  async configureProvider(input: Record<string, unknown>): Promise<void> {
+    const providerName = String(input.provider ?? "").trim();
+    if (providerName.length === 0) {
+      throw new HttpError(400, "供应商名不能为空");
+    }
+    const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+    if (!this.providerService.hasProvider(providerName) && baseUrl.length === 0) {
+      throw new HttpError(400, "自定义供应商需要 Base URL");
+    }
+
+    const config: { apiKey?: string; baseUrl?: string } = {};
+    if (typeof input.apiKey === "string" && input.apiKey.trim().length > 0) {
+      config.apiKey = input.apiKey.trim();
+    }
+    if (baseUrl.length > 0) {
+      config.baseUrl = baseUrl;
+    }
+    if (Object.keys(config).length === 0) {
+      throw new HttpError(400, "没有可保存的内容");
+    }
+    await this.providerService.saveProviderConfig(providerName, config);
+  }
+
+  /**
+   * 删掉一个自定义供应商。
+   *
+   * 默认模型正指着它时一并清掉：留着会让下次启动去解析一个不存在的
+   * 供应商，界面停在"尚未配置模型"却说不出原因。
+   */
+  async deleteCustomProvider(providerName: string): Promise<void> {
+    if (!this.providerService.isCustomProvider(providerName)) {
+      throw new HttpError(400, `「${providerName}」不是自定义供应商，不能删除`);
+    }
+    await this.providerService.deleteCustomProvider(providerName);
+
+    const parsed = await this.settingsStore.parseDefaultModel();
+    if (parsed?.providerName === providerName) {
+      await this.settingsStore.clearDefaultModel();
+      await this.reloadModel();
+    }
   }
 
   /** 委派开关；与 CLI 同义（下一次执行生效，不影响已开跑的那个） */

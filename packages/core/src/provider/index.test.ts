@@ -245,3 +245,166 @@ describe("ModelProviderService", () => {
     });
   });
 });
+
+describe("ModelProviderService 自定义供应商", () => {
+  let store: ProviderStore;
+  let testDir: string;
+  let testFilePath: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `mini-pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testFilePath = join(testDir, "auth.json");
+
+    if (!existsSync(testDir)) {
+      await mkdir(testDir, { recursive: true });
+    }
+
+    store = new ProviderStore(testFilePath);
+  });
+
+  afterEach(async () => {
+    try {
+      if (existsSync(testFilePath)) {
+        await unlink(testFilePath);
+      }
+    } catch (error) {
+      // Ignore cleanup errors
+    }
+  });
+
+  it("未注册名 + Base URL：当场建成槽位并存成独立条目", async () => {
+    const service = new ModelProviderService(store);
+    await service.saveProviderConfig("公司网关", {
+      apiKey: "gw-key",
+      baseUrl: "https://gateway.internal/v1",
+    });
+
+    assert.ok(service.hasProvider("公司网关"));
+    assert.strictEqual(service.isCustomProvider("公司网关"), true);
+    const config = await service.getProviderConfig("公司网关");
+    assert.strictEqual(config.apiKey, "gw-key");
+    assert.strictEqual(config.baseUrl, "https://gateway.internal/v1");
+    assert.strictEqual(config.sdkType, "OpenAI");
+    // 官方 OpenAI 的凭据没被顺手改掉
+    assert.strictEqual((await service.getProviderConfig("openai")).apiKey, undefined);
+  });
+
+  it("getProviderConfig 不外泄 custom 持久化标记", async () => {
+    const service = new ModelProviderService(store);
+    await service.saveProviderConfig("gw", { baseUrl: "https://gw.example/v1" });
+    const config = await service.getProviderConfig("gw");
+    assert.strictEqual("custom" in config, false);
+  });
+
+  it("未注册名不给 Base URL：仍然拒绝，不猜地址", async () => {
+    const service = new ModelProviderService(store);
+    await assert.rejects(
+      async () => await service.saveProviderConfig("ghost", { apiKey: "k" }),
+      { message: "Provider 'ghost' not found" },
+    );
+    assert.ok(!service.hasProvider("ghost"));
+  });
+
+  it("名字里带 / 会撕坏「供应商/模型」格式，直接拒绝", async () => {
+    const service = new ModelProviderService(store);
+    await assert.rejects(
+      async () => await service.saveProviderConfig("a/b", { baseUrl: "https://x.example/v1" }),
+      { message: /不能包含/ },
+    );
+    assert.ok(!service.hasProvider("a/b"));
+  });
+
+  it("重启后 loadCustomProviders 把槽位注册回来", async () => {
+    const first = new ModelProviderService(store);
+    await first.saveProviderConfig("gw", {
+      apiKey: "gw-key",
+      baseUrl: "https://gw.example/v1",
+    });
+
+    // 第二次构造 = 重启：内存槽位没了，但 auth.json 里的条目还在
+    const second = new ModelProviderService(store);
+    assert.ok(!second.hasProvider("gw"));
+    await second.loadCustomProviders();
+    assert.ok(second.hasProvider("gw"));
+    assert.strictEqual(second.getProviderBaseUrl("gw"), "https://gw.example/v1");
+    assert.strictEqual((await second.getProviderConfig("gw")).apiKey, "gw-key");
+  });
+
+  it("loadCustomProviders 只认带标记的条目，不把官方配置脑补成槽位", async () => {
+    // 官方供应商也可能有用户改过的 baseUrl——没有 custom 标记就不是槽位
+    await store.saveConfig("ghost", { apiKey: "k", baseUrl: "https://ghost.example/v1" });
+    const service = new ModelProviderService(store);
+    await service.loadCustomProviders();
+    assert.ok(!service.hasProvider("ghost"));
+  });
+
+  it("多个自建网关可以并存，凭据互不干扰", async () => {
+    const first = new ModelProviderService(store);
+    await first.saveProviderConfig("公司网关", {
+      apiKey: "k1",
+      baseUrl: "https://gw1.example/v1",
+    });
+    await first.saveProviderConfig("测试网关", {
+      apiKey: "k2",
+      baseUrl: "https://gw2.example/v1",
+    });
+
+    // 两个槽位各自记各自的地址与密钥
+    const one = await first.getProviderConfig("公司网关");
+    const two = await first.getProviderConfig("测试网关");
+    assert.strictEqual(one.apiKey, "k1");
+    assert.strictEqual(one.baseUrl, "https://gw1.example/v1");
+    assert.strictEqual(two.apiKey, "k2");
+    assert.strictEqual(two.baseUrl, "https://gw2.example/v1");
+
+    // 删掉其中一家，另一家不受牵连
+    await first.deleteCustomProvider("公司网关");
+    assert.ok(first.hasProvider("测试网关"));
+    assert.strictEqual((await first.getProviderConfig("测试网关")).apiKey, "k2");
+
+    // 重启：存活的网关照常恢复，删掉的不复活
+    const second = new ModelProviderService(store);
+    await second.loadCustomProviders();
+    assert.ok(!second.hasProvider("公司网关"));
+    assert.ok(second.hasProvider("测试网关"));
+    assert.strictEqual(second.getProviderBaseUrl("测试网关"), "https://gw2.example/v1");
+  });
+
+  it("改自建网关的地址：内存槽位跟着换（不等重启）", async () => {
+    const service = new ModelProviderService(store);
+    await service.saveProviderConfig("gw", { baseUrl: "https://old.example/v1" });
+    await service.saveProviderConfig("gw", { baseUrl: "https://new.example/v1" });
+
+    assert.strictEqual(service.getProviderBaseUrl("gw"), "https://new.example/v1");
+    assert.strictEqual((await service.getProviderConfig("gw")).baseUrl, "https://new.example/v1");
+  });
+
+  it("deleteCustomProvider 删条目并摘掉槽位", async () => {
+    const service = new ModelProviderService(store);
+    await service.saveProviderConfig("gw", { apiKey: "k", baseUrl: "https://gw.example/v1" });
+
+    await service.deleteCustomProvider("gw");
+    assert.ok(!service.hasProvider("gw"));
+    assert.strictEqual(service.isCustomProvider("gw"), false);
+    assert.strictEqual(await store.hasConfig("gw"), false);
+  });
+
+  it("官方供应商不能整条删除（它们的配置归换密钥管）", async () => {
+    const service = new ModelProviderService(store);
+    await assert.rejects(
+      async () => await service.deleteCustomProvider("deepseek"),
+      { message: /不是自定义供应商/ },
+    );
+    assert.ok(service.hasProvider("deepseek"));
+  });
+
+  it("删掉后重启：槽位不会复活", async () => {
+    const first = new ModelProviderService(store);
+    await first.saveProviderConfig("gw", { baseUrl: "https://gw.example/v1" });
+    await first.deleteCustomProvider("gw");
+
+    const second = new ModelProviderService(store);
+    await second.loadCustomProviders();
+    assert.ok(!second.hasProvider("gw"));
+  });
+});

@@ -14,19 +14,124 @@ import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { App } from "./App";
-import { ClientStore } from "./store";
-import { initialState } from "./state";
+import { ClientProvider, ClientStore } from "./store";
+import { initialState, type TimelineItem } from "./state";
+import { TimelineItemRow } from "./components/TimelineItems";
+import { DiffPanel } from "./components/DiffPanel";
+import { Statusbar } from "./components/Statusbar";
+import type { Actions } from "./actions";
+import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
+
+/** 渲染用的假动作：这里只验证 markup，不触发任何请求 */
+const fakeActions = {
+  send: () => undefined,
+  stop: () => undefined,
+  recall: async () => undefined,
+  cancelRun: async () => undefined,
+  discardWorktree: async () => undefined,
+  openDiff: () => undefined,
+  closeDiff: () => undefined,
+  mergeWorktree: async () => undefined,
+  newTask: () => undefined,
+  openSession: () => undefined,
+  continueSession: async () => undefined,
+  openRun: () => undefined,
+  decide: () => undefined,
+  setSearch: () => undefined,
+  toggleSidebar: () => undefined,
+  closeSidebar: () => undefined,
+  openSettings: () => undefined,
+  closeSettings: () => undefined,
+  saveModel: async () => undefined,
+  addCustomProvider: async () => [],
+  removeProvider: async () => undefined,
+  setTier: async () => undefined,
+  setSubAgent: async () => undefined,
+  setIsolate: async () => undefined,
+  toggleNotifications: async () => undefined,
+  toggleTheme: () => undefined,
+  openPicker: () => undefined,
+  closePicker: () => undefined,
+  switchWorkspace: async () => undefined,
+  requestDelete: () => undefined,
+  cancelDelete: () => undefined,
+  confirmDelete: async () => undefined,
+  retry: () => undefined,
+} as unknown as Actions;
+
+function renderItem(item: TimelineItem, expanded = false): string {
+  const store = new ClientStore();
+  return renderToStaticMarkup(
+    createElement(
+      ClientProvider,
+      { value: { store, actions: fakeActions } },
+      createElement(TimelineItemRow, {
+        item,
+        revision: "r1",
+        expanded,
+        onToggle: () => undefined,
+        actions: fakeActions,
+      }),
+    ),
+  );
+}
+
+function approval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: "ap1",
+    runId: "run_1",
+    toolCallId: "tc1",
+    toolName: "bash",
+    risk: { level: "elevated", reasons: ["会执行命令"] },
+    summary: ["$ ls -la"],
+    argsPreview: "ls -la",
+    createdAt: 0,
+    ...overrides,
+  };
+}
 
 describe("前端组件树", () => {
-  it("首屏渲染不抛错，且顶栏三枚芯片都在", () => {
+  it("首屏渲染不抛错：主列三层骨架都在", () => {
     const html = renderToStaticMarkup(createElement(App));
 
     assert.match(html, /class="app"/, "根容器要挂上");
     assert.match(html, /class="topbar"/);
+    assert.match(html, /class="main-col"/, "主列三层：状态行 / 会话 / 输入区");
     assert.match(html, /class="sidebar"/);
     assert.match(html, /class="composer"/);
-    assert.match(html, /未打开工作区/, "还没拿到状态时应如实说工作区未打开");
+    // 还没有工作区：状态行整个不渲染（空态稿第 5 页主列只有引导）
+    assert.doesNotMatch(html, /class="statusbar"/);
+    assert.match(html, /还没有工作区/, "还没拿到状态时应如实说工作区未打开");
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
+  });
+
+  it("状态行属于主列且只有三枚指标：模型 / 上下文 / 步数", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Statusbar),
+      ),
+    );
+    assert.match(html, /class="statusbar"/);
+    assert.match(html, />模型</);
+    assert.match(html, />上下文</);
+    assert.match(html, />步数</);
+    assert.doesNotMatch(html, />状态</, "设计稿只有三枚指标，不画第四个");
+  });
+
+  it("没有工作区时主区是品牌引导：一句话 + 选择目录", () => {
+    const html = renderToStaticMarkup(createElement(App));
+
+    assert.match(html, /class="empty-guide"/, "主区放品牌引导，不是一片空白");
+    assert.match(html, /选择目录/);
+    assert.match(html, /mini-pi/);
+    // 侧栏只留一句提示，不摆一棵空树
+    assert.match(html, /还没有工作区/);
   });
 
   it("起不来的时候给的是说明与重试，不是一片空白", () => {
@@ -38,5 +143,208 @@ describe("前端组件树", () => {
     // Boot 只在有错误时出现：初始状态（无错）不该渲染它
     const initial = initialState();
     assert.strictEqual(initial.error, null);
+  });
+});
+
+describe("变更面板", () => {
+  function diffStore(): ClientStore {
+    const store = new ClientStore();
+    const run: RunSummary = {
+      runId: "run_1",
+      title: "改两行",
+      sessionId: "s1",
+      status: "done",
+      model: "test / test-model",
+      startedAt: 0,
+      elapsedMs: 1000,
+      tokens: 10,
+      contextWindow: 128_000,
+      pendingApprovals: 0,
+      workspace: { root: "/tmp/wt", isolated: true, released: false, merged: false },
+    };
+    const diff: RunDiff = {
+      runId: "run_1",
+      files: ["src/a.ts", "src/b.ts"],
+      patch: [
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--- a/src/a.ts",
+        "+++ b/src/a.ts",
+        "@@ -1,2 +1,3 @@",
+        " keep",
+        "-old",
+        "+new",
+        "+newer",
+        "diff --git a/src/b.ts b/src/b.ts",
+        "--- a/src/b.ts",
+        "+++ b/src/b.ts",
+        "@@ -1 +1,2 @@",
+        "keep",
+        "+added",
+      ].join("\n"),
+    };
+    store.update((state) => {
+      state.runs = [run];
+      state.ui.diffRunId = "run_1";
+      state.diff = diff;
+    });
+    return store;
+  }
+
+  it("行级 diff：增删行各走各的令牌类，动作行是应用/放弃/返回", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+
+    assert.match(html, /class="diff-row diff-add"/, "新增行要带 diff-add");
+    assert.match(html, /class="diff-row diff-del"/, "删除行要带 diff-del");
+    assert.match(html, /class="diff-row diff-meta"/, "文件头不当成增删行");
+    assert.match(html, /class="diff-row diff-hunk"/);
+    assert.match(html, /\+3/, "面板头给出整体增行数");
+    assert.match(html, /−1/, "面板头给出整体删行数");
+    assert.match(html, /\+2/, "文件条给出每个文件自己的增行数");
+    assert.match(html, /src\/b\.ts[\s\S]*?\+1/, "第二个文件条也带统计");
+    assert.match(html, /应用变更/);
+    assert.match(html, /放弃变更/);
+    assert.match(html, /返回/);
+  });
+
+  it("面板画在主列里：内嵌面板而非遮罩模态", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.match(html, /class="diff-panel"/, "主列内嵌容器");
+    assert.match(html, /class="diff-card"/, "带描边的卡片");
+    assert.doesNotMatch(html, /class="overlay"/, "不铺全屏遮罩——侧栏与输入区都在场");
+  });
+
+  it("没打开时什么都不渲染", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: new ClientStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.strictEqual(html, "");
+  });
+});
+
+describe("时间线条目的 markup", () => {
+  it("已入队的消息是空心气泡，带元信息行与撤回", () => {
+    const html = renderItem({
+      kind: "user",
+      id: "u:1#1",
+      text: "顺手把测试也补了",
+      queued: true,
+      locked: true,
+      at: 0,
+      runId: "run_q",
+    });
+    assert.match(html, /bubble-user queued/, "空心描边气泡（与已执行的实心区分）");
+    assert.match(html, /已入队 · 当前回合结束后执行/);
+    assert.match(html, /撤回/);
+    assert.doesNotMatch(html, /bubble-time/, "入队中的那条不画时刻");
+  });
+
+  it("已执行的消息气泡内带发出时刻（14:02）", () => {
+    // 本地时区 2026-10-22 14:02（构造时固定时分，跨时区跑也只断言格式）
+    const html = renderItem({
+      kind: "user",
+      id: "u:1#2",
+      text: "跑一遍测试",
+      queued: false,
+      locked: true,
+      at: new Date(2026, 9, 22, 14, 2).getTime(),
+      runId: null,
+    });
+    assert.match(html, /bubble-time[^<]*>14:02</);
+  });
+
+  it("工具调用是单行：生命周期标记 + 名称 + 参数 + 耗时", () => {
+    const html = renderItem({
+      kind: "tool",
+      id: "t:1",
+      toolCallId: "1",
+      name: "grep",
+      args: JSON.stringify({ pattern: "TODO", path: "src" }),
+      status: "done",
+      output: "src/a.ts:12: // TODO\nsrc/b.ts:3: // TODO",
+      startedAt: 0,
+      durationMs: 320,
+    });
+    assert.match(html, /tool-line/, "单行，不套三层盒子");
+    assert.match(html, /tool-mark is-done[^<]*>✓</, "完成是 ✓");
+    assert.match(html, /grep/);
+    assert.match(html, /TODO/, "参数必须渲染（设计稿第 7 条）");
+    assert.match(html, /0.3s/);
+  });
+
+  it("输出被裁过才给「查看完整输出 / 复制」：短输出不摆链接", () => {
+    const long = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const collapsed = renderItem({
+      kind: "tool",
+      id: "t:2",
+      toolCallId: "2",
+      name: "bash",
+      args: "ls",
+      status: "done",
+      output: long,
+      startedAt: 0,
+      durationMs: 10,
+    });
+    assert.match(collapsed, /查看完整输出/, "长输出给看全的入口");
+    assert.match(collapsed, /复制/, "并给复制");
+    const short = renderItem({
+      kind: "tool",
+      id: "t:3",
+      toolCallId: "3",
+      name: "bash",
+      args: "ls",
+      status: "done",
+      output: "a.ts",
+      startedAt: 0,
+      durationMs: 10,
+    });
+    assert.doesNotMatch(short, /tool-links/, "短输出全在眼前，链接只是噪音");
+  });
+
+  it("审批卡四个动作：允许一次 / 本会话全部允许 / 拒绝（非隔离没有看变更）", () => {
+    const html = renderItem({
+      kind: "approval",
+      id: "ap:ap1",
+      request: approval(),
+      state: "pending",
+    });
+    assert.match(html, /approval"/, "warn-soft 底（elevated）");
+    assert.match(html, /允许一次/);
+    assert.match(html, /本会话内全部允许 bash/);
+    assert.match(html, /拒绝/);
+    assert.doesNotMatch(html, /看变更/, "非隔离任务没有 diff，不摆必然 409 的按钮");
+  });
+
+  it("高危审批换 danger-soft：完整命令 + 不可撤销，不叠降级理由", () => {
+    const html = renderItem({
+      kind: "approval",
+      id: "ap:ap2",
+      request: approval({
+        risk: { level: "high", reasons: ["删除文件", "不可恢复"] },
+        summary: ["$ rm -rf build"],
+        argsPreview: "rm -rf build",
+      }),
+      state: "pending",
+    });
+    assert.match(html, /approval high"/);
+    assert.match(html, /高危：bash/);
+    assert.match(html, /rm -rf build/, "完整命令要给全");
+    assert.match(html, /此操作不可撤销/);
+    assert.doesNotMatch(html, /<code>/, "高危不叠summary 的理由行");
   });
 });

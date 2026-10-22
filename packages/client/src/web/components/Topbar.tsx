@@ -27,11 +27,11 @@ export function Topbar(): React.ReactElement {
       </button>
 
       <div className="brand">
-        <Icon name="sparkles" />
+        <Icon name="logo" size={18} />
         <span className="brand-name">mini-pi</span>
       </div>
 
-      <span
+      {/* <span
         className={`chip mono${state.workspace.name ? "" : " warn"}`}
         title={state.workspace.root ? `工作区：${state.workspace.root}` : "还没有选择工作区"}
         onClick={() => actions.openPicker()}
@@ -53,7 +53,7 @@ export function Topbar(): React.ReactElement {
 
       <span className="pill pill-slate" title="默认审批档位（新任务生效）">
         {state.tier}
-      </span>
+      </span> */}
 
       {state.approvals > 0 ? (
         <span
@@ -85,8 +85,13 @@ export function Topbar(): React.ReactElement {
       <button className="icon-btn" title="设置" onClick={() => actions.openSettings()}>
         <Icon name="gear" />
       </button>
-      <button className="icon-btn" title="切换侧栏" onClick={() => actions.toggleSidebar()}>
-        <Icon name="menu" />
+      <button
+        className="icon-btn theme-btn"
+        title={state.theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+        aria-label="切换主题"
+        onClick={() => actions.toggleTheme()}
+      >
+        <Icon name={state.theme === "dark" ? "sun" : "moon"} />
       </button>
     </header>
   );

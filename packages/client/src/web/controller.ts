@@ -16,9 +16,11 @@ import {
   applyRunMetaEvent,
   applyRunWorkspace,
   applySnapshot,
+  attachQueuedRun,
   emptyView,
   openSession as openSessionIn,
   removeItem,
+  type TimelineItem,
 } from "./state";
 import { ClientStore } from "./store";
 import type { Actions, SaveModelInput } from "./actions";
@@ -34,6 +36,13 @@ import {
   showSystemNotification,
 } from "./notify";
 import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
+import {
+  applyTheme,
+  initialTheme,
+  toggledTheme,
+  writeStoredTheme,
+  type ThemeMode,
+} from "./theme";
 
 /**
  * 输入区暴露给动作层的三个命令：清空、聚焦、把没发出去的字还回去。
@@ -69,6 +78,15 @@ export class AppController {
   private streamedRunId: string | null = null;
   /** 乐观插入的用户消息：等服务端把同一条消息发回来时让位给它 */
   private pendingUsers: Array<{ id: string; text: string }> = [];
+  /**
+   * 发送中的"延期票据"：optimisticId → 创建结果。
+   *
+   * 撤回要用它取消"请求还在路上"的那一条（见 {@link recall}）。
+   */
+  private readonly sendTasks = new Map<
+    string,
+    Promise<{ runId: string; sessionId: string }>
+  >();
   /**
    * 发送闸门。
    *
@@ -108,6 +126,27 @@ export class AppController {
     this.store.update((state) => {
       state.notifications = detectNotifications();
     });
+    // 主题在构造时就落到根节点：晚一步（等 boot）会有一帧深色闪白
+    this.store.update((state) => {
+      state.theme = initialTheme(
+        typeof localStorage === "undefined" ? null : localStorage,
+        typeof matchMedia === "undefined"
+          ? null
+          : { matches: (query: string) => matchMedia(query).matches },
+      );
+      this.paintTheme(state.theme);
+    });
+  }
+
+  /**
+   * 主题落地：根节点属性 + 本地记住。
+   *
+   * 两个副作用都做了"没有 DOM / 存储不可用"的兜底——Electron 的渲染进程
+   * 与浏览器都有 localStorage，但隐私模式下它会抛，那时切主题仍然要成立。
+   */
+  private paintTheme(mode: ThemeMode): void {
+    applyTheme(typeof document === "undefined" ? null : document.documentElement, mode);
+    writeStoredTheme(typeof localStorage === "undefined" ? null : localStorage, mode);
   }
 
   attachComposer(ref: ComposerRef): void {
@@ -406,6 +445,20 @@ export class AppController {
     }
   }
 
+  /**
+   * 侧栏行的 `+`：打开这段会话并把焦点放进输入框。
+   *
+   * 与 openSession 只差聚焦——对当前会话来说这就是"接着写"。
+   * 聚焦带会话守卫：打开期间用户可能又点了别处，那时不该把光标
+   * 抢到一个已经不在看的会话上。
+   */
+  private async continueSession(sessionId: string): Promise<void> {
+    await this.openSession(sessionId);
+    if (this.store.current.view.sessionId === sessionId) {
+      this.composer?.current?.focus();
+    }
+  }
+
   private liveRunOf(sessionId: string) {
     return (
       this.store.current.runs.find(
@@ -450,6 +503,19 @@ export class AppController {
       optimisticId = addUserMessage(state.view, text, busy);
     });
     this.pendingUsers.push({ id: optimisticId, text });
+
+    /*
+     * 发送结果的"延期票据"。
+     *
+     * 撤回要在请求在路上的时候也能取消到真正排着的那条 Run，所以票据
+     * 必须在发请求**之前**挂上去——等到响应回来再挂，那段时间里点的
+     * 撤回只能本地撤，排着的任务照样会跑。
+     */
+    let settle: (created: { runId: string; sessionId: string }) => void = () => {};
+    const created2 = new Promise<{ runId: string; sessionId: string }>((resolve) => {
+      settle = resolve;
+    });
+    this.sendTasks.set(optimisticId, created2);
     this.composer?.current?.clear();
 
     // 闸门：见字段注释。等的是"上一个请求把 sessionId 带回来"
@@ -464,10 +530,13 @@ export class AppController {
       // 等的这一下里，上一个请求可能已经建好会话了：优先用它
       const sessionId = this.store.current.view.sessionId ?? undefined;
       const created = await api.sendRun(text, sessionId);
+      settle(created);
       this.store.update((state) => {
         if (state.view.sessionId === null) {
           state.view.sessionId = created.sessionId;
         }
+        // runId 落到那条乐观消息上：撤回要点名它
+        attachQueuedRun(state.view, optimisticId, created.runId);
       });
       this.attach(created.runId);
       await this.refreshState();
@@ -488,8 +557,49 @@ export class AppController {
       }
       this.fail(error);
     } finally {
+      this.sendTasks.delete(optimisticId);
       openGate();
     }
+  }
+
+  /**
+   * 撤回一条"已入队"的消息。
+   *
+   * 两步：先取消排着的那条 Run（请求在路上的话等它落地，才能取消到
+   * 真正登记了的那条），再把气泡从时间线上撤掉。已经开跑的消息撤不回——
+   * 取消只停得下还没执行的部分，说出去的话留在历史里。
+   */
+  private async recall(id: string): Promise<void> {
+    const task = this.sendTasks.get(id);
+    if (task) {
+      this.sendTasks.delete(id);
+      try {
+        await task;
+      } catch {
+        // 发送本身失败了：没有可取消的 Run，本地撤即可
+      }
+    }
+    const item = this.store.current.view.items.find(
+      (entry): entry is Extract<TimelineItem, { kind: "user" }> =>
+        entry.kind === "user" && entry.id === id,
+    );
+    if (!item) {
+      return;
+    }
+    this.store.update((state) => removeItem(state.view, id));
+    this.pendingUsers = this.pendingUsers.filter((entry) => entry.id !== id);
+    if (item.runId) {
+      try {
+        await api.cancelRun(item.runId);
+        this.banner("warn", "已撤回：这条消息不会执行");
+      } catch (error) {
+        // 多半是这一小会儿里它已经开跑了：说清现状，别假装撤成了
+        this.fail(error);
+      }
+    } else {
+      this.banner("warn", "已撤回：如果任务已经排上，请在侧栏里取消它");
+    }
+    await this.refreshState();
   }
 
   private async stop(): Promise<void> {
@@ -500,6 +610,22 @@ export class AppController {
     try {
       await api.cancelRun(runId);
       this.banner("warn", "已请求停止：引擎会在当前这一步结束后收手");
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * 取消侧栏里点名的一条 Run。
+   *
+   * 排队中的 Run 内核直接出队（cancelled 结论），运行中的走"当前这一步
+   * 结束后收手"——两种结局都说出来，别让用户以为点完就立刻停了。
+   */
+  private async cancelRun(runId: string): Promise<void> {
+    try {
+      await api.cancelRun(runId);
+      this.banner("warn", "已请求取消：引擎会在当前这一步结束后收手");
+      await this.refreshState();
     } catch (error) {
       this.fail(error);
     }
@@ -582,7 +708,7 @@ export class AppController {
   private async mergeWorktree(runId: string): Promise<void> {
     try {
       const result = await api.mergeWorktree(runId);
-      this.banner("ok", `已合并回工作区：${result.files.length} 个文件`);
+      this.banner("ok", `已应用回工作区：${result.files.length} 个文件`);
       this.closeDiff();
       await this.refreshState();
       this.store.update((state) => {
@@ -814,12 +940,15 @@ export class AppController {
     return {
       send: (text) => void this.send(text),
       stop: () => void this.stop(),
+      recall: (id) => this.recall(id),
+      cancelRun: (runId) => this.cancelRun(runId),
       discardWorktree: (runId) => this.discardWorktree(runId),
       openDiff: (runId) => void this.openDiff(runId),
       closeDiff: () => this.closeDiff(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
       openSession: (sessionId) => void this.openSession(sessionId),
+      continueSession: (sessionId) => this.continueSession(sessionId),
       openRun: (runId) => void this.openRun(runId),
       decide: (approvalId, answer) => void this.decide(approvalId, answer),
       setSearch: (keyword) => {
@@ -851,6 +980,14 @@ export class AppController {
         const snapshot = await api.saveModel(input);
         this.store.update((state) => applySnapshot(state, snapshot));
       },
+      addCustomProvider: async (input) => {
+        // 只发凭据：这一发不碰默认模型，选模型是用户下一步的事
+        return api.configureProvider(input);
+      },
+      removeProvider: async (name: string) => {
+        const snapshot = await api.removeProvider(name);
+        this.store.update((state) => applySnapshot(state, snapshot));
+      },
       setTier: async (tier: Tier) => {
         await api.setTier(tier);
         this.store.update((state) => {
@@ -872,6 +1009,13 @@ export class AppController {
         }
       },
       toggleNotifications: () => this.toggleNotifications(),
+      toggleTheme: () => {
+        const next = toggledTheme(this.store.current.theme);
+        this.store.update((state) => {
+          state.theme = next;
+        });
+        this.paintTheme(next);
+      },
       openPicker: () => {
         this.store.update((state) => {
           state.ui.picker = true;

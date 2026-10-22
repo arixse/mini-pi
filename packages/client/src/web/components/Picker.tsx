@@ -70,7 +70,7 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
     <div className="overlay" onClick={() => actions.closePicker()}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <Icon name="folder" color="var(--indigo-lt)" />
+          <Icon name="folder" color="var(--Client-accent-text)" />
           <span style={{ flex: 1 }}>选择工作区</span>
           <button
             className="btn btn-ghost"
@@ -147,13 +147,13 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
               </button>
             ))}
           </div>
-          <span style={{ fontSize: "11.5px", color: "var(--t5)" }}>
+          <span style={{ fontSize: "11.5px", color: "var(--Client-text-tertiary)" }}>
             换工作区会换一套会话与工具：原来那些任务不会消失，但要切回原目录才能看见。
           </span>
         </div>
 
         <div className="modal-foot">
-          <span style={{ fontSize: 12, color: "#fda4af" }}>{error}</span>
+          <span style={{ fontSize: 12, color: "var(--Client-danger-text)" }}>{error}</span>
           <span className="spacer" />
           <button className="btn btn-ghost" onClick={() => actions.closePicker()}>
             取消

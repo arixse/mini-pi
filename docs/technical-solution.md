@@ -86,6 +86,10 @@ mini-pi/
 - `ModelProviderService` 负责提供商注册、配置存储（apiKey/baseUrl/model）与模型列表获取
 - 当前已注册的提供商：7 家，名称 / SDK 类型 / 默认 Base URL 见
   [cli-config.md](./cli-config.md) §3（配置视角的唯一一张表）。
+- 除 7 家官方提供商外，还有**自定义供应商槽位**：未注册名 + Base URL 会当场建成一个
+  OpenAI 兼容的 `CustomProvider`（凭据存成 auth.json 里带 `custom` 标记的独立条目，
+  重启后由 `loadCustomProviders()` 注册回来）。入口在客户端设置里，CLI 与客户端
+  经 `createModelFromSettings` 同一个收口加载——细节见 [providers.md](./providers.md)。
 
 > 新增供应商时除了实现 `Provider` 接口，还要同步 `packages/core/src/provider/context-window.ts`
 > 的推断表：窗口小于 128k 的模型若不登记，会在压缩触发前就超窗（400）。
@@ -349,11 +353,12 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   （不加 `rehype-raw`、不开 `skipHtml`、不碰 `dangerouslySetInnerHTML`），
   危险 URL 由 `urlTransform` 挡掉；外链一律 `target="_blank"`。
   这三条由 `web/markdown.test.ts` 拿真实渲染结果钉住。
-- **会话懒创建**：点「新任务」只把界面换成白板（`view.sessionId === null`
+- **会话懒创建**：新建会话只把界面换成白板（`view.sessionId === null`
   即草稿态），不发请求；会话文件在第一次发送时创建（`POST /api/runs`
-  不带 `sessionId` 即新建）。启动时没有会话、删掉当前会话，也都回到草稿态，
-  不补开空文件。因此 `applySnapshot` **不**把服务端的当前会话回填进草稿
-  时间线，且发送闸门保证草稿态下连发两条只会话开一段。
+  不带 `sessionId` 即新建）。启动时没有会话、删掉当前会话、在只读的历史
+  会话里发送，也都回到草稿态，不补开空文件。因此 `applySnapshot` **不**
+  把服务端的当前会话回填进草稿时间线，且发送闸门保证草稿态下连发两条
+  只会话开一段。
 - **纯逻辑不下沉到 `.tsx`**：归约、动作、展示判断都在 `.ts` 里，
   于是它们能在 node 里直接测（连组件树的可挂载性都用 `react-dom/server`
   验了一遍）；`.tsx` 因此被排除在覆盖率统计之外。markdown 是例外——
@@ -364,9 +369,13 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   （`core/risk.ts` / `describeToolCallLines`），三档裁决与 CLI 的 `y` / `N` / `a` 同义；
   挂起不设超时，Run 被取消时挂起审批自动作废。
 - **界面基准**是 Ardot 画布 `738920616583250`（十帧，深浅两套只切 `data-theme`），
-  交接说明见 `docs/client-visual-handoff.md`：顶栏芯片是默认值、per-Run 模型画在运行头；
-  工具卡必须渲染参数；高危单独成块；输入区与会话同宽、默认三行高；
-  运行中发送照常入队。旧静态稿 `packages/client/design/mockup.html` 已废弃。
+  交接说明见 `docs/client-visual-handoff.md`。UI 重做后的结构：顶栏只留品牌 +
+  待审批徽标 + 图标组；主列顶部一条 36px 状态行（per-Run 的模型 / 上下文进度槽 /
+  步数）；侧栏是树形（工作区根 → 会话 → Run 子任务，行操作 hover 才出现）；
+  默认模型与档位是输入区附加行的两个下拉；发送与停止是同一个按钮的两种状态，
+  Tab 可排队下一条；工具卡单行渲染参数；审批动作行四个（允许一次 /
+  本会话全部允许 / 拒绝 / 看变更）；高危单独成块；输入区与会话同宽、
+  默认 68px 高；运行中发送照常入队。旧静态稿 mockup.html 已删除废弃。
 - **换盘**：`readdir` 到盘根就没有"上一级"了，所以 `GET /api/dirs` 额外
   返回 `drives`（Windows 枚举盘符，其他平台空数组），选择器浮层顶部画盘符条。
 
@@ -399,7 +408,8 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   返回 409，**一个文件都不会被改到一半**，worktree 保留、文件列表随错误返回。
   成功后 `merged` 置位，同一份 patch 不允许应用第二遍；worktree **不自动回收**。
 - **丢弃是显式动作**：`DELETE /api/runs/:id/worktree`，跑着 / 排队 /
-  没开隔离 / 已丢弃都回 409；成功后 `released` 置位，前端运行头按钮变灰。
+  没开隔离 / 已丢弃都回 409；成功后 `released` 置位，前端不再提供该 Run 的
+  变更入口。
   目录真没了（`worktree remove --force` + `branch -D`），不只是打标记。
 
 ## 7.2 M4：审批三档

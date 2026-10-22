@@ -7,7 +7,7 @@
  */
 
 import { previewToolArgs } from "../shared/preview";
-import type { TimelineItem, ToolStatus } from "./state";
+import type { TimelineItem } from "./state";
 
 /**
  * 一条条目"变了多少"的指纹。
@@ -56,16 +56,6 @@ export function describeArgs(item: Extract<TimelineItem, { kind: "tool" }>): str
   return previewToolArgs({ name: item.name, arguments: args }, { maxChars: 160, maxLines: 3 })
     .split("\n")
     .join(" · ");
-}
-
-export function toolStatusMeta(status: ToolStatus): { label: string; tone: string } {
-  if (status === "running") {
-    return { label: "运行中", tone: "sky" };
-  }
-  if (status === "failed") {
-    return { label: "失败", tone: "rose" };
-  }
-  return { label: "完成", tone: "emerald" };
 }
 
 export function approvalStatusText(

@@ -132,6 +132,14 @@ export const api = {
     request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   providers: (): Promise<ProviderView[]> => request<ProviderView[]>("/api/providers"),
+  /** 只存凭据不设默认模型：自定义供应商先"能进"，再选模型 */
+  configureProvider: (payload: {
+    provider: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }): Promise<ProviderView[]> => post("/api/providers", payload),
+  removeProvider: (name: string): Promise<AppState> =>
+    request<AppState>(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" }),
   models: (provider: string): Promise<{ models: string[]; error: string | null }> =>
     request(`/api/models?provider=${encodeURIComponent(provider)}`),
   saveModel: (payload: {

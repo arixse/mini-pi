@@ -1,8 +1,9 @@
 # 客户端视觉交互稿 · 交接说明
 
-> 本文是**视觉稿定稿后的开发交接物**。界面结构、组件状态与 26 条已定决策见
-> [client-ui-design.md](./client-ui-design.md)，本文只讲"稿子怎么读、哪些必须照做、
-> 哪些是内核缺口"。事件口径见 [client-event-stream.md](./client-event-stream.md)。
+> 本文是**视觉稿定稿后的开发交接物**。本文讲"稿子怎么读、哪些必须照做、
+> 哪些是内核缺口"；**界面结构以本文 §2/§3 为准**，26 条已定决策的**设计理由**见
+> [client-ui-design.md](./client-ui-design.md)，事件口径见
+> [client-event-stream.md](./client-event-stream.md)。
 
 ## 1. 物料清单
 
@@ -11,7 +12,7 @@
 | 视觉稿（10 帧） | Ardot 画布 `https://ardot.tencent.com/file/738920616583250` | 布局、层级、间距、状态的唯一视觉基准 |
 | 色板 | `packages/client/design/tokens.css` | 唯一色源，深浅双模式 |
 | 色板（结构化） | `packages/client/design/tokens.json` | W3C DTCG，供工具链消费 |
-| 旧静态稿 | `packages/client/design/mockup.html` | **已废弃，不要参考**（原因见 §7） |
+| 旧静态稿 | mockup.html（已删除） | **已废弃，不要参考**（原因见 §7） |
 
 画布 10 帧的排布：**上排 5 帧 Dark**（01 ~ 05），**下排 5 帧 Light**（同名，同一份图层切
 `variableModes` 得到）。每帧 1280×900。
@@ -81,15 +82,19 @@
 
 ## 5. 内核缺口（开发前要补）
 
-1. **自定义供应商**：现在 `ModelProviderService.saveProviderConfig()` 只接受**已注册**的
-   provider 名，自定义名称会被直接抛错。需要一个可配置名称与 baseUrl 的
-   `OpenAICompatibleProvider` 槽位，存成独立条目、不覆盖 OpenAI 官方的凭据。
-2. **权限页**：审批档位（只读 / 工作区写 / 完全访问）目前没有独立的界面归属，
-   稿子只画了输入框内的临时切换。要做成设置里的一级分类。
-3. **排队条目取消**：`RunManager.cancelRun` 已明确"排队中的 Run 直接出队并给 cancelled
-   结论"，客户端只需要把这个出口接到 UI 上。
-4. **状态栏上下文用量**：分母来自 `settings.json` 的 `contextWindow`，缺省按模型名推断
-   （见 [providers.md](./providers.md) 的上下文窗口推断表）。
+1. **自定义供应商**（已补）：`ModelProviderService.saveProviderConfig()` 原先只接受**已注册**的
+   provider 名，自定义名称会被直接抛错。现在未注册名 + Base URL 会当场建成一个
+   OpenAI 兼容的 `CustomProvider` 槽位，存成 auth.json 里带 `custom` 标记的独立条目，
+   不覆盖官方凭据；`loadCustomProviders()` 负责重启后注册回来，CLI 与客户端
+   经同一个收口（`createModelFromSettings` / host `start()`）加载。细节见
+   [providers.md](./providers.md) 的自定义供应商一节。
+2. **权限页**（已补）：审批档位（只读 / 工作区写 / 完全访问）做成设置里的一级分类，
+   与供应商页并列；输入框内的临时切换保留在发送区。
+3. **排队条目取消**（已补）：`RunManager.cancelRun` 对排队中的 Run 直接出队并给 cancelled
+   结论；客户端侧栏行菜单的「取消任务」与排队气泡上的「撤回」都接到这个出口。
+4. **状态栏上下文用量**（已补）：分母来自 `settings.json` 的 `contextWindow`，缺省按模型名推断
+   （见 [providers.md](./providers.md) 的上下文窗口推断表）；状态栏常驻显示百分比，
+   ≥80% 变色提示。
 
 ## 6. 文案红线
 
@@ -99,7 +104,7 @@
 
 ## 7. 不要复刻旧静态稿的问题
 
-`packages/client/design/mockup.html` 已废弃，它的六个缺陷是这次重做的出发点：
+旧静态稿 mockup.html（已删除）的六个缺陷是这次重做的出发点：
 
 1. 三个背景色亮度差不足 6%，只能靠满屏 1px 描边分层
 2. 用户气泡用最大视觉权重（实心高饱和），而工具输出被裁到 148px —— 信息权重与视觉权重倒挂
@@ -119,8 +124,9 @@
 硬约束：
 1. 色值只允许引用 packages/client/design/tokens.css 的变量，禁止写死色值；
    深浅切换只切根节点的 data-theme。
-2. 界面结构、组件状态与口径以 docs/client-ui-design.md 的 26 条决策为准；
-   排队、审批、diff、侧栏 hover 四个交互以 handoff 文档 §4 为准。
+2. 界面结构与组件状态以本文件 §2/§3 为准；26 条已定决策的设计理由见
+   docs/client-ui-design.md（重做后第 1/2/4/20 条的载体已跟着结构更新）；
+   排队、审批、diff、侧栏 hover 四个交互以本文 §4 为准。
 3. 不要参考 packages/client/design/mockup.html，它是被本次设计取代的旧稿。
 4. 单文件不超过 1000 行，改动先开分支，每提交独立过 pnpm check。
 

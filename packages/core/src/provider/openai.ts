@@ -1,5 +1,5 @@
 import { Provider, buildModelsUrl } from "./index";
-import { logger } from "../shared/logger";
+import { fetchOpenAiModelIds } from "./openai-compat";
 
 export class OpenAIProvider implements Provider {
   private baseUrl: string = "https://api.openai.com/v1";
@@ -30,35 +30,7 @@ export class OpenAIProvider implements Provider {
    * --header 'Authorization: Bearer <token>' 动态获取模型列表
    */
   async getModelList(apiKey: string, baseUrl?: string): Promise<string[]> {
-    if (!apiKey) {
-      throw new Error("API key is required");
-    }
-
-    try {
-      const response = await fetch(this.getModelsUrl(baseUrl ?? this.baseUrl), {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      // 从响应中提取模型ID列表
-      if (data && data.data && Array.isArray(data.data)) {
-        return data.data.map((model: any) => model.id);
-      }
-
-      return [];
-    } catch (error) {
-      logger.error("Failed to get model list:", error);
-      throw error;
-    }
+    return fetchOpenAiModelIds(this.getModelsUrl(baseUrl ?? this.baseUrl), apiKey);
   }
 
   /**

@@ -7,15 +7,24 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protocol";
 import {
+  CONTEXT_WARN_PCT,
+  contextPercent,
+  diffStats,
+  diffStatsByFile,
+  formatClock,
   formatDuration,
   formatSessionTime,
   formatTokens,
+  parseDiffRows,
   resultText,
   riskMeta,
   statusMeta,
   textOf,
+  tierLabel,
   toolMetaLine,
+  TIER_LABELS,
 } from "./format";
+import type { Tier } from "../shared/types";
 
 describe("formatDuration", () => {
   it("十秒以内给到 0.1s", () => {
@@ -106,5 +115,198 @@ describe("toolMetaLine", () => {
     assert.equal(toolMetaLine(1500, "failed"), "1.5s · 失败");
     assert.equal(toolMetaLine(1500, "done"), "1.5s");
     assert.equal(toolMetaLine(null, "running"), "");
+  });
+});
+
+describe("contextPercent", () => {
+  it("按占比取整", () => {
+    assert.equal(contextPercent(0, 128_000), 0);
+    assert.equal(contextPercent(64_000, 128_000), 50);
+    assert.equal(contextPercent(1, 3), 33);
+  });
+
+  it("超额也钳在 100：快满了靠换色说，不靠进度条爆表", () => {
+    assert.equal(contextPercent(200_000, 128_000), 100);
+  });
+
+  it("没有分母（没配模型、窗口未知）时是 0，不给假百分比", () => {
+    assert.equal(contextPercent(500, 0), 0);
+    assert.equal(contextPercent(500, Number.NaN), 0);
+    assert.equal(contextPercent(Number.NaN, 1000), 0);
+    assert.equal(contextPercent(-5, 1000), 0);
+  });
+
+  it("警戒线在八成", () => {
+    assert.equal(CONTEXT_WARN_PCT, 80);
+    assert.equal(contextPercent(102_400, 128_000) >= CONTEXT_WARN_PCT, true);
+    assert.equal(contextPercent(51_200, 128_000) >= CONTEXT_WARN_PCT, false);
+  });
+});
+
+describe("档位文案", () => {
+  it("三档都有中文名，认不出的档位原样返回（不静默改写）", () => {
+    assert.equal(tierLabel("read-only"), "只读");
+    assert.equal(tierLabel("workspace-write"), "工作区写");
+    assert.equal(tierLabel("full-access"), "完全访问");
+    assert.equal(tierLabel("mystery" as Tier), "mystery");
+  });
+
+  it("每档都带说明：档位是安全语义，不能只给一个名字", () => {
+    for (const item of TIER_LABELS) {
+      assert.ok(item.hint.length > 0, `${item.tier} 应有说明`);
+    }
+    assert.equal(TIER_LABELS.length, 3);
+  });
+});
+
+describe("parseDiffRows", () => {
+  const patch = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "index 1234567..89abcde 100644",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -10,3 +10,4 @@ function f() {",
+    " context line",
+    "-old line",
+    "+new line",
+    "+another new",
+    "\\ No newline at end of file",
+  ].join("\n");
+
+  it("文件头归 meta：不数进增删，也不占行号", () => {
+    const rows = parseDiffRows(patch);
+    assert.equal(rows[0].kind, "meta");
+    assert.equal(rows[0].text, "diff --git a/src/a.ts b/src/a.ts");
+    assert.equal(rows[0].oldNo, null);
+    // --- / +++ 长得像增删行，但不能被统计进去
+    assert.equal(rows[2].kind, "meta");
+    assert.equal(rows[3].kind, "meta");
+  });
+
+  it("hunk 头重置行号起点", () => {
+    const rows = parseDiffRows(patch);
+    const hunk = rows[4];
+    assert.equal(hunk.kind, "hunk");
+    assert.equal(hunk.oldNo, null);
+    assert.equal(hunk.newNo, null);
+  });
+
+  it("增删行各走各的行号，上下文行走双号", () => {
+    const rows = parseDiffRows(patch);
+    const context = rows[5];
+    assert.equal(context.kind, "context");
+    assert.equal(context.oldNo, 10);
+    assert.equal(context.newNo, 10);
+    assert.equal(context.text, "context line");
+
+    const del = rows[6];
+    assert.equal(del.kind, "del");
+    assert.equal(del.oldNo, 11);
+    assert.equal(del.newNo, null);
+    assert.equal(del.text, "old line");
+
+    const add = rows[7];
+    assert.equal(add.kind, "add");
+    assert.equal(add.oldNo, null);
+    assert.equal(add.newNo, 11);
+    assert.equal(add.text, "new line");
+
+    const add2 = rows[8];
+    assert.equal(add2.newNo, 12);
+  });
+
+  it("\\ No newline 也是 meta，不推进行号", () => {
+    const rows = parseDiffRows(patch);
+    const last = rows[rows.length - 1];
+    assert.equal(last.kind, "meta");
+    assert.equal(last.text, "\\ No newline at end of file");
+  });
+
+  it("结尾换行不产生多余的空上下文行", () => {
+    const rows = parseDiffRows("@@ -1 +1 @@\n-a\n+b\n");
+    assert.equal(rows.length, 3);
+  });
+});
+
+describe("diffStats", () => {
+  it("只数真正的增删行：文件头不算", () => {
+    const patch = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -1,2 +1,3 @@",
+      " keep",
+      "-gone",
+      "+one",
+      "+two",
+    ].join("\n");
+    assert.deepEqual(diffStats(patch), { additions: 2, deletions: 1 });
+  });
+
+  it("空 patch 两个都是 0", () => {
+    assert.deepEqual(diffStats(""), { additions: 0, deletions: 0 });
+  });
+});
+
+describe("diffStatsByFile", () => {
+  it("按块统计：每个文件各自 +x −y，口径与 diffStats 一致（文件头不算）", () => {
+    const patch = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,2 +1,3 @@",
+      " keep",
+      "-gone",
+      "+one",
+      "+two",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "--- a/src/b.ts",
+      "+++ b/src/b.ts",
+      "@@ -1 +1,2 @@",
+      "keep",
+      "+added",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [
+      { file: "src/a.ts", additions: 2, deletions: 1 },
+      { file: "src/b.ts", additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it("整文件删除（+++ /dev/null）记到 a 侧路径上", () => {
+    const patch = [
+      "diff --git a/src/dead.ts b/src/dead.ts",
+      "--- a/src/dead.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [{ file: "src/dead.ts", additions: 0, deletions: 1 }]);
+  });
+
+  it("路径带空格时 git 的引号写法也能对上", () => {
+    const patch = [
+      'diff --git "a/my file.ts" "b/my file.ts"',
+      '--- "a/my file.ts"',
+      '+++ "b/my file.ts"',
+      "@@ -1 +1 @@",
+      "+x",
+    ].join("\n");
+    assert.deepEqual(diffStatsByFile(patch), [{ file: "my file.ts", additions: 1, deletions: 0 }]);
+  });
+
+  it("空 patch 给空数组", () => {
+    assert.deepEqual(diffStatsByFile(""), []);
+  });
+});
+
+describe("formatClock", () => {
+  it("只要时分（气泡里放全日期会把短消息撑成两行）", () => {
+    assert.equal(formatClock(new Date(2026, 9, 22, 14, 2).getTime()), "14:02");
+    assert.equal(formatClock(new Date(2026, 9, 22, 8, 5).getTime()), "08:05");
+  });
+
+  it("0 与非法值给空串：没有时间戳就不画那一行", () => {
+    assert.equal(formatClock(0), "");
+    assert.equal(formatClock(Number.NaN), "");
   });
 });

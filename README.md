@@ -219,6 +219,7 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、26 条已定决策（视觉基准为 Ardot 画布，交接见下一行）         |
 | [客户端视觉稿交接](docs/client-visual-handoff.md) | 视觉交互稿定稿说明：物料清单、十屏验收要点、内核缺口、开发指令模板                      |
 | [客户端事件流](docs/client-event-stream.md)      | 两条 SSE 的分工：当前 Run 的正文与所有 Run 的控制事件，以及游标、缺口与降级语义 |
+| [客户端多工作区方案](docs/client-multi-workspace.md) | 方案待定：单活动工作区的理由、宿主池改法、会话寻址与分期（未实施）           |
 | [开发日志索引](notes/README.md)                 | day1 ~ day28，按真实提交日期编排                                             |
 
 ## 范围

@@ -7,6 +7,13 @@ type ProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /**
+   * 自定义供应商槽位的持久化标记。
+   *
+   * 官方供应商的 baseUrl 也可能被用户改过，所以重启后不能凭"有条目"
+   * 就重建槽位——只认这个标记（见 ModelProviderService.loadCustomProviders）。
+   */
+  custom?: boolean;
 };
 
 type ProviderStoreData = Record<string, ProviderConfig>;

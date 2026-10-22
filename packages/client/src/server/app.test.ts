@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { bootAppServer } from "./app";
 import { EventJournal } from "./journal";
+import { WorkspaceHost } from "./host";
 import {
   scriptedModel,
   startTestServer,
@@ -646,6 +647,136 @@ describe("App Server · 配置", () => {
       assert.strictEqual(saved.model.contextWindowSource, "configured");
     } finally {
       await server.close();
+    }
+  });
+
+  it("自定义供应商：先存凭据再选模型，凭据独立于官方条目", async () => {
+    const server = await startTestServer();
+    try {
+      // 没注册过、又不带 Base URL：不能猜一个地址出来
+      const noUrl = await server.raw("/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "公司网关" }),
+      });
+      assert.strictEqual(noUrl.status, 400);
+
+      // 带上 Base URL：存成独立条目，协议按 OpenAI 兼容
+      const added = await server.post<
+        Array<{ name: string; custom: boolean; hasApiKey: boolean; baseUrl: string }>
+      >("/api/providers", {
+        provider: "公司网关",
+        baseUrl: "https://gw.example.com/v1",
+        apiKey: "gw-key",
+      });
+      const custom = added.find((item) => item.name === "公司网关");
+      assert.ok(custom, "新供应商要出现在列表里");
+      assert.strictEqual(custom?.custom, true);
+      assert.strictEqual(custom?.hasApiKey, true);
+      assert.strictEqual(custom?.baseUrl, "https://gw.example.com/v1");
+      assert.strictEqual(
+        added.find((item) => item.name === "openai")?.hasApiKey,
+        false,
+        "官方供应商的凭据状态不受影响",
+      );
+
+      // 槽位已注册：设默认模型不再被"未知供应商"挡下（拿到的是状态，不是 400）
+      const saved = await server.post<AppState>("/api/model", {
+        provider: "公司网关",
+        model: "gw-model",
+      });
+      assert.ok(saved.workspace, "保存成功应返回完整状态");
+
+      // 列表能看出"当前默认"指着它
+      const listed = await server.get<Array<{ name: string; selectedModel: string | null }>>(
+        "/api/providers",
+      );
+      assert.strictEqual(
+        listed.find((item) => item.name === "公司网关")?.selectedModel,
+        "gw-model",
+      );
+
+      // 官方供应商删不掉
+      const official = await server.raw("/api/providers/openai", { method: "DELETE" });
+      assert.strictEqual(official.status, 400);
+
+      // 自建网关可以整条删掉
+      const afterDelete = await server.del<AppState>(
+        `/api/providers/${encodeURIComponent("公司网关")}`,
+      );
+      assert.strictEqual(
+        afterDelete.runs.length >= 0,
+        true,
+        "删除后返回的仍是完整状态",
+      );
+      const rest = await server.get<Array<{ name: string }>>("/api/providers");
+      assert.strictEqual(
+        rest.some((item) => item.name === "公司网关"),
+        false,
+        "删掉的供应商不该还在列表里",
+      );
+      // 槽位没了：再拿它当默认模型会被拒
+      const gone = await server.raw("/api/model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "公司网关", model: "gw-model" }),
+      });
+      assert.strictEqual(gone.status, 400);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("删自定义供应商时，指着它的默认模型一并清掉", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-host-custom-"));
+    try {
+      const workspace = join(root, "workspace");
+      mkdirSync(workspace, { recursive: true });
+      const host = new WorkspaceHost({
+        workspaceRoot: workspace,
+        sessionsDir: join(root, "sessions"),
+        globalAgentsPath: join(root, "AGENTS.md"),
+        settingsStore: new SettingsStore(join(root, "settings.json")),
+        providerService: new ModelProviderService(new ProviderStore(join(root, "auth.json"))),
+        // 回声解析器：默认模型指向谁，state 就报谁。
+        // （testServer 的脚本模型会把这一步盖掉，所以这里自己搭宿主）
+        resolveModel: async (_service, settings) => {
+          const parsed = await settings.parseDefaultModel();
+          if (!parsed) {
+            return { model: null, providerName: null, modelName: null };
+          }
+          return {
+            model: scriptedModel([]),
+            providerName: parsed.providerName,
+            modelName: parsed.modelName,
+          };
+        },
+      });
+      try {
+        await host.start();
+        await host.configureProvider({
+          provider: "公司网关",
+          baseUrl: "https://gw.example.com/v1",
+          apiKey: "gw-key",
+        });
+        await host.configureModel({ provider: "公司网关", model: "gw-model" });
+
+        const before = await host.state();
+        assert.strictEqual(before.model.label, "公司网关 / gw-model");
+        assert.strictEqual(before.sendable, true);
+
+        await host.deleteCustomProvider("公司网关");
+
+        const after = await host.state();
+        assert.strictEqual(after.model.label, null, "默认模型不能指着一个已删除的供应商");
+        assert.strictEqual(after.model.provider, null);
+        assert.strictEqual(after.sendable, false);
+        assert.match(after.blockReason ?? "", /尚未配置模型/);
+      } finally {
+        host.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

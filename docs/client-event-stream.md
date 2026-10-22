@@ -1,8 +1,9 @@
 # 客户端全局事件流（`/api/events`）
 
-> **状态**：设计已定，按本文落地。实现落在 `packages/client/src/server/journal.ts`、
+> **状态**：已落地。实现落在 `packages/client/src/server/journal.ts`、
 > `packages/client/src/server/app.ts`，以及 `packages/client/src/web/api.ts`、
-> `packages/client/src/web/controller.ts`、`packages/client/src/web/state.ts`。
+> `packages/client/src/web/controller.ts`、`packages/client/src/web/state.ts`；
+> 本文保留"为什么这么设计"与协议口径。
 >
 > 这篇回答一个问题：**为什么在"每个 Run 一条 SSE"之外还要一条全局流**，
 > 以及为什么它只送 Run 生命周期与审批，不送正文增量。
@@ -38,8 +39,12 @@
 
 - **不送正文增量**（`message_update` 等）。理由见 §3。
 - 不做多标签页互斥/协同（审批裁决仍以服务端为准，重复裁决已有 409 语义）。
-- 不做通知 UI 本身（本流只提供"该通知了"的触发点，形态留给后续批次）。
 - 不改 per-run 端点与它的游标语义。
+
+（初版还写着"不做通知 UI 本身"；通知后来已落地——顶栏铃铛申请权限、标题角标
+`(n) mini-pi`、挂起与后台结束各提醒一次并按 `tag` 去重，触发点正是本流的
+`journal_ready` 与控制事件。口径见 [client-ui-design.md](./client-ui-design.md)
+第 26 条决策与 [客户端 README](../packages/client/README.md)。）
 
 ## 3. 只送控制事件，不送正文
 
@@ -179,10 +184,10 @@ per-run 游标与全局游标的编号空间互不相干。
   后台 `run_done` 与审批事件合并触发一次 `/api/state`；全局流终局失败写 `globalNote`。
 - 删除批次 A 的两条轮询用例（它们测的是即将被替换的兜底）。
 
-## 8. 落地顺序
+## 8. 落地顺序（已按此完成）
 
 1. 服务端：`journal.ts` + Host 回调 + `/api/events` + 测试；
 2. 前端：`subscribeEvents` + `applyRunMetaEvent` + 控制器接线 + 测试；
 3. 删除轮询、同步文档（`client-ui-design.md` §6、`packages/client/README.md`）。
 
-每一步单独提交并过 `pnpm check`。
+每步单独提交并过 `pnpm check`。

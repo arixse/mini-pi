@@ -13,7 +13,6 @@ import {
   describeArgs,
   noticeTone,
   revisionOf,
-  toolStatusMeta,
 } from "./items";
 import type { TimelineItem } from "./state";
 
@@ -83,12 +82,6 @@ describe("describeArgs", () => {
 });
 
 describe("状态文案", () => {
-  it("工具状态三态的颜色与文字一一对应", () => {
-    assert.deepStrictEqual(toolStatusMeta("running"), { label: "运行中", tone: "sky" });
-    assert.deepStrictEqual(toolStatusMeta("failed"), { label: "失败", tone: "rose" });
-    assert.deepStrictEqual(toolStatusMeta("done"), { label: "完成", tone: "emerald" });
-  });
-
   it("审批裁决的五种结果各有说法（不留空）", () => {
     for (const state of ["pending", "approved", "always", "rejected", "stale"] as const) {
       assert.ok(

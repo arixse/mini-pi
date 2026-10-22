@@ -182,6 +182,8 @@ export type ProviderView = {
   defaultModels: string[];
   /** 该供应商上次用过的模型（settings 里若指向它则为当前默认） */
   selectedModel: string | null;
+  /** 用户自建网关（自定义供应商）：可整条删除，官方供应商不可 */
+  custom: boolean;
 };
 
 export type WorkspaceView = {

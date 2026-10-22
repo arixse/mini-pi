@@ -16,6 +16,7 @@ import {
   applyRunEvent,
   applyRunMetaEvent,
   applySnapshot,
+  attachQueuedRun,
   emptyView,
   filterBySearch,
   initialState,
@@ -24,6 +25,7 @@ import {
   openSession,
   pendingApprovals,
   removeItem,
+  sessionGroups,
   upsertItem,
   type ClientState,
   type TimelineItem,
@@ -354,6 +356,20 @@ describe("乐观插入与快照", () => {
     assert.equal(view.title, "第一句", "标题不该被撤回");
   });
 
+  it("attachQueuedRun 把服务端分配的 runId 落到那条乐观消息上", () => {
+    const view = emptyView();
+    const id = addUserMessage(view, "第二句", true);
+    attachQueuedRun(view, id, "run_1");
+    const item = view.items[0];
+    assert.strictEqual(item?.kind === "user" ? item.runId : null, "run_1");
+  });
+
+  it("attachQueuedRun 对已经不存在的 id 静默跳过（已被撤回/替换）", () => {
+    const view = emptyView();
+    assert.doesNotThrow(() => attachQueuedRun(view, "u:不存在", "run_1"));
+    assert.equal(view.items.length, 0);
+  });
+
   it("同一毫秒连发两条是两条，不是一条盖住另一条", () => {
     const view = emptyView();
     const first = addUserMessage(view, "第一句", false);
@@ -370,7 +386,7 @@ describe("乐观插入与快照", () => {
     const view = emptyView();
     const id = addUserMessage(view, "原话", false);
     const before = view.items[0]!.rev ?? 0;
-    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true });
+    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true, at: 0, runId: null });
     assert.equal(view.items[0]!.rev, before + 1);
   });
 
@@ -593,5 +609,98 @@ describe("侧栏的两组过滤", () => {
     assert.equal(filterBySearch(sessions, "fix").length, 1);
     assert.equal(filterBySearch(sessions, "").length, 2);
     assert.equal(filterBySearch(sessions, "   ").length, 2);
+  });
+});
+
+describe("sessionGroups：侧栏树", () => {
+  const session = (sessionId: string, title: string): SessionSummary => ({
+    sessionId,
+    timestamp: "2026-10-20T09-14-02",
+    title,
+    messageCount: 3,
+    compactedCount: 0,
+    sizeBytes: 10,
+    isCurrent: false,
+  });
+
+  const run = (runId: string, sessionId: string, title: string): RunSummary => ({
+    runId,
+    title,
+    sessionId,
+    status: "done",
+    model: "m",
+    startedAt: 0,
+    elapsedMs: 1,
+    tokens: 0,
+    contextWindow: 0,
+    pendingApprovals: 0,
+    workspace: runWorkspace(),
+  });
+
+  it("Run 挂在它所属的会话下面，没有 Run 的会话也还是节点", () => {
+    const state = initialState();
+    state.sessions = [session("s1", "修 bug"), session("s2", "写文档")];
+    state.runs = [run("r1", "s1", "改 login.ts"), run("r2", "s1", "补测试")];
+    const groups = sessionGroups(state);
+    assert.deepEqual(
+      groups.map((group) => group.session.title),
+      ["修 bug", "写文档"],
+    );
+    assert.deepEqual(
+      groups[0]!.runs.map((item) => item.runId),
+      ["r1", "r2"],
+    );
+    assert.deepEqual(groups[1]!.runs, []);
+  });
+
+  it("搜索命中会话时它的 Run 整组保留；只命中 Run 时只留那几条", () => {
+    const state = initialState();
+    state.sessions = [session("s1", "修 bug"), session("s2", "写文档")];
+    state.runs = [run("r1", "s1", "改 login.ts"), run("r2", "s1", "补测试")];
+
+    state.search = "修 bug";
+    let groups = sessionGroups(state);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0]!.runs.length, 2, "命中会话不砍它的子任务");
+
+    state.search = "login";
+    groups = sessionGroups(state);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(
+      groups[0]!.runs.map((item) => item.runId),
+      ["r1"],
+    );
+
+    state.search = "不存在的词";
+    assert.deepEqual(sessionGroups(state), []);
+  });
+
+  it("Run 属于不在会话列表里的会话时不建野节点", () => {
+    const state = initialState();
+    state.sessions = [session("s1", "修 bug")];
+    state.runs = [run("r9", "s-gone", "孤儿任务")];
+    const groups = sessionGroups(state);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0]!.runs, [], "会话列表才是树的节点来源");
+  });
+});
+
+describe("步数：turn_start 的序号直接当权威值", () => {
+  it("重放历史不会多数一遍", () => {
+    const view = emptyView();
+    feed(view, "run1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+      { type: "turn_start", turn: 2 },
+      { type: "turn_start", turn: 2 },
+    ]);
+    assert.equal(view.steps, 2);
+  });
+
+  it("别的 Run 的回合不计进来", () => {
+    const view = emptyView();
+    view.activeRunId = "run1";
+    applyRunEvent(view, "run2", { type: "turn_start", turn: 7 });
+    assert.equal(view.steps, 0);
   });
 });
