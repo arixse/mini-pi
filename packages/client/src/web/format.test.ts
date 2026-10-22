@@ -9,9 +9,11 @@ import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protoc
 import {
   CONTEXT_WARN_PCT,
   contextPercent,
+  diffStats,
   formatDuration,
   formatSessionTime,
   formatTokens,
+  parseDiffRows,
   resultText,
   riskMeta,
   statusMeta,
@@ -152,5 +154,94 @@ describe("档位文案", () => {
       assert.ok(item.hint.length > 0, `${item.tier} 应有说明`);
     }
     assert.equal(TIER_LABELS.length, 3);
+  });
+});
+
+describe("parseDiffRows", () => {
+  const patch = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "index 1234567..89abcde 100644",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -10,3 +10,4 @@ function f() {",
+    " context line",
+    "-old line",
+    "+new line",
+    "+another new",
+    "\\ No newline at end of file",
+  ].join("\n");
+
+  it("文件头归 meta：不数进增删，也不占行号", () => {
+    const rows = parseDiffRows(patch);
+    assert.equal(rows[0].kind, "meta");
+    assert.equal(rows[0].text, "diff --git a/src/a.ts b/src/a.ts");
+    assert.equal(rows[0].oldNo, null);
+    // --- / +++ 长得像增删行，但不能被统计进去
+    assert.equal(rows[2].kind, "meta");
+    assert.equal(rows[3].kind, "meta");
+  });
+
+  it("hunk 头重置行号起点", () => {
+    const rows = parseDiffRows(patch);
+    const hunk = rows[4];
+    assert.equal(hunk.kind, "hunk");
+    assert.equal(hunk.oldNo, null);
+    assert.equal(hunk.newNo, null);
+  });
+
+  it("增删行各走各的行号，上下文行走双号", () => {
+    const rows = parseDiffRows(patch);
+    const context = rows[5];
+    assert.equal(context.kind, "context");
+    assert.equal(context.oldNo, 10);
+    assert.equal(context.newNo, 10);
+    assert.equal(context.text, "context line");
+
+    const del = rows[6];
+    assert.equal(del.kind, "del");
+    assert.equal(del.oldNo, 11);
+    assert.equal(del.newNo, null);
+    assert.equal(del.text, "old line");
+
+    const add = rows[7];
+    assert.equal(add.kind, "add");
+    assert.equal(add.oldNo, null);
+    assert.equal(add.newNo, 11);
+    assert.equal(add.text, "new line");
+
+    const add2 = rows[8];
+    assert.equal(add2.newNo, 12);
+  });
+
+  it("\\ No newline 也是 meta，不推进行号", () => {
+    const rows = parseDiffRows(patch);
+    const last = rows[rows.length - 1];
+    assert.equal(last.kind, "meta");
+    assert.equal(last.text, "\\ No newline at end of file");
+  });
+
+  it("结尾换行不产生多余的空上下文行", () => {
+    const rows = parseDiffRows("@@ -1 +1 @@\n-a\n+b\n");
+    assert.equal(rows.length, 3);
+  });
+});
+
+describe("diffStats", () => {
+  it("只数真正的增删行：文件头不算", () => {
+    const patch = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -1,2 +1,3 @@",
+      " keep",
+      "-gone",
+      "+one",
+      "+two",
+    ].join("\n");
+    assert.deepEqual(diffStats(patch), { additions: 2, deletions: 1 });
+  });
+
+  it("空 patch 两个都是 0", () => {
+    assert.deepEqual(diffStats(""), { additions: 0, deletions: 0 });
   });
 });

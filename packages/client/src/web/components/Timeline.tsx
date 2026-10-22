@@ -56,6 +56,18 @@ export function Timeline(): React.ReactElement {
     }
   }, [revision]);
 
+  // 还没有工作区：主区只放品牌与一个动作（交接稿 §3「05 空态引导」）。
+  // 放在所有 hook 之后——提前 return 会改变 hook 次序
+  if (!state.workspace.root) {
+    return (
+      <main className="main" id="timeline">
+        <div className="main-inner">
+          <EmptyGuide />
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
       <div className="main-inner">
@@ -81,6 +93,29 @@ export function Timeline(): React.ReactElement {
         ))}
       </div>
     </main>
+  );
+}
+
+/**
+ * 空态引导：还没有工作区时，主区只放品牌与「选择目录」。
+ *
+ * 一句人话 + 一个动作，不摆功能清单——这一刻用户还没决定把项目放在哪，
+ * 介绍什么都为时过早。选了目录，界面自己会长出内容来。
+ */
+function EmptyGuide(): React.ReactElement {
+  const actions = useActions();
+  return (
+    <div className="empty-guide">
+      <div className="eg-brand">
+        <Icon name="sparkles" size={20} color="var(--Client-accent-text)" />
+        Mini Pi
+      </div>
+      <p className="eg-text">选择一个目录作为工作区：之后的任务、会话与改动，都发生在它里面。</p>
+      <button className="btn btn-yes" onClick={() => actions.openPicker()}>
+        <Icon name="folder" size={12} />
+        选择目录…
+      </button>
+    </div>
   );
 }
 

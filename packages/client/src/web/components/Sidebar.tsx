@@ -49,39 +49,46 @@ export function Sidebar(): React.ReactElement {
         />
       </div>
 
-      <div className="tree">
-        <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
-          <button
-            className="tree-twist"
-            title={rootOpen ? "收起会话树" : "展开会话树"}
-            aria-label={rootOpen ? "收起会话树" : "展开会话树"}
-            onClick={() => setRootOpen((open) => !open)}
-          >
-            <Icon name="chevron" size={12} />
-          </button>
-          <button
-            className="tree-main"
-            title={state.workspace.root ? `工作区：${state.workspace.root}（点击更换）` : "还没有选择工作区"}
-            onClick={() => actions.openPicker()}
-          >
-            <Icon name="folder" size={13} />
-            <span className="tree-label">{state.workspace.name || "未打开工作区"}</span>
-          </button>
-        </div>
-
-        {rootOpen ? (
-          <div className="tree-kids">
-            {groups.length === 0 ? (
-              <div className="empty-hint" style={{ marginLeft: 18 }}>
-                {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话：发一条消息就开始了"}
-              </div>
-            ) : null}
-            {groups.map((group) => (
-              <SessionNode key={group.session.sessionId} group={group} state={state} />
-            ))}
+      {state.workspace.root ? (
+        <div className="tree">
+          <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
+            <button
+              className="tree-twist"
+              title={rootOpen ? "收起会话树" : "展开会话树"}
+              aria-label={rootOpen ? "收起会话树" : "展开会话树"}
+              onClick={() => setRootOpen((open) => !open)}
+            >
+              <Icon name="chevron" size={12} />
+            </button>
+            <button
+              className="tree-main"
+              title={`工作区：${state.workspace.root}（点击更换）`}
+              onClick={() => actions.openPicker()}
+            >
+              <Icon name="folder" size={13} />
+              <span className="tree-label">{state.workspace.name || "未打开工作区"}</span>
+            </button>
           </div>
-        ) : null}
-      </div>
+
+          {rootOpen ? (
+            <div className="tree-kids">
+              {groups.length === 0 ? (
+                <div className="empty-hint" style={{ marginLeft: 18 }}>
+                  {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话：发一条消息就开始了"}
+                </div>
+              ) : null}
+              {groups.map((group) => (
+                <SessionNode key={group.session.sessionId} group={group} state={state} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        // 还没有工作区：侧栏只留一句提示（交接稿 §3「05 空态引导」）
+        <div className="empty-hint" style={{ margin: "2px 2px 0" }}>
+          还没有工作区：选一个目录，任务与改动都发生在它里面
+        </div>
+      )}
     </aside>
   );
 }

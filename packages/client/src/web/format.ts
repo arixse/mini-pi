@@ -153,3 +153,100 @@ export function toolMetaLine(durationMs: number | null, status: string): string 
   }
   return duration ?? "";
 }
+
+// ---------------------------------------------------------------- diff
+
+/** diff 行的五种身份：增 / 删 / hunk 头 / 文件头 / 上下文 */
+export type DiffRowKind = "add" | "del" | "hunk" | "meta" | "context";
+
+export type DiffRow = {
+  kind: DiffRowKind;
+  /** 装订线里的旧行号；文件头与 hunk 头没有行号 */
+  oldNo: number | null;
+  /** 装订线里的新行号 */
+  newNo: number | null;
+  /** 去掉行首那个 `+` / `-` / 空格之后的正文 */
+  text: string;
+};
+
+/** hunk 头：`@@ -12,3 +12,4 @@`（段长可省略） */
+const HUNK_HEAD = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/**
+ * 把 unified patch 拆成带行号的行。
+ *
+ * 行号跟着 hunk 头走：装订线要能指回原文件，否则"这一行改的是哪"
+ * 只能靠人肉数。文件头（`diff --git` / `index` / `---` / `+++` /
+ * `\ No newline`）归 meta——`--- a/x` 与 `+++ b/x` 长得像增删行，
+ * 数进统计里会让「−1」平白多一个。
+ */
+export function parseDiffRows(patch: string): DiffRow[] {
+  const lines = patch.split("\n");
+  // 结尾那个空元素是 split 的产物，不是一行上下文
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+
+  const rows: DiffRow[] = [];
+  let oldNo = 0;
+  let newNo = 0;
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      const match = HUNK_HEAD.exec(line);
+      if (match) {
+        oldNo = Number(match[1]);
+        newNo = Number(match[2]);
+      }
+      rows.push({ kind: "hunk", oldNo: null, newNo: null, text: line });
+      continue;
+    }
+    if (
+      line.startsWith("diff ") ||
+      line.startsWith("index ") ||
+      line.startsWith("--- ") ||
+      line.startsWith("+++ ") ||
+      line.startsWith("\\")
+    ) {
+      rows.push({ kind: "meta", oldNo: null, newNo: null, text: line });
+      continue;
+    }
+    if (line.startsWith("+")) {
+      rows.push({ kind: "add", oldNo: null, newNo, text: line.slice(1) });
+      newNo += 1;
+      continue;
+    }
+    if (line.startsWith("-")) {
+      rows.push({ kind: "del", oldNo, newNo: null, text: line.slice(1) });
+      oldNo += 1;
+      continue;
+    }
+    rows.push({
+      kind: "context",
+      oldNo,
+      newNo,
+      text: line.startsWith(" ") ? line.slice(1) : line,
+    });
+    oldNo += 1;
+    newNo += 1;
+  }
+  return rows;
+}
+
+/**
+ * 面板头的 `+54 / −6`。
+ *
+ * 只数真正的增删行（文件头不算）。一份被截断的 patch 统计也是截断的——
+ * 面板另有一行说明，不在这里假装完整。
+ */
+export function diffStats(patch: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const row of parseDiffRows(patch)) {
+    if (row.kind === "add") {
+      additions += 1;
+    } else if (row.kind === "del") {
+      deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}

@@ -37,8 +37,9 @@ commit 范围可直接用 `git log <from>~1..<to>` 回放。
 | [Day 28](./day28.md) | 2026-10-20 | 3 | M2 落地：内核摘要下沉收尾、App Server（node:http + SSE，零运行时依赖）、Web 前端照设计稿实现（流式 / 审批 / 会话 / 设置 / 工作区），假模型 + 真浏览器逐屏核对 |
 | [Day 29](./day29.md) | 2026-10-20 | 7 | 客户端改用 Express + React + Vite（用户拍板，含三个修正）与 M3/M4：worktree 每 Run 隔离（`core/worktree.ts` + `serve --isolate` + 丢弃接口）、审批三档两端同一裁决（`core/policy.ts`，CLI `/approval` 与 exec `--approval`） |
 | [Day 30](./day30.md) | 2026-10-20 | 12 | M5 落地：Electron 桌面壳（`packages/client/src/electron/`，窄接口 / 主进程 / `desktop` 命令）；顺带抽出 `bootAppServer` 让 serve 与桌面壳同源；**桌面壳没有默认工作区**（`--cwd` > 记住的目录 > 弹系统目录框，选完写 `~/.mini-pi/client-workspace.json`）；三个判断与方案原文不同（desktop 不进 CLI、不靠 require 判"能不能起 Electron"、取消选择即退出而不拿启动目录顶替）；**M6 桌面安装包**：`dist:*` 出 NSIS 与 dmg/zip，产物在 `dist/installer/` 而非 `dist/`（后者会被 `build:web` 的 `emptyOutDir` 清掉），electron-builder 只肯本平台打本平台 → 加 `.github/workflows/desktop.yml` 走 `v*` tag 双 runner 矩阵，真起一次才撞上的坑是 `globalThis.require` 在主进程里是 undefined |
+| [Day 31](./day31.md) | 2026-10-21 | 11 | 发版链路与客户端四件实事（五条支线各自合入 main）：`pnpm release` 把版本号写回四个 package.json（CRLF 定点替换、`add → commit → push 分支 → tag → push tag`、试运行与实况共用 `applyVersions`）；界面说真话（失败原因落到时间线 / 会话视图代次 / REST 15s 超时 + SSE 退避封顶 / Esc 不再停任务）；应用级事件流 `/api/events` 删掉 5s 轮询；隔离工作区闭环（运行时开关 + diff + merge，冲突时主工作区一个字不改）；系统通知只提醒"需要人"的事件（首次点击才申请权限、标题角标、按 id 去重）；`.npmrc` 落死两个 electron 镜像变量 |
 
-合计 30 篇 / 243 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
+合计 31 篇 / 254 个归篇提交：各篇"提交数"为归入该篇的提交，合并提交与索引、测试维护类提交未归篇，所以总数小于 `git rev-list --count HEAD`——需要总数时直接跑那条命令，不在此处硬编码（否则每次改这一行都会让它自己变得不准）。
 
 > Day 21 / 22 / 23 / 24 / 25 同属 2026-10-19，主题完全不同（Skill 加载链路 /
 > 版本更新检测 / 安全与正确性修复 / 测试覆盖缺口 / Maker+Checker 与文档收口），

@@ -32,11 +32,6 @@ export function Icon({
   );
 }
 
-/** 呼吸感的小圆点：只给"运行中"这类需要提示在动的徽标用 */
-export function Dot(): React.ReactElement {
-  return <i className="dot" />;
-}
-
 /**
  * 状态环（视觉交接稿 §4）：
  * - **空闲不画点**——没有信息的状态不该占一个像素；

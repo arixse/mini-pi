@@ -708,7 +708,7 @@ export class AppController {
   private async mergeWorktree(runId: string): Promise<void> {
     try {
       const result = await api.mergeWorktree(runId);
-      this.banner("ok", `已合并回工作区：${result.files.length} 个文件`);
+      this.banner("ok", `已应用回工作区：${result.files.length} 个文件`);
       this.closeDiff();
       await this.refreshState();
       this.store.update((state) => {

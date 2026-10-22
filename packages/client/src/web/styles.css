@@ -223,14 +223,6 @@ svg.ic {
   flex: 1 1 auto;
 }
 
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 99px;
-  background: currentColor;
-  flex: none;
-}
-
 .take-me {
   cursor: pointer;
 }
@@ -1837,20 +1829,81 @@ svg.ic {
   color: var(--Client-diff-del-text);
 }
 
-.diff-patch {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--Client-bg-code);
+/* diff 体：一行一格，装订线两列 + 符号一列 + 正文。
+   行底色走 diff 专用令牌（add/del 两色），**不复用语义色**——
+   语义色在别处表示"对/错"，diff 的行只是"加了/减了" */
+.diff-body {
   border: 1px solid var(--Client-border-subtle);
   border-radius: var(--r-input);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--Client-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  background: var(--Client-bg-code);
   max-height: 46vh;
   overflow: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.diff-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-no {
+  flex: none;
+  width: 34px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--Client-diff-gutter);
+  user-select: none;
+}
+
+.diff-sign {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  user-select: none;
+}
+
+.diff-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--Client-text-secondary);
+}
+
+/* 增删行：底色 + 字色双令牌；符号列跟着字色走，远处扫一眼也分得清 */
+.diff-row.diff-add {
+  background: var(--Client-diff-add-bg);
+}
+
+.diff-row.diff-add .diff-sign,
+.diff-row.diff-add .diff-text {
+  color: var(--Client-diff-add-text);
+}
+
+.diff-row.diff-del {
+  background: var(--Client-diff-del-bg);
+}
+
+.diff-row.diff-del .diff-sign,
+.diff-row.diff-del .diff-text {
+  color: var(--Client-diff-del-text);
+}
+
+/* hunk 头：弱底色 + 装订线色，不抢增删行的视觉权重 */
+.diff-row.diff-hunk {
+  background: var(--Client-bg-hover);
+}
+
+.diff-row.diff-hunk .diff-text {
+  color: var(--Client-diff-gutter);
+}
+
+/* 文件头（diff --git / index / --- / +++）：再弱一档，它是路标不是内容 */
+.diff-row.diff-meta .diff-text {
+  color: var(--Client-text-tertiary);
 }
 
 /* ---------------- 空态引导：缺什么说什么，并给直达按钮 ---------------- */

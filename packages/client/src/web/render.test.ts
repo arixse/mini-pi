@@ -17,8 +17,9 @@ import { App } from "./App";
 import { ClientProvider, ClientStore } from "./store";
 import { initialState, type TimelineItem } from "./state";
 import { TimelineItemRow } from "./components/TimelineItems";
+import { DiffPanel } from "./components/DiffPanel";
 import type { Actions } from "./actions";
-import type { ApprovalRequest } from "../shared/types";
+import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
 
 /** 渲染用的假动作：这里只验证 markup，不触发任何请求 */
 const fakeActions = {
@@ -101,6 +102,16 @@ describe("前端组件树", () => {
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
   });
 
+  it("没有工作区时主区是品牌引导：一句话 + 选择目录", () => {
+    const html = renderToStaticMarkup(createElement(App));
+
+    assert.match(html, /class="empty-guide"/, "主区放品牌引导，不是一片空白");
+    assert.match(html, /选择目录/);
+    assert.match(html, /Mini Pi/);
+    // 侧栏只留一句提示，不摆一棵空树
+    assert.match(html, /还没有工作区/);
+  });
+
   it("起不来的时候给的是说明与重试，不是一片空白", () => {
     const store = new ClientStore();
     store.update((state) => {
@@ -110,6 +121,75 @@ describe("前端组件树", () => {
     // Boot 只在有错误时出现：初始状态（无错）不该渲染它
     const initial = initialState();
     assert.strictEqual(initial.error, null);
+  });
+});
+
+describe("变更面板", () => {
+  function diffStore(): ClientStore {
+    const store = new ClientStore();
+    const run: RunSummary = {
+      runId: "run_1",
+      title: "改两行",
+      sessionId: "s1",
+      status: "done",
+      model: "test / test-model",
+      startedAt: 0,
+      elapsedMs: 1000,
+      tokens: 10,
+      contextWindow: 128_000,
+      pendingApprovals: 0,
+      workspace: { root: "/tmp/wt", isolated: true, released: false, merged: false },
+    };
+    const diff: RunDiff = {
+      runId: "run_1",
+      files: ["src/a.ts"],
+      patch: [
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--- a/src/a.ts",
+        "+++ b/src/a.ts",
+        "@@ -1,2 +1,3 @@",
+        " keep",
+        "-old",
+        "+new",
+      ].join("\n"),
+    };
+    store.update((state) => {
+      state.runs = [run];
+      state.ui.diffRunId = "run_1";
+      state.diff = diff;
+    });
+    return store;
+  }
+
+  it("行级 diff：增删行各走各的令牌类，动作行是应用/放弃/返回", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+
+    assert.match(html, /class="diff-row diff-add"/, "新增行要带 diff-add");
+    assert.match(html, /class="diff-row diff-del"/, "删除行要带 diff-del");
+    assert.match(html, /class="diff-row diff-meta"/, "文件头不当成增删行");
+    assert.match(html, /class="diff-row diff-hunk"/);
+    assert.match(html, /\+1/, "面板头给出增行数");
+    assert.match(html, /−1/, "面板头给出删行数");
+    assert.match(html, /应用变更/);
+    assert.match(html, /放弃变更/);
+    assert.match(html, /返回/);
+  });
+
+  it("没打开时什么都不渲染", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: new ClientStore(), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.strictEqual(html, "");
   });
 });
 

@@ -653,7 +653,7 @@ describe("AppController", () => {
     await settle();
 
     assert.strictEqual(controller.store.current.ui.diffRunId, null, "成功后关面板");
-    assert.match(controller.store.current.banner?.text ?? "", /已合并/);
+    assert.match(controller.store.current.banner?.text ?? "", /已应用回工作区/);
     assert.strictEqual(controller.store.current.runs[0]?.workspace.merged, true);
     assert.strictEqual(controller.store.current.view.workspace?.merged, true);
   });
