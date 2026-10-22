@@ -50,9 +50,14 @@ export function Sidebar(): React.ReactElement {
         <>
           {/* 分区标题：右侧的 + 是「再打开一个工作区」。
               空态稿的提示语点名了这个入口，不能只有藏在行点击里的那一条路 */}
-          <div className="side-head">
-            <span>工作区</span>
-            <button
+          <div className="tree">
+            <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
+              
+              <span className="tree-main" title="工作区">
+                <span className="tree-label">工作区</span>
+                
+              </span>
+              <button
               className="side-head-add"
               title="再打开一个工作区"
               aria-label="再打开一个工作区"
@@ -60,20 +65,6 @@ export function Sidebar(): React.ReactElement {
             >
               <Icon name="plus" size={13} />
             </button>
-          </div>
-          <div className="tree">
-            <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
-              <button
-                className="tree-twist"
-                title={rootOpen ? "收起工作区列表" : "展开工作区列表"}
-                aria-label={rootOpen ? "收起工作区列表" : "展开工作区列表"}
-                onClick={() => setRootOpen((open) => !open)}
-              >
-                <Icon name="chevron" size={12} />
-              </button>
-              <span className="tree-main" title="工作区">
-                <span className="tree-label">工作区</span>
-              </span>
               {/* 根行右侧的计数：池里一共有多少段会话，收起时也看得见 */}
               <span className="tree-count" title={`${totalSessions} 段会话`}>
                 {totalSessions}
@@ -150,7 +141,7 @@ function WorkspaceNode({
       </span>
 
       {open ? (
-        <div className="tree-kids">
+        <div className="tree-kids" style={{width:"80%"}}>
           {group.groups.length === 0 ? (
             <div className="empty-hint" style={{ marginLeft: 30 }}>
               {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
