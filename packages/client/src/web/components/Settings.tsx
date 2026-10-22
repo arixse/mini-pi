@@ -16,15 +16,10 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useActions, useClient } from "../store";
 import type { ClientState } from "../state";
+import { TIER_LABELS } from "../format";
 import type { ProviderView, Tier } from "../../shared/types";
 import type { SaveModelInput } from "../actions";
 import { Icon } from "./Icon";
-
-const TIER_LABELS: ReadonlyArray<{ tier: Tier; hint: string }> = [
-  { tier: "read-only", hint: "只能读；写操作与命令一律拒绝执行" },
-  { tier: "workspace-write", hint: "改工作区内的文件要问人，读操作直接放行" },
-  { tier: "full-access", hint: "不再询问，全部放行（慎用）" },
-];
 
 export function Settings(): React.ReactElement | null {
   const state = useClient();
@@ -259,7 +254,7 @@ function SettingsDialog({ tier, model }: SettingsDialogProps): React.ReactElemen
                     });
                   }}
                 >
-                  {item.tier}
+                  {item.label}
                 </button>
               ))}
             </div>

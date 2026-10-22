@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protocol";
-import type { ApprovalRiskLevel, RunPhase } from "../shared/types";
+import type { ApprovalRiskLevel, RunPhase, Tier } from "../shared/types";
 
 export type Tone = "slate" | "sky" | "amber" | "emerald" | "rose";
 
@@ -108,6 +108,25 @@ export function riskMeta(level: ApprovalRiskLevel): RiskMeta {
     default:
       return { label: "待确认", tone: "amber" };
   }
+}
+
+export type TierLabel = { tier: Tier; label: string; hint: string };
+
+/**
+ * 审批档位的文案：设置页与输入区的权限下拉共用一份。
+ *
+ * 档位值本身是内核 `ApprovalMode`（shared/types.ts 的别名），这里只负责
+ * "这一档在人话里叫什么、意味着什么"——两处各写一遍必然出现
+ * "工作区写"与"workspace-write"并存。
+ */
+export const TIER_LABELS: readonly TierLabel[] = [
+  { tier: "read-only", label: "只读", hint: "只能读；写操作与命令一律拒绝执行" },
+  { tier: "workspace-write", label: "工作区写", hint: "改工作区内的文件要问人，读操作直接放行" },
+  { tier: "full-access", label: "完全访问", hint: "不再询问，全部放行（慎用）" },
+];
+
+export function tierLabel(tier: Tier): string {
+  return TIER_LABELS.find((item) => item.tier === tier)?.label ?? tier;
 }
 
 /** 从 assistant 消息里取正文（用于气泡与"最后一段话"） */

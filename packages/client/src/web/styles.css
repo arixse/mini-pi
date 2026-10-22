@@ -1195,11 +1195,13 @@ svg.ic {
   padding: 0 16px;
 }
 
+/* 附加行：下拉浮层的定位基准（浮层向上展开，不挡输入框） */
 .composer-attach {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+  position: relative;
 }
 
 .composer-select {
@@ -1214,7 +1216,7 @@ svg.ic {
   color: var(--Client-text-secondary);
   cursor: pointer;
   font-family: inherit;
-  max-width: 260px;
+  max-width: 280px;
 }
 
 .composer-select:hover {
@@ -1230,14 +1232,58 @@ svg.ic {
   white-space: nowrap;
 }
 
-.composer-row {
+/* 下拉浮层：向上展开（附加行在输入框上方），盖住捕获层 */
+.composer-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 36;
+  min-width: 220px;
+  max-width: 320px;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--Client-bg-raised);
+  border: 1px solid var(--Client-border-default);
+  border-radius: var(--r-card);
+  box-shadow: 0 12px 32px -8px #000;
+}
+
+.pop-item {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-input);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--Client-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pop-item:hover {
+  background: var(--Client-bg-hover);
+}
+
+.pop-item.is-on {
+  color: var(--Client-accent-text);
+}
+
+.pop-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
 .composer textarea {
-  flex: 1 1 auto;
+  width: 100%;
   min-height: 68px;
   max-height: 208px;
   resize: none;
@@ -1269,6 +1315,7 @@ svg.ic {
   padding: 1px 4px;
 }
 
+/* 底部一行：两个开关在左，提示与发送/停止在右 */
 .composer-bottom {
   display: flex;
   align-items: center;
@@ -1278,12 +1325,17 @@ svg.ic {
 }
 
 .composer-hint {
-  display: flex;
-  gap: 8px;
+  display: inline-flex;
+  gap: 4px;
   align-items: center;
-  flex-wrap: wrap;
   font-size: 11px;
   color: var(--Client-text-tertiary);
+}
+
+/* 发不出任务时给具体原因：一颗灰掉的按钮不解释，等于把用户关在门外 */
+.composer-block {
+  font-size: 11.5px;
+  color: var(--Client-warn-text);
 }
 
 .switch {
@@ -1312,7 +1364,7 @@ svg.ic {
   border-radius: var(--r-input);
   background: var(--Client-accent-solid);
   color: var(--Client-text-inverse);
-  padding: 9px 15px;
+  padding: 8px 15px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;

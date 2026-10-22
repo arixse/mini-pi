@@ -16,8 +16,11 @@ import {
   riskMeta,
   statusMeta,
   textOf,
+  tierLabel,
   toolMetaLine,
+  TIER_LABELS,
 } from "./format";
+import type { Tier } from "../shared/types";
 
 describe("formatDuration", () => {
   it("十秒以内给到 0.1s", () => {
@@ -133,5 +136,21 @@ describe("contextPercent", () => {
     assert.equal(CONTEXT_WARN_PCT, 80);
     assert.equal(contextPercent(102_400, 128_000) >= CONTEXT_WARN_PCT, true);
     assert.equal(contextPercent(51_200, 128_000) >= CONTEXT_WARN_PCT, false);
+  });
+});
+
+describe("档位文案", () => {
+  it("三档都有中文名，认不出的档位原样返回（不静默改写）", () => {
+    assert.equal(tierLabel("read-only"), "只读");
+    assert.equal(tierLabel("workspace-write"), "工作区写");
+    assert.equal(tierLabel("full-access"), "完全访问");
+    assert.equal(tierLabel("mystery" as Tier), "mystery");
+  });
+
+  it("每档都带说明：档位是安全语义，不能只给一个名字", () => {
+    for (const item of TIER_LABELS) {
+      assert.ok(item.hint.length > 0, `${item.tier} 应有说明`);
+    }
+    assert.equal(TIER_LABELS.length, 3);
   });
 });
