@@ -57,10 +57,10 @@ import { RunRecord } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
 import {
   isTier,
-  type AppState,
   type ApprovalAnswer,
   type ApprovalRequest,
   type DirListing,
+  type HostState,
   type ProviderView,
   type RunDiff,
   type RunPhase,
@@ -117,6 +117,14 @@ export type WorkspaceHostOptions = {
    * 只送 `isRunMetaEvent` 认可的那几类；正文增量仍然只走 per-run 流。
    */
   onRunEvent?: (runId: string, event: ServerEvent) => void;
+  /**
+   * 全局执行槽位（多工作区用）：`acquire` 等到一个槽位并返回释放函数。
+   *
+   * `RunManager` 是每个宿主自己的（默认 1），管不住"N 个工作区各跑一个"；
+   * 总闸挂在 AppServer 上，宿主在真正开跑前先过这道闸。排队等闸时 Run
+   * 保持 `queued`——对前端来说"在排队"仍然是真的。
+   */
+  acquireRunSlot?: () => Promise<() => void>;
   now?: () => number;
 };
 
@@ -146,6 +154,7 @@ export class WorkspaceHost {
   private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
   private readonly onRunEvent: ((runId: string, event: ServerEvent) => void) | undefined;
+  private readonly acquireRunSlot: NonNullable<WorkspaceHostOptions["acquireRunSlot"]> | undefined;
   private readonly now: () => number;
 
   private readonly records = new Map<string, RunRecord>();
@@ -177,6 +186,7 @@ export class WorkspaceHost {
     this.settingsStore = options.settingsStore ?? new SettingsStore();
     this.resolveModelImpl = options.resolveModel ?? defaultResolveModel;
     this.onRunEvent = options.onRunEvent;
+    this.acquireRunSlot = options.acquireRunSlot;
     this.skillLoader = new SkillLoader(this.workspaceRoot);
     this.sessionManager = new SessionManager(this.workspaceRoot, {
       skillLoader: this.skillLoader,
@@ -223,7 +233,8 @@ export class WorkspaceHost {
 
   // ---------------------------------------------------------------- 状态
 
-  async state(): Promise<AppState> {
+  /** 本宿主（一个工作区）的状态；AppServer 把池里每份聚合成 /api/state */
+  async state(): Promise<HostState> {
     const sessions = this.sessionSummaries();
     const runs = [...this.records.values()]
       .slice(-MAX_RUNS)
@@ -771,10 +782,13 @@ export class WorkspaceHost {
     }
   }
 
-  /** 单个 Run 的对外摘要（GET /api/runs/:id） */
+  /** 单个 Run 的对外摘要（GET /api/runs/:id）；补上归属根（多工作区路由用） */
   runSummary(runId: string): RunSummary {
     const record = this.record(runId);
-    return record.summary(this.contextWindow, this.broker.countFor(runId));
+    return {
+      ...record.summary(this.contextWindow, this.broker.countFor(runId)),
+      root: this.workspaceRoot,
+    };
   }
 
   record(runId: string): RunRecord {
@@ -783,6 +797,18 @@ export class WorkspaceHost {
       throw new HttpError(404, `任务不存在：${runId}`);
     }
     return record;
+  }
+
+  /** 这条审批是否挂在这个宿主上（多工作区时路由裁决请求用） */
+  hasApproval(id: string): boolean {
+    return this.broker.get(id) !== undefined;
+  }
+
+  /** 有没有还在跑 / 排队 / 等裁决的任务（关闭工作区前要问） */
+  hasActiveRun(): boolean {
+    return [...this.records.values()].some(
+      (r) => r.status === "running" || r.status === "blocked" || r.status === "queued",
+    );
   }
 
   /**
@@ -817,6 +843,24 @@ export class WorkspaceHost {
     if (record.status !== "queued") {
       return;
     }
+    // 全局槽位（多工作区的总闸，见 WorkspaceHostOptions.acquireRunSlot）：
+    // 等闸期间 Run 保持 queued；等到之后可能已经被取消（取消路径会把
+    // 状态收成 cancelled），不能再把一个已结束的 Run 跑起来
+    let releaseSlot: (() => void) | undefined;
+    try {
+      if (this.acquireRunSlot) {
+        releaseSlot = await this.acquireRunSlot();
+        if (record.status !== "queued") {
+          return;
+        }
+      }
+      await this.runRecord(record);
+    } finally {
+      releaseSlot?.();
+    }
+  }
+
+  private async runRecord(record: RunRecord): Promise<void> {
     const model = this.model;
     if (!model) {
       await this.finish(record, "failed", "没有可用模型");

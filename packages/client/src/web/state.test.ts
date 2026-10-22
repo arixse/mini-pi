@@ -81,6 +81,8 @@ function toolResult(
 function snapshot(overrides: Partial<AppState> = {}): AppState {
   return {
     workspace: { root: "D:\\demo", name: "demo" },
+    activeRoot: "D:\\demo",
+    workspaces: [],
     tier: "workspace-write",
     model: {
       provider: "deepseek",

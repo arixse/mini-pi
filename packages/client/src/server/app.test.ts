@@ -54,6 +54,11 @@ describe("App Server · 状态", () => {
     // 启动时补开一个空会话，等于"什么都没点"也往磁盘上写文件
     assert.strictEqual(state.currentSessionId, null, "没有会话时不该自动补一个");
     assert.strictEqual(state.sessions.length, 0);
+    // 多工作区的形状：单工作区时池里就是这一个，活动根即唯一根
+    assert.strictEqual(state.activeRoot, server.workspace);
+    assert.strictEqual(state.workspaces.length, 1);
+    assert.strictEqual(state.workspaces[0]!.root, server.workspace);
+    assert.strictEqual(state.workspaces[0]!.name, "workspace");
   });
 
   it("没有模型时也照常起服务，只是发不出任务并给出具体原因", async () => {
@@ -818,8 +823,8 @@ describe("App Server · 配置", () => {
     }
   });
 
-  it("切换工作区会重建宿主：会话列表跟着换，旧任务被取消", async () => {
-    // 记住工作区的替身：断言"界面里切了一次，桌面壳下次启动开的是新目录"
+  it("打开第二个工作区：聚焦切过去，旧宿主不销毁、档位带过去", async () => {
+    // 记住工作区的替身：断言"界面里打开了一次，桌面壳下次启动开的是它"
     const remembered: string[] = [];
     const server = await startTestServer({
       workspaceMemory: { remember: async (path) => void remembered.push(path) },
@@ -833,8 +838,8 @@ describe("App Server · 配置", () => {
       assert.strictEqual(workspace.root, target);
       const state = await server.get<AppState>("/api/state");
       assert.strictEqual(state.workspace.root, target);
-      assert.strictEqual(state.tier, "workspace-write", "切工作区不该重置审批档位");
-      assert.deepStrictEqual(remembered, [target], "切换是一次明确的选择，要记住");
+      assert.strictEqual(state.tier, "workspace-write", "打开新工作区不该重置审批档位");
+      assert.deepStrictEqual(remembered, [target], "打开是一次明确的选择，要记住");
 
       const bad = await server.raw("/api/workspace", {
         method: "POST",
@@ -842,9 +847,341 @@ describe("App Server · 配置", () => {
         body: JSON.stringify({ path: `${target}/does-not-exist` }),
       });
       assert.strictEqual(bad.status, 400);
-      assert.deepStrictEqual(remembered, [target], "切失败的不该被记住");
+      assert.deepStrictEqual(remembered, [target], "打失败的不该被记住");
     } finally {
       await server.close();
+    }
+  });
+});
+
+describe("App Server · 多工作区", () => {
+  /** 在系统临时目录造第二个工作区；返回绝对路径 */
+  function makeWorkspace(prefix: string): string {
+    return mkdtempSync(join(tmpdir(), `minipi-${prefix}-`));
+  }
+
+  it("宿主池：打开第二个不销毁第一个，会话按 root 寻址不串根", async () => {
+    // 会话文件的一行 message（与内核落盘同格式，读取才会解析得动）
+    const messageLine = (text: string): string =>
+      JSON.stringify({
+        type: "message",
+        id: "m1",
+        parentId: null,
+        timestamp: "2026-10-22T10:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text }], timestamp: 1 },
+      });
+    // 两个工作区各预置一个**同名**会话文件：这是最容易静默出错的地方
+    const server = await startTestServer({
+      sessions: [
+        { fileName: "2026-10-22T10-00-00.jsonl", lines: [messageLine("第一个工作区的会话")] },
+      ],
+    });
+    const second = makeWorkspace("second");
+    try {
+      const { workspaceSessionDirName } = await import("@minipi/core/agent/sessionManager");
+      const secondSessions = join(server.sessionsDir, workspaceSessionDirName(second));
+      mkdirSync(secondSessions, { recursive: true });
+      writeFileSync(
+        join(secondSessions, "2026-10-22T10-00-00.jsonl"),
+        messageLine("第二个工作区的会话"),
+        "utf8",
+      );
+
+      const opened = await server.post<{ root: string }>("/api/workspace", { path: second });
+      assert.strictEqual(opened.root, second);
+
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.workspaces.length, 2);
+      assert.strictEqual(state.activeRoot, second, "新打开的成为活动根");
+      assert.strictEqual(state.workspace.root, second);
+
+      // 不带 root = 活动根（第二个）：看到的是第二个的会话
+      const activeSessions = await server.get<Array<{ sessionId: string; title: string }>>(
+        "/api/sessions",
+      );
+      assert.strictEqual(activeSessions.length, 1);
+
+      // 带 root = 指定根：第一个工作区的同名会话照样读得到，内容是它自己的
+      const firstSessions = await server.get<Array<{ sessionId: string }>>(
+        `/api/sessions?root=${encodeURIComponent(server.workspace)}`,
+      );
+      assert.strictEqual(firstSessions.length, 1, "切走不销毁：第一个宿主还在");
+      const firstDetail = await server.get<{ messages: Array<{ content: unknown }> }>(
+        `/api/sessions/2026-10-22T10-00-00.jsonl?root=${encodeURIComponent(server.workspace)}`,
+      );
+      assert.strictEqual(firstDetail.messages.length, 1, "同名会话读的是指定根自己那份");
+      const secondDetail = await server.get<{ messages: Array<{ content: unknown }> }>(
+        `/api/sessions/2026-10-22T10-00-00.jsonl?root=${encodeURIComponent(second)}`,
+      );
+      assert.notDeepStrictEqual(firstDetail.messages, secondDetail.messages);
+
+      // 没打开过的根是 404，不是落到活动根上（静默错位比报错可怕）
+      const stranger = makeWorkspace("stranger");
+      try {
+        const missing = await server.raw(
+          `/api/sessions?root=${encodeURIComponent(stranger)}`,
+        );
+        assert.strictEqual(missing.status, 404);
+      } finally {
+        rmSync(stranger, { recursive: true, force: true });
+      }
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("Run 按归属路由：在第二个工作区发的任务，查询与取消都找得到它", async () => {
+    const server = await startTestServer();
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const created = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "第二个工作区的任务",
+      });
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.root, second, "RunSummary 带上归属根");
+      assert.strictEqual(summary.sessionId, created.sessionId);
+
+      const runs = await server.get<RunSummary[]>("/api/runs");
+      assert.strictEqual(runs.length, 1);
+      assert.strictEqual(runs[0]!.root, second);
+      await server.stream(created.runId);
+
+      const state = await server.get<AppState>("/api/state");
+      const secondView = state.workspaces.find((w) => w.root === second);
+      assert.strictEqual(secondView?.runs.length, 1, "按根归组时任务长在第二个上");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("切走不打断：A 的任务跑着，聚焦 B，A 的任务照常跑完", async () => {
+    let release: () => void = () => undefined;
+    const server = await startTestServer({
+      modelBefore: (index) =>
+        new Promise<void>((resolveWait) => {
+          if (index === 0) {
+            release = resolveWait;
+          } else {
+            resolveWait();
+          }
+        }),
+    });
+    const second = makeWorkspace("second");
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "A 的长任务" });
+      await waitFor(() => server.model.calls.length === 1);
+
+      await server.post("/api/workspace", { path: second });
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.status, "running", "聚焦到 B 不打断 A 的任务");
+
+      release();
+      await waitFor(async () => {
+        const done = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+        return done.status === "done";
+      });
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.workspaces.length, 2, "两个宿主都还在");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("全局并发是总闸：A 占住唯一的槽位时，B 的任务只能排队", async () => {
+    let release: () => void = () => undefined;
+    const server = await startTestServer({
+      globalConcurrency: 1,
+      modelBefore: (index) =>
+        new Promise<void>((resolveWait) => {
+          if (index === 0) {
+            release = resolveWait;
+          } else {
+            resolveWait();
+          }
+        }),
+    });
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const first = await server.post<{ runId: string }>("/api/runs", { prompt: "A 的任务" });
+      await waitFor(() => server.model.calls.length === 1);
+
+      const secondRun = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "B 的任务",
+        root: second,
+      });
+      // 给 B 的执行链一点时间：如果总闸没生效，它会直接跑完
+      await new Promise((resolveWait) => setTimeout(resolveWait, 120));
+      const queued = await server.get<RunSummary>(`/api/runs/${secondRun.runId}`);
+      assert.strictEqual(queued.status, "queued", "全局槽位被 A 占着，B 排队等");
+
+      release();
+      await waitFor(async () => {
+        const a = await server.get<RunSummary>(`/api/runs/${first.runId}`);
+        const b = await server.get<RunSummary>(`/api/runs/${secondRun.runId}`);
+        return a.status === "done" && b.status === "done";
+      });
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("关闭工作区：跑着任务 409，空闲才真关，最后一个不让关", async () => {
+    let release: () => void = () => undefined;
+    const server = await startTestServer({
+      modelBefore: (index) =>
+        new Promise<void>((resolveWait) => {
+          if (index === 0) {
+            release = resolveWait;
+          } else {
+            resolveWait();
+          }
+        }),
+    });
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const created = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "跑着的任务",
+        root: second,
+      });
+      await waitFor(() => server.model.calls.length === 1);
+
+      const busy = await server.raw(
+        `/api/workspace?root=${encodeURIComponent(second)}`,
+        { method: "DELETE" },
+      );
+      assert.strictEqual(busy.status, 409, "跑着任务不能关");
+
+      release();
+      await waitFor(async () => {
+        const done = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+        return done.status === "done";
+      });
+
+      // 空闲了才关得掉；关掉后焦点挪回剩下的那个
+      const closed = await server.raw(`/api/workspace?root=${encodeURIComponent(second)}`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(closed.status, 204);
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.workspaces.length, 1);
+      assert.strictEqual(state.activeRoot, server.workspace, "焦点挪回剩下的工作区");
+
+      // 现在只剩一个了：它不让关（池空会让界面失去"我在哪"）
+      const last = await server.raw(
+        `/api/workspace?root=${encodeURIComponent(server.workspace)}`,
+        { method: "DELETE" },
+      );
+      assert.strictEqual(last.status, 409, "最后一个工作区不让关");
+
+      const missing = await server.raw(`/api/workspace?root=${encodeURIComponent(second)}`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(missing.status, 404, "没打开的根明说 404");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("打开数有上限：超限 409，让用户先关一个而不是悄悄挤掉", async () => {
+    const server = await startTestServer({ maxWorkspaces: 2 });
+    const second = makeWorkspace("second");
+    const third = makeWorkspace("third");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const over = await server.raw("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: third }),
+      });
+      assert.strictEqual(over.status, 409);
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.workspaces.length, 2);
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+      rmSync(third, { recursive: true, force: true });
+    }
+  });
+
+  it("全局事件流的帧带 root：前端分得清「谁的任务完成了」", async () => {
+    const server = await startTestServer();
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const created = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "第二个的任务",
+        root: second,
+      });
+      const frames = await server.journal({ cursor: 0, until: 2_000 });
+      const own = frames.filter((frame) => frame.runId === created.runId);
+      assert.ok(own.length > 0, "至少收到这条 Run 的控制事件");
+      assert.ok(
+        own.every((frame) => frame.root === second),
+        "每帧都标着它属于哪个工作区",
+      );
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("审批跨根聚合：两个工作区各挂一张卡，都能按 id 裁决", async () => {
+    const server = await startTestServer({
+      // 脚本按调用顺序排：A 首调、B 首调都返回工具调用，二轮各自收尾。
+      // 先等 A 挂起再发 B，两次首调的顺序才是确定的
+      responses: [
+        toolCallResponse("write_file", { path: "a.txt", content: "hello" }),
+        toolCallResponse("write_file", { path: "b.txt", content: "world" }),
+        textResponse("A 写好了"),
+        textResponse("B 写好了"),
+      ],
+    });
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      // A 显式指定第一个根（打开第二个之后，不带 root 的默认落点是活动根）
+      const firstRun = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "A 建个文件",
+        root: server.workspace,
+      });
+      await waitFor(async () => (await server.get<ApprovalRequest[]>("/api/approvals")).length === 1);
+
+      const secondRun = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "B 建个文件",
+        root: second,
+      });
+
+      await waitFor(async () => {
+        const pending = await server.get<ApprovalRequest[]>("/api/approvals");
+        return pending.length === 2;
+      });
+      const pending = await server.get<ApprovalRequest[]>("/api/approvals");
+      const roots = new Set(pending.map((request) => request.root));
+      assert.strictEqual(roots.size, 2, "两张卡各长在各自的工作区上");
+
+      // 裁决按 id 路由到挂着的那个宿主，与"当前活动根"无关
+      for (const request of pending) {
+        await server.post(`/api/approvals/${request.id}`, { answer: "yes" });
+      }
+      await waitFor(async () => {
+        const a = await server.get<RunSummary>(`/api/runs/${firstRun.runId}`);
+        const b = await server.get<RunSummary>(`/api/runs/${secondRun.runId}`);
+        return a.status === "done" && b.status === "done";
+      });
+      const { readFileSync } = await import("node:fs");
+      assert.strictEqual(readFileSync(join(server.workspace, "a.txt"), "utf8"), "hello");
+      assert.strictEqual(readFileSync(join(second, "b.txt"), "utf8"), "world");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
     }
   });
 });
