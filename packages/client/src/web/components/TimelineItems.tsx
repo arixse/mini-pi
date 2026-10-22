@@ -48,7 +48,12 @@ export type ItemProps = {
 };
 
 export const TimelineItemRow = memo(
-  function TimelineItemRow({ item, expanded, onToggle, actions }: ItemProps): React.ReactElement {
+  function TimelineItemRow({
+    item,
+    expanded,
+    onToggle,
+    actions,
+  }: ItemProps): React.ReactElement {
     switch (item.kind) {
       case "user":
         return <UserBlock item={item} actions={actions} />;
@@ -74,7 +79,9 @@ export const TimelineItemRow = memo(
                     <button
                       className="copy"
                       title="复制这段回复"
-                      onClick={() => void navigator.clipboard?.writeText(item.text)}
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(item.text)
+                      }
                     >
                       复制
                     </button>
@@ -93,7 +100,10 @@ export const TimelineItemRow = memo(
 
       case "notice":
         return (
-          <div className={`bar bar-${noticeTone(item.level)}`} style={{ marginBottom: 12 }}>
+          <div
+            className={`bar bar-${noticeTone(item.level)}`}
+            style={{ marginBottom: 12 }}
+          >
             <Icon name={item.level === "ok" ? "check" : "alert"} />
             {item.text}
           </div>
@@ -101,7 +111,10 @@ export const TimelineItemRow = memo(
     }
   },
   // `item` 是可变对象，只比指纹；`actions` 引用恒定
-  (a, b) => a.revision === b.revision && a.expanded === b.expanded && a.actions === b.actions,
+  (a, b) =>
+    a.revision === b.revision &&
+    a.expanded === b.expanded &&
+    a.actions === b.actions,
 );
 
 /**
@@ -125,6 +138,7 @@ function UserBlock({
   const clock = item.queued ? "" : formatClock(item.at);
   return (
     <div className="row right">
+      <div className="avatar user">我</div>
       <div className="stack">
         <div className={`bubble-user${item.queued ? " queued" : ""}`}>
           {item.text}
@@ -143,7 +157,6 @@ function UserBlock({
             </span>
           ) : null}
         </div>
-        <div className="avatar user">我</div>
       </div>
     </div>
   );
@@ -167,8 +180,13 @@ function ToolCard({
 }): React.ReactElement {
   const args = describeArgs(item);
   const lines = item.output.split("\n");
-  const long = lines.length > OUTPUT_PREVIEW_LINES || item.output.length > OUTPUT_PREVIEW_CHARS;
-  const shown = expanded || !long ? item.output : lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n");
+  const long =
+    lines.length > OUTPUT_PREVIEW_LINES ||
+    item.output.length > OUTPUT_PREVIEW_CHARS;
+  const shown =
+    expanded || !long
+      ? item.output
+      : lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n");
   const hasOutput = item.output.length > 0;
 
   return (
@@ -179,14 +197,22 @@ function ToolCard({
           title={hasOutput ? (expanded ? "收起输出" : "展开输出") : item.name}
           onClick={() => (hasOutput ? onToggle(item.id) : undefined)}
         >
-          <span className={`tool-mark is-${item.status}`}>{TOOL_MARK[item.status]}</span>
+          <span className={`tool-mark is-${item.status}`}>
+            {TOOL_MARK[item.status]}
+          </span>
           <span className="tool-name">{item.name}</span>
           {args ? <span className="tool-args">{args}</span> : null}
-          <span className="tool-meta">{toolMetaLine(item.durationMs, item.status)}</span>
+          <span className="tool-meta">
+            {toolMetaLine(item.durationMs, item.status)}
+          </span>
         </button>
         {hasOutput ? (
           <>
-            <pre className={`tool-out${item.status === "failed" ? " err" : ""}`}>{shown}</pre>
+            <pre
+              className={`tool-out${item.status === "failed" ? " err" : ""}`}
+            >
+              {shown}
+            </pre>
             {/* 输出被裁过才给这两个链接：看全的入口与复制。短输出本来就
                 全在眼前，再摆一排链接只是噪音（设计稿第 2 页同此） */}
             {long ? (
@@ -197,7 +223,9 @@ function ToolCard({
                 <button
                   className="tool-more"
                   title="复制这段输出"
-                  onClick={() => void navigator.clipboard?.writeText(item.output)}
+                  onClick={() =>
+                    void navigator.clipboard?.writeText(item.output)
+                  }
                 >
                   复制
                 </button>
@@ -245,7 +273,10 @@ function ApprovalCard({
   return (
     <div className="row">
       <div className="stack" style={{ maxWidth: "92%" }}>
-        <div className={`approval${high ? " high" : ""}`} style={{ width: "100%" }}>
+        <div
+          className={`approval${high ? " high" : ""}`}
+          style={{ width: "100%" }}
+        >
           <div className="approval-head">
             <Icon name={high ? "alert" : "shield"} size={14} />
             <span className="card-name">
@@ -253,7 +284,9 @@ function ApprovalCard({
             </span>
             <span className={`pill pill-${risk.tone}`}>{risk.label}</span>
             <span className="spacer" />
-            <span style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}>
+            <span
+              style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}
+            >
               {pending ? (
                 <Waiting since={request.createdAt} />
               ) : (
@@ -276,7 +309,9 @@ function ApprovalCard({
                   ))}
                 </ul>
               ) : null}
-              <div className="approval-pre">{request.argsPreview || "（没有参数预览）"}</div>
+              <div className="approval-pre">
+                {request.argsPreview || "（没有参数预览）"}
+              </div>
               <div className="approval-warn-line">此操作不可撤销</div>
             </>
           ) : (
