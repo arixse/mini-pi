@@ -11,7 +11,7 @@
 | 视觉稿（10 帧） | Ardot 画布 `https://ardot.tencent.com/file/738920616583250` | 布局、层级、间距、状态的唯一视觉基准 |
 | 色板 | `packages/client/design/tokens.css` | 唯一色源，深浅双模式 |
 | 色板（结构化） | `packages/client/design/tokens.json` | W3C DTCG，供工具链消费 |
-| 旧静态稿 | `packages/client/design/mockup.html` | **已废弃，不要参考**（原因见 §7） |
+| 旧静态稿 | mockup.html（已删除） | **已废弃，不要参考**（原因见 §7） |
 
 画布 10 帧的排布：**上排 5 帧 Dark**（01 ~ 05），**下排 5 帧 Light**（同名，同一份图层切
 `variableModes` 得到）。每帧 1280×900。
@@ -103,7 +103,7 @@
 
 ## 7. 不要复刻旧静态稿的问题
 
-`packages/client/design/mockup.html` 已废弃，它的六个缺陷是这次重做的出发点：
+旧静态稿 mockup.html（已删除）的六个缺陷是这次重做的出发点：
 
 1. 三个背景色亮度差不足 6%，只能靠满屏 1px 描边分层
 2. 用户气泡用最大视觉权重（实心高饱和），而工具输出被裁到 148px —— 信息权重与视觉权重倒挂

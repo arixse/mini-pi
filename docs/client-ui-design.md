@@ -6,7 +6,7 @@
 > 每帧 1280×900）。开发交接说明、十屏验收要点与内核缺口见
 > [client-visual-handoff.md](./client-visual-handoff.md)，色板是
 > [`packages/client/design/tokens.css`](../packages/client/design/tokens.css)。
-> 旧静态稿 `packages/client/design/mockup.html` 已被本次重做取代，不要参考。
+> 旧静态稿 mockup.html（已随本次重做删除）已被取代，不要参考。
 >
 > **这一篇只写"为什么这么设计"**：目标与原则、组件与状态清单、已定决策及其理由。
 > 终态的交互细节与接口语义，落地后以 [cli-interaction.md](./cli-interaction.md)（命令行为）、

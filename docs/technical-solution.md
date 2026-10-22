@@ -370,7 +370,7 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 - **界面基准**是 Ardot 画布 `738920616583250`（十帧，深浅两套只切 `data-theme`），
   交接说明见 `docs/client-visual-handoff.md`：顶栏芯片是默认值、per-Run 模型画在运行头；
   工具卡必须渲染参数；高危单独成块；输入区与会话同宽、默认三行高；
-  运行中发送照常入队。旧静态稿 `packages/client/design/mockup.html` 已废弃。
+  运行中发送照常入队。旧静态稿 mockup.html 已删除废弃。
 - **换盘**：`readdir` 到盘根就没有"上一级"了，所以 `GET /api/dirs` 额外
   返回 `drives`（Windows 枚举盘符，其他平台空数组），选择器浮层顶部画盘符条。
 
