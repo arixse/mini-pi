@@ -29,7 +29,11 @@ import { openSse } from "./sse";
 import { isTier, type AppState, type ApprovalAnswer, type ServerEvent, type Tier, type WorkspaceStateView } from "../shared/types";
 import type { ServeArgs } from "./serveArgs";
 import { logger } from "@minipi/core/shared/logger";
-import { nullWorkspaceMemory, type WorkspaceMemory } from "./workspaceMemory";
+import {
+  nullWorkspaceMemory,
+  type RememberedWorkspaces,
+  type WorkspaceMemory,
+} from "./workspaceMemory";
 
 export type AppServerOptions = {
   workspaceRoot: string;
@@ -237,8 +241,12 @@ export class AppServer {
    * "关闭才打断"，这条打断必须由用户显式发起，不能被顺手触发。
    * 关闭最后一个工作区同样拒绝：池空会让 `workspace` 变 null，
    * 界面的空态引导在"重新打开"这条路上，不在"服务还在但没有工作区"上。
+   *
+   * 关成的同时把这条从工作区记忆里摘掉：用户显式关掉的目录不该在
+   * 下次启动时又被恢复出来。摘记忆放在收宿主**之前**（先落盘再改内存），
+   * 中间崩掉最多是"没关成"，不会是"关了又复活"。
    */
-  closeWorkspace(candidate: string): void {
+  async closeWorkspace(candidate: string): Promise<void> {
     const root = resolve(candidate);
     const host = this.hosts.get(root);
     if (!host) {
@@ -250,6 +258,7 @@ export class AppServer {
     if (host.hasActiveRun()) {
       throw new HttpError(409, "这个工作区还有任务在跑，先停止它们再关闭");
     }
+    await this.forget(root);
     host.close();
     this.hosts.delete(root);
     for (const [runId, owner] of [...this.runRoots]) {
@@ -388,6 +397,63 @@ export class AppServer {
       await this.rememberWorkspace.remember(root);
     } catch (error) {
       logger.error("记住工作区失败（不影响本次切换）:", errorMessage(error));
+    }
+  }
+
+  /** 关闭工作区时把这条从记忆里摘掉；失败同样不影响关闭本身 */
+  private async forget(root: string): Promise<void> {
+    try {
+      await this.rememberWorkspace.forget(root);
+    } catch (error) {
+      logger.error("移除工作区记忆失败（不影响本次关闭）:", errorMessage(error));
+    }
+  }
+
+  /**
+   * 启动恢复：把记忆里的工作区逐一开进池子（`bootAppServer` 在入口接了
+   * 记忆时调用）。
+   *
+   * - **活动根不在这里挪**：桌面壳的初始根本来就取自记忆的 `active`
+   *   （`resolveDesktopWorkspace` → `readRememberedWorkspace`），显式
+   *   `--cwd` 指定的更是不能被记忆压过去——恢复只负责"把其余的加进来"；
+   * - 目录已失效的条目**跳过并摘除**：侧栏只显示打开的宿主，一条永远
+   *   开不出来的隐形记忆只会让人困惑；摘除前先写日志，不是静默清除；
+   * - 目录有效但起宿主失败的（比如会话目录暂时不可写）只跳过、**保留**
+   *   记忆：路径还在，下次启动再试；
+   * - 超出同时打开上限的也保留：这是"这次没开"，不是"不再要了"。
+   */
+  async restoreWorkspaces(remembered: RememberedWorkspaces): Promise<void> {
+    for (const root of remembered.roots) {
+      if (this.hosts.has(root)) {
+        continue;
+      }
+      let usable = true;
+      try {
+        WorkspaceHost.assertWorkspaceRoot(root);
+      } catch {
+        usable = false;
+      }
+      if (!usable) {
+        logger.error(`启动恢复：记忆里的工作区已不可用，跳过并移除：${root}`);
+        await this.forget(root);
+        continue;
+      }
+      if (this.hosts.size >= this.maxWorkspaces) {
+        logger.error(
+          `启动恢复：已到同时打开上限（${this.maxWorkspaces}），这条记忆这次没有打开：${root}`,
+        );
+        continue;
+      }
+      const current = this.activeHost();
+      // 与打开工作区同一套继承：档位与隔离开关是"人的选择"，换工作区不复位
+      const host = this.createHost(root, current?.getTier(), current?.getIsolate());
+      try {
+        await host.start();
+      } catch (error) {
+        logger.error(`启动恢复：打开工作区失败，跳过（记忆保留）：${root}`, errorMessage(error));
+        continue;
+      }
+      this.hosts.set(root, host);
     }
   }
 
@@ -666,9 +732,9 @@ export class AppServer {
     }));
 
     // 显式关闭：跑着任务时 409——只有这条路径才结束里面的任务
-    app.delete("/api/workspace", wrap((req, res) => {
+    app.delete("/api/workspace", wrap(async (req, res) => {
       const root = queryParam(req.query.root) || requireString(asRecord(req.body).root, "root");
-      this.closeWorkspace(root);
+      await this.closeWorkspace(root);
       res.status(204).end();
     }));
 
@@ -896,6 +962,18 @@ export async function bootAppServer(
     ...(options.now ? { now: options.now } : {}),
     concurrency: options.concurrency,
   });
+  // 启动恢复：入口接了记忆才做（桌面壳 / serve 都接）。读取失败不影响
+  // 本次启动——记忆是便利功能，不该有把服务挡在门外的话语权。
+  if (options.workspaceMemory) {
+    try {
+      const remembered = await options.workspaceMemory.list();
+      if (remembered) {
+        await server.restoreWorkspaces(remembered);
+      }
+    } catch (error) {
+      logger.error(`启动恢复：读取工作区记忆失败（不影响本次启动）: ${errorMessage(error)}`);
+    }
+  }
   const running = await server.start();
   return { code: 0, server, url: running.url, port: running.port };
 }

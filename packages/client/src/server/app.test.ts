@@ -827,7 +827,11 @@ describe("App Server · 配置", () => {
     // 记住工作区的替身：断言"界面里打开了一次，桌面壳下次启动开的是它"
     const remembered: string[] = [];
     const server = await startTestServer({
-      workspaceMemory: { remember: async (path) => void remembered.push(path) },
+      workspaceMemory: {
+        list: async () => null,
+        remember: async (path) => void remembered.push(path),
+        forget: async () => undefined,
+      },
     });
     try {
       const { mkdtempSync } = await import("node:fs");
@@ -1084,6 +1088,69 @@ describe("App Server · 多工作区", () => {
         method: "DELETE",
       });
       assert.strictEqual(missing.status, 404, "没打开的根明说 404");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("关成的工作区从记忆里摘掉；没关成的（409）不动记忆", async () => {
+    const forgotten: string[] = [];
+    const server = await startTestServer({
+      workspaceMemory: {
+        list: async () => null,
+        remember: async () => undefined,
+        forget: async (path) => void forgotten.push(path),
+      },
+    });
+    const second = makeWorkspace("second");
+    try {
+      await server.post("/api/workspace", { path: second });
+      const closed = await server.raw(`/api/workspace?root=${encodeURIComponent(second)}`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(closed.status, 204);
+      assert.deepStrictEqual(forgotten, [second], "显式关掉的不该在下次启动时被恢复");
+
+      // 关最后一个被 409 挡住：记忆不能跟着动，工作区明明还开着
+      const last = await server.raw(
+        `/api/workspace?root=${encodeURIComponent(server.workspace)}`,
+        { method: "DELETE" },
+      );
+      assert.strictEqual(last.status, 409);
+      assert.deepStrictEqual(forgotten, [second], "没关成的不能摘记忆");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("启动恢复：记忆里的根逐一进池子，失效的摘掉，活动根不被挪动", async () => {
+    const forgotten: string[] = [];
+    const server = await startTestServer({
+      workspaceMemory: {
+        list: async () => null,
+        remember: async () => undefined,
+        forget: async (path) => void forgotten.push(path),
+      },
+    });
+    const second = makeWorkspace("second");
+    const missing = `${second}-gone`;
+    try {
+      await server.app.restoreWorkspaces({
+        roots: [server.workspace, second, missing],
+        active: second,
+      });
+      const state = await server.get<AppState>("/api/state");
+      assert.deepStrictEqual(
+        state.workspaces.map((w) => w.root).sort(),
+        [server.workspace, second].sort(),
+        "记忆里可用的根都开了，包括初始根本身（重复恢复是跳过）",
+      );
+      // 活动根不归恢复管：桌面壳的初始根本来就取自记忆的 active，
+      // 显式 --cwd 更不能被记忆压过去——"新任务去哪"以启动时定下的为准
+      assert.strictEqual(state.activeRoot, server.workspace);
+      assert.deepStrictEqual(forgotten, [missing], "失效条目跳过并摘除，不静默留着");
     } finally {
       await server.close();
       rmSync(second, { recursive: true, force: true });
@@ -1729,7 +1796,11 @@ describe("bootAppServer", () => {
           providerService: new ModelProviderService(
             new ProviderStore(join(configDir, "auth.json")),
           ),
-          workspaceMemory: { remember: async (path) => void remembered.push(path) },
+          workspaceMemory: {
+            list: async () => null,
+            remember: async (path) => void remembered.push(path),
+            forget: async () => undefined,
+          },
           resolveModel: async () => ({
             model: scriptedModel([textResponse("你好")]),
             providerName: "test",
@@ -1742,6 +1813,68 @@ describe("bootAppServer", () => {
         assert.strictEqual(booted.code, 0);
         await booted.server?.switchWorkspace(workspace);
         assert.deepStrictEqual(remembered, [], "切到同一个目录不算一次选择");
+      } finally {
+        await booted.server?.stop();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 启动恢复：入口接了记忆，`bootAppServer` 就把记忆里的工作区原样加载
+   * 回来。桌面壳重启后侧栏还是上次那几个项目，不用重新一个个添加。
+   */
+  it("注入的 workspaceMemory 会做启动恢复：记忆里的根进池子、失效的摘掉", async () => {
+    const forgotten: string[] = [];
+    const root = mkdtempSync(join(tmpdir(), "minipi-boot-restore-"));
+    try {
+      const workspace = join(root, "workspace");
+      const other = join(root, "other");
+      const sessionsDir = join(root, "sessions");
+      const configDir = join(root, "config");
+      for (const dir of [workspace, other, sessionsDir, configDir]) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const missing = join(root, "gone");
+
+      const booted = await bootAppServer(
+        {
+          cwd: workspace,
+          cwdGiven: true,
+          port: 0,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          sessionsDir,
+          settingsStore: new SettingsStore(join(configDir, "settings.json")),
+          providerService: new ModelProviderService(
+            new ProviderStore(join(configDir, "auth.json")),
+          ),
+          workspaceMemory: {
+            list: async () => ({ roots: [workspace, other, missing], active: workspace }),
+            remember: async () => undefined,
+            forget: async (path) => void forgotten.push(path),
+          },
+          resolveModel: async () => ({
+            model: scriptedModel([textResponse("你好")]),
+            providerName: "test",
+            modelName: "test-model",
+          }),
+        },
+        { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+      );
+      try {
+        assert.strictEqual(booted.code, 0);
+        const response = await fetch(`${booted.url}/api/state`);
+        const state = (await response.json()) as AppState;
+        assert.deepStrictEqual(
+          state.workspaces.map((w) => w.root).sort(),
+          [workspace, other].sort(),
+          "记忆里可用的根都进了池子",
+        );
+        assert.strictEqual(state.activeRoot, workspace, "活动根以启动时定下的为准");
+        assert.deepStrictEqual(forgotten, [missing], "失效条目摘掉，不静默留着");
       } finally {
         await booted.server?.stop();
       }

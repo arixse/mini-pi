@@ -1,21 +1,24 @@
 /**
- * "记住的工作区"那一行文件的读写。
+ * "记住的工作区"那份文件的读写。
  *
- * 它只有一行路径，但三种坏法都会让用户**每次启动都被再问一遍**：
- * 写了一半（崩溃在写盘途中）、读出来不是字符串、文件被改成了别的形状。
- * 因此这里逐条钉住：没有、有、坏，分别是三个不同的答案。
+ * 多工作区之后它记的是一组：`{ roots: [...], active }`。三种坏法都会让
+ * 用户**每次启动都被再问一遍**：写了一半（崩溃在写盘途中）、读出来不是
+ * 字符串、文件被改成了别的形状。因此这里逐条钉住：没有、有、坏、
+ * 旧格式迁移，分别是四个不同的答案。
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   WORKSPACE_MEMORY_FILE,
   fileWorkspaceMemory,
+  forgetWorkspace,
   nullWorkspaceMemory,
   readRememberedWorkspace,
+  readRememberedWorkspaces,
   rememberWorkspace,
   workspaceMemoryPath,
 } from "./workspaceMemory";
@@ -29,11 +32,11 @@ function tempMemory(): { file: string; cleanup: () => void } {
   };
 }
 
-describe("readRememberedWorkspace", () => {
+describe("readRememberedWorkspaces", () => {
   it("没有文件就是没有（第一次启动的形状）", async () => {
     const memory = tempMemory();
     try {
-      assert.strictEqual(await readRememberedWorkspace(memory.file), null);
+      assert.strictEqual(await readRememberedWorkspaces(memory.file), null);
     } finally {
       memory.cleanup();
     }
@@ -43,7 +46,26 @@ describe("readRememberedWorkspace", () => {
     const memory = tempMemory();
     try {
       await rememberWorkspace("D:\\projects\\mini-pi", memory.file);
-      assert.strictEqual(await readRememberedWorkspace(memory.file), "D:\\projects\\mini-pi");
+      await rememberWorkspace("D:\\other", memory.file);
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\projects\\mini-pi", "D:\\other"]);
+      assert.strictEqual(remembered.active, "D:\\other");
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("旧格式 { workspace } 当场迁移成单元素列表", async () => {
+    const memory = tempMemory();
+    try {
+      writeFileSync(memory.file, JSON.stringify({ workspace: "D:\\old" }, null, 2), "utf8");
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\old"]);
+      assert.strictEqual(remembered.active, "D:\\old");
+      // 兼容入口：桌面壳拿"上次活动的那个"当初始根
+      assert.strictEqual(await readRememberedWorkspace(memory.file), "D:\\old");
     } finally {
       memory.cleanup();
     }
@@ -53,19 +75,60 @@ describe("readRememberedWorkspace", () => {
     const memory = tempMemory();
     try {
       writeFileSync(memory.file, "{ 这不是 json", "utf8");
-      assert.strictEqual(await readRememberedWorkspace(memory.file), null);
+      assert.strictEqual(await readRememberedWorkspaces(memory.file), null);
     } finally {
       memory.cleanup();
     }
   });
 
-  it("顶层不是对象、字段不是字符串，都算没有", async () => {
+  it("顶层不是对象、roots 不是数组、一条有效路径都没有，都算没有", async () => {
     const memory = tempMemory();
     try {
-      for (const content of ["[]", "null", '"a-string"', "{}", '{"workspace": 42}', '{"workspace": ""}']) {
+      const bad = [
+        "[]",
+        "null",
+        '"a-string"',
+        "{}",
+        '{"roots": 42}',
+        '{"roots": "a"}',
+        '{"roots": []}',
+        '{"roots": ["", "   "]}',
+        '{"workspace": 42}',
+        '{"workspace": ""}',
+      ];
+      for (const content of bad) {
         writeFileSync(memory.file, content, "utf8");
-        assert.strictEqual(await readRememberedWorkspace(memory.file), null, content);
+        assert.strictEqual(await readRememberedWorkspaces(memory.file), null, content);
       }
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("roots 里混进非字符串时滤掉，剩多少算多少", async () => {
+    const memory = tempMemory();
+    try {
+      writeFileSync(memory.file, '{"roots": ["D:\\\\keep", 7, null, ""]}', "utf8");
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\keep"]);
+      assert.strictEqual(remembered.active, "D:\\keep");
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("active 不在 roots 里时回落到第一个，而不是信文件里的悬空值", async () => {
+    const memory = tempMemory();
+    try {
+      writeFileSync(
+        memory.file,
+        '{"roots": ["D:\\\\a", "D:\\\\b"], "active": "D:\\\\gone"}',
+        "utf8",
+      );
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.strictEqual(remembered.active, "D:\\a");
     } finally {
       memory.cleanup();
     }
@@ -85,27 +148,81 @@ describe("rememberWorkspace", () => {
     }
   });
 
-  it("重复记是覆盖，不是追加（文件里始终只有一个路径）", async () => {
+  it("重复记是挪 active，不是清掉别的条目（记一组，不是记一个）", async () => {
     const memory = tempMemory();
     try {
       await rememberWorkspace("D:\\first", memory.file);
       await rememberWorkspace("D:\\second", memory.file);
-      const raw = readFileSync(memory.file, "utf8");
-      assert.ok(!raw.includes("first"), raw);
-      assert.strictEqual(await readRememberedWorkspace(memory.file), "D:\\second");
+      await rememberWorkspace("D:\\first", memory.file);
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\first", "D:\\second"]);
+      assert.strictEqual(remembered.active, "D:\\first");
     } finally {
       memory.cleanup();
     }
   });
 
-  it("临时文件不会留在目录里（ rename 成功即清理）", async () => {
+  it("临时文件不会留在目录里（rename 成功即清理）", async () => {
     const memory = tempMemory();
     try {
       await rememberWorkspace("D:\\projects", memory.file);
       assert.strictEqual(await readRememberedWorkspace(memory.file), "D:\\projects");
-      // 只应有记忆文件本身：临时名带 pid， rename 之后必须消失
-      const { readdirSync } = await import("node:fs");
+      // 只应有记忆文件本身：临时名带 pid，rename 之后必须消失
       assert.deepStrictEqual(readdirSync(join(memory.file, "..")), [WORKSPACE_MEMORY_FILE]);
+    } finally {
+      memory.cleanup();
+    }
+  });
+});
+
+describe("forgetWorkspace", () => {
+  it("摘掉一条，剩下的留着；摘的是 active 就挪到剩下的第一个", async () => {
+    const memory = tempMemory();
+    try {
+      await rememberWorkspace("D:\\a", memory.file);
+      await rememberWorkspace("D:\\b", memory.file);
+      await forgetWorkspace("D:\\b", memory.file);
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\a"]);
+      assert.strictEqual(remembered.active, "D:\\a");
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("摘到最后一条为空：文件还在（空列表），读出来就是没有", async () => {
+    const memory = tempMemory();
+    try {
+      await rememberWorkspace("D:\\only", memory.file);
+      await forgetWorkspace("D:\\only", memory.file);
+      assert.strictEqual(await readRememberedWorkspaces(memory.file), null);
+      assert.ok(existsSync(memory.file), "空列表写回文件，不悄悄删用户目录里的东西");
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("没有记忆文件时 forget 是 no-op，不凭空造文件", async () => {
+    const memory = tempMemory();
+    try {
+      await forgetWorkspace("D:\\never-was", memory.file);
+      assert.strictEqual(existsSync(memory.file), false);
+    } finally {
+      memory.cleanup();
+    }
+  });
+});
+
+describe("readRememberedWorkspace", () => {
+  /** 桌面壳的初始根只认 `active` 这一项；列表恢复归 bootAppServer 管 */
+  it("回答的是列表里的 active", async () => {
+    const memory = tempMemory();
+    try {
+      await rememberWorkspace("D:\\a", memory.file);
+      await rememberWorkspace("D:\\b", memory.file);
+      assert.strictEqual(await readRememberedWorkspace(memory.file), "D:\\b");
     } finally {
       memory.cleanup();
     }
@@ -121,21 +238,23 @@ describe("workspaceMemoryPath", () => {
 
 describe("nullWorkspaceMemory", () => {
   /**
-   * 默认实现必须是"不记"：构造一个服务不该顺带往用户家目录写文件。
+   * 默认实现必须是"什么都不做"：构造一个服务不该顺带往用户家目录写文件。
    * 这条断言守着的是那个默认值的语义——它看起来什么都没做，但那正是重点。
    */
-  it("什么都不做，也不抛", async () => {
+  it("读是 null，写与摘都不抛", async () => {
+    assert.strictEqual(await nullWorkspaceMemory.list(), null);
     await assert.doesNotReject(() => nullWorkspaceMemory.remember("D:\\anywhere"));
+    await assert.doesNotReject(() => nullWorkspaceMemory.forget("D:\\anywhere"));
   });
 });
 
 describe("fileWorkspaceMemory", () => {
   /**
    * 真实入口（serve / Electron 主进程 / desktop）接的就是这个实例。
-   * 它看着只是转调 `rememberWorkspace`，但"入口确实接上了"这件事
-   * 只有在这里才被测到——转调断了的表现是桌面壳每次启动都重新问。
+   * 它看着只是转调文件函数，但"入口确实接上了"这件事只有在这里才被
+   * 测到——转调断了的表现是桌面壳每次启动都重新问。
    */
-  it("remember 转调 rememberWorkspace（默认位置）", async () => {
+  it("list / remember / forget 转调同一份文件（默认位置）", async () => {
     const memory = tempMemory();
     const savedHome = process.env.USERPROFILE;
     const savedDrive = process.env.HOMEDRIVE;
@@ -149,7 +268,16 @@ describe("fileWorkspaceMemory", () => {
 
       await fileWorkspaceMemory.remember("D:\\projects");
       const expected = join(fakeHome, ".mini-pi", WORKSPACE_MEMORY_FILE);
-      assert.strictEqual(await readRememberedWorkspace(expected), "D:\\projects");
+      let listed = await fileWorkspaceMemory.list();
+      assert.ok(listed);
+      assert.deepStrictEqual(listed.roots, ["D:\\projects"]);
+
+      await fileWorkspaceMemory.remember("D:\\other");
+      await fileWorkspaceMemory.forget("D:\\projects");
+      listed = await fileWorkspaceMemory.list();
+      assert.ok(listed);
+      assert.deepStrictEqual(listed.roots, ["D:\\other"]);
+      assert.strictEqual(await readRememberedWorkspace(expected), "D:\\other");
     } finally {
       if (savedHome === undefined) {
         delete process.env.USERPROFILE;
