@@ -389,6 +389,8 @@ svg.ic {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* 在行内时独占第二行：会话行自己是第一行，它的 Run 是第二行起 */
+  flex-basis: 100%;
 }
 
 .tree-row {
@@ -406,6 +408,9 @@ svg.ic {
   color: var(--Client-text-secondary);
   font-size: 12.5px;
   min-width: 0;
+  /* 行菜单与嵌套子树的定位基准；wrap 让 .tree-kids 独占第二行 */
+  position: relative;
+  flex-wrap: wrap;
 }
 
 .tree-row:hover {
@@ -429,7 +434,7 @@ svg.ic {
 }
 
 .tree-row.lv-run {
-  padding-left: 30px;
+  padding-left: 12px;
   font-size: 12px;
 }
 
@@ -439,6 +444,89 @@ svg.ic {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 行里的主点击目标：铺满除行操作外的全部宽度 */
+.tree-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tree-twist {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--Client-text-tertiary);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.tree-twist:hover {
+  color: var(--Client-text-primary);
+}
+
+/* 收起时箭头转 90 度：方向即状态 */
+.tree-row.is-fold .tree-twist {
+  transform: rotate(-90deg);
+}
+
+/* 行菜单：··· 点开的小浮层，z 轴盖住捕获层 */
+.row-menu {
+  position: absolute;
+  right: 6px;
+  top: calc(100% + 2px);
+  z-index: 36;
+  min-width: 128px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--Client-bg-raised);
+  border: 1px solid var(--Client-border-default);
+  border-radius: var(--r-input);
+  box-shadow: 0 12px 32px -8px #000;
+}
+
+.row-menu-item {
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--Client-text-primary);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.row-menu-item:hover {
+  background: var(--Client-bg-hover);
+}
+
+.row-menu-item.danger {
+  color: var(--Client-danger-text);
+}
+
+/* 全屏透明捕获层：点它就关菜单，不需要 document 级监听 */
+.menu-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
 }
 
 .tree-meta {
@@ -464,7 +552,6 @@ svg.ic {
 }
 
 /* 展开状态下箭头常驻：折着的内容不该让人找不到入口 */
-.tree-kids + .tree-twist,
 .is-open > .tree-twist {
   opacity: 1;
 }

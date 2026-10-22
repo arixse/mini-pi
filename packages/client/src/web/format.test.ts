@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protocol";
 import {
+  CONTEXT_WARN_PCT,
+  contextPercent,
   formatDuration,
   formatSessionTime,
   formatTokens,
@@ -106,5 +108,30 @@ describe("toolMetaLine", () => {
     assert.equal(toolMetaLine(1500, "failed"), "1.5s · 失败");
     assert.equal(toolMetaLine(1500, "done"), "1.5s");
     assert.equal(toolMetaLine(null, "running"), "");
+  });
+});
+
+describe("contextPercent", () => {
+  it("按占比取整", () => {
+    assert.equal(contextPercent(0, 128_000), 0);
+    assert.equal(contextPercent(64_000, 128_000), 50);
+    assert.equal(contextPercent(1, 3), 33);
+  });
+
+  it("超额也钳在 100：快满了靠换色说，不靠进度条爆表", () => {
+    assert.equal(contextPercent(200_000, 128_000), 100);
+  });
+
+  it("没有分母（没配模型、窗口未知）时是 0，不给假百分比", () => {
+    assert.equal(contextPercent(500, 0), 0);
+    assert.equal(contextPercent(500, Number.NaN), 0);
+    assert.equal(contextPercent(Number.NaN, 1000), 0);
+    assert.equal(contextPercent(-5, 1000), 0);
+  });
+
+  it("警戒线在八成", () => {
+    assert.equal(CONTEXT_WARN_PCT, 80);
+    assert.equal(contextPercent(102_400, 128_000) >= CONTEXT_WARN_PCT, true);
+    assert.equal(contextPercent(51_200, 128_000) >= CONTEXT_WARN_PCT, false);
   });
 });

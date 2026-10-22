@@ -19,6 +19,14 @@ export type SaveModelInput = {
 export type Actions = {
   send: (text: string) => void;
   stop: () => void;
+  /**
+   * 取消指定的一条 Run（侧栏行菜单 / 撤回排队消息都走这里）。
+   *
+   * 与 {@link Actions.stop} 的分工：`stop` 作用于"正在看的那个 Run"，
+   * 这个能点名侧栏里任意一条——包括还没开始执行的排队项
+   * （内核对排队中的 Run 直接出队并给 cancelled 结论）。
+   */
+  cancelRun: (runId: string) => Promise<void>;
   /** 丢弃某个 Run 的隔离工作区（M3）：跑着的任务服务端会拒绝 */
   discardWorktree: (runId: string) => Promise<void>;
   /** 打开某个隔离 Run 的变更面板（读 diff） */
@@ -28,6 +36,13 @@ export type Actions = {
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
   openSession: (sessionId: string) => void;
+  /**
+   * 打开一段会话并把焦点放进输入框（侧栏行的 `+`）。
+   *
+   * 与 {@link Actions.openSession} 只差"聚焦"：对当前会话来说这就是
+   * "接着写"，对历史会话则打开只读回看——由 composer 自己说明状态。
+   */
+  continueSession: (sessionId: string) => Promise<void>;
   openRun: (runId: string) => void;
   decide: (approvalId: string, answer: ApprovalAnswer) => void;
   setSearch: (keyword: string) => void;

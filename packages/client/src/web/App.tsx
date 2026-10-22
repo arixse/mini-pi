@@ -16,6 +16,7 @@ import { DiffPanel } from "./components/DiffPanel";
 import { Picker } from "./components/Picker";
 import { Settings } from "./components/Settings";
 import { Sidebar } from "./components/Sidebar";
+import { Statusbar } from "./components/Statusbar";
 import { Timeline } from "./components/Timeline";
 import { Topbar } from "./components/Topbar";
 
@@ -67,6 +68,7 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
   return (
     <div className={`app${state.ui.sidebar ? " nav-open" : ""}`}>
       <Topbar />
+      <Statusbar />
       <div className="body">
         <Sidebar />
         <div className="drawer-mask" onClick={() => actions.closeSidebar()} />

@@ -44,6 +44,22 @@ export function formatTokens(value: number): string {
 }
 
 /**
+ * 上下文占用百分比（状态栏进度槽）。
+ *
+ * 分母为 0（没配模型、窗口还在推断中）时给 0：没有分母的百分比是假的。
+ * 上限钳在 100——压缩阈值之前的超额占用不该让进度槽溢出容器；
+ * "快满了"由 {@link CONTEXT_WARN_PCT} 换色说出来，不靠爆表。
+ */
+export const CONTEXT_WARN_PCT = 80;
+
+export function contextPercent(tokens: number, window: number): number {
+  if (!Number.isFinite(window) || window <= 0 || !Number.isFinite(tokens) || tokens <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round((tokens / window) * 100)));
+}
+
+/**
  * 会话时间戳 → `2026-10-20 09:14`。
  *
  * 输入是文件名里那段 `2026-10-20T09-14-02`（分隔符被换成了 `-`，

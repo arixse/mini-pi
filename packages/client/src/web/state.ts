@@ -76,6 +76,13 @@ export type View = {
   model: string | null;
   tokens: number;
   contextWindow: number;
+  /**
+   * 模型回合数（状态栏的"指标-步数"）。
+   *
+   * 直接取 `turn_start` 事件里的回合序号而不是自己累加：重放一段历史时
+   * 累加会多数一遍，而序号本身就是权威值。
+   */
+  steps: number;
   /** 运行头里的耗时：开始时记墙钟，结束后用服务端给的 elapsedMs */
   startedAt: number | null;
   elapsedMs: number | null;
@@ -176,6 +183,7 @@ export function emptyView(): View {
     model: null,
     tokens: 0,
     contextWindow: 0,
+    steps: 0,
     startedAt: null,
     elapsedMs: null,
     readOnly: false,
@@ -524,6 +532,15 @@ export function removeItem(view: View, id: string): void {
  */
 export function applyRunEvent(view: View, runId: string, event: ServerEvent): void {
   switch (event.type) {
+    case "turn_start": {
+      // 回合序号是权威值：重放历史时直接认它，不自己累加
+      if (view.activeRunId !== null && view.activeRunId !== runId) {
+        return;
+      }
+      view.steps = event.turn;
+      return;
+    }
+
     case "run_state": {
       if (view.activeRunId !== null && view.activeRunId !== runId) {
         return;
@@ -791,6 +808,50 @@ export function activeRuns(state: ClientState): RunSummary[] {
   return state.runs.filter(
     (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
   );
+}
+
+/**
+ * 侧栏树的一层：会话为节点，它名下的 Run 是叶子。
+ *
+ * 服务端的 `runs` 是内存里最近的若干条（ newest first ），`sessions` 是
+ * 磁盘上的全部会话；两者按 sessionId 归并。没有 Run 的会话仍然是节点——
+ * 一段只有历史的会话不该从树上消失。
+ */
+export type SessionGroup = { session: SessionSummary; runs: RunSummary[] };
+
+/**
+ * 侧栏树：按搜索词过滤，命中会话时它的 Run 整组保留。
+ *
+ * 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有）。
+ * 纯函数：组件只摆，这里算——过滤口径因此可以单测。
+ */
+export function sessionGroups(state: ClientState): SessionGroup[] {
+  const keyword = state.search.trim().toLowerCase();
+  const bySession = new Map<string, RunSummary[]>();
+  for (const run of state.runs) {
+    const list = bySession.get(run.sessionId);
+    if (list) {
+      list.push(run);
+    } else {
+      bySession.set(run.sessionId, [run]);
+    }
+  }
+  const groups = state.sessions.map((session) => ({
+    session,
+    runs: bySession.get(session.sessionId) ?? [],
+  }));
+  if (keyword.length === 0) {
+    return groups;
+  }
+  return groups
+    .map((group) => {
+      const sessionHit = group.session.title.toLowerCase().includes(keyword);
+      const runs = sessionHit
+        ? group.runs
+        : group.runs.filter((run) => run.title.toLowerCase().includes(keyword));
+      return { session: group.session, runs };
+    })
+    .filter((group) => group.runs.length > 0 || group.session.title.toLowerCase().includes(keyword));
 }
 
 /** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */

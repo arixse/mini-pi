@@ -23,6 +23,7 @@ describe("前端组件树", () => {
 
     assert.match(html, /class="app"/, "根容器要挂上");
     assert.match(html, /class="topbar"/);
+    assert.match(html, /class="statusbar"/, "状态栏常驻：模型 / 上下文 / 步数");
     assert.match(html, /class="sidebar"/);
     assert.match(html, /class="composer"/);
     assert.match(html, /未打开工作区/, "还没拿到状态时应如实说工作区未打开");

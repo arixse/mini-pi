@@ -434,6 +434,20 @@ export class AppController {
     }
   }
 
+  /**
+   * 侧栏行的 `+`：打开这段会话并把焦点放进输入框。
+   *
+   * 与 openSession 只差聚焦——对当前会话来说这就是"接着写"。
+   * 聚焦带会话守卫：打开期间用户可能又点了别处，那时不该把光标
+   * 抢到一个已经不在看的会话上。
+   */
+  private async continueSession(sessionId: string): Promise<void> {
+    await this.openSession(sessionId);
+    if (this.store.current.view.sessionId === sessionId) {
+      this.composer?.current?.focus();
+    }
+  }
+
   private liveRunOf(sessionId: string) {
     return (
       this.store.current.runs.find(
@@ -528,6 +542,22 @@ export class AppController {
     try {
       await api.cancelRun(runId);
       this.banner("warn", "已请求停止：引擎会在当前这一步结束后收手");
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * 取消侧栏里点名的一条 Run。
+   *
+   * 排队中的 Run 内核直接出队（cancelled 结论），运行中的走"当前这一步
+   * 结束后收手"——两种结局都说出来，别让用户以为点完就立刻停了。
+   */
+  private async cancelRun(runId: string): Promise<void> {
+    try {
+      await api.cancelRun(runId);
+      this.banner("warn", "已请求取消：引擎会在当前这一步结束后收手");
+      await this.refreshState();
     } catch (error) {
       this.fail(error);
     }
@@ -842,12 +872,14 @@ export class AppController {
     return {
       send: (text) => void this.send(text),
       stop: () => void this.stop(),
+      cancelRun: (runId) => this.cancelRun(runId),
       discardWorktree: (runId) => this.discardWorktree(runId),
       openDiff: (runId) => void this.openDiff(runId),
       closeDiff: () => this.closeDiff(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
       openSession: (sessionId) => void this.openSession(sessionId),
+      continueSession: (sessionId) => this.continueSession(sessionId),
       openRun: (runId) => void this.openRun(runId),
       decide: (approvalId, answer) => void this.decide(approvalId, answer),
       setSearch: (keyword) => {

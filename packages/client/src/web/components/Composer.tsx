@@ -80,43 +80,45 @@ export function Composer({
 
   return (
     <footer className="composer">
-      <div className="composer-row">
-        <textarea
-          ref={inputRef}
-          rows={3}
-          placeholder="接着说……（Enter 发送，Shift+Enter 换行）"
-          aria-label="输入消息"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              submit();
-              return;
-            }
-            // Esc 交给上层统一处理（只收浮层，不停任务），别在这里吞掉
-          }}
-        />
-        <button
-          className="btn-send"
-          disabled={mode !== "readonly" && (mode === "blocked" || text.trim().length === 0)}
-          onClick={submit}
-        >
-          {mode === "readonly" ? <Icon name="plus" size={13} /> : <Icon name="send" size={13} />}
-          {mode === "readonly" ? "新任务" : "发送"}
-        </button>
-        {mode === "busy" ? (
+      <div className="composer-inner">
+        <div className="composer-row">
+          <textarea
+            ref={inputRef}
+            rows={3}
+            placeholder="接着说……（Enter 发送，Shift+Enter 换行）"
+            aria-label="输入消息"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                submit();
+                return;
+              }
+              // Esc 交给上层统一处理（只收浮层，不停任务），别在这里吞掉
+            }}
+          />
           <button
-            className="btn btn-stop"
-            title="停止这个任务"
-            style={{ padding: "9px 12px", borderRadius: 12 }}
-            onClick={() => actions.stop()}
+            className="btn-send"
+            disabled={mode !== "readonly" && (mode === "blocked" || text.trim().length === 0)}
+            onClick={submit}
           >
-            <Icon name="stop" size={12} />
+            {mode === "readonly" ? <Icon name="plus" size={13} /> : <Icon name="send" size={13} />}
+            {mode === "readonly" ? "新任务" : "发送"}
           </button>
-        ) : null}
+          {mode === "busy" ? (
+            <button
+              className="btn btn-stop"
+              title="停止这个任务"
+              style={{ padding: "9px 12px", borderRadius: 12 }}
+              onClick={() => actions.stop()}
+            >
+              <Icon name="stop" size={12} />
+            </button>
+          ) : null}
+        </div>
+        <ComposerHint mode={mode} />
       </div>
-      <ComposerHint mode={mode} />
     </footer>
   );
 }

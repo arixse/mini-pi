@@ -13,7 +13,7 @@ import { pendingApprovals } from "../state";
 import { revisionOf } from "../items";
 import { useActions, useClient, useRevision } from "../store";
 import { formatDuration, formatTokens, statusMeta } from "../format";
-import { Dot, Icon } from "./Icon";
+import { Icon, StatusRing } from "./Icon";
 import { TimelineItemRow } from "./TimelineItems";
 
 /** 距底多少像素算"贴着底部看" */
@@ -58,26 +58,28 @@ export function Timeline(): React.ReactElement {
 
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
-      <RunHead />
-      <Banners />
-      {state.view.sessionId === null && state.view.items.length === 0 ? (
-        <div className="empty-hint draft-hint">
-          <Icon name="sparkles" size={14} />
-          <span>
-            新任务：直接在下面对话。这段会话还不在磁盘上——发出第一条消息时才创建
-          </span>
-        </div>
-      ) : null}
-      {state.view.items.map((item) => (
-        <TimelineItemRow
-          key={item.id}
-          item={item}
-          revision={revisionOf(item)}
-          expanded={expanded.has(item.id)}
-          onToggle={toggle}
-          actions={actions}
-        />
-      ))}
+      <div className="main-inner">
+        <RunHead />
+        <Banners />
+        {state.view.sessionId === null && state.view.items.length === 0 ? (
+          <div className="empty-hint draft-hint">
+            <Icon name="sparkles" size={14} />
+            <span>
+              新任务：直接在下面对话。这段会话还不在磁盘上——发出第一条消息时才创建
+            </span>
+          </div>
+        ) : null}
+        {state.view.items.map((item) => (
+          <TimelineItemRow
+            key={item.id}
+            item={item}
+            revision={revisionOf(item)}
+            expanded={expanded.has(item.id)}
+            onToggle={toggle}
+            actions={actions}
+          />
+        ))}
+      </div>
     </main>
   );
 }
@@ -106,7 +108,8 @@ function RunHead(): React.ReactElement | null {
   return (
     <div className="run-head">
       <span className={`pill pill-${meta.tone}`}>
-        {view.status === "running" ? <Dot /> : null}
+        {/* 状态环：待裁决是暂停形、运行中在转圈；pill 的文字是双重编码 */}
+        <StatusRing phase={view.status} />
         {meta.label}
       </span>
       <span className="title">{view.title || "新任务"}</span>
