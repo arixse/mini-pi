@@ -156,9 +156,6 @@ export function Composer({
               <span className="composer-hint">
                 <span className="kbd">Shift</span>+<span className="kbd">Enter</span> 换行
               </span>
-              {stopping ? (
-                <span className="composer-hint">运行中发送会排队，当前回合结束后执行</span>
-              ) : null}
             </>
           ) : null}
 

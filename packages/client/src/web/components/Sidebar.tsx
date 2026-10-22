@@ -35,10 +35,6 @@ export function Sidebar(): React.ReactElement {
 
   return (
     <aside className="sidebar">
-      <button className="btn-primary" onClick={() => actions.newTask()}>
-        <Icon name="plus" />
-        新任务
-      </button>
       <div className="side-search">
         <Icon name="search" />
         <input
@@ -74,7 +70,7 @@ export function Sidebar(): React.ReactElement {
             <div className="tree-kids">
               {groups.length === 0 ? (
                 <div className="empty-hint" style={{ marginLeft: 18 }}>
-                  {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话：发一条消息就开始了"}
+                  {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
                 </div>
               ) : null}
               {groups.map((group) => (

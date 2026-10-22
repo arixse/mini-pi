@@ -31,7 +31,7 @@ export function Topbar(): React.ReactElement {
         <span className="brand-name">mini-pi</span>
       </div>
 
-      <span
+      {/* <span
         className={`chip mono${state.workspace.name ? "" : " warn"}`}
         title={state.workspace.root ? `工作区：${state.workspace.root}` : "还没有选择工作区"}
         onClick={() => actions.openPicker()}
@@ -53,7 +53,7 @@ export function Topbar(): React.ReactElement {
 
       <span className="pill pill-slate" title="默认审批档位（新任务生效）">
         {state.tier}
-      </span>
+      </span> */}
 
       {state.approvals > 0 ? (
         <span
@@ -72,16 +72,6 @@ export function Topbar(): React.ReactElement {
 
       <span className="spacer" />
 
-      {/* 供应商入口：handoff §2 顶栏右组第一枚（供应商 / 通知 / 设置 / 主题 / 侧栏）。
-         直接落到模型页——供应商配置就住在那里 */}
-      <button
-        className="icon-btn"
-        title="模型供应商设置"
-        aria-label="模型供应商设置"
-        onClick={() => actions.openSettings()}
-      >
-        <Icon name="gateway" />
-      </button>
       <button
         className="icon-btn notify-btn"
         title={notificationButtonTitle(state.notifications)}

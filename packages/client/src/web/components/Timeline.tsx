@@ -71,7 +71,7 @@ export function Timeline(): React.ReactElement {
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
       <div className="main-inner">
-        <RunHead />
+        {/* <RunHead /> */}
         <Banners />
         {state.view.sessionId === null && state.view.items.length === 0 ? (
           <div className="empty-hint draft-hint">
