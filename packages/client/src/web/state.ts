@@ -181,6 +181,7 @@ export type ClientState = {
   runs: RunSummary[];
   sessions: SessionSummary[];
   currentSessionId: string | null;
+  /** 侧栏搜索框的词：**按工作区名模糊过滤**（见 workspaceMatches） */
   search: string;
   view: View;
   ui: {
@@ -882,16 +883,16 @@ export function activeRuns(state: ClientState): RunSummary[] {
 export type SessionGroup = { session: SessionSummary; runs: RunSummary[] };
 
 /**
- * 把一个工作区的会话与 Run 归并成分组；纯函数，搜索口径因此可以单测。
+ * 把一个工作区的会话与 Run 归并成分组；纯函数，因此可单测。
  *
- * 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有）。
+ * 只做归并、不做过滤：搜索框搜的是工作区名（见 workspaceGroups），
+ * 命中的工作区整组原样展开——在里面再按标题砍一遍会让"搜到的工作区
+ * 里少了几段会话"，那比不搜更让人困惑。
  */
 export function groupSessions(
   sessions: readonly SessionSummary[],
   runs: readonly RunSummary[],
-  keyword: string,
 ): SessionGroup[] {
-  const needle = keyword.trim().toLowerCase();
   const bySession = new Map<string, RunSummary[]>();
   for (const run of runs) {
     const list = bySession.get(run.sessionId);
@@ -901,27 +902,25 @@ export function groupSessions(
       bySession.set(run.sessionId, [run]);
     }
   }
-  const groups = sessions.map((session) => ({
+  return sessions.map((session) => ({
     session,
     runs: bySession.get(session.sessionId) ?? [],
   }));
-  if (needle.length === 0) {
-    return groups;
-  }
-  return groups
-    .map((group) => {
-      const sessionHit = group.session.title.toLowerCase().includes(needle);
-      const hits = sessionHit
-        ? group.runs
-        : group.runs.filter((run) => run.title.toLowerCase().includes(needle));
-      return { session: group.session, runs: hits };
-    })
-    .filter((group) => group.runs.length > 0 || group.session.title.toLowerCase().includes(needle));
 }
 
-/** 兼容旧入口：活动工作区的分组（`workspaceGroups` 的单根版） */
-export function sessionGroups(state: ClientState): SessionGroup[] {
-  return groupSessions(state.sessions, state.runs, state.search);
+/**
+ * 工作区名是否命中搜索词。
+ *
+ * 模糊 = 子串 + 大小写不敏感，与"输两个字符就想看到结果"的预期对齐。
+ * 只比显示名（`name`）不比路径：侧栏上写着的就是名字，按路径命中会
+ * 出现"列表里明明没有这个词却筛出来了"的困惑。
+ */
+export function workspaceMatches(name: string, keyword: string): boolean {
+  const needle = keyword.trim().toLowerCase();
+  if (needle.length === 0) {
+    return true;
+  }
+  return name.toLowerCase().includes(needle);
 }
 
 /** 侧栏树的一层：工作区名节点，它名下是会话（会话下才是 Run） */
@@ -939,11 +938,13 @@ export type WorkspaceGroup = {
  * 侧栏三层树：工作区 → 工作区名 → 会话（Run 挂在会话下，见 groupSessions）。
  *
  * 根节点「工作区」本身是纯分组标题，不携带行为；每个工作区名独立折叠、
- * 独立计数。搜索时没有命中的工作区整个隐藏，而不是留一个空节点。
+ * 独立计数。**搜索框搜的是工作区名**（见 workspaceMatches）：没命中的
+ * 工作区整组隐藏，命中的整组原样列出——界面上因此只有"哪些工作区还在"，
+ * 不会出现"工作区在、它下面的会话被悄悄砍掉"这种半过滤状态。
  */
 export function workspaceGroups(state: ClientState): WorkspaceGroup[] {
-  const needle = state.search.trim().toLowerCase();
   return state.workspaces
+    .filter((ws) => workspaceMatches(ws.name, state.search))
     .map((ws) => ({
       root: ws.root,
       name: ws.name,
@@ -951,10 +952,8 @@ export function workspaceGroups(state: ClientState): WorkspaceGroup[] {
       busy: ws.runs.some(
         (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
       ),
-      groups: groupSessions(ws.sessions, ws.runs, state.search),
-    }))
-    // 搜索时没有任何命中的工作区整组隐藏，而不是留一个空节点
-    .filter((group) => needle.length === 0 || group.groups.length > 0);
+      groups: groupSessions(ws.sessions, ws.runs),
+    }));
 }
 
 /** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */
@@ -974,11 +973,3 @@ export function modeOf(state: ClientState): ComposerMode {
   return "ready";
 }
 
-/** 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有） */
-export function filterBySearch<T extends { title: string }>(items: T[], keyword: string): T[] {
-  const needle = keyword.trim().toLowerCase();
-  if (needle.length === 0) {
-    return items;
-  }
-  return items.filter((item) => item.title.toLowerCase().includes(needle));
-}

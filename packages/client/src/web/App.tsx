@@ -46,7 +46,7 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
    *
    * - Esc：只收浮层，不停任务（见 handleEscape）；
    * - Ctrl+N：新任务；Ctrl+,：打开设置——这两组直接走动作层；
-   * - Ctrl+K：聚焦侧栏搜索。侧栏收起时先把它拉开——对一个 display:none
+   * - Ctrl+K：聚焦侧栏搜索（搜工作区名）。侧栏收起时先把它拉开——对一个 display:none
    *   的输入框调 focus() 是空操作，等一帧再聚焦（React 提交之后）。
    */
   useEffect(() => {

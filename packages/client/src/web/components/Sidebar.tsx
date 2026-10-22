@@ -12,8 +12,10 @@
  * 每个独立折叠、独立显示会话数，点击聚焦该根（新任务去哪），行菜单里
  * 有「关闭工作区」。会话按它所属的根打开与删除（sessionId 跨根会撞名）。
  *
- * 搜索只覆盖任务名与会话标题：服务端没有会话内容检索接口，
- * 界面上就不该暗示"能搜内容"。
+ * 搜索框搜的是**工作区名**（模糊匹配）：池里有十几个工作区时，找"我要
+ * 切过去的那一个"比找某段会话频繁得多。命中的工作区整组原样展开，
+ * 不按标题二次过滤——否则"搜到了工作区，里面的会话却少了"会让人以为
+ * 数据丢了。
  */
 
 import { useState } from "react";
@@ -30,8 +32,9 @@ export function Sidebar(): React.ReactElement {
   const state = useClient();
   const actions = useActions();
   const groups = workspaceGroups(state);
-  // 折叠是纯展示状态：不进 store，它不影响任何别处
-  const [rootOpen, setRootOpen] = useState(true);
+  // 根节点「工作区」没有折叠入口（不摆折叠箭头），所以这里只取状态不取
+  // setter——`is-fold` 那套类名留着，等哪天真要收起时不用重新接线
+  const [rootOpen] = useState(true);
   const totalSessions = state.workspaces.reduce((sum, ws) => sum + ws.sessions.length, 0);
 
   return (
@@ -39,8 +42,8 @@ export function Sidebar(): React.ReactElement {
       <div className="side-search">
         <Icon name="search" />
         <input
-          placeholder="搜索任务名"
-          aria-label="搜索任务名"
+          placeholder="搜索工作区"
+          aria-label="搜索工作区"
           value={state.search}
           onChange={(event) => actions.setSearch(event.target.value)}
         />
@@ -72,11 +75,19 @@ export function Sidebar(): React.ReactElement {
             </div>
 
             {rootOpen ? (
-              <div className="tree-kids">
-                {groups.map((group) => (
-                  <WorkspaceNode key={group.root} group={group} state={state} />
-                ))}
-              </div>
+              groups.length > 0 ? (
+                <div className="tree-kids">
+                  {groups.map((group) => (
+                    <WorkspaceNode key={group.root} group={group} state={state} />
+                  ))}
+                </div>
+              ) : (
+                // 池里有工作区、但一个都没命中。根行与它的「+」照旧留着：
+                // 搜不到的时候，用户下一步往往是去打开一个新的
+                <div className="empty-hint" style={{ margin: "2px 2px 0 14px" }}>
+                  没有匹配的工作区
+                </div>
+              )
             ) : null}
           </div>
         </>
@@ -144,7 +155,7 @@ function WorkspaceNode({
         <div className="tree-kids" style={{width:"80%"}}>
           {group.groups.length === 0 ? (
             <div className="empty-hint" style={{ marginLeft: 30 }}>
-              {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
+              还没有会话
             </div>
           ) : null}
           {group.groups.map((item) => (

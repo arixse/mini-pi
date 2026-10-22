@@ -18,16 +18,16 @@ import {
   applySnapshot,
   attachQueuedRun,
   emptyView,
-  filterBySearch,
+  groupSessions,
   initialState,
   itemsFromMessages,
   messageId,
   openSession,
   pendingApprovals,
   removeItem,
-  sessionGroups,
   upsertItem,
   workspaceGroups,
+  workspaceMatches,
   type ClientState,
   type TimelineItem,
   type View,
@@ -581,7 +581,7 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
   });
 });
 
-describe("侧栏的两组过滤", () => {
+describe("侧栏：进行中的任务", () => {
   it("activeRuns 只留没结束的", () => {
     const state = initialState();
     const run = (runId: string, status: RunSummary["status"]): RunSummary => ({
@@ -604,18 +604,20 @@ describe("侧栏的两组过滤", () => {
     );
   });
 
-  it("filterBySearch 大小写不敏感，空串不过滤", () => {
-    const sessions = [
-      { title: "Fix bug" },
-      { title: "写文档" },
-    ] as Array<SessionSummary & { title: string }>;
-    assert.equal(filterBySearch(sessions, "fix").length, 1);
-    assert.equal(filterBySearch(sessions, "").length, 2);
-    assert.equal(filterBySearch(sessions, "   ").length, 2);
+});
+
+describe("workspaceMatches：搜索框的口径", () => {
+  it("子串 + 大小写不敏感，空串全命中", () => {
+    assert.equal(workspaceMatches("Mini-Pi", "mini"), true);
+    assert.equal(workspaceMatches("Mini-Pi", "PI"), true);
+    assert.equal(workspaceMatches("Mini-Pi", ""), true);
+    assert.equal(workspaceMatches("Mini-Pi", "   "), true, "只有空白等同没搜");
+    assert.equal(workspaceMatches("Mini-Pi", "  mini  "), true, "前后空白先 trim");
+    assert.equal(workspaceMatches("Mini-Pi", "other"), false);
   });
 });
 
-describe("sessionGroups：侧栏树", () => {
+describe("groupSessions：会话与 Run 归并", () => {
   const session = (sessionId: string, title: string): SessionSummary => ({
     sessionId,
     timestamp: "2026-10-20T09-14-02",
@@ -641,10 +643,10 @@ describe("sessionGroups：侧栏树", () => {
   });
 
   it("Run 挂在它所属的会话下面，没有 Run 的会话也还是节点", () => {
-    const state = initialState();
-    state.sessions = [session("s1", "修 bug"), session("s2", "写文档")];
-    state.runs = [run("r1", "s1", "改 login.ts"), run("r2", "s1", "补测试")];
-    const groups = sessionGroups(state);
+    const groups = groupSessions(
+      [session("s1", "修 bug"), session("s2", "写文档")],
+      [run("r1", "s1", "改 login.ts"), run("r2", "s1", "补测试")],
+    );
     assert.deepEqual(
       groups.map((group) => group.session.title),
       ["修 bug", "写文档"],
@@ -656,33 +658,14 @@ describe("sessionGroups：侧栏树", () => {
     assert.deepEqual(groups[1]!.runs, []);
   });
 
-  it("搜索命中会话时它的 Run 整组保留；只命中 Run 时只留那几条", () => {
-    const state = initialState();
-    state.sessions = [session("s1", "修 bug"), session("s2", "写文档")];
-    state.runs = [run("r1", "s1", "改 login.ts"), run("r2", "s1", "补测试")];
-
-    state.search = "修 bug";
-    let groups = sessionGroups(state);
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0]!.runs.length, 2, "命中会话不砍它的子任务");
-
-    state.search = "login";
-    groups = sessionGroups(state);
-    assert.equal(groups.length, 1);
-    assert.deepEqual(
-      groups[0]!.runs.map((item) => item.runId),
-      ["r1"],
-    );
-
-    state.search = "不存在的词";
-    assert.deepEqual(sessionGroups(state), []);
+  it("只归并不过滤：会话标题不含搜索词也不砍", () => {
+    const groups = groupSessions([session("s1", "修 bug")], [run("r1", "s1", "改 login.ts")]);
+    assert.equal(groups.length, 1, "过滤归 workspaceGroups，这里不认识搜索词");
+    assert.equal(groups[0]!.runs.length, 1);
   });
 
   it("Run 属于不在会话列表里的会话时不建野节点", () => {
-    const state = initialState();
-    state.sessions = [session("s1", "修 bug")];
-    state.runs = [run("r9", "s-gone", "孤儿任务")];
-    const groups = sessionGroups(state);
+    const groups = groupSessions([session("s1", "修 bug")], [run("r9", "s-gone", "孤儿任务")]);
     assert.equal(groups.length, 1);
     assert.deepEqual(groups[0]!.runs, [], "会话列表才是树的节点来源");
   });
@@ -761,7 +744,7 @@ describe("workspaceGroups：多工作区三层树", () => {
     );
   });
 
-  it("待裁决数与忙碌标记跟着各自的根走；搜索没命中的工作区整个隐藏", () => {
+  it("待裁决数与忙碌标记跟着各自的根走", () => {
     const state = initialState();
     state.workspaces = [
       workspace("D:/a", "a", [session("s1", "修 bug")], [
@@ -769,17 +752,38 @@ describe("workspaceGroups：多工作区三层树", () => {
       ], 2),
       workspace("D:/b", "b", [session("s1", "写文档")], []),
     ];
-    let groups = workspaceGroups(state);
+    const groups = workspaceGroups(state);
     assert.equal(groups[0]!.pendingApprovals, 2);
     assert.equal(groups[0]!.busy, true, "有 running 任务就是忙");
     assert.equal(groups[1]!.busy, false);
+  });
 
-    state.search = "写文档";
+  it("搜索按工作区名过滤：没命中的整组隐藏，命中的整组原样列出", () => {
+    const state = initialState();
+    state.workspaces = [
+      workspace("D:/a", "Mini-Pi", [session("s1", "修 bug")], [run("r1", "s1", "改 login.ts")]),
+      workspace("D:/b", "沙盒", [session("s2", "写文档")], [run("r2", "s2", "补测试")]),
+    ];
+
+    state.search = "mini";
+    let groups = workspaceGroups(state);
+    assert.deepEqual(
+      groups.map((group) => group.name),
+      ["Mini-Pi"],
+      "大小写不敏感的子串命中；沙盒整组隐藏",
+    );
+    assert.equal(groups[0]!.groups.length, 1, "命中的工作区里会话全在，不按标题二次过滤");
+    assert.equal(groups[0]!.groups[0]!.runs.length, 1, "Run 也不砍");
+
+    state.search = "不存在的词";
+    assert.deepEqual(workspaceGroups(state), []);
+
+    state.search = "  ";
     groups = workspaceGroups(state);
     assert.deepEqual(
       groups.map((group) => group.name),
-      ["b"],
-      "a 根没有任何命中，整组隐藏",
+      ["Mini-Pi", "沙盒"],
+      "只有空白等同没搜",
     );
   });
 });
