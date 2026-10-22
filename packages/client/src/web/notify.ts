@@ -127,10 +127,13 @@ export function approvalNotification(input: {
   approvalId: string;
   runTitle: string;
   toolName: string;
+  /** 哪个工作区的任务（多工作区时"谁在等"必须说清）；缺省不加前缀 */
+  workspaceName?: string;
 }): NotificationText {
+  const scope = input.workspaceName ? `【${input.workspaceName}】` : "";
   return {
     title: "需要你的裁决 · mini-pi",
-    body: `${input.runTitle} 请求执行 ${input.toolName}`,
+    body: `${scope}${input.runTitle} 请求执行 ${input.toolName}`,
     tag: `ap:${input.approvalId}`,
   };
 }
@@ -140,6 +143,8 @@ export function doneNotification(input: {
   runTitle: string;
   status: RunPhase;
   elapsedMs: number;
+  /** 哪个工作区的任务完成了（多工作区时不说清是谁等于没说） */
+  workspaceName?: string;
 }): NotificationText {
   const label =
     input.status === "failed"
@@ -147,9 +152,10 @@ export function doneNotification(input: {
       : input.status === "cancelled"
         ? "任务已取消"
         : "任务完成";
+  const scope = input.workspaceName ? `【${input.workspaceName}】` : "";
   return {
     title: `${label} · mini-pi`,
-    body: `${input.runTitle}（${(input.elapsedMs / 1000).toFixed(1)}s）`,
+    body: `${scope}${input.runTitle}（${(input.elapsedMs / 1000).toFixed(1)}s）`,
     tag: `run:${input.runId}:done`,
   };
 }

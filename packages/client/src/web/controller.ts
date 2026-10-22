@@ -170,7 +170,7 @@ export class AppController {
       // 首份快照之后立刻建全局流：快照与建流之间发生的事件必须补上
       this.startGlobalStream();
       if (snapshot.currentSessionId) {
-        await this.openSession(snapshot.currentSessionId);
+        await this.openSession(snapshot.currentSessionId, snapshot.activeRoot);
       }
     } catch (error) {
       this.store.update((state) => {
@@ -286,6 +286,14 @@ export class AppController {
     }
   }
 
+  /** 某个工作区的名字（通知文案用）；根不在池里时返回 null */
+  private workspaceNameOf(root: string | undefined): string | null {
+    if (!root) {
+      return null;
+    }
+    return this.store.current.workspaces.find((w) => w.root === root)?.name ?? null;
+  }
+
   /**
    * 该不该弹、弹什么。
    *
@@ -312,6 +320,7 @@ export class AppController {
           approvalId: event.request.id,
           runTitle: run?.title ?? "任务",
           toolName: event.request.toolName,
+          workspaceName: this.workspaceNameOf(envelope.root) ?? undefined,
         }),
         envelope.runId,
       );
@@ -329,6 +338,7 @@ export class AppController {
           runTitle: run?.title ?? "任务",
           status: event.status,
           elapsedMs: event.elapsedMs,
+          workspaceName: this.workspaceNameOf(envelope.root) ?? undefined,
         }),
         envelope.runId,
       );
@@ -408,25 +418,30 @@ export class AppController {
 
   // ------------------------------------------------------------ 会话 / Run
 
-  private async openSession(sessionId: string): Promise<void> {
+  private async openSession(sessionId: string, root?: string): Promise<void> {
     const epoch = ++this.viewEpoch;
+    // 跨根打开必须显式带根：sessionId 是文件名，跨工作区会撞
+    const targetRoot = root ?? this.store.current.activeRoot;
     try {
-      const detail = await api.session(sessionId);
+      const detail = await api.session(sessionId, targetRoot);
       // 请求回来时用户可能已经点了别的会话或新任务：这一份不再算数
       if (epoch !== this.viewEpoch) {
         return;
       }
-      const live = this.liveRunOf(sessionId);
+      const live = this.liveRunOf(targetRoot, sessionId);
       // 最近的一条 Run（不论结束没结束）：运行头的隔离信息要靠它
       // （任务跑完了，「丢弃」按钮还得在）
       const recent =
-        this.store.current.runs.find((run) => run.sessionId === sessionId) ?? null;
+        this.runsOf(targetRoot).find((run) => run.sessionId === sessionId) ?? null;
+      const target =
+        this.store.current.workspaces.find((w) => w.root === targetRoot) ?? null;
       this.store.update((state) => {
         openSessionIn(state, sessionId, detail.messages, {
-          // 只有"当前会话"能接着聊；其余历史会话只读回看
-          readOnly: sessionId !== state.currentSessionId,
+          // 只有"这个根的当前会话"能接着聊；其余历史会话只读回看
+          readOnly: sessionId !== (target?.currentSessionId ?? state.currentSessionId),
           liveRun: live,
           run: recent,
+          root: targetRoot,
         });
         state.ui.sidebar = false;
       });
@@ -452,16 +467,21 @@ export class AppController {
    * 聚焦带会话守卫：打开期间用户可能又点了别处，那时不该把光标
    * 抢到一个已经不在看的会话上。
    */
-  private async continueSession(sessionId: string): Promise<void> {
-    await this.openSession(sessionId);
+  private async continueSession(sessionId: string, root?: string): Promise<void> {
+    await this.openSession(sessionId, root);
     if (this.store.current.view.sessionId === sessionId) {
       this.composer?.current?.focus();
     }
   }
 
-  private liveRunOf(sessionId: string) {
+  /** 某个工作区名下的 Run 列表（池里每个根有自己的任务） */
+  private runsOf(root: string) {
+    return this.store.current.workspaces.find((w) => w.root === root)?.runs ?? [];
+  }
+
+  private liveRunOf(root: string, sessionId: string) {
     return (
-      this.store.current.runs.find(
+      this.runsOf(root).find(
         (run) =>
           run.sessionId === sessionId &&
           (run.status === "running" || run.status === "blocked" || run.status === "queued"),
@@ -481,8 +501,12 @@ export class AppController {
       await this.openRun(runId);
       return;
     }
-    if (this.store.current.view.sessionId !== found.sessionId) {
-      await this.openSession(found.sessionId);
+    // Run 带着归属根：跨根的会话打开要显式指过去
+    if (
+      this.store.current.view.sessionId !== found.sessionId ||
+      this.store.current.view.root !== (found.root ?? null)
+    ) {
+      await this.openSession(found.sessionId, found.root);
       // 打开期间用户可能又切走了：不要把这条 Run 硬按到别的会话的头上
       if (this.store.current.view.sessionId !== found.sessionId) {
         return;
@@ -529,11 +553,20 @@ export class AppController {
       await previous;
       // 等的这一下里，上一个请求可能已经建好会话了：优先用它
       const sessionId = this.store.current.view.sessionId ?? undefined;
-      const created = await api.sendRun(text, sessionId);
+      // 发给哪个根：看着的会话属于哪个根就回哪个根；草稿（新任务）去活动根
+      const targetRoot =
+        sessionId !== undefined
+          ? (this.store.current.view.root ?? this.store.current.activeRoot)
+          : this.store.current.activeRoot;
+      const created = await api.sendRun(text, sessionId, targetRoot);
       settle(created);
       this.store.update((state) => {
         if (state.view.sessionId === null) {
           state.view.sessionId = created.sessionId;
+          // 草稿落了地：时间线从此属于这个根
+          if (state.view.root === null) {
+            state.view.root = targetRoot;
+          }
         }
         // runId 落到那条乐观消息上：撤回要点名它
         attachQueuedRun(state.view, optimisticId, created.runId);
@@ -745,13 +778,15 @@ export class AppController {
   }
 
   private async deleteTarget(): Promise<void> {
-    const sessionId = this.store.current.ui.deleteTarget;
-    if (!sessionId) {
+    const target = this.store.current.ui.deleteTarget;
+    if (!target) {
       return;
     }
     try {
-      const result = await api.deleteSession(sessionId);
-      const wasOpen = this.store.current.view.sessionId === sessionId;
+      const result = await api.deleteSession(target.sessionId, target.root);
+      const wasOpen =
+        this.store.current.view.sessionId === target.sessionId &&
+        this.store.current.view.root === target.root;
       this.store.update((state) => {
         state.ui.deleteTarget = null;
       });
@@ -765,7 +800,7 @@ export class AppController {
         // 删掉的正是当前会话时，服务端不再补开新的：回到草稿态，
         // 下一段对话从第一次发送算起
         if (result.currentSessionId) {
-          await this.openSession(result.currentSessionId);
+          await this.openSession(result.currentSessionId, target.root);
         }
       }
     } catch (error) {
@@ -773,6 +808,48 @@ export class AppController {
         state.ui.deleteTarget = null;
       });
       this.fail(error);
+    }
+  }
+
+  /**
+   * 聚焦一个已打开的工作区（侧栏工作区名节点点击）。
+   *
+   * 只挪"新任务去哪"的焦点：刷新一份全量状态（活动根相关的顶层字段
+   * 会换），但**不重建时间线**——正在看的会话不换、事件流不断。
+   */
+  private async focusWorkspace(root: string): Promise<void> {
+    try {
+      await api.openWorkspace(root);
+      await this.refreshState();
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /**
+   * 显式关闭一个工作区。
+   *
+   * 正在看的会话属于它时，时间线一起收掉：回到草稿态，输入区接下来的
+   * 第一条消息去新的活动根。没在看就只刷状态，界面别的东西都不动。
+   */
+  private async closeWorkspace(root: string): Promise<void> {
+    try {
+      await api.closeWorkspace(root);
+      this.banner("ok", "已关闭该工作区");
+      if (this.store.current.view.root === root) {
+        this.viewEpoch += 1;
+        this.closeStream();
+        this.closeDiff();
+        this.pendingUsers = [];
+        this.store.update((state) => {
+          state.view = emptyView();
+        });
+      }
+      await this.refreshState();
+    } catch (error) {
+      // 跑着任务时服务端 409，原因会原样带到提示条上
+      this.fail(error);
+      await this.refreshState(true);
     }
   }
 
@@ -947,8 +1024,8 @@ export class AppController {
       closeDiff: () => this.closeDiff(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
-      openSession: (sessionId) => void this.openSession(sessionId),
-      continueSession: (sessionId) => this.continueSession(sessionId),
+      openSession: (sessionId, root) => void this.openSession(sessionId, root),
+      continueSession: (sessionId, root) => this.continueSession(sessionId, root),
       openRun: (runId) => void this.openRun(runId),
       decide: (approvalId, answer) => void this.decide(approvalId, answer),
       setSearch: (keyword) => {
@@ -1026,13 +1103,15 @@ export class AppController {
           state.ui.picker = false;
         });
       },
-      switchWorkspace: async (path: string) => {
-        await api.switchWorkspace(path);
+      openWorkspace: async (path: string) => {
+        await api.openWorkspace(path);
         await this.reload();
       },
-      requestDelete: (sessionId) => {
+      focusWorkspace: (root: string) => this.focusWorkspace(root),
+      closeWorkspace: (root: string) => this.closeWorkspace(root),
+      requestDelete: (sessionId, root) => {
         this.store.update((state) => {
-          state.ui.deleteTarget = sessionId;
+          state.ui.deleteTarget = { sessionId, root: root ?? state.activeRoot };
         });
       },
       cancelDelete: () => {

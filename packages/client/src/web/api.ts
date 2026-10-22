@@ -106,8 +106,20 @@ const post = <T>(path: string, body?: unknown): Promise<T> =>
 
 export const api = {
   state: (): Promise<AppState> => request<AppState>("/api/state"),
-  sendRun: (prompt: string, sessionId?: string): Promise<{ runId: string; sessionId: string }> =>
-    post("/api/runs", sessionId ? { prompt, sessionId } : { prompt }),
+  /**
+   * 发一条消息。`root` 指定发给哪个工作区：草稿态（新任务）省略时由
+   * 服务端落在活动根；看着别的根的会话接着聊时必须带上那个根。
+   */
+  sendRun: (
+    prompt: string,
+    sessionId?: string,
+    root?: string,
+  ): Promise<{ runId: string; sessionId: string }> =>
+    post("/api/runs", {
+      prompt,
+      ...(sessionId ? { sessionId } : {}),
+      ...(root ? { root } : {}),
+    }),
   cancelRun: (runId: string): Promise<void> =>
     request<void>(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   /** 丢弃这个 Run 的隔离工作区（M3）；跑着的时候服务端会 409 */
@@ -126,10 +138,16 @@ export const api = {
     post(`/api/approvals/${encodeURIComponent(id)}`, { answer }),
 
   sessions: (): Promise<SessionSummary[]> => request<SessionSummary[]>("/api/sessions"),
-  session: (id: string): Promise<SessionDetail> =>
-    request<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),
-  deleteSession: (id: string): Promise<{ currentSessionId: string | null }> =>
-    request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** 会话按根寻址：sessionId 是文件名，跨工作区会撞（缺省 = 活动根） */
+  session: (id: string, root?: string): Promise<SessionDetail> =>
+    request<SessionDetail>(
+      `/api/sessions/${encodeURIComponent(id)}${root ? `?root=${encodeURIComponent(root)}` : ""}`,
+    ),
+  deleteSession: (id: string, root?: string): Promise<{ currentSessionId: string | null }> =>
+    request(
+      `/api/sessions/${encodeURIComponent(id)}${root ? `?root=${encodeURIComponent(root)}` : ""}`,
+      { method: "DELETE" },
+    ),
 
   providers: (): Promise<ProviderView[]> => request<ProviderView[]>("/api/providers"),
   /** 只存凭据不设默认模型：自定义供应商先"能进"，再选模型 */
@@ -156,7 +174,11 @@ export const api = {
 
   dirs: (path?: string): Promise<DirListing> =>
     request<DirListing>(`/api/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  switchWorkspace: (path: string): Promise<WorkspaceView> => post("/api/workspace", { path }),
+  /** 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务 */
+  openWorkspace: (path: string): Promise<WorkspaceView> => post("/api/workspace", { path }),
+  /** 显式关闭一个工作区；跑着任务时服务端 409 */
+  closeWorkspace: (root: string): Promise<void> =>
+    request<void>(`/api/workspace?root=${encodeURIComponent(root)}`, { method: "DELETE" }),
 };
 
 /**

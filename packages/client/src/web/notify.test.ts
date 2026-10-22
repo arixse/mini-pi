@@ -79,6 +79,34 @@ describe("通知文案", () => {
     assert.match(failed.title, /失败/);
   });
 
+  it("多工作区时文案带工作区名，不说清是谁等于没说", () => {
+    const approval = approvalNotification({
+      approvalId: "ap_2",
+      runTitle: "写文档",
+      toolName: "write_file",
+      workspaceName: "mini-pi",
+    });
+    assert.match(approval.body, /【mini-pi】/);
+
+    const done = doneNotification({
+      runId: "run_3",
+      runTitle: "写文档",
+      status: "done",
+      elapsedMs: 500,
+      workspaceName: "blog",
+    });
+    assert.match(done.body, /【blog】/);
+
+    // 不带名字（单工作区 / 旧帧）时维持原样，没有空括号
+    const plain = doneNotification({
+      runId: "run_4",
+      runTitle: "写文档",
+      status: "done",
+      elapsedMs: 500,
+    });
+    assert.doesNotMatch(plain.body, /【/);
+  });
+
   it("铃铛 tooltip 说清开不了的原因", () => {
     assert.match(
       notificationButtonTitle({ supported: false, permission: "default", enabled: false }),

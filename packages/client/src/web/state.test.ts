@@ -27,11 +27,12 @@ import {
   removeItem,
   sessionGroups,
   upsertItem,
+  workspaceGroups,
   type ClientState,
   type TimelineItem,
   type View,
 } from "./state";
-import type { AppState, RunSummary, ServerEvent, SessionSummary } from "../shared/types";
+import type { AppState, RunSummary, ServerEvent, SessionSummary, WorkspaceStateView } from "../shared/types";
 
 function userMessage(text: string, timestamp = 1000): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -684,6 +685,102 @@ describe("sessionGroups：侧栏树", () => {
     const groups = sessionGroups(state);
     assert.equal(groups.length, 1);
     assert.deepEqual(groups[0]!.runs, [], "会话列表才是树的节点来源");
+  });
+});
+
+describe("workspaceGroups：多工作区三层树", () => {
+  const session = (sessionId: string, title: string): SessionSummary => ({
+    sessionId,
+    timestamp: "2026-10-20T09-14-02",
+    title,
+    messageCount: 3,
+    compactedCount: 0,
+    sizeBytes: 10,
+    isCurrent: false,
+  });
+
+  const run = (
+    runId: string,
+    sessionId: string,
+    title: string,
+    status: RunSummary["status"] = "done",
+  ): RunSummary => ({
+    runId,
+    title,
+    sessionId,
+    status,
+    model: "m",
+    startedAt: 0,
+    elapsedMs: 1,
+    tokens: 0,
+    contextWindow: 0,
+    pendingApprovals: 0,
+    workspace: runWorkspace(),
+  });
+
+  const workspace = (
+    root: string,
+    name: string,
+    sessions: SessionSummary[],
+    runs: RunSummary[],
+    pending = 0,
+  ): WorkspaceStateView => ({
+    root,
+    name,
+    sessions,
+    runs,
+    currentSessionId: sessions[sessions.length - 1]?.sessionId ?? null,
+    approvals: { pending },
+    sendable: true,
+    blockReason: null,
+    isolate: false,
+    isolateError: null,
+  });
+
+  it("每个工作区独立归组：同名会话各回各的根，不串", () => {
+    const state = initialState();
+    // 同一个 sessionId 出现在两个根下——这正是按根归组要防的撞名
+    state.workspaces = [
+      workspace("D:/a", "a", [session("s1", "A 的会话")], [run("r1", "s1", "A 的任务")]),
+      workspace("D:/b", "b", [session("s1", "B 的会话")], [run("r2", "s1", "B 的任务")]),
+    ];
+    const groups = workspaceGroups(state);
+    assert.equal(groups.length, 2);
+    assert.deepEqual(
+      groups.map((group) => group.name),
+      ["a", "b"],
+    );
+    assert.deepEqual(
+      groups[0]!.groups[0]!.runs.map((item) => item.runId),
+      ["r1"],
+      "同名会话在 a 根下挂的是 a 的任务",
+    );
+    assert.deepEqual(
+      groups[1]!.groups[0]!.runs.map((item) => item.runId),
+      ["r2"],
+    );
+  });
+
+  it("待裁决数与忙碌标记跟着各自的根走；搜索没命中的工作区整个隐藏", () => {
+    const state = initialState();
+    state.workspaces = [
+      workspace("D:/a", "a", [session("s1", "修 bug")], [
+        run("r1", "s1", "改 login.ts", "running"),
+      ], 2),
+      workspace("D:/b", "b", [session("s1", "写文档")], []),
+    ];
+    let groups = workspaceGroups(state);
+    assert.equal(groups[0]!.pendingApprovals, 2);
+    assert.equal(groups[0]!.busy, true, "有 running 任务就是忙");
+    assert.equal(groups[1]!.busy, false);
+
+    state.search = "写文档";
+    groups = workspaceGroups(state);
+    assert.deepEqual(
+      groups.map((group) => group.name),
+      ["b"],
+      "a 根没有任何命中，整组隐藏",
+    );
   });
 });
 

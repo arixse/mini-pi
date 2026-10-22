@@ -1,11 +1,11 @@
 /**
  * 工作区选择浮层。
  *
- * 顶栏的工作区芯片点开就是这里：模型读写的是哪个目录，界面上任何时候都要能查、
- * 能换。只列**目录**——这里选的是工作区，不是文件。
+ * 侧栏分区标题的 `+` 点开就是这里：模型读写的是哪个目录，界面上任何时候
+ * 都要能查、能选。只列**目录**——这里选的是工作区，不是文件。
  *
- * 换工作区在服务端等于换一个宿主（会话、模型、工具全跟着换），
- * 所以这里只发一个请求，成功后由动作层重新拉一次全量状态。
+ * 多工作区后这里是「再打开一个」：成功后由动作层重新拉一次全量状态；
+ * 别的宿主不销毁，切走不打断跑着的任务。
  */
 
 import { useEffect, useState } from "react";
@@ -57,7 +57,7 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
     setBusy(true);
     setError("");
     try {
-      await actions.switchWorkspace(target);
+      await actions.openWorkspace(target);
       actions.closePicker();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

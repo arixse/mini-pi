@@ -129,6 +129,8 @@ function sessionDetail(sessionId: string, text: string): SessionDetail {
 function snapshot(overrides: Partial<AppState> = {}): AppState {
   return {
     workspace: { root: "D:/ws", name: "ws" },
+    activeRoot: "D:/ws",
+    workspaces: [],
     tier: "workspace-write",
     model: {
       provider: "deepseek",
@@ -200,7 +202,7 @@ describe("AppController", () => {
     controller.store.update((state) => {
       state.ui.settings = true;
       state.ui.picker = true;
-      state.ui.deleteTarget = "s1";
+      state.ui.deleteTarget = { sessionId: "s1", root: "D:\\demo" };
       state.ui.sidebar = true;
       state.view.activeRunId = "run_1";
     });

@@ -25,6 +25,7 @@ import type {
   ServerEvent,
   SessionSummary,
   Tier,
+  WorkspaceStateView,
   WorkspaceView,
 } from "../shared/types";
 import { textOf } from "./format";
@@ -88,6 +89,13 @@ export type TimelineItem = {
 
 export type View = {
   sessionId: string | null;
+  /**
+   * 当前时间线属于哪个工作区。
+   *
+   * 草稿态（sessionId 为 null）时它也是 null——发送时再取活动根；
+   * 打开过会话之后它跟着会话走，切活动根不改它（时间线不重建）。
+   */
+  root: string | null;
   items: TimelineItem[];
   status: RunPhase | "idle";
   /** 正在订阅的 Run；null 表示没有在跑的任务 */
@@ -150,7 +158,12 @@ export type ClientState = {
    * （服务端渲染、单测）里 `initialTheme` 自己会退到深色。
    */
   theme: ThemeMode;
+  /** 活动工作区（"新任务去哪"）；与 `activeRoot` 指向同一个根 */
   workspace: WorkspaceView;
+  /** 活动根：侧栏聚焦、输入区与状态行绑定谁 */
+  activeRoot: string;
+  /** 宿主池里打开的全部工作区（侧栏三层树的数据源） */
+  workspaces: WorkspaceStateView[];
   tier: Tier;
   model: ServerSnapshot["model"];
   sendable: boolean;
@@ -174,8 +187,8 @@ export type ClientState = {
     settings: boolean;
     picker: boolean;
     sidebar: boolean;
-    /** 待二次确认删除的会话 */
-    deleteTarget: string | null;
+    /** 待二次确认删除的会话（会话 id + 它的根：跨工作区会撞名） */
+    deleteTarget: { sessionId: string; root: string } | null;
     /** 正在看变更的 Run；null 表示面板关着 */
     diffRunId: string | null;
   };
@@ -196,6 +209,7 @@ export type ClientState = {
 export function emptyView(): View {
   return {
     sessionId: null,
+    root: null,
     items: [],
     status: "idle",
     activeRunId: null,
@@ -227,6 +241,8 @@ export function initialState(): ClientState {
         : { matches: (query: string) => matchMedia(query).matches },
     ),
     workspace: { root: "", name: "" },
+    activeRoot: "",
+    workspaces: [],
     tier: "workspace-write",
     model: {
       provider: null,
@@ -402,6 +418,8 @@ export function applySnapshot(state: ClientState, snapshot: ServerSnapshot): voi
   state.ready = true;
   state.error = null;
   state.workspace = snapshot.workspace;
+  state.activeRoot = snapshot.activeRoot;
+  state.workspaces = snapshot.workspaces;
   state.tier = snapshot.tier;
   state.model = snapshot.model;
   state.sendable = snapshot.sendable;
@@ -479,10 +497,13 @@ export function openSession(
     readOnly?: boolean;
     liveRun?: RunSummary | null;
     run?: RunSummary | null;
+    /** 这段会话属于哪个工作区；缺省 = 活动根 */
+    root?: string;
   } = {},
 ): void {
   const view = emptyView();
   view.sessionId = sessionId;
+  view.root = options.root ?? state.activeRoot;
   view.items = itemsFromMessages(messages);
   view.title = options.title ?? "";
   view.readOnly = options.readOnly ?? false;
@@ -861,15 +882,18 @@ export function activeRuns(state: ClientState): RunSummary[] {
 export type SessionGroup = { session: SessionSummary; runs: RunSummary[] };
 
 /**
- * 侧栏树：按搜索词过滤，命中会话时它的 Run 整组保留。
+ * 把一个工作区的会话与 Run 归并成分组；纯函数，搜索口径因此可以单测。
  *
  * 搜索只覆盖任务名与会话标题（服务端没有会话检索接口，别假装有）。
- * 纯函数：组件只摆，这里算——过滤口径因此可以单测。
  */
-export function sessionGroups(state: ClientState): SessionGroup[] {
-  const keyword = state.search.trim().toLowerCase();
+export function groupSessions(
+  sessions: readonly SessionSummary[],
+  runs: readonly RunSummary[],
+  keyword: string,
+): SessionGroup[] {
+  const needle = keyword.trim().toLowerCase();
   const bySession = new Map<string, RunSummary[]>();
-  for (const run of state.runs) {
+  for (const run of runs) {
     const list = bySession.get(run.sessionId);
     if (list) {
       list.push(run);
@@ -877,22 +901,60 @@ export function sessionGroups(state: ClientState): SessionGroup[] {
       bySession.set(run.sessionId, [run]);
     }
   }
-  const groups = state.sessions.map((session) => ({
+  const groups = sessions.map((session) => ({
     session,
     runs: bySession.get(session.sessionId) ?? [],
   }));
-  if (keyword.length === 0) {
+  if (needle.length === 0) {
     return groups;
   }
   return groups
     .map((group) => {
-      const sessionHit = group.session.title.toLowerCase().includes(keyword);
-      const runs = sessionHit
+      const sessionHit = group.session.title.toLowerCase().includes(needle);
+      const hits = sessionHit
         ? group.runs
-        : group.runs.filter((run) => run.title.toLowerCase().includes(keyword));
-      return { session: group.session, runs };
+        : group.runs.filter((run) => run.title.toLowerCase().includes(needle));
+      return { session: group.session, runs: hits };
     })
-    .filter((group) => group.runs.length > 0 || group.session.title.toLowerCase().includes(keyword));
+    .filter((group) => group.runs.length > 0 || group.session.title.toLowerCase().includes(needle));
+}
+
+/** 兼容旧入口：活动工作区的分组（`workspaceGroups` 的单根版） */
+export function sessionGroups(state: ClientState): SessionGroup[] {
+  return groupSessions(state.sessions, state.runs, state.search);
+}
+
+/** 侧栏树的一层：工作区名节点，它名下是会话（会话下才是 Run） */
+export type WorkspaceGroup = {
+  root: string;
+  name: string;
+  /** 这个根上还挂着几个待裁决（节点行上的小红点用） */
+  pendingApprovals: number;
+  /** 这个根上有没有跑着 / 排队 / 等裁决的任务（「关闭工作区」的说明用） */
+  busy: boolean;
+  groups: SessionGroup[];
+};
+
+/**
+ * 侧栏三层树：工作区 → 工作区名 → 会话（Run 挂在会话下，见 groupSessions）。
+ *
+ * 根节点「工作区」本身是纯分组标题，不携带行为；每个工作区名独立折叠、
+ * 独立计数。搜索时没有命中的工作区整个隐藏，而不是留一个空节点。
+ */
+export function workspaceGroups(state: ClientState): WorkspaceGroup[] {
+  const needle = state.search.trim().toLowerCase();
+  return state.workspaces
+    .map((ws) => ({
+      root: ws.root,
+      name: ws.name,
+      pendingApprovals: ws.approvals.pending,
+      busy: ws.runs.some(
+        (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
+      ),
+      groups: groupSessions(ws.sessions, ws.runs, state.search),
+    }))
+    // 搜索时没有任何命中的工作区整组隐藏，而不是留一个空节点
+    .filter((group) => needle.length === 0 || group.groups.length > 0);
 }
 
 /** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */
