@@ -57,10 +57,10 @@ import { RunRecord } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
 import {
   isTier,
-  type AppState,
   type ApprovalAnswer,
   type ApprovalRequest,
   type DirListing,
+  type HostState,
   type ProviderView,
   type RunDiff,
   type RunPhase,
@@ -117,6 +117,14 @@ export type WorkspaceHostOptions = {
    * 只送 `isRunMetaEvent` 认可的那几类；正文增量仍然只走 per-run 流。
    */
   onRunEvent?: (runId: string, event: ServerEvent) => void;
+  /**
+   * 全局执行槽位（多工作区用）：`acquire` 等到一个槽位并返回释放函数。
+   *
+   * `RunManager` 是每个宿主自己的（默认 1），管不住"N 个工作区各跑一个"；
+   * 总闸挂在 AppServer 上，宿主在真正开跑前先过这道闸。排队等闸时 Run
+   * 保持 `queued`——对前端来说"在排队"仍然是真的。
+   */
+  acquireRunSlot?: () => Promise<() => void>;
   now?: () => number;
 };
 
@@ -146,6 +154,7 @@ export class WorkspaceHost {
   private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
   private readonly onRunEvent: ((runId: string, event: ServerEvent) => void) | undefined;
+  private readonly acquireRunSlot: NonNullable<WorkspaceHostOptions["acquireRunSlot"]> | undefined;
   private readonly now: () => number;
 
   private readonly records = new Map<string, RunRecord>();
@@ -177,6 +186,7 @@ export class WorkspaceHost {
     this.settingsStore = options.settingsStore ?? new SettingsStore();
     this.resolveModelImpl = options.resolveModel ?? defaultResolveModel;
     this.onRunEvent = options.onRunEvent;
+    this.acquireRunSlot = options.acquireRunSlot;
     this.skillLoader = new SkillLoader(this.workspaceRoot);
     this.sessionManager = new SessionManager(this.workspaceRoot, {
       skillLoader: this.skillLoader,
@@ -223,7 +233,8 @@ export class WorkspaceHost {
 
   // ---------------------------------------------------------------- 状态
 
-  async state(): Promise<AppState> {
+  /** 本宿主（一个工作区）的状态；AppServer 把池里每份聚合成 /api/state */
+  async state(): Promise<HostState> {
     const sessions = this.sessionSummaries();
     const runs = [...this.records.values()]
       .slice(-MAX_RUNS)
@@ -572,7 +583,14 @@ export class WorkspaceHost {
     );
   }
 
-  /** 历史会话只读回看：切过去只换 view，不动当前会话 */
+  /**
+   * 历史会话只读回看：切过去只换 view，不动当前会话。
+   *
+   * 除了消息还带回**这段会话现在的用量与回合数**（`tokens` / `turns`）：
+   * 顶部状态行的两枚指标问的就是"这段历史占了多大事"，只给消息的话
+   * 前端只能显示 0 和「—」——等于说这段会话什么都没发生过。
+   * 两者都按**当前上下文**（含压缩摘要）算，与跑着的 Run 同一把尺子。
+   */
   readSession(sessionId: string): SessionDetail {
     const context = this.sessionContext(sessionId);
     const summary = this.sessionSummaries().find((item) => item.sessionId === sessionId);
@@ -581,6 +599,8 @@ export class WorkspaceHost {
       messages: context.messages,
       messageCount: summary?.messageCount ?? context.messages.length,
       compactedCount: summary?.compactedCount ?? 0,
+      tokens: context.store.estimateContextTokens(),
+      turns: countTurns(context.messages),
     };
   }
 
@@ -771,10 +791,13 @@ export class WorkspaceHost {
     }
   }
 
-  /** 单个 Run 的对外摘要（GET /api/runs/:id） */
+  /** 单个 Run 的对外摘要（GET /api/runs/:id）；补上归属根（多工作区路由用） */
   runSummary(runId: string): RunSummary {
     const record = this.record(runId);
-    return record.summary(this.contextWindow, this.broker.countFor(runId));
+    return {
+      ...record.summary(this.contextWindow, this.broker.countFor(runId)),
+      root: this.workspaceRoot,
+    };
   }
 
   record(runId: string): RunRecord {
@@ -783,6 +806,18 @@ export class WorkspaceHost {
       throw new HttpError(404, `任务不存在：${runId}`);
     }
     return record;
+  }
+
+  /** 这条审批是否挂在这个宿主上（多工作区时路由裁决请求用） */
+  hasApproval(id: string): boolean {
+    return this.broker.get(id) !== undefined;
+  }
+
+  /** 有没有还在跑 / 排队 / 等裁决的任务（关闭工作区前要问） */
+  hasActiveRun(): boolean {
+    return [...this.records.values()].some(
+      (r) => r.status === "running" || r.status === "blocked" || r.status === "queued",
+    );
   }
 
   /**
@@ -817,6 +852,24 @@ export class WorkspaceHost {
     if (record.status !== "queued") {
       return;
     }
+    // 全局槽位（多工作区的总闸，见 WorkspaceHostOptions.acquireRunSlot）：
+    // 等闸期间 Run 保持 queued；等到之后可能已经被取消（取消路径会把
+    // 状态收成 cancelled），不能再把一个已结束的 Run 跑起来
+    let releaseSlot: (() => void) | undefined;
+    try {
+      if (this.acquireRunSlot) {
+        releaseSlot = await this.acquireRunSlot();
+        if (record.status !== "queued") {
+          return;
+        }
+      }
+      await this.runRecord(record);
+    } finally {
+      releaseSlot?.();
+    }
+  }
+
+  private async runRecord(record: RunRecord): Promise<void> {
     const model = this.model;
     if (!model) {
       await this.finish(record, "failed", "没有可用模型");
@@ -1121,24 +1174,7 @@ export class WorkspaceHost {
 
   /** 目录选择器：只列子目录，不列文件——这里选的是"工作区" */
   listDir(target: string | null): DirListing {
-    const path = resolve(target ?? this.workspaceRoot);
-    let names: string[];
-    try {
-      names = readdirSync(path, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-        .map((entry) => entry.name)
-        .sort((a, b) => a.localeCompare(b));
-    } catch (error) {
-      throw new HttpError(400, `无法读取目录：${errorMessage(error)}`);
-    }
-    const entries = names.map((name) => ({ name, path: join(path, name) }));
-    const parent = dirname(path);
-    return {
-      path,
-      parent: parent === path ? null : parent,
-      entries,
-      drives: listDrives(),
-    };
+    return listDirectory(target, this.workspaceRoot);
   }
 
   /** 切换工作区前的校验：必须是存在的目录 */
@@ -1153,6 +1189,20 @@ export class WorkspaceHost {
     }
     return path;
   }
+}
+
+/**
+ * 一段上下文里的模型回合数（顶部状态行的「步数」）。
+ *
+ * 数 assistant 消息而不是"有正文的回答"：只有工具调用、没有正文的那一条
+ * 同样是模型的一次回合，漏掉它会让"点了工具之后"的步数不涨。工具结果
+ * 是 toolResult 消息，本来就不在这一数里。
+ *
+ * 压缩过的会话只数得出现在上下文里的部分——被摘要替代的那些轮次已经
+ * 不在上下文里了，与 `tokens` 同样只回答"现在还剩多少"。
+ */
+function countTurns(messages: readonly AgentMessage[]): number {
+  return messages.filter((message) => message.role === "assistant").length;
 }
 
 /**
@@ -1203,6 +1253,33 @@ async function defaultResolveModel(
     maxTokens,
   });
   return { model, providerName: parsed.providerName, modelName: parsed.modelName };
+}
+
+/**
+ * 目录选择器的列目录实现：只列子目录，不列文件——这里选的是"工作区"。
+ *
+ * 抽成独立函数是因为空池启动（serve 未显式给 `--cwd`）时没有宿主可借，
+ * 选择器照样要能列目录——起点退到调用方给的安全默认值（比如用户主目录）。
+ */
+export function listDirectory(target: string | null, fallbackRoot: string): DirListing {
+  const path = resolve(target ?? fallbackRoot);
+  let names: string[];
+  try {
+    names = readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    throw new HttpError(400, `无法读取目录：${errorMessage(error)}`);
+  }
+  const entries = names.map((name) => ({ name, path: join(path, name) }));
+  const parent = dirname(path);
+  return {
+    path,
+    parent: parent === path ? null : parent,
+    entries,
+    drives: listDrives(),
+  };
 }
 
 export function errorMessage(error: unknown): string {

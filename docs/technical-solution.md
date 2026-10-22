@@ -468,11 +468,18 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 优先级是三段——`--cwd` 显式指定（直接用它，**不改记忆**）→ `~/.mini-pi/
 client-workspace.json` 里记着的目录还在（直接开，不问）→ 都没有就
 `dialog.showOpenDialog({properties:["openDirectory"]})` 问一次，选完记下来。
-用户**取消就退出**，不替他挑一个目录。界面里切换工作区
-（`POST /api/workspace` → `AppServer.switchWorkspace`）同样更新记忆，
-否则"在应用里换了三次、重启一问又回到最初那个"。记忆文件放 `~/.mini-pi/`
+用户**取消就退出**，不替他挑一个目录。界面里打开 / 聚焦工作区
+（`POST /api/workspace` → `AppServer.openWorkspace`，多工作区见
+[client-multi-workspace.md](./client-multi-workspace.md)）同样更新记忆——
+能被打开的都是一次明确选择（界面里添加、显式 `--cwd`、桌面壳目录框）。
+serve 的默认当前目录不在此列：它**根本不会被开成工作区**（serve 未显式给
+`--cwd` 就空池启动），"在哪儿敲的命令"不会混进列表。记忆文件放 `~/.mini-pi/`
 而不是 Electron 的 userData：浏览器形态没有 userData 却也要读它，
 且它与 `auth.json` / `settings.json` 同目录，用户找得到、删得掉。
+多工作区之后记忆从"记一个"变"记一组"（`{ roots, active }`，读到旧格式
+当场迁移）：`bootAppServer` 启动时把列表里的工作区原样恢复进宿主池，
+失效条目跳过并摘除；界面里显式关闭工作区会把它从列表里摘掉；
+serve 未显式给 `--cwd` 时空池启动，空池下活动根由启动恢复补上。
 `AppServer` 对记忆是**可注入**的（`workspaceMemory` 选项，默认不记）：
 单测构造服务的次数太多，默认实现会往用户家目录写文件。
 窗口先建（隐藏）再问工作区——目录框挂在窗口上才是模态的。

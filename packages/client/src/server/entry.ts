@@ -33,9 +33,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     return booted.code;
   }
   const app = booted.server;
-  process.stdout.write(
-    `mini-pi 客户端已启动：${booted.url}\n工作区：${app.workspaceRoot}\n（Ctrl+C 退出）\n`,
-  );
+  // 空池启动（没显式给 --cwd）时没有初始工作区，别把它说成有了
+  const workspaceLine = app.workspaceRoot
+    ? `工作区：${app.workspaceRoot}`
+    : "工作区：尚未打开——在界面里选择一个目录";
+  process.stdout.write(`mini-pi 客户端已启动：${booted.url}\n${workspaceLine}\n（Ctrl+C 退出）\n`);
 
   // 收到信号时先收服务，再退出：SSE 连接不断掉的话进程会一直挂着
   const shutdown = (): void => {

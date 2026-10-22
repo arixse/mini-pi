@@ -16,7 +16,6 @@ import type { RunEventEnvelope, ServerEvent } from "../shared/types";
 export const MAX_JOURNAL_EVENTS = 2_000;
 
 export type JournalEntry = RunEventEnvelope & { seq: number };
-
 /**
  * 哪些事件该进应用级日志。
  *
@@ -49,9 +48,14 @@ export class EventJournal {
       Number.isFinite(capacity) && capacity >= 1 ? Math.floor(capacity) : MAX_JOURNAL_EVENTS;
   }
 
-  /** 追加一条；返回带序号的记录（seq 从 1 起） */
-  push(runId: string, event: ServerEvent): JournalEntry {
-    const entry: JournalEntry = { seq: this.nextSeq, runId, event };
+  /**
+   * 追加一条；返回带序号的记录（seq 从 1 起）。
+   *
+   * `root` 是这条 Run 所属的工作区（多工作区后前端靠它区分"谁的任务"）；
+   * 连接级提示（`journal_ready` / `stream_gap`）不带它。
+   */
+  push(runId: string, event: ServerEvent, root?: string): JournalEntry {
+    const entry: JournalEntry = { seq: this.nextSeq, runId, event, ...(root ? { root } : {}) };
     this.nextSeq += 1;
     this.entries.push(entry);
     while (this.entries.length > this.capacity) {

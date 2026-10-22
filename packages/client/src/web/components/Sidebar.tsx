@@ -1,23 +1,30 @@
 /**
  * 侧栏：树形导航，不随执行过程重排。
  *
- * 结构来自视觉交接稿（§2）：**工作区根 → 会话 → 子任务（叶子）**，
- * 层级靠缩进表达（工作区 4 / 会话 18 / 任务 30），不用竖线画树干。
- * 两条交互硬要求（§4）：
+ * 结构来自多工作区方案（docs/client-multi-workspace.md §5）：
+ * **工作区（根，纯分组标题）→ 工作区名 → 会话 → Run 叶子**，层级靠缩进
+ * 表达，不用竖线画树干。两条交互硬要求（视觉交接稿 §4）：
  * - 行操作默认不占位：`+`（在这段会话接着写）与 `···`（行菜单）只在
  *   hover 该行时出现——常驻按钮会吃掉近 1/3 行宽；
- * - 工作区根的折叠箭头同样 hover 才出现。
+ * - 各层折叠箭头同样 hover 才出现。
  *
- * 与旧版两段式（进行中 / 历史会话）的差别：Run 不再是平行的一份列表，
- * 而是挂在它所属的会话下面——"这段对话里发生过什么"一眼看得见，
- * 而"哪个还在跑"由状态环与 {icon} 转圈说出来。
+ * 与单工作区版的差别：根节点「工作区」之下变成**多个工作区名节点**——
+ * 每个独立折叠、独立显示会话数，点击聚焦该根（新任务去哪），行菜单里
+ * 有「关闭工作区」。会话按它所属的根打开与删除（sessionId 跨根会撞名）。
  *
- * 搜索只覆盖任务名与会话标题：服务端没有会话内容检索接口，
- * 界面上就不该暗示"能搜内容"。
+ * 搜索框搜的是**工作区名**（模糊匹配）：池里有十几个工作区时，找"我要
+ * 切过去的那一个"比找某段会话频繁得多。命中的工作区整组原样展开，
+ * 不按标题二次过滤——否则"搜到了工作区，里面的会话却少了"会让人以为
+ * 数据丢了。
+ *
+ * 开新会话的入口挂在**每个工作区名节点**上（hover 出现的 `+`），不摆
+ * 在侧栏顶上：多工作区下"新会话开在哪"是必须当场回答的问题，一颗顶栏
+ * 按钮只能默认落在活动根，等于把选择藏起来。工作区节点的 `+` 先聚焦该
+ * 根再换白板，落点就是点的那一行。
  */
 
 import { useState } from "react";
-import { sessionGroups, type ClientState } from "../state";
+import { workspaceGroups, type ClientState, type WorkspaceGroup } from "../state";
 import { useActions, useClient } from "../store";
 import { formatDuration, formatSessionTime, statusMeta } from "../format";
 import type { RunSummary, SessionSummary } from "../../shared/types";
@@ -29,72 +36,63 @@ type MenuItem = { label: string; danger?: boolean; onPick: () => void };
 export function Sidebar(): React.ReactElement {
   const state = useClient();
   const actions = useActions();
-  const groups = sessionGroups(state);
-  // 折叠是纯展示状态：不进 store，它不影响任何别处
-  const [rootOpen, setRootOpen] = useState(true);
+  const groups = workspaceGroups(state);
+  // 根节点「工作区」没有折叠入口（不摆折叠箭头），所以这里只取状态不取
+  // setter——`is-fold` 那套类名留着，等哪天真要收起时不用重新接线
+  const [rootOpen] = useState(true);
+  const totalSessions = state.workspaces.reduce((sum, ws) => sum + ws.sessions.length, 0);
 
   return (
     <aside className="sidebar">
       <div className="side-search">
         <Icon name="search" />
         <input
-          placeholder="搜索任务名"
-          aria-label="搜索任务名"
+          placeholder="搜索工作区"
+          aria-label="搜索工作区"
           value={state.search}
           onChange={(event) => actions.setSearch(event.target.value)}
         />
       </div>
 
-      {state.workspace.root ? (
+      {state.workspaces.length > 0 ? (
         <>
-          {/* 分区标题：右侧的 + 与根行点击同义——都是换/选目录。
+          {/* 分区标题：右侧的 + 是「再打开一个工作区」。
               空态稿的提示语点名了这个入口，不能只有藏在行点击里的那一条路 */}
-          <div className="side-head">
-            <span>工作区</span>
-            <button
+          <div className="tree">
+            <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
+              
+              <span className="tree-main" title="工作区">
+                <span className="tree-label">工作区</span>
+                
+              </span>
+              <button
               className="side-head-add"
-              title="选择工作区目录"
-              aria-label="选择工作区目录"
+              title="再打开一个工作区"
+              aria-label="再打开一个工作区"
               onClick={() => actions.openPicker()}
             >
               <Icon name="plus" size={13} />
             </button>
-          </div>
-          <div className="tree">
-            <div className={`tree-row lv-root${rootOpen ? "" : " is-fold"}`}>
-              <button
-                className="tree-twist"
-                title={rootOpen ? "收起会话树" : "展开会话树"}
-                aria-label={rootOpen ? "收起会话树" : "展开会话树"}
-                onClick={() => setRootOpen((open) => !open)}
-              >
-                <Icon name="chevron" size={12} />
-              </button>
-              <button
-                className="tree-main"
-                title={`工作区：${state.workspace.root}（点击更换）`}
-                onClick={() => actions.openPicker()}
-              >
-                <Icon name="folder" size={13} />
-                <span className="tree-label">{state.workspace.name || "未打开工作区"}</span>
-              </button>
-              {/* 根行右侧的计数：这里有多少段会话，收起时也看得见 */}
-              <span className="tree-count" title={`${state.sessions.length} 段会话`}>
-                {state.sessions.length}
+              {/* 根行右侧的计数：池里一共有多少段会话，收起时也看得见 */}
+              <span className="tree-count" title={`${totalSessions} 段会话`}>
+                {totalSessions}
               </span>
             </div>
 
             {rootOpen ? (
-              <div className="tree-kids">
-                {groups.length === 0 ? (
-                  <div className="empty-hint" style={{ marginLeft: 18 }}>
-                    {state.search.trim().length > 0 ? "没有匹配的任务或会话" : "还没有会话"}
-                  </div>
-                ) : null}
-                {groups.map((group) => (
-                  <SessionNode key={group.session.sessionId} group={group} state={state} />
-                ))}
-              </div>
+              groups.length > 0 ? (
+                <div className="tree-kids">
+                  {groups.map((group) => (
+                    <WorkspaceNode key={group.root} group={group} state={state} />
+                  ))}
+                </div>
+              ) : (
+                // 池里有工作区、但一个都没命中。根行与它的「+」照旧留着：
+                // 搜不到的时候，用户下一步往往是去打开一个新的
+                <div className="empty-hint" style={{ margin: "2px 2px 0 14px" }}>
+                  没有匹配的工作区
+                </div>
+              )
             ) : null}
           </div>
         </>
@@ -108,15 +106,101 @@ export function Sidebar(): React.ReactElement {
   );
 }
 
-function SessionNode({
+/** 工作区名节点：点击聚焦（新任务去哪），行菜单里是「关闭工作区」 */
+function WorkspaceNode({
   group,
   state,
 }: {
-  group: { session: SessionSummary; runs: RunSummary[] };
+  group: WorkspaceGroup;
   state: ClientState;
 }): React.ReactElement {
   const actions = useActions();
-  const active = state.view.sessionId === group.session.sessionId;
+  // 折叠是纯展示状态：不进 store，它不影响任何别处
+  const [open, setOpen] = useState(true);
+  const active = state.activeRoot === group.root;
+  const busyNote = group.busy ? "（有任务在跑）" : "";
+
+  return (
+    <div className={`tree-row lv-ws${active ? " is-active" : ""}${open ? "" : " is-fold"}`}>
+      <button
+        className="tree-twist"
+        title={open ? "收起这个工作区" : "展开这个工作区"}
+        aria-label={open ? "收起这个工作区" : "展开这个工作区"}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="chevron" size={12} />
+      </button>
+      <button
+        className="tree-main"
+        title={`${group.root}${active ? "（新任务会发到这里）" : "（点击设为活动工作区）"}`}
+        onClick={() => void actions.focusWorkspace(group.root)}
+      >
+        <Icon name="folder" size={13} />
+        <span className="tree-label">{group.name}</span>
+        {group.pendingApprovals > 0 ? (
+          <span className="tree-meta">{group.pendingApprovals} 待裁决</span>
+        ) : null}
+      </button>
+      <span className="tree-count" title={`${group.groups.length} 段会话`}>
+        {group.groups.length}
+      </span>
+      {/* 行操作 hover 才出现（§4）：+ 在这个工作区开新会话，··· 是行菜单 */}
+      <span className="row-acts">
+        <button
+          className="row-act"
+          title={
+            active
+              ? `在「${group.name}」开一段新会话（Ctrl+N）`
+              : `在「${group.name}」开一段新会话：会先把它设为活动工作区`
+          }
+          aria-label={`在「${group.name}」开一段新会话`}
+          onClick={() => void actions.newTaskIn(group.root)}
+        >
+          <Icon name="plus" size={12} />
+        </button>
+        <RowMenu
+          items={[
+            {
+              label: `关闭工作区${busyNote}`,
+              danger: true,
+              onPick: () => void actions.closeWorkspace(group.root),
+            },
+          ]}
+        />
+      </span>
+
+      {open ? (
+        <div className="tree-kids" style={{width:"80%"}}>
+          {group.groups.length === 0 ? (
+            <div className="empty-hint" style={{ marginLeft: 30 }}>
+              还没有会话
+            </div>
+          ) : null}
+          {group.groups.map((item) => (
+            <SessionNode
+              key={item.session.sessionId}
+              group={item}
+              root={group.root}
+              state={state}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionNode({
+  group,
+  root,
+  state,
+}: {
+  group: { session: SessionSummary; runs: RunSummary[] };
+  root: string;
+  state: ClientState;
+}): React.ReactElement {
+  const actions = useActions();
+  const active = state.view.sessionId === group.session.sessionId && state.view.root === root;
   const meta = [`${group.session.messageCount} 条`];
   if (group.session.compactedCount > 0) {
     meta.push(`已压缩 ${group.session.compactedCount} 次`);
@@ -124,7 +208,10 @@ function SessionNode({
 
   // 删除是不可逆的：点一次只是"要删"，还得再点一次"确认"。
   // 这一步不省——会话文件删掉就找不回来了
-  if (state.ui.deleteTarget === group.session.sessionId) {
+  if (
+    state.ui.deleteTarget?.sessionId === group.session.sessionId &&
+    state.ui.deleteTarget.root === root
+  ) {
     return (
       <div className="side-confirm">
         <span className="side-confirm-text">删除这段会话？删了就找不回来</span>
@@ -153,7 +240,7 @@ function SessionNode({
       <button
         className="tree-main"
         title={`${formatSessionTime(group.session.timestamp)} · ${group.session.title}`}
-        onClick={() => actions.openSession(group.session.sessionId)}
+        onClick={() => actions.openSession(group.session.sessionId, root)}
       >
         <span className="tree-label">{group.session.title || "新会话"}</span>
         <span className="tree-meta">{meta.join(" · ")}</span>
@@ -164,7 +251,7 @@ function SessionNode({
             {
               label: "删除会话",
               danger: true,
-              onPick: () => actions.requestDelete(group.session.sessionId),
+              onPick: () => actions.requestDelete(group.session.sessionId, root),
             },
           ]}
         />
@@ -172,7 +259,7 @@ function SessionNode({
       {group.runs.length > 0 ? (
         <div className="tree-kids">
           {group.runs.map((run) => (
-            <RunNode key={run.runId} run={run} state={state} />
+            <RunNode key={run.runId} run={run} root={root} state={state} />
           ))}
         </div>
       ) : null}
@@ -180,7 +267,15 @@ function SessionNode({
   );
 }
 
-function RunNode({ run, state }: { run: RunSummary; state: ClientState }): React.ReactElement {
+function RunNode({
+  run,
+  root,
+  state,
+}: {
+  run: RunSummary;
+  root: string;
+  state: ClientState;
+}): React.ReactElement {
   const actions = useActions();
   const active = state.view.activeRunId === run.runId;
   const meta = statusMeta(run.status);
@@ -212,7 +307,7 @@ function RunNode({ run, state }: { run: RunSummary; state: ClientState }): React
           className="row-act"
           title="在这段会话接着写"
           aria-label="在这段会话接着写"
-          onClick={() => void actions.continueSession(run.sessionId)}
+          onClick={() => void actions.continueSession(run.sessionId, root)}
         >
           <Icon name="plus" size={12} />
         </button>

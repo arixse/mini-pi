@@ -71,6 +71,13 @@ export type RunSummary = {
   pendingApprovals: number;
   /** 这次执行实际用的根目录；开隔离时是独立 worktree */
   workspace: RunWorkspace;
+  /**
+   * 这个 Run 属于哪个工作区（多工作区后按根归组；单工作区就是唯一的根）。
+   * 注意它与 `workspace.root` 的分工：那个是"这次执行在哪干活"（隔离时是
+   * worktree），这个是"任务长在哪个打开的工作区上"。
+   * 宿主级状态不填（根是隐含的）；AppServer 聚合时补上。
+   */
+  root?: string;
   error?: string;
 };
 
@@ -96,6 +103,11 @@ export type ApprovalRequest = {
   /** 参数预览：服务端裁剪过，前端只排版，不再自行解析 args */
   argsPreview: string;
   createdAt: number;
+  /**
+   * 审批长在哪个工作区上（多工作区聚合后跳转要用）。
+   * 单宿主的服务端不填；AppServer 聚合 `/api/approvals` 时补上。
+   */
+  root?: string;
 };
 
 export type ApprovalAnswer = "yes" | "no" | "always";
@@ -148,9 +160,12 @@ export type BufferedEvent = { seq: number; event: ServerEvent };
  *
  * 全局流用**应用级**序号（在 SSE 的 `id:` 里），不是 Run 内序号；
  * 两者编号空间互不相干，别混用。`runId` 为空串表示这是连接级提示
- * （目前只有 `stream_gap`）。
+ * （目前只有 `stream_gap` / `journal_ready`）。
+ *
+ * `root` 是这条 Run 所属的工作区（多工作区后前端靠它把"任务完成"说清楚）；
+ * 单宿主时代没有这个字段，所以是可选的——旧帧没有它。
  */
-export type RunEventEnvelope = { runId: string; event: ServerEvent };
+export type RunEventEnvelope = { runId: string; root?: string; event: ServerEvent };
 
 export type SessionSummary = {
   /** 文件名（含 .jsonl），同时用作 REST 里的会话标识 */
@@ -170,6 +185,21 @@ export type SessionDetail = {
   messages: AgentMessage[];
   messageCount: number;
   compactedCount: number;
+  /**
+   * 这段会话**当前**上下文的占用（token 估算）。
+   *
+   * 与跑着的 Run 的 `run.tokens` 同源（都是 `estimateContextTokens`），
+   * 于是"看历史"和"看正在跑的"是同一把尺子。历史会话以前不带这一项，
+   * 状态行只能显示 0——看着像"这段会话什么都没发生过"。
+   */
+  tokens: number;
+  /**
+   * 当前上下文里的模型回合数（一问一答算一步）。
+   *
+   * 压缩掉的那些轮次不计：它们已经被摘要替代、不在上下文里了，与
+   * `tokens` 的口径保持一致（两者说的都是"现在还剩多少"）。
+   */
+  turns: number;
 };
 
 export type ProviderView = {
@@ -192,7 +222,34 @@ export type WorkspaceView = {
   name: string;
 };
 
-export type AppState = {
+/**
+ * 宿主池里一个工作区的摘要（多工作区后侧栏按它画树）。
+ *
+ * 只放"这个根自己的东西"——模型配置、档位开关这些全局量不重复 N 份；
+ * 会话与 Run 必须在这里，因为它们是按根隔离的。
+ */
+export type WorkspaceStateView = {
+  root: string;
+  name: string;
+  sessions: SessionSummary[];
+  runs: RunSummary[];
+  currentSessionId: string | null;
+  /** 这个根上还挂着的待裁决数（徽标跨根聚合的数据来源） */
+  approvals: { pending: number };
+  sendable: boolean;
+  blockReason: string | null;
+  isolate: boolean;
+  isolateError: string | null;
+};
+
+/**
+ * 单个工作区（宿主）自己的状态。
+ *
+ * `WorkspaceHost.state()` 返回它；`/api/state` 上的 {@link AppState} 是
+ * AppServer 把池里每个宿主的这份聚合成全局视图之后的形状。
+ */
+export type HostState = {
+  /** 本宿主的工作区（"新任务去哪"由活动根回答） */
   workspace: WorkspaceView;
   tier: Tier;
   model: {
@@ -217,6 +274,13 @@ export type AppState = {
   isolate: boolean;
   /** 隔离不可用的原因（未开启隔离时为 null；切换失败时也会留在这里） */
   isolateError: string | null;
+};
+
+export type AppState = HostState & {
+  /** 活动根；与 `workspace.root` 相同，单列出来是为了寻址直读 */
+  activeRoot: string;
+  /** 宿主池里的全部工作区（按打开顺序，各带自己的会话与任务） */
+  workspaces: WorkspaceStateView[];
 };
 
 /**

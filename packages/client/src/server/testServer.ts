@@ -51,15 +51,21 @@ export function toolCallResponse(
 export type ScriptedModel = LlmModel & { calls: CompleteInput[] };
 
 /** 假模型：按脚本逐次返回；用完之后一直重复最后一个 */
-export function scriptedModel(responses: AssistantMessage[]): ScriptedModel {
+export function scriptedModel(
+  responses: AssistantMessage[],
+  timing: { before?: (index: number) => Promise<void> } = {},
+): ScriptedModel {
   const calls: CompleteInput[] = [];
   let index = 0;
   return {
     calls,
     async complete(input: CompleteInput): Promise<AssistantMessage> {
       calls.push(input);
-      const response = responses[Math.min(index, responses.length - 1)] ?? textResponse("");
+      const current = index;
       index += 1;
+      // 全局并发的闸在这里等：模型"还没回话"，Run 就一直占着执行槽位
+      await timing.before?.(current);
+      const response = responses[Math.min(current, responses.length - 1)] ?? textResponse("");
       // 真模型是"逐字"回来的：把正文切几段喂给 onDelta，前端才有东西可流式渲染
       const text = response.content
         .filter((part): part is { type: "text"; text: string } => part.type === "text")
@@ -99,6 +105,8 @@ export type TestServer = {
 export type JournalFrame = {
   seq: number;
   runId: string;
+  /** 这条 Run 属于哪个工作区（多工作区；连接级提示没有它） */
+  root?: string;
   event: ServerEvent;
 };
 
@@ -114,6 +122,15 @@ export type TestServerOptions = {
   initGit?: boolean;
   /** 同时执行上限，默认 1 */
   concurrency?: number;
+  /** 同时打开的工作区上限（多工作区测试用；默认 4） */
+  maxWorkspaces?: number;
+  /** 全局同时执行上限（默认 2） */
+  globalConcurrency?: number;
+  /**
+   * 模型调用前的闸：第 index 次调用会先 `await` 它。
+   * 用来让某次执行"停在模型回话前"，测全局并发的排队与放行。
+   */
+  modelBefore?: (index: number) => Promise<void>;
   /**
    * "记住工作区"的替身；不注入就默认不记。
    *
@@ -158,7 +175,10 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     writeFileSync(join(projectSessions, session.fileName), session.lines.join("\n"), "utf8");
   }
 
-  const model = scriptedModel(options.responses ?? [textResponse("好的")]);
+  const model = scriptedModel(
+    options.responses ?? [textResponse("好的")],
+    options.modelBefore ? { before: options.modelBefore } : {},
+  );
   const settingsStore = new SettingsStore(join(configDir, "settings.json"));
   const providerStore = new ProviderStore(join(configDir, "auth.json"));
   const providerService = new ModelProviderService(providerStore);
@@ -172,6 +192,10 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(options.isolate ? { isolate: true } : {}),
     ...(worktreesRoot ? { worktreesRoot } : {}),
     ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+    ...(options.maxWorkspaces !== undefined ? { maxWorkspaces: options.maxWorkspaces } : {}),
+    ...(options.globalConcurrency !== undefined
+      ? { globalConcurrency: options.globalConcurrency }
+      : {}),
     ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
     ...(options.journal ? { journal: options.journal } : {}),
     settingsStore,
@@ -285,13 +309,14 @@ export async function collectJournal(url: string, timeoutMs: number): Promise<Jo
   const frames = await collectFrames(url, timeoutMs);
   const entries: JournalFrame[] = [];
   for (const frame of frames) {
-    const envelope = parseJson<{ runId?: unknown; event?: unknown }>(frame.data);
+    const envelope = parseJson<{ runId?: unknown; root?: unknown; event?: unknown }>(frame.data);
     if (!envelope || typeof envelope.runId !== "string" || !envelope.event) {
       continue;
     }
     entries.push({
       seq: frame.id ?? 0,
       runId: envelope.runId,
+      ...(typeof envelope.root === "string" ? { root: envelope.root } : {}),
       event: envelope.event as ServerEvent,
     });
   }

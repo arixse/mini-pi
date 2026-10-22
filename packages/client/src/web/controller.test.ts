@@ -119,16 +119,29 @@ const jsonResponse = (body: unknown): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-function sessionDetail(sessionId: string, text: string): SessionDetail {
+function sessionDetail(
+  sessionId: string,
+  text: string,
+  usage: { tokens?: number; turns?: number } = {},
+): SessionDetail {
   const messages: AgentMessage[] = [
     { role: "user", content: [{ type: "text", text }], timestamp: 1 },
   ];
-  return { sessionId, messages, messageCount: 1, compactedCount: 0 };
+  return {
+    sessionId,
+    messages,
+    messageCount: 1,
+    compactedCount: 0,
+    tokens: usage.tokens ?? 0,
+    turns: usage.turns ?? 0,
+  };
 }
 
 function snapshot(overrides: Partial<AppState> = {}): AppState {
   return {
     workspace: { root: "D:/ws", name: "ws" },
+    activeRoot: "D:/ws",
+    workspaces: [],
     tier: "workspace-write",
     model: {
       provider: "deepseek",
@@ -200,7 +213,7 @@ describe("AppController", () => {
     controller.store.update((state) => {
       state.ui.settings = true;
       state.ui.picker = true;
-      state.ui.deleteTarget = "s1";
+      state.ui.deleteTarget = { sessionId: "s1", root: "D:\\demo" };
       state.ui.sidebar = true;
       state.view.activeRunId = "run_1";
     });
@@ -320,6 +333,39 @@ describe("AppController", () => {
     assert.strictEqual(state.banner, null);
   });
 
+  it("工作区节点的 +：不是活动根就先聚焦过来，再换白板", async () => {
+    let activeRoot = "D:/ws";
+    installFetch({
+      "/api/state": () => ({ body: snapshot({ activeRoot }) }),
+      // 服务端真的把活动根挪过去了，之后的 /api/state 才会带回新值
+      "/api/workspace": () => {
+        activeRoot = "D:/other";
+        return { body: { root: "D:/other", name: "other" } };
+      },
+    });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    await controller.actions.newTaskIn("D:/other");
+    await settle();
+
+    const posted = requested.filter(
+      (item) => item.method === "POST" && item.url.includes("/api/workspace"),
+    );
+    assert.strictEqual(posted.length, 1, "会话开在被点的那个工作区：先挪活动根");
+    assert.strictEqual(controller.store.current.view.sessionId, null, "然后才换白板");
+
+    requested.length = 0;
+    await controller.actions.newTaskIn("D:/other");
+    await settle();
+    assert.strictEqual(
+      requested.filter((item) => item.method === "POST").length,
+      0,
+      "已经是活动根就不必再请求一次",
+    );
+  });
+
   it("草稿态连发两条只开一段会话：第二个请求等第一个带回 sessionId", async () => {
     let created = 0;
     installFetch({
@@ -387,6 +433,30 @@ describe("AppController", () => {
       /快的那段/,
       "时间线内容也必须来自后点的那次请求",
     );
+  });
+
+  it("打开历史会话：顶部那两枚指标拿到这段会话自己的用量与步数", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/state")) {
+        return jsonResponse(snapshot({ currentSessionId: null }));
+      }
+      if (url.includes("/api/sessions/old.jsonl")) {
+        return jsonResponse(sessionDetail("old.jsonl", "很久以前的一段", { tokens: 4321, turns: 7 }));
+      }
+      return new Response(JSON.stringify({ error: "没有这个接口" }), { status: 404 });
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.actions.openSession("old.jsonl");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+
+    const view = controller.store.current.view;
+    assert.strictEqual(view.sessionId, "old.jsonl");
+    assert.strictEqual(view.tokens, 4321, "历史用量来自服务端回看时算好的那个");
+    assert.strictEqual(view.steps, 7);
   });
 
   it("boot 后建立应用级事件流：后台 Run 的状态变化不再等轮询", async () => {

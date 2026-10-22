@@ -402,6 +402,9 @@ export async function runDesktop(
     {
       ...args,
       cwd: workspace.root,
+      // 到这里工作区已经定了（记忆或解析），对服务而言是一次明确选择——
+      // 不能留 parse 出来的 false，否则装配层会当成"serve 没给 --cwd"而空池启动
+      cwdGiven: true,
       workspaceMemory: fileWorkspaceMemory,
     },
     streams,

@@ -9,28 +9,42 @@
  * 本文件只保留业务语义（哪些端点、什么状态码）。SSE 那一帧仍然自己写
  * ——express 的流式响应只是"不调 res.end()"，帧格式与游标在 `sse.ts`。
  *
- * 工作区可切换：换目录 = 换一个 `WorkspaceHost`（会话、模型、工具都跟着换），
- * 旧宿主收掉前会把还在跑的 Run 取消——否则它们的落盘会写进一个已经被
- * 换掉的工作区的会话文件里。
+ * 工作区是一个**宿主池**（见 docs/client-multi-workspace.md）：
+ * 一个根一个 `WorkspaceHost`，可以同时打开几个；"活动根"决定新任务去哪，
+ * 切换（聚焦）不销毁别的宿主——旧工作区跑着的任务照常跑完。
+ * 会话按根寻址（`?root=`），Run 的 id 进程内唯一、由 AppServer 记住归谁。
+ * 只有显式「关闭工作区」才会收掉宿主并取消里面的任务。
  */
 
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import type { Server } from "node:http";
 import { HttpError, requireString } from "./errors";
-import { WorkspaceHost, errorMessage, type WorkspaceHostOptions } from "./host";
+import { WorkspaceHost, errorMessage, listDirectory, type WorkspaceHostOptions } from "./host";
 import { errorHandler, localGuard, noStore } from "./http";
 import { EventJournal } from "./journal";
 import { openSse } from "./sse";
-import { isTier, type ApprovalAnswer, type ServerEvent, type Tier } from "../shared/types";
+import { isTier, type AppState, type ApprovalAnswer, type ServerEvent, type Tier, type WorkspaceStateView } from "../shared/types";
 import type { ServeArgs } from "./serveArgs";
 import { logger } from "@minipi/core/shared/logger";
-import { nullWorkspaceMemory, type WorkspaceMemory } from "./workspaceMemory";
+import {
+  nullWorkspaceMemory,
+  type RememberedWorkspaces,
+  type WorkspaceMemory,
+} from "./workspaceMemory";
 
 export type AppServerOptions = {
-  workspaceRoot: string;
+  /**
+   * 初始工作区；**不传就是空池启动**。
+   *
+   * serve 只在显式给了 `--cwd` 时才传它——"在哪儿敲的命令"不配成为一个
+   * 工作区，空池等用户在界面里添加或由启动恢复把记忆里的开回来。
+   * 桌面壳永远传：它的根要么来自记忆、要么来自用户在目录框里选的。
+   */
+  workspaceRoot?: string;
   /** 0 表示让系统分配（测试用）；默认 4788（与设计稿一致） */
   port?: number;
   /** 只监听本机：这个服务没有任何鉴权，绑到 0.0.0.0 等于把 agent 交出去 */
@@ -45,6 +59,21 @@ export type AppServerOptions = {
   worktreesRoot?: string;
   /** 同时执行上限，默认 1（与 CLI"回合结束后执行"同口径） */
   concurrency?: number;
+  /**
+   * 同时打开的工作区上限，默认 4。
+   *
+   * 每个宿主都有自己的 RunManager、技能扫描与 prompt 组装缓存，
+   * 不设上限等于让"多开几个项目"悄悄吃光内存；超限时打开请求 409，
+   * 让用户先关一个，而不是静默把最早的挤掉。
+   */
+  maxWorkspaces?: number;
+  /**
+   * 全局同时执行上限，默认 2。
+   *
+   * `RunManager` 是每个宿主自己的（默认 1），管不住"4 个工作区各跑一个"；
+   * 这道总闸挂在 AppServer 上，宿主开跑前先过它。设为 0 / 负数按默认值处理。
+   */
+  globalConcurrency?: number;
   resolveModel?: WorkspaceHostOptions["resolveModel"];
   providerService?: WorkspaceHostOptions["providerService"];
   settingsStore?: WorkspaceHostOptions["settingsStore"];
@@ -75,6 +104,10 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const DEFAULT_PORT = 4788;
 /** 请求体上限：审批参数、提问都在这里，1MB 对"文本"这个用途绰绰有余 */
 const MAX_BODY = "1mb";
+/** 同时打开的工作区上限（默认值；`maxWorkspaces` 可覆盖） */
+const DEFAULT_MAX_WORKSPACES = 4;
+/** 全局同时执行上限（默认值；`globalConcurrency` 可覆盖） */
+const DEFAULT_GLOBAL_CONCURRENCY = 2;
 /** 前端产物在本包内的相对位置（`vite build` 的 outDir） */
 const WEB_ROOT_PARTS = ["dist", "web"] as const;
 
@@ -109,13 +142,23 @@ export function findWebRoot(candidate: string): string | undefined {
 }
 
 export class AppServer {
-  private host: WorkspaceHost;
+  /** 宿主池：绝对路径（已 resolve）→ 宿主。serve 未给 `--cwd` 时可以为空，上限 `maxWorkspaces` */
+  private readonly hosts = new Map<string, WorkspaceHost>();
+  /** 活动根：决定"新任务去哪"、输入区与状态行绑定谁 */
+  private activeRoot: string | null = null;
+  /** runId → 归属工作区：Run 的 id 进程内唯一，跨宿主路由靠它 */
+  private readonly runRoots = new Map<string, string>();
   private readonly app: Express = express();
   private readonly options: AppServerOptions;
   private readonly webRoot: string;
   private readonly rememberWorkspace: WorkspaceMemory;
   /** 全局 `run_state` / 审批 / 结束事件；正文增量不进来 */
   private readonly journal: EventJournal;
+  private readonly maxWorkspaces: number;
+  private readonly globalConcurrency: number;
+  /** 全局槽位：正在执行的 Run 数与排队等闸的唤醒队列 */
+  private globalActive = 0;
+  private readonly slotWaiters: Array<() => void> = [];
   private server: Server | null = null;
   /** 进行中的 SSE 连接：关闭服务时要一起断掉，否则进程不退出 */
   private readonly streams = new Set<() => void>();
@@ -125,16 +168,126 @@ export class AppServer {
     this.webRoot = options.webRoot ?? defaultWebRoot();
     this.rememberWorkspace = options.workspaceMemory ?? nullWorkspaceMemory;
     this.journal = options.journal ?? new EventJournal();
-    this.host = this.createHost(options.workspaceRoot, options.tier);
+    this.maxWorkspaces =
+      Number.isFinite(options.maxWorkspaces) && (options.maxWorkspaces ?? 0) >= 1
+        ? Math.floor(options.maxWorkspaces ?? DEFAULT_MAX_WORKSPACES)
+        : DEFAULT_MAX_WORKSPACES;
+    this.globalConcurrency =
+      Number.isFinite(options.globalConcurrency) && (options.globalConcurrency ?? 0) >= 1
+        ? Math.floor(options.globalConcurrency ?? DEFAULT_GLOBAL_CONCURRENCY)
+        : DEFAULT_GLOBAL_CONCURRENCY;
+    // 没给 workspaceRoot 就空池启动（serve 未显式给 --cwd 的形状）：
+    // 当前目录不配成为一个工作区，等用户在界面里添加
+    if (options.workspaceRoot !== undefined) {
+      const initial = WorkspaceHost.assertWorkspaceRoot(options.workspaceRoot);
+      this.hosts.set(initial, this.createHost(initial, options.tier));
+      this.activeRoot = initial;
+    }
     this.registerRoutes();
   }
 
-  get workspaceRoot(): string {
-    return this.host.workspaceRoot;
+  /** 活动根；空池启动（还没开任何工作区）时是 null */
+  get workspaceRoot(): string | null {
+    return this.activeRoot;
+  }
+
+  /** 池里至少有一个工作区（构造时必建，关闭最后一个被 409 挡住） */
+  private requiredActiveHost(): WorkspaceHost {
+    const host = this.activeRoot !== null ? this.hosts.get(this.activeRoot) : undefined;
+    if (!host) {
+      throw new HttpError(409, "没有打开的工作区");
+    }
+    return host;
+  }
+
+  /** 有活动根就用它；没有返回 null（启动路径不会走到，路由会） */
+  private activeHost(): WorkspaceHost | null {
+    return this.activeRoot !== null ? (this.hosts.get(this.activeRoot) ?? null) : null;
+  }
+
+  /**
+   * 打开（或聚焦）一个工作区。
+   *
+   * 语义与旧版"切换"的关键差别：**不销毁**别的宿主——A 项目的任务跑着，
+   * 聚焦到 B 去看一眼，A 的任务照常跑完。已打开的根重复打开只是挪焦点。
+   */
+  async openWorkspace(candidate: string): Promise<void> {
+    const root = WorkspaceHost.assertWorkspaceRoot(candidate);
+    if (this.hosts.has(root)) {
+      // 重复打开当前活动根不算一次选择：没有换焦点，也就没有可记的
+      if (this.activeRoot === root) {
+        return;
+      }
+      this.activeRoot = root;
+      await this.remember(root);
+      return;
+    }
+    if (this.hosts.size >= this.maxWorkspaces) {
+      throw new HttpError(
+        409,
+        `最多同时打开 ${this.maxWorkspaces} 个工作区，先关闭一个再打开新的`,
+      );
+    }
+    const current = this.activeHost();
+    // 新宿主沿用用户当前的档位与隔离开关：这些是"人的选择"，
+    // 换个工作区不该悄悄复位
+    const next = this.createHost(
+      root,
+      current?.getTier(),
+      current?.getIsolate(),
+    );
+    await next.start();
+    this.hosts.set(root, next);
+    this.activeRoot = root;
+    await this.remember(root);
+  }
+
+  /** 旧名字保留：语义已是"打开/聚焦"，调用方逐步迁到 `openWorkspace` */
+  async switchWorkspace(candidate: string): Promise<void> {
+    await this.openWorkspace(candidate);
+  }
+
+  /**
+   * 显式关闭一个工作区。
+   *
+   * 里面还有任务在跑 / 排队 / 等裁决时拒绝——"切走不打断"的另一面是
+   * "关闭才打断"，这条打断必须由用户显式发起，不能被顺手触发。
+   * 关闭最后一个工作区同样拒绝：池空会让 `workspace` 变 null，
+   * 界面的空态引导在"重新打开"这条路上，不在"服务还在但没有工作区"上。
+   *
+   * 关成的同时把这条从工作区记忆里摘掉：用户显式关掉的目录不该在
+   * 下次启动时又被恢复出来。摘记忆放在收宿主**之前**（先落盘再改内存），
+   * 中间崩掉最多是"没关成"，不会是"关了又复活"。
+   */
+  async closeWorkspace(candidate: string): Promise<void> {
+    const root = resolve(candidate);
+    const host = this.hosts.get(root);
+    if (!host) {
+      throw new HttpError(404, `这个工作区没有打开：${root}`);
+    }
+    if (this.hosts.size === 1) {
+      throw new HttpError(409, "至少保留一个工作区：先打开别的，再关这个");
+    }
+    if (host.hasActiveRun()) {
+      throw new HttpError(409, "这个工作区还有任务在跑，先停止它们再关闭");
+    }
+    await this.forget(root);
+    host.close();
+    this.hosts.delete(root);
+    for (const [runId, owner] of [...this.runRoots]) {
+      if (owner === root) {
+        this.runRoots.delete(runId);
+      }
+    }
+    if (this.activeRoot === root) {
+      this.activeRoot = [...this.hosts.keys()][0] ?? null;
+    }
   }
 
   async start(): Promise<RunningAppServer> {
-    await this.host.start();
+    // 空池启动时没有宿主可起；恢复出来的宿主已在 restoreWorkspaces 里
+    // 各自 start 过——这里只管构造时那个初始宿主（如果有的话）
+    await this.activeHost()?.start();
     const port = this.options.port ?? DEFAULT_PORT;
     const host = this.options.host ?? "127.0.0.1";
     const server = await new Promise<Server>((resolve, reject) => {
@@ -156,7 +309,12 @@ export class AppServer {
       close();
     }
     this.streams.clear();
-    this.host.close();
+    for (const host of this.hosts.values()) {
+      host.close();
+    }
+    this.hosts.clear();
+    this.activeRoot = null;
+    this.runRoots.clear();
     this.journal.clear();
     const server = this.server;
     this.server = null;
@@ -166,22 +324,88 @@ export class AppServer {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
-  /** 换工作区：新宿主起来之后再换，失败时旧宿主仍然可用 */
-  async switchWorkspace(candidate: string): Promise<void> {
-    const root = WorkspaceHost.assertWorkspaceRoot(candidate);
-    if (root === this.host.workspaceRoot) {
+  // ------------------------------------------------------- 宿主寻址
+
+  /**
+   * 会话类端点的宿主解析：带 `?root=` 按根找，不带就落在活动根。
+   *
+   * sessionId 是会话文件名，跨工作区会撞——所有会话读写必须先过这里，
+   * 漏一处就是把 A 项目的会话读成 B 项目的（静默出错）。
+   */
+  private hostForRoot(raw: string | undefined): WorkspaceHost {
+    if (raw === undefined || typeof raw !== "string" || raw.length === 0) {
+      return this.requiredActiveHost();
+    }
+    const host = this.hosts.get(resolve(raw));
+    if (!host) {
+      throw new HttpError(404, `这个工作区没有打开：${raw}`);
+    }
+    return host;
+  }
+
+  /** Run 类端点的宿主解析：runId 进程内唯一，先查登记表，兜底扫一遍池 */
+  private hostForRun(runId: string): WorkspaceHost {
+    const root = this.runRoots.get(runId);
+    if (root) {
+      const host = this.hosts.get(root);
+      if (host) {
+        return host;
+      }
+    }
+    for (const host of this.hosts.values()) {
+      try {
+        host.record(runId);
+        return host;
+      } catch {
+        // 不在这个宿主上，继续找
+      }
+    }
+    throw new HttpError(404, `任务不存在：${runId}`);
+  }
+
+  /** 审批裁决的路由：审批 id 只有挂着的那个宿主认识 */
+  private hostForApproval(id: string): WorkspaceHost {
+    for (const host of this.hosts.values()) {
+      if (host.hasApproval(id)) {
+        return host;
+      }
+    }
+    throw new HttpError(409, "这条审批已失效（可能已裁决，或任务已结束）");
+  }
+
+  // ------------------------------------------------------- 全局并发
+
+  /** 等一个全局执行槽位；返回释放函数（必须调用，否则闸永远不松） */
+  private acquireRunSlot(): Promise<() => void> {
+    if (this.globalActive < this.globalConcurrency) {
+      this.globalActive += 1;
+      return Promise.resolve(() => this.releaseRunSlot());
+    }
+    return new Promise((resolveWait) => {
+      this.slotWaiters.push(() => {
+        this.globalActive += 1;
+        resolveWait(() => this.releaseRunSlot());
+      });
+    });
+  }
+
+  private releaseRunSlot(): void {
+    const next = this.slotWaiters.shift();
+    if (next) {
+      // 直接把槽位移交给下一个等待者：不经过"先减再加"，
+      // 中间不会漏进第三个 Run
+      next();
       return;
     }
-    const next = this.createHost(root, this.host.getTier(), this.host.getIsolate());
-    await next.start();
-    const previous = this.host;
-    this.host = next;
-    previous.close();
-    await this.remember(root);
+    this.globalActive = Math.max(0, this.globalActive - 1);
   }
 
   /**
    * 记下这次选择，供桌面壳下次启动使用。
+   *
+   * 能走到这里的根都是一次明确选择：界面里添加、显式 `--cwd`、桌面壳
+   * 目录框里选的。serve 的默认当前目录不在此列——它根本不会被开成
+   * 工作区（`workspaceRoot` 不传即空池），不存在"要不要记它"的问题。
    *
    * 失败**不影响切换本身**：宿主已经换过来了，会话在跑、页面能用，
    * 唯独"下次自动开这个目录"这条会失效。为一条便利功能把一次成功的
@@ -195,13 +419,80 @@ export class AppServer {
     }
   }
 
+  /** 关闭工作区时把这条从记忆里摘掉；失败同样不影响关闭本身 */
+  private async forget(root: string): Promise<void> {
+    try {
+      await this.rememberWorkspace.forget(root);
+    } catch (error) {
+      logger.error("移除工作区记忆失败（不影响本次关闭）:", errorMessage(error));
+    }
+  }
+
+  /**
+   * 启动恢复：把记忆里的工作区逐一开进池子（`bootAppServer` 在入口接了
+   * 记忆时调用）。
+   *
+   * - **活动根**：桌面壳/显式 `--cwd` 有初始根时不挪——它本来就在启动时
+   *   定下了，记忆压不过去；**空池启动**（serve 未给 `--cwd`）时由恢复
+   *   补上：优先记忆的 `active`，它没开成就退到第一个开成的根。
+   * - 目录已失效的条目**跳过并摘除**：侧栏只显示打开的宿主，一条永远
+   *   开不出来的隐形记忆只会让人困惑；摘除前先写日志，不是静默清除；
+   * - 目录有效但起宿主失败的（比如会话目录暂时不可写）只跳过、**保留**
+   *   记忆：路径还在，下次启动再试；
+   * - 超出同时打开上限的也保留：这是"这次没开"，不是"不再要了"。
+   */
+  async restoreWorkspaces(remembered: RememberedWorkspaces): Promise<void> {
+    for (const root of remembered.roots) {
+      if (this.hosts.has(root)) {
+        continue;
+      }
+      let usable = true;
+      try {
+        WorkspaceHost.assertWorkspaceRoot(root);
+      } catch {
+        usable = false;
+      }
+      if (!usable) {
+        logger.error(`启动恢复：记忆里的工作区已不可用，跳过并移除：${root}`);
+        await this.forget(root);
+        continue;
+      }
+      if (this.hosts.size >= this.maxWorkspaces) {
+        logger.error(
+          `启动恢复：已到同时打开上限（${this.maxWorkspaces}），这条记忆这次没有打开：${root}`,
+        );
+        continue;
+      }
+      const current = this.activeHost();
+      // 与打开工作区同一套继承：档位与隔离开关是"人的选择"，换工作区不复位
+      const host = this.createHost(root, current?.getTier(), current?.getIsolate());
+      try {
+        await host.start();
+      } catch (error) {
+        logger.error(`启动恢复：打开工作区失败，跳过（记忆保留）：${root}`, errorMessage(error));
+        continue;
+      }
+      this.hosts.set(root, host);
+    }
+    // 空池启动时活动根由恢复补上：优先记忆里的 active，它没开成
+    // （失效被摘 / 起宿主失败 / 超上限）就退而求其次用第一个开成的；
+    // 有初始根（桌面壳形状）时不挪——上面注释里的那条
+    if (this.activeRoot === null && this.hosts.size > 0) {
+      const rememberedActive =
+        remembered.active !== null && this.hosts.has(remembered.active)
+          ? remembered.active
+          : undefined;
+      this.activeRoot = rememberedActive ?? [...this.hosts.keys()][0]!;
+    }
+  }
+
   private createHost(workspaceRoot: string, tier?: Tier, isolate?: boolean): WorkspaceHost {
     return new WorkspaceHost({
       workspaceRoot,
       ...(this.options.sessionsDir ? { sessionsDir: this.options.sessionsDir } : {}),
       ...(this.options.globalAgentsPath ? { globalAgentsPath: this.options.globalAgentsPath } : {}),
       ...(tier ? { tier } : {}),
-      // 切工作区时沿用用户当前的开关；没给才回落到启动参数
+      // 打开工作区时沿用用户当前的开关；没给才回落到启动参数
       ...((isolate ?? this.options.isolate ?? false) ? { isolate: true } : {}),
       ...(this.options.worktreesRoot ? { worktreesRoot: this.options.worktreesRoot } : {}),
       ...(this.options.concurrency !== undefined
@@ -210,10 +501,78 @@ export class AppServer {
       ...(this.options.resolveModel ? { resolveModel: this.options.resolveModel } : {}),
       ...(this.options.providerService ? { providerService: this.options.providerService } : {}),
       ...(this.options.settingsStore ? { settingsStore: this.options.settingsStore } : {}),
-      // Host 只负责把控制事件交出来；日志归 AppServer，切工作区时不跟着换
-      onRunEvent: (runId, event) => this.journal.push(runId, event),
+      // Host 只负责把控制事件交出来；日志归 AppServer，切工作区时不跟着换。
+      // root 跟着宿主走：每条控制事件都标上它属于哪个工作区
+      onRunEvent: (runId, event) => this.journal.push(runId, event, workspaceRoot),
+      // 多工作区的总闸；单工作区时池里只有一个宿主，等于不设限
+      acquireRunSlot: () => this.acquireRunSlot(),
       ...(this.options.now ? { now: this.options.now } : {}),
     });
+  }
+
+  // --------------------------------------------------------------- 状态
+
+  /**
+   * 聚合全部宿主的状态。
+   *
+   * 顶层字段（workspace / tier / model / sessions…）仍然是**活动根**的——
+   * 单工作区用法的形状不变；多出来的 `workspaces[]` 是池里每个根自己的
+   * 会话、任务与待裁决数，`runs` 则是跨根汇总（各带 `root`）。
+   */
+  private async composeState(): Promise<AppState> {
+    const states = new Map<string, Awaited<ReturnType<WorkspaceHost["state"]>>>();
+    for (const [root, host] of this.hosts) {
+      states.set(root, await host.state());
+    }
+    const activeRoot = this.activeRoot ?? [...this.hosts.keys()][0] ?? null;
+    const active = activeRoot !== null ? states.get(activeRoot) : undefined;
+
+    const workspaces: WorkspaceStateView[] = [...states.entries()].map(([root, s]) => ({
+      root,
+      name: s.workspace.name,
+      sessions: s.sessions,
+      runs: s.runs.map((run) => ({ ...run, root })),
+      currentSessionId: s.currentSessionId,
+      approvals: { pending: s.approvals.pending },
+      sendable: s.sendable,
+      blockReason: s.blockReason,
+      isolate: s.isolate,
+      isolateError: s.isolateError,
+    }));
+
+    // 审批跨根聚合：待裁决数求和，最早挂起的那个仍是跳转的落脚点
+    // （前端拿 runs 里的 root 把 runId 映射回工作区）
+    const approvals = [...this.hosts.entries()].flatMap(([root, host]) =>
+      host.listApprovals().map((request) => ({ ...request, root })),
+    );
+    approvals.sort((a, b) => a.createdAt - b.createdAt);
+
+    return {
+      workspace: active?.workspace ?? { root: "", name: "" },
+      workspaces,
+      activeRoot: activeRoot ?? "",
+      tier: active?.tier ?? "workspace-write",
+      model:
+        active?.model ?? {
+          provider: null,
+          model: null,
+          label: null,
+          contextWindow: 0,
+          contextWindowSource: "default",
+        },
+      approvals: { pending: approvals.length, oldestRunId: approvals[0]?.runId ?? null },
+      runs: workspaces
+        .flatMap((w) => w.runs)
+        .sort((a, b) => b.startedAt - a.startedAt),
+      sessions: active?.sessions ?? [],
+      currentSessionId: active?.currentSessionId ?? null,
+      sendable: active?.sendable ?? false,
+      // 不能用 ?? ：blockReason 为 null（可以发送）会被当成"没有值"吞掉
+      blockReason: active ? active.blockReason : "没有打开的工作区",
+      subAgent: active?.subAgent ?? false,
+      isolate: active?.isolate ?? false,
+      isolateError: active?.isolateError ?? null,
+    };
   }
 
   // --------------------------------------------------------------- 路由
@@ -227,44 +586,52 @@ export class AppServer {
     app.use("/api", noStore);
 
     app.get("/api/state", wrap(async (_req, res) => {
-      res.json(await this.host.state());
+      res.json(await this.composeState());
     }));
 
+    // 所有工作区的 Run 汇总（各带 root）；单工作区时就是原来那一份
     app.get("/api/runs", wrap(async (_req, res) => {
-      res.json((await this.host.state()).runs);
+      res.json((await this.composeState()).runs);
     }));
 
     app.post("/api/runs", wrap((req, res) => {
       const payload = asRecord(req.body);
       const prompt = requireString(payload.prompt, "prompt");
       const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
-      res.status(201).json(this.host.send(prompt, sessionId));
+      const root = typeof payload.root === "string" && payload.root.length > 0
+        ? payload.root
+        : undefined;
+      const host = this.hostForRoot(root);
+      const created = host.send(prompt, sessionId);
+      // 登记归属：之后这条 Run 的查询 / 取消 / 事件流都按它路由
+      this.runRoots.set(created.runId, host.workspaceRoot);
+      res.status(201).json(created);
     }));
 
     app.get("/api/runs/:id", wrap((req, res) => {
-      res.json(this.host.runSummary(pathParam(req.params.id)));
+      res.json(this.hostForRun(pathParam(req.params.id)).runSummary(pathParam(req.params.id)));
     }));
 
     app.post("/api/runs/:id/cancel", wrap((req, res) => {
-      this.host.cancel(pathParam(req.params.id));
+      this.hostForRun(pathParam(req.params.id)).cancel(pathParam(req.params.id));
       res.status(204).end();
     }));
 
-    // 丢弃这个 Run 的隔离工作区（界面运行头的「丢弃」）。跑着的时候
+    // 丢弃这个 Run 的隔离工作区（界面审批卡的「丢弃」）。跑着的时候
     // 宿主会 409——正在用的目录不能抽掉；没开隔离同样是 409，而不是
     // 假装删掉了什么
     app.delete("/api/runs/:id/worktree", wrap((req, res) => {
-      this.host.releaseWorktree(pathParam(req.params.id));
+      this.hostForRun(pathParam(req.params.id)).releaseWorktree(pathParam(req.params.id));
       res.status(204).end();
     }));
 
     // 隔离改动的审阅与落地：先看 diff，再决定合并还是丢弃
     app.get("/api/runs/:id/diff", wrap((req, res) => {
-      res.json(this.host.runDiff(pathParam(req.params.id)));
+      res.json(this.hostForRun(pathParam(req.params.id)).runDiff(pathParam(req.params.id)));
     }));
 
     app.post("/api/runs/:id/merge", wrap((req, res) => {
-      res.json(this.host.mergeWorktree(pathParam(req.params.id)));
+      res.json(this.hostForRun(pathParam(req.params.id)).mergeWorktree(pathParam(req.params.id)));
     }));
 
     app.get("/api/runs/:id/events", (req, res, next) => {
@@ -285,8 +652,13 @@ export class AppServer {
       }
     });
 
+    // 审批跨根聚合，各带 root；裁决按 id 路由到挂着的那个宿主
     app.get("/api/approvals", wrap((_req, res) => {
-      res.json(this.host.listApprovals());
+      const all = [...this.hosts.entries()].flatMap(([root, host]) =>
+        host.listApprovals().map((request) => ({ ...request, root })),
+      );
+      all.sort((a, b) => a.createdAt - b.createdAt);
+      res.json(all);
     }));
 
     app.post("/api/approvals/:id", wrap((req, res) => {
@@ -294,37 +666,43 @@ export class AppServer {
       if (answer !== "yes" && answer !== "no" && answer !== "always") {
         throw new HttpError(400, `无法识别的裁决：${String(answer)}`);
       }
-      res.json(this.host.resolveApproval(pathParam(req.params.id), answer as ApprovalAnswer));
+      const host = this.hostForApproval(pathParam(req.params.id));
+      res.json(host.resolveApproval(pathParam(req.params.id), answer as ApprovalAnswer));
     }));
 
-    app.get("/api/sessions", wrap((_req, res) => {
-      res.json(this.host.listSessions());
+    // 会话按根寻址：sessionId 是文件名，跨工作区会撞（见 docs/client-multi-workspace.md §4）
+    app.get("/api/sessions", wrap((req, res) => {
+      res.json(this.hostForRoot(queryParam(req.query.root)).listSessions());
     }));
 
     // 没有"新建会话"这个接口：会话在第一次发送时创建（POST /api/runs
     // 不带 sessionId），界面上点「新任务」因此不会往磁盘上写空文件
 
     app.get("/api/sessions/:id", wrap(async (req, res) => {
-      res.json(await this.host.readSession(pathParam(req.params.id)));
+      const host = this.hostForRoot(queryParam(req.query.root));
+      res.json(await host.readSession(pathParam(req.params.id)));
     }));
 
     app.delete("/api/sessions/:id", wrap(async (req, res) => {
-      res.json(await this.host.deleteSession(pathParam(req.params.id)));
+      const host = this.hostForRoot(queryParam(req.query.root));
+      res.json(await host.deleteSession(pathParam(req.params.id)));
     }));
 
     app.get("/api/providers", wrap(async (_req, res) => {
-      res.json(await this.host.providers());
+      res.json(await this.requiredActiveHost().providers());
     }));
 
     // 只存凭据、不设默认模型：自定义供应商先"能进"，再选模型
     app.post("/api/providers", wrap(async (req, res) => {
-      await this.host.configureProvider(asRecord(req.body));
-      res.json(await this.host.providers());
+      const host = this.requiredActiveHost();
+      await host.configureProvider(asRecord(req.body));
+      res.json(await host.providers());
     }));
 
     app.delete("/api/providers/:name", wrap(async (req, res) => {
-      await this.host.deleteCustomProvider(pathParam(req.params.name));
-      res.json(await this.host.state());
+      const host = this.requiredActiveHost();
+      await host.deleteCustomProvider(pathParam(req.params.name));
+      res.json(await this.composeState());
     }));
 
     app.get("/api/models", wrap(async (req, res) => {
@@ -332,12 +710,13 @@ export class AppServer {
       if (typeof provider !== "string" || provider.length === 0) {
         throw new HttpError(400, "缺少 provider 参数");
       }
-      res.json(await this.host.models(provider));
+      res.json(await this.requiredActiveHost().models(provider));
     }));
 
     app.post("/api/model", wrap(async (req, res) => {
-      await this.host.configureModel(asRecord(req.body));
-      res.json(await this.host.state());
+      const host = this.requiredActiveHost();
+      await host.configureModel(asRecord(req.body));
+      res.json(await this.composeState());
     }));
 
     app.post("/api/tier", wrap((req, res) => {
@@ -345,30 +724,52 @@ export class AppServer {
       if (!isTier(payload.tier)) {
         throw new HttpError(400, `无法识别的审批档位：${String(payload.tier)}`);
       }
-      res.json({ tier: this.host.setTier(payload.tier) });
+      // 档位是"人的选择"，对池里所有宿主生效：设置面板只有一个开关，
+      // 不该出现"A 工作区问、B 工作区不问"这种看不懂的组合
+      for (const host of this.hosts.values()) {
+        host.setTier(payload.tier);
+      }
+      res.json({ tier: this.requiredActiveHost().getTier() });
     }));
 
     app.post("/api/options", wrap(async (req, res) => {
       const payload = asRecord(req.body);
       if (payload.subAgent !== undefined) {
-        this.host.setSubAgentEnabled(payload.subAgent);
+        // 委派开关同理：对所有宿主生效，与设置里的同一份语义
+        for (const host of this.hosts.values()) {
+          host.setSubAgentEnabled(payload.subAgent);
+        }
       }
       if (payload.isolate !== undefined) {
-        // 不支持时这里 409 并带上原因；state 里的 isolateError 也会同时更新
-        this.host.setIsolate(payload.isolate);
+        // 不支持时这里 409 并带上原因；state 里的 isolateError 也会同时更新。
+        // 隔离按宿主探测（有的目录不是 git 仓库），只作用于活动根
+        this.requiredActiveHost().setIsolate(payload.isolate);
       }
-      res.json(await this.host.state());
+      res.json(await this.composeState());
     }));
 
     app.get("/api/dirs", wrap((req, res) => {
       const path = req.query.path;
-      res.json(this.host.listDir(typeof path === "string" ? path : null));
+      // 空串与缺省一样算"未指定"：空池时前端拿到的起点就是空串，
+      // resolve("") 会落到服务进程的当前目录——那正是要避开的东西
+      const target = typeof path === "string" && path !== "" ? path : null;
+      const host = this.activeHost();
+      // 空池没有宿主可借：选择器照样要能列目录，起点退到用户主目录
+      res.json(host ? host.listDir(target) : listDirectory(target, homedir()));
     }));
 
+    // 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务
     app.post("/api/workspace", wrap(async (req, res) => {
       const root = requireString(asRecord(req.body).path, "path");
-      await this.switchWorkspace(root);
-      res.json((await this.host.state()).workspace);
+      await this.openWorkspace(root);
+      res.json((await this.requiredActiveHost().state()).workspace);
+    }));
+
+    // 显式关闭：跑着任务时 409——只有这条路径才结束里面的任务
+    app.delete("/api/workspace", wrap(async (req, res) => {
+      const root = queryParam(req.query.root) || requireString(asRecord(req.body).root, "root");
+      await this.closeWorkspace(root);
+      res.status(204).end();
     }));
 
     // API 里没有匹配到的：明确的 404，而不是掉进静态资源兜底返回一页 HTML
@@ -423,7 +824,8 @@ export class AppServer {
    * 都靠它补齐，而不是让前端自己攒一份"我收到哪了"。
    */
   private streamEvents(req: Request, res: Response): void {
-    const record = this.host.record(pathParam(req.params.id));
+    const runId = pathParam(req.params.id);
+    const record = this.hostForRun(runId).record(runId);
     const raw = req.query.cursor;
     const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw[0] : undefined;
     const cursor = text === undefined ? 0 : Math.max(0, Math.floor(Number(text) || 0));
@@ -567,16 +969,21 @@ export async function bootAppServer(
   options: BootOptions,
   streams: BootStreams,
 ): Promise<BootResult> {
-  let root: string;
-  try {
-    root = WorkspaceHost.assertWorkspaceRoot(options.cwd);
-  } catch (error) {
-    streams.stderr.write(`mini-pi 客户端：工作区不可用：${errorMessage(error)}\n`);
-    return { code: 1, server: null, url: null, port: null };
+  // cwdGiven=false（serve 没显式给 --cwd）：当前目录不配成为工作区，
+  // 空池启动，等用户在界面里添加或由启动恢复把记忆里的开回来
+  const explicit = options.cwdGiven !== false;
+  let root = "";
+  if (explicit) {
+    try {
+      root = WorkspaceHost.assertWorkspaceRoot(options.cwd);
+    } catch (error) {
+      streams.stderr.write(`mini-pi 客户端：工作区不可用：${errorMessage(error)}\n`);
+      return { code: 1, server: null, url: null, port: null };
+    }
   }
 
   const server = new AppServer({
-    workspaceRoot: root,
+    ...(explicit ? { workspaceRoot: root } : {}),
     port: options.port,
     host: options.host,
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
@@ -594,6 +1001,18 @@ export async function bootAppServer(
     ...(options.now ? { now: options.now } : {}),
     concurrency: options.concurrency,
   });
+  // 启动恢复：入口接了记忆才做（桌面壳 / serve 都接）。读取失败不影响
+  // 本次启动——记忆是便利功能，不该有把服务挡在门外的话语权。
+  if (options.workspaceMemory) {
+    try {
+      const remembered = await options.workspaceMemory.list();
+      if (remembered) {
+        await server.restoreWorkspaces(remembered);
+      }
+    } catch (error) {
+      logger.error(`启动恢复：读取工作区记忆失败（不影响本次启动）: ${errorMessage(error)}`);
+    }
+  }
   const running = await server.start();
   return { code: 0, server, url: running.url, port: running.port };
 }
@@ -631,6 +1050,15 @@ function pathParam(value: string | string[] | undefined): string {
     return value[0] ?? "";
   }
   return value ?? "";
+}
+
+/** query 参数（`?root=` 这类可选寻址）：取第一个，缺省空串 */
+function queryParam(value: unknown): string {
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return typeof first === "string" ? first : "";
+  }
+  return typeof value === "string" ? value : "";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

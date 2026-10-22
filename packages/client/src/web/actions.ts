@@ -43,14 +43,24 @@ export type Actions = {
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
-  openSession: (sessionId: string) => void;
+  /**
+   * 在指定工作区开一段新会话（侧栏工作区名节点的 `+`）。
+   *
+   * 与 {@link Actions.newTask} 的差别只有一处：草稿发送时去的是**活动根**，
+   * 所以在非活动工作区上点"+"，得先把那个根聚焦过来，否则"点了这个
+   * 工作区的 +，会话却开在别处"。
+   */
+  newTaskIn: (root: string) => Promise<void>;
+  /** 打开一段会话；`root` 缺省 = 活动根（跨根打开靠它，sessionId 会撞名） */
+  openSession: (sessionId: string, root?: string) => void;
   /**
    * 打开一段会话并把焦点放进输入框（侧栏行的 `+`）。
    *
    * 与 {@link Actions.openSession} 只差"聚焦"：对当前会话来说这就是
    * "接着写"，对历史会话则打开只读回看——由 composer 自己说明状态。
+   * `root` 缺省 = 活动根。
    */
-  continueSession: (sessionId: string) => Promise<void>;
+  continueSession: (sessionId: string, root?: string) => Promise<void>;
   openRun: (runId: string) => void;
   decide: (approvalId: string, answer: ApprovalAnswer) => void;
   setSearch: (keyword: string) => void;
@@ -82,8 +92,21 @@ export type Actions = {
   toggleTheme: () => void;
   openPicker: () => void;
   closePicker: () => void;
-  switchWorkspace: (path: string) => Promise<void>;
-  requestDelete: (sessionId: string) => void;
+  /** 打开（或聚焦）一个工作区目录：切走不打断别的根跑着的任务 */
+  openWorkspace: (path: string) => Promise<void>;
+  /**
+   * 聚焦一个已打开的工作区（侧栏工作区名节点点击）。
+   *
+   * 只挪"新任务去哪"的焦点，**不重建时间线**——正在看的会话不换。
+   */
+  focusWorkspace: (root: string) => Promise<void>;
+  /**
+   * 显式关闭一个工作区：里面的任务先停，服务端才肯收。
+   * 正在看的会话属于它时，时间线会回到活动根。
+   */
+  closeWorkspace: (root: string) => Promise<void>;
+  /** "要删"的确认是两段式：先点名（会话 + 它的根），再确认 */
+  requestDelete: (sessionId: string, root?: string) => void;
   cancelDelete: () => void;
   confirmDelete: () => Promise<void>;
   retry: () => void;
