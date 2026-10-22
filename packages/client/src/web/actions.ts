@@ -43,6 +43,14 @@ export type Actions = {
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
+  /**
+   * 在指定工作区开一段新会话（侧栏工作区名节点的 `+`）。
+   *
+   * 与 {@link Actions.newTask} 的差别只有一处：草稿发送时去的是**活动根**，
+   * 所以在非活动工作区上点"+"，得先把那个根聚焦过来，否则"点了这个
+   * 工作区的 +，会话却开在别处"。
+   */
+  newTaskIn: (root: string) => Promise<void>;
   /** 打开一段会话；`root` 缺省 = 活动根（跨根打开靠它，sessionId 会撞名） */
   openSession: (sessionId: string, root?: string) => void;
   /**

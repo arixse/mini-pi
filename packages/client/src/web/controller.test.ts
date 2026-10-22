@@ -333,6 +333,39 @@ describe("AppController", () => {
     assert.strictEqual(state.banner, null);
   });
 
+  it("工作区节点的 +：不是活动根就先聚焦过来，再换白板", async () => {
+    let activeRoot = "D:/ws";
+    installFetch({
+      "/api/state": () => ({ body: snapshot({ activeRoot }) }),
+      // 服务端真的把活动根挪过去了，之后的 /api/state 才会带回新值
+      "/api/workspace": () => {
+        activeRoot = "D:/other";
+        return { body: { root: "D:/other", name: "other" } };
+      },
+    });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    await controller.actions.newTaskIn("D:/other");
+    await settle();
+
+    const posted = requested.filter(
+      (item) => item.method === "POST" && item.url.includes("/api/workspace"),
+    );
+    assert.strictEqual(posted.length, 1, "会话开在被点的那个工作区：先挪活动根");
+    assert.strictEqual(controller.store.current.view.sessionId, null, "然后才换白板");
+
+    requested.length = 0;
+    await controller.actions.newTaskIn("D:/other");
+    await settle();
+    assert.strictEqual(
+      requested.filter((item) => item.method === "POST").length,
+      0,
+      "已经是活动根就不必再请求一次",
+    );
+  });
+
   it("草稿态连发两条只开一段会话：第二个请求等第一个带回 sessionId", async () => {
     let created = 0;
     installFetch({

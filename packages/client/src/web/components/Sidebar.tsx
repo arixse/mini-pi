@@ -16,6 +16,11 @@
  * 切过去的那一个"比找某段会话频繁得多。命中的工作区整组原样展开，
  * 不按标题二次过滤——否则"搜到了工作区，里面的会话却少了"会让人以为
  * 数据丢了。
+ *
+ * 开新会话的入口挂在**每个工作区名节点**上（hover 出现的 `+`），不摆
+ * 在侧栏顶上：多工作区下"新会话开在哪"是必须当场回答的问题，一颗顶栏
+ * 按钮只能默认落在活动根，等于把选择藏起来。工作区节点的 `+` 先聚焦该
+ * 根再换白板，落点就是点的那一行。
  */
 
 import { useState } from "react";
@@ -139,7 +144,20 @@ function WorkspaceNode({
       <span className="tree-count" title={`${group.groups.length} 段会话`}>
         {group.groups.length}
       </span>
+      {/* 行操作 hover 才出现（§4）：+ 在这个工作区开新会话，··· 是行菜单 */}
       <span className="row-acts">
+        <button
+          className="row-act"
+          title={
+            active
+              ? `在「${group.name}」开一段新会话（Ctrl+N）`
+              : `在「${group.name}」开一段新会话：会先把它设为活动工作区`
+          }
+          aria-label={`在「${group.name}」开一段新会话`}
+          onClick={() => void actions.newTaskIn(group.root)}
+        >
+          <Icon name="plus" size={12} />
+        </button>
         <RowMenu
           items={[
             {

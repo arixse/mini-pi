@@ -18,6 +18,7 @@ import { ClientProvider, ClientStore } from "./store";
 import { initialState, type TimelineItem } from "./state";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { DiffPanel } from "./components/DiffPanel";
+import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
@@ -33,6 +34,7 @@ const fakeActions = {
   closeDiff: () => undefined,
   mergeWorktree: async () => undefined,
   newTask: () => undefined,
+  newTaskIn: async () => undefined,
   openSession: () => undefined,
   continueSession: async () => undefined,
   openRun: () => undefined,
@@ -134,6 +136,58 @@ describe("前端组件树", () => {
     assert.match(html, /mini-pi/);
     // 侧栏只留一句提示，不摆一棵空树
     assert.match(html, /还没有工作区/);
+  });
+
+  it("开新会话的入口挂在工作区节点上：一个工作区一个，空池没有", () => {
+    const empty = new ClientStore();
+    const htmlEmpty = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: empty, actions: fakeActions } },
+        createElement(Sidebar),
+      ),
+    );
+    assert.doesNotMatch(htmlEmpty, /开一段新会话/, "没有工作区就没有落点，别摆空入口");
+
+    const ready = new ClientStore();
+    ready.update((state) => {
+      state.activeRoot = "/tmp/a";
+      state.workspaces = [
+        {
+          root: "/tmp/a",
+          name: "a",
+          sessions: [],
+          runs: [],
+          currentSessionId: null,
+          approvals: { pending: 0 },
+          sendable: true,
+          blockReason: null,
+          isolate: false,
+          isolateError: null,
+        },
+        {
+          root: "/tmp/b",
+          name: "b",
+          sessions: [],
+          runs: [],
+          currentSessionId: null,
+          approvals: { pending: 0 },
+          sendable: true,
+          blockReason: null,
+          isolate: false,
+          isolateError: null,
+        },
+      ];
+    });
+    const htmlReady = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: ready, actions: fakeActions } },
+        createElement(Sidebar),
+      ),
+    );
+    assert.match(htmlReady, /aria-label="在「a」开一段新会话"/);
+    assert.match(htmlReady, /aria-label="在「b」开一段新会话"/, "每个工作区各自一个入口");
   });
 
   it("起不来的时候给的是说明与重试，不是一片空白", () => {

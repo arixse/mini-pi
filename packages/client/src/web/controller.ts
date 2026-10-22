@@ -779,6 +779,20 @@ export class AppController {
     this.composer?.current?.focus();
   }
 
+  /**
+   * 在指定工作区开一段新会话（侧栏工作区名节点的 `+`）。
+   *
+   * 先聚焦再换白板，顺序不能倒：草稿发送时去的是活动根
+   * （见 {@link AppController.send}），所以点了非活动工作区的 `+`
+   * 却不挪焦点，会话会开在别处——"点这里、落在那里"是最难解释的一类错。
+   */
+  private async newTaskIn(root: string): Promise<void> {
+    if (this.store.current.activeRoot !== root) {
+      await this.focusWorkspace(root);
+    }
+    this.newTask();
+  }
+
   private async deleteTarget(): Promise<void> {
     const target = this.store.current.ui.deleteTarget;
     if (!target) {
@@ -1026,6 +1040,7 @@ export class AppController {
       closeDiff: () => this.closeDiff(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
+      newTaskIn: (root) => this.newTaskIn(root),
       openSession: (sessionId, root) => void this.openSession(sessionId, root),
       continueSession: (sessionId, root) => this.continueSession(sessionId, root),
       openRun: (runId) => void this.openRun(runId),
