@@ -338,6 +338,38 @@ describe("ModelProviderService 自定义供应商", () => {
     assert.ok(!service.hasProvider("ghost"));
   });
 
+  it("多个自建网关可以并存，凭据互不干扰", async () => {
+    const first = new ModelProviderService(store);
+    await first.saveProviderConfig("公司网关", {
+      apiKey: "k1",
+      baseUrl: "https://gw1.example/v1",
+    });
+    await first.saveProviderConfig("测试网关", {
+      apiKey: "k2",
+      baseUrl: "https://gw2.example/v1",
+    });
+
+    // 两个槽位各自记各自的地址与密钥
+    const one = await first.getProviderConfig("公司网关");
+    const two = await first.getProviderConfig("测试网关");
+    assert.strictEqual(one.apiKey, "k1");
+    assert.strictEqual(one.baseUrl, "https://gw1.example/v1");
+    assert.strictEqual(two.apiKey, "k2");
+    assert.strictEqual(two.baseUrl, "https://gw2.example/v1");
+
+    // 删掉其中一家，另一家不受牵连
+    await first.deleteCustomProvider("公司网关");
+    assert.ok(first.hasProvider("测试网关"));
+    assert.strictEqual((await first.getProviderConfig("测试网关")).apiKey, "k2");
+
+    // 重启：存活的网关照常恢复，删掉的不复活
+    const second = new ModelProviderService(store);
+    await second.loadCustomProviders();
+    assert.ok(!second.hasProvider("公司网关"));
+    assert.ok(second.hasProvider("测试网关"));
+    assert.strictEqual(second.getProviderBaseUrl("测试网关"), "https://gw2.example/v1");
+  });
+
   it("改自建网关的地址：内存槽位跟着换（不等重启）", async () => {
     const service = new ModelProviderService(store);
     await service.saveProviderConfig("gw", { baseUrl: "https://old.example/v1" });
