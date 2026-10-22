@@ -1,10 +1,17 @@
 /**
  * 时间线的条目。
  *
- * 三条来自设计稿的硬要求：
- * - 工具卡片**必须渲染参数**（第 7 条）：只写"跑了 grep"等于让用户信任一句没有证据的话
- * - 风险等级与原因由内核算好，前端只配色（第 8 条）
- * - 高危单独成块，不叠加降级理由（第 10 条）：一次列五条会把最致命的那条淹掉
+ * 版式来自视觉交接稿 §3 的「01 执行中」：转录列四块加一个新块，
+ * 顺序即时间顺序——指令 → 工具调用 → 模型正文 → 审批 → 已入队：
+ * - 指令块：用户头像 + accent-soft 实心气泡，右对齐；已入队的那条换
+ *   **空心描边气泡**，附元信息行与「撤回」；
+ * - 工具调用：**单行**，生命周期标记 ● 运行中 / ✓ 完成 / ✖ 错误，
+ *   不套三层盒子；参数必须渲染（设计稿第 7 条），结果超 6 行或超长
+ *   才给"展开全部"；
+ * - 审批块：warn-soft 底，动作行四个（允许一次 / 本会话全部允许 /
+ *   拒绝 / 看变更）；高危单独换 danger-soft，不叠加降级理由（第 10 条）；
+ * - 模型正文：助手气泡，流式期间按纯文本渲染（半截 ``` 会让代码块
+ *   在眼前反复跳），复制按钮 hover 出现。
  *
  * 每条都按 `revision` 指纹做 memo：条目对象是就地修改的，按引用比较的 memo
  * 会永远认为没变，于是整条时间线每次 delta 都要重画。
@@ -12,19 +19,24 @@
 
 import { memo, useEffect, useState } from "react";
 import type { Actions } from "../actions";
-import type { TimelineItem } from "../state";
-import {
-  approvalStatusText,
-  describeArgs,
-  noticeTone,
-  toolStatusMeta,
-} from "../items";
+import type { TimelineItem, ToolStatus } from "../state";
+import { approvalStatusText, describeArgs, noticeTone } from "../items";
 import { formatDuration, riskMeta, toolMetaLine } from "../format";
-import { Icon, Dot } from "./Icon";
+import { useClient } from "../store";
+import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
-/** 工具输出在卡片里最多显示几行，超出给"展开全部" */
+/** 工具结果在卡片里最多显示几行，超出给"展开全部" */
 const OUTPUT_PREVIEW_LINES = 6;
+/** 单行超长也算"超长"：一行 4KB 的 JSON 摊开会把整列顶翻 */
+const OUTPUT_PREVIEW_CHARS = 2000;
+
+/** 生命周期标记：配色 + 字形双重编码，色弱用户与截图场景都读得出 */
+const TOOL_MARK: Record<ToolStatus, string> = {
+  running: "●",
+  done: "✓",
+  failed: "✖",
+};
 
 export type ItemProps = {
   item: TimelineItem;
@@ -39,24 +51,7 @@ export const TimelineItemRow = memo(
   function TimelineItemRow({ item, expanded, onToggle, actions }: ItemProps): React.ReactElement {
     switch (item.kind) {
       case "user":
-        return (
-          <div className="row right">
-            <div className="stack">
-              <div className="bubble-user">
-                {item.text}
-                {item.queued ? (
-                  <span
-                    className="pill pill-slate"
-                    style={{ marginLeft: 8, fontSize: "10.5px" }}
-                  >
-                    已入队
-                  </span>
-                ) : null}
-              </div>
-              <div className="avatar user">我</div>
-            </div>
-          </div>
-        );
+        return <UserBlock item={item} actions={actions} />;
 
       case "assistant":
         return (
@@ -109,6 +104,52 @@ export const TimelineItemRow = memo(
   (a, b) => a.revision === b.revision && a.expanded === b.expanded && a.actions === b.actions,
 );
 
+/**
+ * 指令块。
+ *
+ * 已入队的那条是**空心描边气泡**（区别于已执行的实心），元信息行说明
+ * "当前回合结束后执行"，并给「撤回」——内核对排队中的 Run 直接出队，
+ * 前端只负责把这个出口接到 UI 上（handoff §5 缺口 3）。
+ */
+function UserBlock({
+  item,
+  actions,
+}: {
+  item: Extract<TimelineItem, { kind: "user" }>;
+  actions: Actions;
+}): React.ReactElement {
+  return (
+    <div className="row right">
+      <div className="stack">
+        <div className={`bubble-user${item.queued ? " queued" : ""}`}>
+          {item.text}
+          {item.queued ? (
+            <span className="queued-meta">
+              已入队 · 当前回合结束后执行
+              <button
+                className="recall"
+                title="撤回这条消息：排队中的任务会直接取消"
+                onClick={() => actions.recall(item.id)}
+              >
+                <Icon name="undo" size={11} />
+                撤回
+              </button>
+            </span>
+          ) : null}
+        </div>
+        <div className="avatar user">我</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 工具调用：单行。
+ *
+ * 不套三层盒子——旧稿一张 grep 结果套了三层边框、两层背景，信息权重
+ * 与视觉权重倒挂。整行是一个按钮：点它展开/收起输出；参数行内联展示，
+ * 只写"跑了 grep"等于让用户信任一句没有证据的话（设计稿第 7 条）。
+ */
 function ToolCard({
   item,
   expanded,
@@ -118,49 +159,52 @@ function ToolCard({
   expanded: boolean;
   onToggle: (id: string) => void;
 }): React.ReactElement {
-  const status = toolStatusMeta(item.status);
+  const args = describeArgs(item);
   const lines = item.output.split("\n");
-  const shown = expanded ? item.output : lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n");
+  const long = lines.length > OUTPUT_PREVIEW_LINES || item.output.length > OUTPUT_PREVIEW_CHARS;
+  const shown = expanded || !long ? item.output : lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n");
+  const hasOutput = item.output.length > 0;
 
   return (
     <div className="row">
-      <div className="avatar bot">
-        <Icon name="sparkles" size={13} />
-      </div>
       <div className="stack">
-        <div className="card" style={{ width: "100%" }}>
-          <div className="card-head">
-            <span className="card-name">{item.name}</span>
-            <span className={`pill pill-${status.tone}`}>
-              {item.status === "running" ? <Dot /> : null}
-              {status.label}
-            </span>
-            <span className="spacer" />
-            <span style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}>
-              {toolMetaLine(item.durationMs, item.status)}
-            </span>
-          </div>
-          {describeArgs(item) ? (
-            <div className="card-args" title={describeArgs(item)}>
-              {describeArgs(item)}
-            </div>
-          ) : null}
-          {item.output.length > 0 ? (
-            <div className="card-out">
-              <pre className={item.status === "failed" ? "err" : undefined}>{shown}</pre>
-              {lines.length > OUTPUT_PREVIEW_LINES ? (
-                <button className="card-more" onClick={() => onToggle(item.id)}>
-                  {expanded ? "收起" : `展开全部（${lines.length} 行）`}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <button
+          className={`tool-line${hasOutput ? " take-me" : ""}`}
+          title={hasOutput ? (expanded ? "收起输出" : "展开输出") : item.name}
+          onClick={() => (hasOutput ? onToggle(item.id) : undefined)}
+        >
+          <span className={`tool-mark is-${item.status}`}>{TOOL_MARK[item.status]}</span>
+          <span className="tool-name">{item.name}</span>
+          {args ? <span className="tool-args">{args}</span> : null}
+          <span className="tool-meta">{toolMetaLine(item.durationMs, item.status)}</span>
+        </button>
+        {hasOutput ? (
+          <>
+            <pre className={`tool-out${item.status === "failed" ? " err" : ""}`}>{shown}</pre>
+            {long ? (
+              <button className="tool-more" onClick={() => onToggle(item.id)}>
+                {expanded ? "收起" : `展开全部（${lines.length} 行）`}
+              </button>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </div>
   );
 }
 
+/**
+ * 审批卡。
+ *
+ * 风险等级与命中原因由内核算好（`core/risk.ts`），前端只负责配色与
+ * 按钮——同一条 `rm -rf` 在终端与网页上必须是同一个等级。高危单独
+ * 成块（danger-soft），不叠加降级理由：一次列五条"删除文件/网络请求"
+ * 会把最致命的那条淹掉（设计稿第 10 条）。
+ *
+ * 第四个动作「看变更」只在"确实有变更可看"时出现：它打开这个 Run 的
+ * 隔离工作区 diff，非隔离的任务没有 diff，摆一颗必然 409 的按钮
+ * 比不摆更糟。
+ */
 function ApprovalCard({
   item,
   actions,
@@ -168,24 +212,28 @@ function ApprovalCard({
   item: Extract<TimelineItem, { kind: "approval" }>;
   actions: Actions;
 }): React.ReactElement {
+  const state = useClient();
   const request = item.request;
   const risk = riskMeta(request.risk.level);
   const high = request.risk.level === "high";
   const pending = item.state === "pending";
+  const workspace = state.view.workspace;
+  const canDiff =
+    pending &&
+    workspace !== null &&
+    workspace.runId === request.runId &&
+    workspace.isolated === true &&
+    workspace.released === false;
 
   return (
     <div className="row">
-      <div className="avatar bot">
-        <Icon name="sparkles" size={13} />
-      </div>
       <div className="stack" style={{ maxWidth: "92%" }}>
         <div className={`approval${high ? " high" : ""}`} style={{ width: "100%" }}>
           <div className="approval-head">
-            <Icon
-              name={high ? "alert" : "shield"}
-              color={high ? "var(--Client-danger-text)" : "var(--Client-warn-text)"}
-            />
-            <span className="card-name">{request.toolName}</span>
+            <Icon name={high ? "alert" : "shield"} size={14} />
+            <span className="card-name">
+              {high ? `高危：${request.toolName}` : request.toolName}
+            </span>
             <span className={`pill pill-${risk.tone}`}>{risk.label}</span>
             <span className="spacer" />
             <span style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}>
@@ -201,13 +249,19 @@ function ApprovalCard({
             <div className="card-args">{`来自子 Agent（depth=${request.identity.depth}）`}</div>
           ) : null}
 
-          {/* 高危：只列原因。降级理由叠上来会把最致命的那条淹掉 */}
+          {/* 高危：只列原因 + 完整命令 + 不可撤销提示。降级理由叠上来会把最致命的那条淹掉 */}
           {high ? (
-            <ul className="reasons" style={{ paddingLeft: 11 }}>
-              {request.risk.reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
+            <>
+              {request.risk.reasons.length > 0 ? (
+                <ul className="reasons" style={{ paddingLeft: 11 }}>
+                  {request.risk.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="approval-pre">{request.argsPreview || "（没有参数预览）"}</div>
+              <div className="approval-warn-line">此操作不可撤销</div>
+            </>
           ) : (
             <>
               {request.summary.length > 0 ? (
@@ -226,10 +280,9 @@ function ApprovalCard({
                   ))}
                 </ul>
               ) : null}
+              {request.argsPreview ? <pre>{request.argsPreview}</pre> : null}
             </>
           )}
-
-          {request.argsPreview ? <pre>{request.argsPreview}</pre> : null}
 
           <div className="approval-actions">
             <button
@@ -237,7 +290,7 @@ function ApprovalCard({
               disabled={!pending}
               onClick={() => actions.decide(request.id, "yes")}
             >
-              仅本次允许
+              允许一次
             </button>
             <button
               className="btn btn-always"
@@ -253,6 +306,16 @@ function ApprovalCard({
             >
               拒绝
             </button>
+            {canDiff ? (
+              <button
+                className="btn btn-ghost"
+                title="查看这次隔离执行改了什么"
+                onClick={() => actions.openDiff(request.runId)}
+              >
+                <Icon name="copy" size={12} />
+                看变更
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

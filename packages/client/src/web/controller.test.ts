@@ -784,3 +784,125 @@ describe("AppController", () => {
     assert.strictEqual(controller.store.current.banner?.level, "error");
   });
 });
+
+describe("撤回已入队的消息", () => {
+  let controller: AppController;
+
+  beforeEach(() => {
+    (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    (globalThis as { Notification?: unknown }).Notification = FakeNotification;
+    FakeEventSource.all = [];
+    FakeEventSource.last = null;
+    FakeNotification.reset();
+    requested.length = 0;
+    controller = new AppController();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { EventSource?: unknown }).EventSource;
+    delete (globalThis as { Notification?: unknown }).Notification;
+  });
+
+  it("取消服务端分配的那条 Run，气泡从时间线上撤掉", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      // cancel 要在 /api/runs 之前：假 fetch 按前缀匹配，具体的路由排后面会被抢走
+      "/api/runs/run_q/cancel": { status: 204, body: {} },
+      "/api/runs": { status: 201, body: { runId: "run_q", sessionId: "s1.jsonl" } },
+    });
+    await controller.boot();
+    await settle();
+
+    // 忙起来：同一会话里上一条还在跑，这一条只能排队
+    controller.store.update((state) => {
+      state.view.status = "running";
+    });
+    controller.actions.send("第二件事");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+
+    const queued = controller.store.current.view.items.find((item) => item.kind === "user");
+    assert.ok(queued, "排队的那条消息要在时间线上");
+    requested.length = 0;
+
+    await controller.actions.recall(queued!.id);
+    await settle();
+
+    assert.strictEqual(controller.store.current.view.items.length, 0, "气泡撤掉");
+    assert.ok(
+      requested.some((entry) => entry.url.includes("/api/runs/run_q/cancel")),
+      "取消要点名服务端分配的那条 Run，而不是只本地撤",
+    );
+  });
+
+  it("撤回时发送请求还在路上：等它落地，取消的是真正登记了的那条", async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      requested.push({
+        url,
+        body: typeof init?.body === "string" ? init.body : "",
+        method: init?.method ?? "GET",
+      });
+      if (init?.method === "POST" && url.endsWith("/api/runs")) {
+        await gate; // 挡住：模拟"请求在路上"
+        return jsonResponse({ runId: "run_slow", sessionId: "s1.jsonl" });
+      }
+      if (url.includes("/api/state")) {
+        return jsonResponse(snapshot());
+      }
+      if (url.includes("/cancel")) {
+        return new Response("{}", { status: 204 });
+      }
+      return jsonResponse({});
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.store.update((state) => {
+      state.view.status = "running";
+    });
+    controller.actions.send("慢半拍的那条");
+    await settle();
+    const queued = controller.store.current.view.items.find((item) => item.kind === "user");
+    assert.ok(queued);
+
+    // 请求还没回来就点撤回：这一句必须等到票据落地
+    const recalling = controller.actions.recall(queued!.id);
+    release!();
+    await recalling;
+    await settle();
+
+    assert.ok(
+      requested.some((entry) => entry.url.includes("/api/runs/run_slow/cancel")),
+      "等在路上的请求落地后，取消的必须是它登记的那条 Run",
+    );
+    assert.strictEqual(controller.store.current.view.items.length, 0);
+  });
+
+  it("已经开跑的消息取消后只说清现状，不假装撤成了", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      // 同上：具体的 cancel 路由排在前面
+      "/api/runs/run_gone/cancel": { status: 409, body: { error: "任务已结束" } },
+      "/api/runs": { status: 201, body: { runId: "run_gone", sessionId: "s1.jsonl" } },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.store.update((state) => {
+      state.view.status = "running";
+    });
+    controller.actions.send("来不及了");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+    const queued = controller.store.current.view.items.find((item) => item.kind === "user");
+    await controller.actions.recall(queued!.id);
+    await settle();
+
+    assert.match(controller.store.current.banner?.text ?? "", /任务已结束/);
+  });
+});

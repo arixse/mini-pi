@@ -20,6 +20,14 @@ export type Actions = {
   send: (text: string) => void;
   stop: () => void;
   /**
+   * 撤回一条"已入队"的消息（时间线里那条空心气泡上的「撤回」）。
+   *
+   * 内核对排队中的 Run 直接出队并给 cancelled 结论；已经开跑的消息
+   * 撤不回——取消只停得下还没执行的部分，说出去的话留在历史里。
+   * 返回 Promise：调用方（测试）要能等到取消请求真的发出去。
+   */
+  recall: (id: string) => Promise<void>;
+  /**
    * 取消指定的一条 Run（侧栏行菜单 / 撤回排队消息都走这里）。
    *
    * 与 {@link Actions.stop} 的分工：`stop` 作用于"正在看的那个 Run"，

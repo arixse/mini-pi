@@ -976,6 +976,44 @@ svg.ic {
   background: var(--Client-danger-soft);
 }
 
+/* 卡标题与参数预览行：审批卡与工具行共用 */
+.card-name {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--Client-text-primary);
+}
+
+.card-args {
+  padding: 0 11px 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--Client-text-secondary);
+}
+
+/* 高危的完整命令区：命令要一眼看全，不给省略号 */
+.approval-pre {
+  margin: 0 11px 8px;
+  padding: 7px 9px;
+  background: var(--Client-bg-code);
+  border-radius: var(--r-input);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--Client-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* "不可撤销"提示行：高危的代价必须写在卡里，不靠用户自己意想 */
+.approval-warn-line {
+  margin: 0 11px 8px;
+  font-size: 11.5px;
+  color: var(--Client-danger-text);
+}
+
 .approval-head {
   display: flex;
   align-items: center;

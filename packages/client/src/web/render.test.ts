@@ -14,8 +14,77 @@ import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { App } from "./App";
-import { ClientStore } from "./store";
-import { initialState } from "./state";
+import { ClientProvider, ClientStore } from "./store";
+import { initialState, type TimelineItem } from "./state";
+import { TimelineItemRow } from "./components/TimelineItems";
+import type { Actions } from "./actions";
+import type { ApprovalRequest } from "../shared/types";
+
+/** 渲染用的假动作：这里只验证 markup，不触发任何请求 */
+const fakeActions = {
+  send: () => undefined,
+  stop: () => undefined,
+  recall: async () => undefined,
+  cancelRun: async () => undefined,
+  discardWorktree: async () => undefined,
+  openDiff: () => undefined,
+  closeDiff: () => undefined,
+  mergeWorktree: async () => undefined,
+  newTask: () => undefined,
+  openSession: () => undefined,
+  continueSession: async () => undefined,
+  openRun: () => undefined,
+  decide: () => undefined,
+  setSearch: () => undefined,
+  toggleSidebar: () => undefined,
+  closeSidebar: () => undefined,
+  openSettings: () => undefined,
+  closeSettings: () => undefined,
+  saveModel: async () => undefined,
+  setTier: async () => undefined,
+  setSubAgent: async () => undefined,
+  setIsolate: async () => undefined,
+  toggleNotifications: async () => undefined,
+  toggleTheme: () => undefined,
+  openPicker: () => undefined,
+  closePicker: () => undefined,
+  switchWorkspace: async () => undefined,
+  requestDelete: () => undefined,
+  cancelDelete: () => undefined,
+  confirmDelete: async () => undefined,
+  retry: () => undefined,
+} as unknown as Actions;
+
+function renderItem(item: TimelineItem, expanded = false): string {
+  const store = new ClientStore();
+  return renderToStaticMarkup(
+    createElement(
+      ClientProvider,
+      { value: { store, actions: fakeActions } },
+      createElement(TimelineItemRow, {
+        item,
+        revision: "r1",
+        expanded,
+        onToggle: () => undefined,
+        actions: fakeActions,
+      }),
+    ),
+  );
+}
+
+function approval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    id: "ap1",
+    runId: "run_1",
+    toolCallId: "tc1",
+    toolName: "bash",
+    risk: { level: "elevated", reasons: ["会执行命令"] },
+    summary: ["$ ls -la"],
+    argsPreview: "ls -la",
+    createdAt: 0,
+    ...overrides,
+  };
+}
 
 describe("前端组件树", () => {
   it("首屏渲染不抛错，且顶栏三枚芯片都在", () => {
@@ -39,5 +108,72 @@ describe("前端组件树", () => {
     // Boot 只在有错误时出现：初始状态（无错）不该渲染它
     const initial = initialState();
     assert.strictEqual(initial.error, null);
+  });
+});
+
+describe("时间线条目的 markup", () => {
+  it("已入队的消息是空心气泡，带元信息行与撤回", () => {
+    const html = renderItem({
+      kind: "user",
+      id: "u:1#1",
+      text: "顺手把测试也补了",
+      queued: true,
+      locked: true,
+      runId: "run_q",
+    });
+    assert.match(html, /bubble-user queued/, "空心描边气泡（与已执行的实心区分）");
+    assert.match(html, /已入队 · 当前回合结束后执行/);
+    assert.match(html, /撤回/);
+  });
+
+  it("工具调用是单行：生命周期标记 + 名称 + 参数 + 耗时", () => {
+    const html = renderItem({
+      kind: "tool",
+      id: "t:1",
+      toolCallId: "1",
+      name: "grep",
+      args: JSON.stringify({ pattern: "TODO", path: "src" }),
+      status: "done",
+      output: "src/a.ts:12: // TODO\nsrc/b.ts:3: // TODO",
+      startedAt: 0,
+      durationMs: 320,
+    });
+    assert.match(html, /tool-line/, "单行，不套三层盒子");
+    assert.match(html, /tool-mark is-done[^<]*>✓</, "完成是 ✓");
+    assert.match(html, /grep/);
+    assert.match(html, /TODO/, "参数必须渲染（设计稿第 7 条）");
+    assert.match(html, /0.3s/);
+  });
+
+  it("审批卡四个动作：允许一次 / 本会话全部允许 / 拒绝（非隔离没有看变更）", () => {
+    const html = renderItem({
+      kind: "approval",
+      id: "ap:ap1",
+      request: approval(),
+      state: "pending",
+    });
+    assert.match(html, /approval"/, "warn-soft 底（elevated）");
+    assert.match(html, /允许一次/);
+    assert.match(html, /本会话内全部允许 bash/);
+    assert.match(html, /拒绝/);
+    assert.doesNotMatch(html, /看变更/, "非隔离任务没有 diff，不摆必然 409 的按钮");
+  });
+
+  it("高危审批换 danger-soft：完整命令 + 不可撤销，不叠降级理由", () => {
+    const html = renderItem({
+      kind: "approval",
+      id: "ap:ap2",
+      request: approval({
+        risk: { level: "high", reasons: ["删除文件", "不可恢复"] },
+        summary: ["$ rm -rf build"],
+        argsPreview: "rm -rf build",
+      }),
+      state: "pending",
+    });
+    assert.match(html, /approval high"/);
+    assert.match(html, /高危：bash/);
+    assert.match(html, /rm -rf build/, "完整命令要给全");
+    assert.match(html, /此操作不可撤销/);
+    assert.doesNotMatch(html, /<code>/, "高危不叠summary 的理由行");
   });
 });

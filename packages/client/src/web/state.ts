@@ -43,7 +43,20 @@ export type TimelineItem = {
    */
   rev?: number;
 } & (
-  | { kind: "user"; id: string; text: string; queued: boolean; locked: boolean }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      queued: boolean;
+      locked: boolean;
+      /**
+       * 这条消息对应的 Run（发送成功后由服务端分配）。
+       *
+       * 撤回要点名它：排队中的 Run 内核直接出队并给 cancelled 结论。
+       * 为 null 表示请求还在路上——那时撤回只能本地撤（见 controller.recall）。
+       */
+      runId: string | null;
+    }
   /** `locked` 表示正文已定稿（来自历史或 message_end）；此后的 delta 一律忽略 */
   | { kind: "assistant"; id: string; text: string; streaming: boolean; locked: boolean }
   | {
@@ -318,6 +331,7 @@ export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineIt
         text: textOf(message),
         queued: false,
         locked: true,
+        runId: null,
       });
       continue;
     }
@@ -509,6 +523,7 @@ export function addUserMessage(view: View, text: string, queued: boolean): strin
     text,
     queued,
     locked: true,
+    runId: null,
   });
   if (!view.title) {
     view.title = text.split("\n")[0]!.slice(0, 48);
@@ -521,6 +536,21 @@ export function removeItem(view: View, id: string): void {
   const index = view.items.findIndex((item) => item.id === id);
   if (index >= 0) {
     view.items.splice(index, 1);
+  }
+}
+
+/**
+ * 把服务端分配的 runId 记到那条乐观消息上。
+ *
+ * 发送是两步的：先乐观插入（用户立刻看见自己说了什么），请求回来才有
+ * runId。撤回按钮要点名具体哪一条 Run，所以这一步不能省——没有它，
+ * "撤回"只能本地撤，排队里的任务照样会跑。
+ */
+export function attachQueuedRun(view: View, id: string, runId: string): void {
+  const item = findItem(view, "user", id);
+  if (item) {
+    item.runId = runId;
+    bump(item);
   }
 }
 
@@ -582,6 +612,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
           text: textOf(event.message),
           queued: false,
           locked: true,
+          runId: null,
         });
       }
       return;

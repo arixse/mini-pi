@@ -16,6 +16,7 @@ import {
   applyRunEvent,
   applyRunMetaEvent,
   applySnapshot,
+  attachQueuedRun,
   emptyView,
   filterBySearch,
   initialState,
@@ -355,6 +356,20 @@ describe("乐观插入与快照", () => {
     assert.equal(view.title, "第一句", "标题不该被撤回");
   });
 
+  it("attachQueuedRun 把服务端分配的 runId 落到那条乐观消息上", () => {
+    const view = emptyView();
+    const id = addUserMessage(view, "第二句", true);
+    attachQueuedRun(view, id, "run_1");
+    const item = view.items[0];
+    assert.strictEqual(item?.kind === "user" ? item.runId : null, "run_1");
+  });
+
+  it("attachQueuedRun 对已经不存在的 id 静默跳过（已被撤回/替换）", () => {
+    const view = emptyView();
+    assert.doesNotThrow(() => attachQueuedRun(view, "u:不存在", "run_1"));
+    assert.equal(view.items.length, 0);
+  });
+
   it("同一毫秒连发两条是两条，不是一条盖住另一条", () => {
     const view = emptyView();
     const first = addUserMessage(view, "第一句", false);
@@ -371,7 +386,7 @@ describe("乐观插入与快照", () => {
     const view = emptyView();
     const id = addUserMessage(view, "原话", false);
     const before = view.items[0]!.rev ?? 0;
-    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true });
+    upsertItem(view, { kind: "user", id, text: "改过的话", queued: false, locked: true, runId: null });
     assert.equal(view.items[0]!.rev, before + 1);
   });
 
