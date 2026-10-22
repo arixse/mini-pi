@@ -157,7 +157,7 @@ function ComposerHint({
       <span className="spacer" />
 
       {mode === "blocked" ? (
-        <span style={{ color: "#fcd34d" }}>{state.blockReason ?? "暂时发不出任务"}</span>
+        <span style={{ color: "var(--Client-warn-text)" }}>{state.blockReason ?? "暂时发不出任务"}</span>
       ) : null}
       {mode === "readonly" ? <span>历史会话只读；点「新任务」开一段新的</span> : null}
       {mode === "ready" || mode === "busy" ? (

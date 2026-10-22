@@ -42,6 +42,8 @@ export type Actions = {
   setIsolate: (enabled: boolean) => Promise<void>;
   /** 通知开关：第一次点会申请权限（必须在用户手势里），之后是开/关 */
   toggleNotifications: () => Promise<void>;
+  /** 主题：只切根节点 data-theme 并记住选择（见 theme.ts） */
+  toggleTheme: () => void;
   openPicker: () => void;
   closePicker: () => void;
   switchWorkspace: (path: string) => Promise<void>;

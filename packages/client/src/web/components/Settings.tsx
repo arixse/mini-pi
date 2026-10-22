@@ -175,7 +175,7 @@ function SettingsDialog({ tier, model }: SettingsDialogProps): React.ReactElemen
     <div className="overlay" onClick={() => actions.closeSettings()}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <Icon name="sparkles" color="var(--indigo-lt)" />
+          <Icon name="sparkles" color="var(--Client-accent-text)" />
           <span style={{ flex: 1 }}>设置 · 模型</span>
           <button
             className="btn btn-ghost"
@@ -263,7 +263,7 @@ function SettingsDialog({ tier, model }: SettingsDialogProps): React.ReactElemen
                 </button>
               ))}
             </div>
-            <span style={{ fontSize: "11.5px", color: "var(--t5)" }}>
+            <span style={{ fontSize: "11.5px", color: "var(--Client-text-tertiary)" }}>
               档位只影响「哪些工具还要问人」；认不出的档位服务端直接报错，不回落。
               切换不追溯：已挂起的审批卡仍等人裁决。
             </span>
@@ -271,8 +271,8 @@ function SettingsDialog({ tier, model }: SettingsDialogProps): React.ReactElemen
         </div>
 
         <div className="modal-foot">
-          <span style={{ flex: 1, fontSize: 12, color: "var(--t5)" }}>{note}</span>
-          <span style={{ fontSize: 12, color: "#fda4af" }}>{error}</span>
+          <span style={{ flex: 1, fontSize: 12, color: "var(--Client-text-tertiary)" }}>{note}</span>
+          <span style={{ fontSize: 12, color: "var(--Client-danger-text)" }}>{error}</span>
           <button
             className="btn btn-ghost"
             disabled={busy}

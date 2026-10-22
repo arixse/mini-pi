@@ -85,6 +85,14 @@ export function Topbar(): React.ReactElement {
       <button className="icon-btn" title="设置" onClick={() => actions.openSettings()}>
         <Icon name="gear" />
       </button>
+      <button
+        className="icon-btn theme-btn"
+        title={state.theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+        aria-label="切换主题"
+        onClick={() => actions.toggleTheme()}
+      >
+        <Icon name={state.theme === "dark" ? "sun" : "moon"} />
+      </button>
       <button className="icon-btn" title="切换侧栏" onClick={() => actions.toggleSidebar()}>
         <Icon name="menu" />
       </button>

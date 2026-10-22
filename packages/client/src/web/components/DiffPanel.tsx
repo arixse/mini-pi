@@ -34,7 +34,7 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
     <div className="overlay" onClick={() => actions.closeDiff()}>
       <div className="modal modal-wide" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <Icon name="copy" color="var(--indigo-lt)" />
+          <Icon name="copy" color="var(--Client-accent-text)" />
           <span style={{ flex: 1 }}>{`变更 · ${files.length} 个文件`}</span>
           <button
             className="btn btn-ghost"

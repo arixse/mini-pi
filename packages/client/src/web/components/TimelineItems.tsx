@@ -136,7 +136,7 @@ function ToolCard({
               {status.label}
             </span>
             <span className="spacer" />
-            <span style={{ fontSize: 11, color: "var(--t5)" }}>
+            <span style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}>
               {toolMetaLine(item.durationMs, item.status)}
             </span>
           </div>
@@ -183,12 +183,12 @@ function ApprovalCard({
           <div className="approval-head">
             <Icon
               name={high ? "alert" : "shield"}
-              color={high ? "var(--rose)" : "var(--amber)"}
+              color={high ? "var(--Client-danger-text)" : "var(--Client-warn-text)"}
             />
             <span className="card-name">{request.toolName}</span>
             <span className={`pill pill-${risk.tone}`}>{risk.label}</span>
             <span className="spacer" />
-            <span style={{ fontSize: 11, color: "var(--t5)" }}>
+            <span style={{ fontSize: 11, color: "var(--Client-text-tertiary)" }}>
               {pending ? (
                 <Waiting since={request.createdAt} />
               ) : (

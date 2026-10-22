@@ -17,7 +17,7 @@ export function Boot(): React.ReactElement | null {
   return (
     <div className="boot">
       <div className="boot-card">
-        <Icon name="alert" color="var(--rose)" />
+        <Icon name="alert" color="var(--Client-danger-text)" />
         <div className="boot-title">连不上本地服务</div>
         <div className="boot-text">{state.error}</div>
         <button

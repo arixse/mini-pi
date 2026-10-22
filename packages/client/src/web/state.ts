@@ -29,6 +29,7 @@ import type {
 } from "../shared/types";
 import { textOf } from "./format";
 import type { NotifyState } from "./notify";
+import { initialTheme, type ThemeMode } from "./theme";
 
 export type ToolStatus = "running" | "done" | "failed";
 
@@ -115,6 +116,13 @@ export type ClientState = {
   ready: boolean;
   /** 首屏加载失败的致命错误（服务没起、JSON 坏了） */
   error: string | null;
+  /**
+   * 主题：只影响根节点上的 `data-theme`（见 theme.ts）。
+   *
+   * 初始值取"用户选过的 > 系统偏好 > 深色"——构造时尚无 DOM 的环境
+   * （服务端渲染、单测）里 `initialTheme` 自己会退到深色。
+   */
+  theme: ThemeMode;
   workspace: WorkspaceView;
   tier: Tier;
   model: ServerSnapshot["model"];
@@ -183,6 +191,13 @@ export function initialState(): ClientState {
   return {
     ready: false,
     error: null,
+    theme: initialTheme(
+      typeof localStorage === "undefined" ? null : localStorage,
+      // matchMedia 的返回是 MediaQueryList（matches 是属性），包一层对齐 ThemePrefers
+      typeof matchMedia === "undefined"
+        ? null
+        : { matches: (query: string) => matchMedia(query).matches },
+    ),
     workspace: { root: "", name: "" },
     tier: "workspace-write",
     model: {

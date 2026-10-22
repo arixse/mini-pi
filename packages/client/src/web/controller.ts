@@ -34,6 +34,13 @@ import {
   showSystemNotification,
 } from "./notify";
 import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
+import {
+  applyTheme,
+  initialTheme,
+  toggledTheme,
+  writeStoredTheme,
+  type ThemeMode,
+} from "./theme";
 
 /**
  * 输入区暴露给动作层的三个命令：清空、聚焦、把没发出去的字还回去。
@@ -108,6 +115,27 @@ export class AppController {
     this.store.update((state) => {
       state.notifications = detectNotifications();
     });
+    // 主题在构造时就落到根节点：晚一步（等 boot）会有一帧深色闪白
+    this.store.update((state) => {
+      state.theme = initialTheme(
+        typeof localStorage === "undefined" ? null : localStorage,
+        typeof matchMedia === "undefined"
+          ? null
+          : { matches: (query: string) => matchMedia(query).matches },
+      );
+      this.paintTheme(state.theme);
+    });
+  }
+
+  /**
+   * 主题落地：根节点属性 + 本地记住。
+   *
+   * 两个副作用都做了"没有 DOM / 存储不可用"的兜底——Electron 的渲染进程
+   * 与浏览器都有 localStorage，但隐私模式下它会抛，那时切主题仍然要成立。
+   */
+  private paintTheme(mode: ThemeMode): void {
+    applyTheme(typeof document === "undefined" ? null : document.documentElement, mode);
+    writeStoredTheme(typeof localStorage === "undefined" ? null : localStorage, mode);
   }
 
   attachComposer(ref: ComposerRef): void {
@@ -872,6 +900,13 @@ export class AppController {
         }
       },
       toggleNotifications: () => this.toggleNotifications(),
+      toggleTheme: () => {
+        const next = toggledTheme(this.store.current.theme);
+        this.store.update((state) => {
+          state.theme = next;
+        });
+        this.paintTheme(next);
+      },
       openPicker: () => {
         this.store.update((state) => {
           state.ui.picker = true;
