@@ -182,6 +182,9 @@ export async function runElectronMain(
     {
       ...parsed.args,
       cwd: workspace.root,
+      // 到这里工作区已经定了（记忆或目录框），对服务而言是一次明确选择——
+      // 不能留 parse 出来的 false，否则装配层会当成"serve 没给 --cwd"而空池启动
+      cwdGiven: true,
       ...(webRoot ? { webRoot } : {}),
       // 桌面壳自己起服务，因此"记住工作区"由它接上：界面里切换工作区后，
       // 下次启动要开的是新目录，而不是最初选的那个

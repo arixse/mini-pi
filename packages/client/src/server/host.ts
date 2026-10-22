@@ -1165,24 +1165,7 @@ export class WorkspaceHost {
 
   /** 目录选择器：只列子目录，不列文件——这里选的是"工作区" */
   listDir(target: string | null): DirListing {
-    const path = resolve(target ?? this.workspaceRoot);
-    let names: string[];
-    try {
-      names = readdirSync(path, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-        .map((entry) => entry.name)
-        .sort((a, b) => a.localeCompare(b));
-    } catch (error) {
-      throw new HttpError(400, `无法读取目录：${errorMessage(error)}`);
-    }
-    const entries = names.map((name) => ({ name, path: join(path, name) }));
-    const parent = dirname(path);
-    return {
-      path,
-      parent: parent === path ? null : parent,
-      entries,
-      drives: listDrives(),
-    };
+    return listDirectory(target, this.workspaceRoot);
   }
 
   /** 切换工作区前的校验：必须是存在的目录 */
@@ -1247,6 +1230,33 @@ async function defaultResolveModel(
     maxTokens,
   });
   return { model, providerName: parsed.providerName, modelName: parsed.modelName };
+}
+
+/**
+ * 目录选择器的列目录实现：只列子目录，不列文件——这里选的是"工作区"。
+ *
+ * 抽成独立函数是因为空池启动（serve 未显式给 `--cwd`）时没有宿主可借，
+ * 选择器照样要能列目录——起点退到调用方给的安全默认值（比如用户主目录）。
+ */
+export function listDirectory(target: string | null, fallbackRoot: string): DirListing {
+  const path = resolve(target ?? fallbackRoot);
+  let names: string[];
+  try {
+    names = readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    throw new HttpError(400, `无法读取目录：${errorMessage(error)}`);
+  }
+  const entries = names.map((name) => ({ name, path: join(path, name) }));
+  const parent = dirname(path);
+  return {
+    path,
+    parent: parent === path ? null : parent,
+    entries,
+    drives: listDrives(),
+  };
 }
 
 export function errorMessage(error: unknown): string {

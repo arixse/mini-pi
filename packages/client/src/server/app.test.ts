@@ -1159,32 +1159,93 @@ describe("App Server · 多工作区", () => {
 
   /**
    * serve 的默认当前目录不是"用户添加的工作区"：在哪儿敲的命令是随机的，
-   * 默默记进列表会让它越积越脏（真实文件里曾混进仓库根与包目录）。
-   * 聚焦它（侧栏点工作区名走的就是这条路）也不该记。
+   * 曾让仓库根与包目录悄悄混进记忆列表。如今它根本不会被开成工作区——
+   * 空池启动，等用户在界面里添加；能被打开的都是明确选择，照常记。
    */
-  it("启动自带的当前目录不进记忆列表：聚焦它也不记", async () => {
-    const remembered: string[] = [];
-    const server = await startTestServer({
-      workspaceMemory: {
-        list: async () => null,
-        remember: async (path) => void remembered.push(path),
-        forget: async () => undefined,
-      },
-    });
-    const second = makeWorkspace("second");
+  it("serve 未显式给 --cwd：当前目录不预开，空池等用户添加", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-empty-"));
     try {
-      // 用户显式添加的照常记
-      await server.post("/api/workspace", { path: second });
-      assert.deepStrictEqual(remembered, [second]);
+      const cwd = join(root, "cwd");
+      const workspace = join(root, "ws");
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+      const remembered: string[] = [];
+      const booted = await bootAppServer(
+        {
+          cwd,
+          cwdGiven: false,
+          port: 0,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          workspaceMemory: {
+            list: async () => null,
+            remember: async (path) => void remembered.push(path),
+            forget: async () => undefined,
+          },
+        },
+        { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+      );
+      try {
+        const response = await fetch(`${booted.url}/api/state`);
+        const state = (await response.json()) as AppState;
+        assert.strictEqual(state.workspaces.length, 0, "当前目录不该被开成工作区");
+        assert.strictEqual(state.blockReason, "没有打开的工作区");
+        assert.strictEqual(state.activeRoot, "");
 
-      // 聚焦回启动自带的初始根：只挪焦点，不进列表
-      await server.post("/api/workspace", { path: server.workspace });
-      const state = await server.get<AppState>("/api/state");
-      assert.strictEqual(state.activeRoot, server.workspace, "焦点确实挪回来了");
-      assert.deepStrictEqual(remembered, [second], "当前目录不该被记进列表");
+        // 用户在界面里添加：这是明确选择，照常记
+        const opened = await fetch(`${booted.url}/api/workspace`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: workspace }),
+        });
+        assert.strictEqual(opened.status, 200);
+        assert.deepStrictEqual(remembered, [workspace], "界面里添加的照常记");
+      } finally {
+        await booted.server?.stop();
+      }
     } finally {
-      await server.close();
-      rmSync(second, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serve 未显式给 --cwd 但记忆里有工作区：恢复列表，活动根取记忆的 active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-restore-"));
+    try {
+      const cwd = join(root, "cwd");
+      const workspace = join(root, "ws");
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+      const booted = await bootAppServer(
+        {
+          cwd,
+          cwdGiven: false,
+          port: 0,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          workspaceMemory: {
+            list: async () => ({ roots: [workspace], active: workspace }),
+            remember: async () => undefined,
+            forget: async () => undefined,
+          },
+        },
+        { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+      );
+      try {
+        const response = await fetch(`${booted.url}/api/state`);
+        const state = (await response.json()) as AppState;
+        assert.deepStrictEqual(
+          state.workspaces.map((w) => w.root),
+          [workspace],
+          "记忆里的工作区恢复了",
+        );
+        assert.strictEqual(state.activeRoot, workspace, "空池启动时活动根由恢复补上");
+      } finally {
+        await booted.server?.stop();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

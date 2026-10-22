@@ -470,15 +470,16 @@ client-workspace.json` 里记着的目录还在（直接开，不问）→ 都�
 `dialog.showOpenDialog({properties:["openDirectory"]})` 问一次，选完记下来。
 用户**取消就退出**，不替他挑一个目录。界面里打开 / 聚焦工作区
 （`POST /api/workspace` → `AppServer.openWorkspace`，多工作区见
-[client-multi-workspace.md](./client-multi-workspace.md)）同样更新记忆，
-但**启动自带的初始根不记**——serve 的默认当前目录、显式 `--cwd` 都不是
-一次明确的选择，聚焦它不能把它记进列表，否则"在哪儿敲的命令"会把列表
-越积越脏；它本来就在记忆里时（桌面壳形状）照常记，聚焦要能更新 `active`。记忆文件放 `~/.mini-pi/`
+[client-multi-workspace.md](./client-multi-workspace.md)）同样更新记忆——
+能被打开的都是一次明确选择（界面里添加、显式 `--cwd`、桌面壳目录框）。
+serve 的默认当前目录不在此列：它**根本不会被开成工作区**（serve 未显式给
+`--cwd` 就空池启动），"在哪儿敲的命令"不会混进列表。记忆文件放 `~/.mini-pi/`
 而不是 Electron 的 userData：浏览器形态没有 userData 却也要读它，
 且它与 `auth.json` / `settings.json` 同目录，用户找得到、删得掉。
 多工作区之后记忆从"记一个"变"记一组"（`{ roots, active }`，读到旧格式
 当场迁移）：`bootAppServer` 启动时把列表里的工作区原样恢复进宿主池，
-失效条目跳过并摘除；界面里显式关闭工作区会把它从列表里摘掉。
+失效条目跳过并摘除；界面里显式关闭工作区会把它从列表里摘掉；
+serve 未显式给 `--cwd` 时空池启动，空池下活动根由启动恢复补上。
 `AppServer` 对记忆是**可注入**的（`workspaceMemory` 选项，默认不记）：
 单测构造服务的次数太多，默认实现会往用户家目录写文件。
 窗口先建（隐藏）再问工作区——目录框挂在窗口上才是模态的。
