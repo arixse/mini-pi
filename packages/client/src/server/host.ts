@@ -934,6 +934,8 @@ export class WorkspaceHost {
       return;
     }
     const runRoot = workspace.root;
+    // 耗时从真正开跑算：排队（以及等全局槽位）不该算进执行时间
+    record.runStartedAt ??= this.now();
     record.status = "running";
     this.push(record, { type: "run_state", status: "running" });
 
@@ -1045,7 +1047,7 @@ export class WorkspaceHost {
     this.push(record, {
       type: "run_done",
       status,
-      elapsedMs: record.endedAt - record.startedAt,
+      elapsedMs: record.elapsedMs ?? 0,
       tokens: record.tokens,
       ...(error ? { error } : {}),
     });
@@ -1292,7 +1294,9 @@ async function defaultResolveModel(
   }
   const config = await service.getProviderConfig(parsed.providerName);
   if (!config.apiKey) {
-    return { model: null, providerName: null, modelName: null };
+    // 不要退化成"尚未配置模型"：用户已经选了供应商和模型，缺的是 Key。
+    // reloadModel 会把这个 message 记进 modelError，输入区据此给出下一步。
+    throw new Error(`供应商「${parsed.providerName}」尚未配置 API Key：请在设置里补上后再发任务`);
   }
   const maxTokens = await settings.getMaxTokens();
   const model = await createModelFromProvider({

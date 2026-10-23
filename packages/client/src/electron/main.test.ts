@@ -223,9 +223,18 @@ describe("runElectronMain", () => {
     assert.strictEqual(boot.seen[0]?.cwd, "/ws", "起服务用的必须是解析出来的工作区");
   });
 
-  it("关窗即退出：窗口的 closed 回调必须 quit，否则端口一直被占着", async () => {
+  it("关窗先收服务再退出：否则隔离 worktree 与退出日志都会漏掉", async () => {
     const electron = fakeElectron();
-    const boot = fakeBoot();
+    const calls: string[] = [];
+    const boot = fakeBoot({
+      server: {
+        stop: async () => {
+          calls.push("stop");
+          // 让异步收尾真的跨过一帧：quit 必须等 stop 完成
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+      } as unknown as NonNullable<BootResult["server"]>,
+    });
     await runElectronMain([], {
       electron: electron.api,
       streams: collector().streams,
@@ -235,7 +244,9 @@ describe("runElectronMain", () => {
 
     assert.ok(!electron.calls.includes("quit"), "关窗之前不该退出");
     electron.fireClosed();
-    assert.ok(electron.calls.includes("quit"), "关窗必须退出");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepStrictEqual(calls, ["stop"], "关窗必须先收服务");
+    assert.ok(electron.calls.includes("quit"), "收完服务后必须退出");
   });
 
   it("第二个实例只是把已有窗口叫到前台", async () => {

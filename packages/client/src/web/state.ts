@@ -192,6 +192,13 @@ export type ClientState = {
     deleteTarget: { sessionId: string; root: string } | null;
     /** 正在看变更的 Run；null 表示面板关着 */
     diffRunId: string | null;
+    /**
+     * 审批徽标跳转：时间线看到这一条后把最早挂起的审批卡滚进视野。
+     *
+     * `nonce` 让"同一条 Run 再点一次"仍然算一次新的跳转；时间线用本地
+     * ref 记住已处理到哪个 nonce，不需要再回调清状态。
+     */
+    approvalJump: { runId: string; nonce: number } | null;
   };
   /** 变更面板的数据（与 ui.diffRunId 同一条 Run） */
   diff: RunDiff | null;
@@ -265,7 +272,14 @@ export function initialState(): ClientState {
     currentSessionId: null,
     search: "",
     view: emptyView(),
-    ui: { settings: false, picker: false, sidebar: false, deleteTarget: null, diffRunId: null },
+    ui: {
+      settings: false,
+      picker: false,
+      sidebar: false,
+      deleteTarget: null,
+      diffRunId: null,
+      approvalJump: null,
+    },
     diff: null,
     diffLoading: false,
     diffError: null,
@@ -940,11 +954,14 @@ export function pendingApprovals(view: View): number {
   ).length;
 }
 
+/** 这条 Run 还在执行链上：排队、跑着、或等裁决 */
+export function isLiveStatus(status: RunPhase | "idle"): boolean {
+  return status === "running" || status === "blocked" || status === "queued";
+}
+
 /** 侧栏"进行中"：按状态过滤，已结束的不占位 */
 export function activeRuns(state: ClientState): RunSummary[] {
-  return state.runs.filter(
-    (run) => run.status === "running" || run.status === "blocked" || run.status === "queued",
-  );
+  return state.runs.filter((run) => isLiveStatus(run.status));
 }
 
 /**
@@ -1040,8 +1057,7 @@ export function modeOf(state: ClientState): ComposerMode {
   if (!state.sendable) {
     return "blocked";
   }
-  const status = state.view.status;
-  if (status === "running" || status === "blocked" || status === "queued") {
+  if (isLiveStatus(state.view.status)) {
     return "busy";
   }
   return "ready";

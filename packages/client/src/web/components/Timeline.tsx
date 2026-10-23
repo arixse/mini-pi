@@ -25,6 +25,8 @@ export function Timeline(): React.ReactElement {
   const revision = useRevision();
   const hostRef = useRef<HTMLElement | null>(null);
   const stickToBottom = useRef(true);
+  /** 已经处理到哪个审批跳转 nonce：同一个请求只滚一次，重渲染不来回拽 */
+  const handledApprovalJump = useRef(0);
 
   // 展开/收起是纯展示状态，不进 store：它不影响任何别处
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -51,10 +53,28 @@ export function Timeline(): React.ReactElement {
 
   useEffect(() => {
     const element = hostRef.current;
-    if (element && stickToBottom.current) {
+    if (!element) {
+      return;
+    }
+    // 审批跳转优先于"贴底跟随"：卡片可能还在事件流重放的路上，没找到时
+    // 不标记已处理，下一次 revision 继续试。
+    const jump = state.ui.approvalJump;
+    if (
+      jump &&
+      jump.nonce !== handledApprovalJump.current &&
+      state.view.activeRunId === jump.runId
+    ) {
+      const card = element.querySelector<HTMLElement>('[data-pending-approval="true"]');
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        handledApprovalJump.current = jump.nonce;
+        return;
+      }
+    }
+    if (stickToBottom.current) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [revision]);
+  }, [revision, state.ui.approvalJump, state.view.activeRunId]);
 
   // 还没有工作区：主区只放品牌与一个动作（交接稿 §3「05 空态引导」）。
   // 放在所有 hook 之后——提前 return 会改变 hook 次序

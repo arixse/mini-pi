@@ -613,6 +613,11 @@ export class AppController {
       await this.openRun(runId);
       return;
     }
+    // 审批徽标是"跨根跳转"：先把活动根挪过去，后续 Ctrl+N/新任务才落在
+    // 同一个工作区。打开会话本身只带 root，不改 activeRoot。
+    if (found.root && found.root !== this.store.current.activeRoot) {
+      await this.focusWorkspace(found.root);
+    }
     // Run 带着归属根：跨根的会话打开要显式指过去
     if (
       this.store.current.view.sessionId !== found.sessionId ||
@@ -628,6 +633,18 @@ export class AppController {
       state.view.activeRunId = found.runId;
     });
     this.attach(found.runId);
+    // 时间线看到这条请求后把最早挂起的审批卡滚进视野。nonce 让"同一条
+    // Run 再点一次"也算一次新跳转；时间线本地记住已处理的 nonce。
+    // 只有确实挂着审批时才留目标：从"完成通知"点进来的 Run 不该在之后
+    // 某次重渲染里把滚动位置抢走。
+    if (found.status === "blocked" || found.pendingApprovals > 0) {
+      this.store.update((state) => {
+        state.ui.approvalJump = {
+          runId: found.runId,
+          nonce: (state.ui.approvalJump?.nonce ?? 0) + 1,
+        };
+      });
+    }
   }
 
   private async send(text: string): Promise<void> {
@@ -1205,8 +1222,15 @@ export class AppController {
         });
       },
       saveModel: async (input: SaveModelInput) => {
-        const snapshot = await api.saveModel(input);
-        this.store.update((state) => applySnapshot(state, snapshot));
+        try {
+          const snapshot = await api.saveModel(input);
+          this.store.update((state) => applySnapshot(state, snapshot));
+        } catch (error) {
+          // 输入区的下拉没有行内错误位：失败必须冒到提示条。
+          // 设置页另有行内错误，因此这里保留 rethrow 让调用方继续处理。
+          this.fail(error);
+          throw error;
+        }
       },
       addCustomProvider: async (input) => {
         // 只发凭据：这一发不碰默认模型，选模型是用户下一步的事
@@ -1217,10 +1241,16 @@ export class AppController {
         this.store.update((state) => applySnapshot(state, snapshot));
       },
       setTier: async (tier: Tier) => {
-        await api.setTier(tier);
-        this.store.update((state) => {
-          state.tier = tier;
-        });
+        try {
+          await api.setTier(tier);
+          this.store.update((state) => {
+            state.tier = tier;
+          });
+        } catch (error) {
+          // 档位是安全边界：切换失败不能静默留在旧值上
+          this.fail(error);
+          throw error;
+        }
       },
       setSubAgent: async (enabled: boolean) => {
         const snapshot = await api.setSubAgent(enabled);

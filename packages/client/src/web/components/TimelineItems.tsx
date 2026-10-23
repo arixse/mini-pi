@@ -267,6 +267,7 @@ function ApprovalCard({
         <div
           className={`approval${high ? " high" : ""}`}
           style={{ width: "100%" }}
+          data-pending-approval={pending ? "true" : undefined}
         >
           <div className="approval-head">
             <Icon name={high ? "alert" : "shield"} size={14} />

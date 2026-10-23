@@ -204,8 +204,26 @@ export async function runElectronMain(
    * 服务活在主进程里，留一个没有窗口的实例会把端口一直占着；
    * macOS 上 Electron 默认也不随手退出（它期望你还有别的窗口），
    * 这里必须显式说清。
+   *
+   * 退出前先把服务收掉：`AppServer.stop()` 会关 SSE、回收已合并/已丢弃的
+   * 隔离 worktree，并把未合并 worktree 的路径写进日志。只 quit 不 stop
+   * 会把这些都漏掉（`.git/worktrees` 元数据也会残留）。
    */
-  primary.onClosed(() => electron.quit());
+  let closing = false;
+  primary.onClosed(() => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    void (async () => {
+      try {
+        await booted.server?.stop();
+      } catch {
+        // 收尾失败也不能把窗口关不掉；进程退出本身仍会释放端口
+      }
+      electron.quit();
+    })();
+  });
   await primary.loadURL(booted.url);
   primary.show();
   return 0;

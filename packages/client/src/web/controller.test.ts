@@ -226,6 +226,114 @@ describe("AppController", () => {
     assert.match(controller.store.current.error ?? "", /服务没起/);
   });
 
+  it("审批跳转打开 Run，并给时间线留下待滚动的目标", async () => {
+    const run = runSummary("run_1", "blocked", { sessionId: "s1.jsonl" });
+    installFetch({
+      "/api/state": {
+        body: snapshot({ runs: [run], currentSessionId: "s1.jsonl" }),
+      },
+      "/api/sessions/s1.jsonl": { body: sessionDetail("s1.jsonl", "等审批") },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.openRun("run_1");
+    await settle();
+
+    const state = controller.store.current;
+    assert.strictEqual(state.view.sessionId, "s1.jsonl");
+    assert.strictEqual(state.view.activeRunId, "run_1");
+    assert.strictEqual(state.ui.approvalJump?.runId, "run_1");
+    assert.strictEqual(state.ui.approvalJump?.nonce, 1);
+  });
+
+  it("从完成通知打开 Run 不留下审批跳转：别在之后抢走滚动位置", async () => {
+    const run = runSummary("run_done", "done", { sessionId: "s1.jsonl", elapsedMs: 10 });
+    installFetch({
+      "/api/state": { body: snapshot({ runs: [run], currentSessionId: "s1.jsonl" }) },
+      "/api/sessions/s1.jsonl": { body: sessionDetail("s1.jsonl", "跑完了") },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.openRun("run_done");
+    await settle();
+
+    const state = controller.store.current;
+    assert.strictEqual(state.view.activeRunId, "run_done");
+    assert.strictEqual(state.ui.approvalJump, null, "没有待审批就不该有跳转目标");
+  });
+
+  it("审批跳转跨根时先切活动根，再打开会话", async () => {
+    const other = "D:/other";
+    const run = runSummary("run_2", "blocked", {
+      sessionId: "s2.jsonl",
+      root: other,
+      workspace: { root: other, isolated: false, released: false, merged: false },
+    });
+    const otherState = snapshot({
+      activeRoot: other,
+      currentSessionId: "s2.jsonl",
+      runs: [run],
+      workspaces: [
+        {
+          root: other,
+          name: "other",
+          sessions: [],
+          runs: [run],
+          currentSessionId: "s2.jsonl",
+          approvals: { pending: 1 },
+          sendable: true,
+          blockReason: null,
+          isolate: false,
+          isolateError: null,
+        },
+      ],
+    });
+    let focused = false;
+    installFetch({
+      "/api/state": () => ({
+        body: focused
+          ? otherState
+          : snapshot({ runs: [run], currentSessionId: "s1.jsonl" }),
+      }),
+      "/api/workspace": () => {
+        focused = true;
+        return { body: { root: other, name: "other" } };
+      },
+      "/api/sessions/s2.jsonl": { body: sessionDetail("s2.jsonl", "等审批") },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.openRun("run_2");
+    await settle();
+
+    assert.ok(
+      requested.some((item) => item.url.includes("/api/workspace")),
+      "跨根跳转要先切活动根",
+    );
+    const state = controller.store.current;
+    assert.strictEqual(state.activeRoot, other);
+    assert.strictEqual(state.ui.approvalJump?.runId, "run_2");
+  });
+
+  it("模型与档位保存失败要冒到提示条，不能静默吞掉", async () => {
+    installFetch({
+      "/api/model": { status: 400, body: { error: "模型名不能为空" } },
+      "/api/tier": { status: 400, body: { error: "无法识别的审批档位" } },
+    });
+
+    await assert.rejects(
+      controller.actions.saveModel({ provider: "deepseek", model: "" }),
+      /模型名不能为空/,
+    );
+    assert.match(controller.store.current.banner?.text ?? "", /模型名不能为空/);
+
+    await assert.rejects(controller.actions.setTier("full-access"), /无法识别的审批档位/);
+    assert.match(controller.store.current.banner?.text ?? "", /无法识别的审批档位/);
+  });
+
   it("Esc 只收界面层：浮层 → 待删确认 → 抽屉，最后一层也不停任务", async () => {
     installFetch({
       "/api/state": { body: snapshot() },

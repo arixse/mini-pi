@@ -22,6 +22,17 @@ export function Picker(): React.ReactElement | null {
   return <PickerDialog root={state.workspace.root} />;
 }
 
+/**
+ * 主按钮落地到哪个目录。
+ *
+ * 输入框里有字就认输入（用户可能改了路径但还没按 Enter）；空着才回落到
+ * 当前列表。导出成纯函数是因为这里最容易犯"点了这个、开了那个"的错。
+ */
+export function pickerTarget(typed: string, listed: string | undefined): string | null {
+  const trimmed = typed.trim();
+  return trimmed.length > 0 ? trimmed : (listed ?? null);
+}
+
 function PickerDialog({ root }: { root: string }): React.ReactElement {
   const actions = useActions();
   const [listing, setListing] = useState<DirListing | null>(null);
@@ -50,7 +61,9 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
   }, [root]);
 
   const commit = async (): Promise<void> => {
-    const target = listing?.path;
+    // 输入框里的路径优先：用户改了路径却没按 Enter 时，主按钮不能默默
+    // 提交上一次列出来的目录（那等于"点这个目录，开了另一个"）。
+    const target = pickerTarget(path, listing?.path);
     if (!target) {
       return;
     }

@@ -41,6 +41,13 @@ export class RunRecord {
   readonly prompt: string;
   readonly modelLabel: string;
   readonly startedAt: number;
+  /**
+   * 真正开始干活的时间；排队/等全局槽位期间为 null。
+   *
+   * `startedAt` 是入队时间，用来排序和展示"排了多久"；耗时只从这一条算，
+   * 否则排在长任务后面的短任务会把等待时间也算成自己的执行时间。
+   */
+  runStartedAt: number | null = null;
   /** 本次执行真正使用的根目录；execute 分工地时写入 */
   workspaceRoot = "";
   /** 是否为本次执行单独隔离（git worktree） */
@@ -139,6 +146,14 @@ export class RunRecord {
     return () => this.listeners.delete(listener);
   }
 
+  /** 真正执行了多久：排队等待不算；没开跑就结束的按 0 算 */
+  get elapsedMs(): number | null {
+    if (this.endedAt === null) {
+      return null;
+    }
+    return this.endedAt - (this.runStartedAt ?? this.endedAt);
+  }
+
   summary(contextWindow: number, pendingApprovals: number): RunSummary {
     return {
       runId: this.runId,
@@ -147,7 +162,7 @@ export class RunRecord {
       status: this.status,
       model: this.modelLabel,
       startedAt: this.startedAt,
-      elapsedMs: this.endedAt === null ? null : this.endedAt - this.startedAt,
+      elapsedMs: this.elapsedMs,
       tokens: this.tokens,
       contextWindow,
       pendingApprovals,

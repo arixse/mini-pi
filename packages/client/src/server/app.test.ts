@@ -853,6 +853,37 @@ describe("App Server · 配置", () => {
     }
   });
 
+  it("选了模型但供应商没有 API Key 时，给的是补 Key 的下一步而不是「尚未配置模型」", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-host-nokey-"));
+    try {
+      const workspace = join(root, "workspace");
+      mkdirSync(workspace, { recursive: true });
+      const host = new WorkspaceHost({
+        workspaceRoot: workspace,
+        sessionsDir: join(root, "sessions"),
+        globalAgentsPath: join(root, "AGENTS.md"),
+        settingsStore: new SettingsStore(join(root, "settings.json")),
+        providerService: new ModelProviderService(new ProviderStore(join(root, "auth.json"))),
+        // 故意不注入 resolveModel：走真实的 defaultResolveModel，
+        // 它才会去读 provider 的 Key 并给出缺 Key 的原因。
+      });
+      try {
+        await host.start();
+        await host.configureProvider({ provider: "公司网关", baseUrl: "https://gw.example.com/v1" });
+        await host.configureModel({ provider: "公司网关", model: "gw-model" });
+
+        const state = await host.state();
+        assert.strictEqual(state.sendable, false);
+        assert.match(state.blockReason ?? "", /API Key/, "要指出缺的是 Key");
+        assert.doesNotMatch(state.blockReason ?? "", /请在设置里选择服务商与模型/);
+      } finally {
+        host.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("目录选择器只列子目录，并给出上一级", async () => {
     const server = await startTestServer({ workspaceFiles: { "a.txt": "x" } });
     try {

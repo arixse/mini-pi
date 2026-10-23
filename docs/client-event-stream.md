@@ -146,7 +146,7 @@ per-run 游标与全局游标的编号空间互不相干。
 | 事件 | 动作 |
 | --- | --- |
 | `run_state` | 直接改 `state.runs` 里那条的 `status`（侧栏立刻变）；若当前会话没有活流，排队项开跑时顺手接上 per-run 流 |
-| `run_done` | 改 `status` / `elapsedMs` / `tokens`，`pendingApprovals` 归零，并**安排一次**状态刷新；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
+| `run_done` | 改 `status` / `elapsedMs` / `tokens`，`pendingApprovals` 归零，并**安排一次**状态刷新；`elapsedMs` 只算真正开跑后的执行时间（排队与等全局槽位不计）；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
 | `approval_request` / `approval_resolved` | 计数与 `oldestRunId` 以服务端为准，**安排一次**状态刷新 |
 | `stream_gap` | 立即安排状态刷新 |
 | Run 不在 `state.runs` 里 | 同上（可能来自另一个标签页或刚换的工作区） |

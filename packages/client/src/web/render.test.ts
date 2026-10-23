@@ -11,16 +11,18 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createElement } from "react";
+import { createElement, createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { App } from "./App";
 import { ClientProvider, ClientStore } from "./store";
 import { initialState, type TimelineItem } from "./state";
+import { Composer } from "./components/Composer";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
+import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
 
@@ -63,6 +65,23 @@ const fakeActions = {
   confirmDelete: async () => undefined,
   retry: () => undefined,
 } as unknown as Actions;
+
+function renderComposer(store: ClientStore): string {
+  return renderToStaticMarkup(
+    createElement(
+      ClientProvider,
+      { value: { store, actions: fakeActions } },
+      createElement(Composer, { handleRef: createRef<ComposerHandle | null>() }),
+    ),
+  );
+}
+
+/** 把发送/停止那一颗按钮从整页 markup 里切出来，避免命中别的 disabled 控件 */
+function sendButton(html: string): string {
+  const match = html.match(/<button class="btn-send[^"]*"[\s\S]*?<\/button>/);
+  assert.ok(match, "输入区必须有一颗发送/停止按钮");
+  return match[0];
+}
 
 function renderItem(item: TimelineItem, expanded = false): string {
   const store = new ClientStore();
@@ -127,6 +146,42 @@ describe("前端组件树", () => {
     assert.match(html, />上下文</);
     assert.match(html, />步数</);
     assert.doesNotMatch(html, />状态</, "设计稿只有三枚指标，不画第四个");
+  });
+
+  it("只读历史会话里挂着 live Run 时，唯一的停止键仍然在", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.activeRoot = "/tmp/ws";
+      state.sendable = true;
+      state.view.sessionId = "s1.jsonl";
+      state.view.root = "/tmp/ws";
+      state.view.readOnly = true;
+      state.view.status = "running";
+      state.view.activeRunId = "run_1";
+    });
+    const html = renderComposer(store);
+    const button = sendButton(html);
+    assert.match(button, /停止/, "只读不等于不能停");
+    assert.doesNotMatch(button, /新任务/, "有 live Run 时按钮不能变成开新任务");
+    assert.doesNotMatch(button, /disabled/, "停止键不能被禁用");
+  });
+
+  it("只读且没有 live Run 时，「新任务」空输入也可点", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.activeRoot = "/tmp/ws";
+      state.sendable = true;
+      state.view.sessionId = "s1.jsonl";
+      state.view.root = "/tmp/ws";
+      state.view.readOnly = true;
+      state.view.status = "idle";
+    });
+    const html = renderComposer(store);
+    const button = sendButton(html);
+    assert.match(button, /新任务/);
+    assert.doesNotMatch(button, /disabled/, "提示语让点「新任务」，就不能把它灰掉");
   });
 
   it("没有工作区时主区是品牌引导：一句话 + 选择目录", () => {
@@ -385,6 +440,15 @@ describe("时间线条目的 markup", () => {
     assert.match(html, /本会话内全部允许 bash/);
     assert.match(html, /拒绝/);
     assert.doesNotMatch(html, /看变更/, "审批挂起时读 diff 必然 409：入口挪到主列");
+    assert.match(html, /data-pending-approval="true"/, "挂起的卡片要能被徽标跳转选中");
+
+    const resolved = renderItem({
+      kind: "approval",
+      id: "ap:ap1",
+      request: approval(),
+      state: "approved",
+    });
+    assert.doesNotMatch(resolved, /data-pending-approval/, "已裁决的卡片不再算跳转目标");
   });
 
   it("隔离改动条：列出未合并 Run；运行中禁用「看变更」，合并/丢弃后不再出现", () => {
