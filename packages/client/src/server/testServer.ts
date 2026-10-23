@@ -437,7 +437,7 @@ export async function waitFor(
  * 身份信息用 `-c` 逐次覆盖，不碰用户的全局配置：测试机上的 git 可能
  * 根本没配 user.name，那时 commit 会失败，而失败原因与要测的东西无关。
  */
-function initGitRepo(dir: string): void {
+export function initGitRepo(dir: string): void {
   const identity = [
     "-c",
     "user.name=mini-pi-test",

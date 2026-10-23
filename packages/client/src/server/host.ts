@@ -223,12 +223,20 @@ export class WorkspaceHost {
     return this;
   }
 
-  /** 退出前收尾：跑着的全部取消，挂起的审批作废，隔离工作区全部回收 */
-  close(): void {
+  /**
+   * 退出前收尾：跑着的全部取消，挂起的审批作废，隔离工作区回收。
+   *
+   * `keepWorktrees` 给进程退出的路径用：还没合并的隔离改动是用户产物，
+   * 服务停掉不等于用户同意删除。保留目录并把路径写进日志，比静默
+   * `git worktree remove --force` 安全。
+   */
+  close(options: { keepWorktrees?: boolean } = {}): void {
     this.runManager.cancelAll();
     this.broker.clear();
-    // worktree 不回收会在主仓库的 .git/worktrees 里留元数据，磁盘也一直占着
-    this.workspaces.dispose();
+    if (!options.keepWorktrees) {
+      // worktree 不回收会在主仓库的 .git/worktrees 里留元数据，磁盘也一直占着
+      this.workspaces.dispose();
+    }
   }
 
   // ---------------------------------------------------------------- 状态
@@ -298,6 +306,11 @@ export class WorkspaceHost {
   }
 
   // ---------------------------------------------------------------- 模型
+
+  /** 全局设置变更后由 AppServer 调：让这个宿主也换到新的默认模型 */
+  async reloadModelFromSettings(): Promise<void> {
+    await this.reloadModel();
+  }
 
   private async reloadModel(): Promise<void> {
     try {
@@ -406,6 +419,7 @@ export class WorkspaceHost {
       await this.providerService.saveProviderConfig(providerName, config);
     }
 
+    const previous = await this.settingsStore.parseDefaultModel();
     await this.settingsStore.setDefaultModel(`${providerName}/${modelName}`);
 
     if (input.contextWindow !== undefined) {
@@ -418,6 +432,13 @@ export class WorkspaceHost {
         }
         await this.settingsStore.setContextWindow(Math.floor(window));
       }
+    } else if (
+      previous &&
+      (previous.providerName !== providerName || previous.modelName !== modelName)
+    ) {
+      // 显式窗口属于"上一个模型"：换模型却不带 contextWindow 时继续沿用，
+      // 等于把 200k 的窗口套在 8k 的模型上（或反过来）。清掉回到推断
+      await this.settingsStore.setContextWindow(undefined);
     }
 
     if (input.tier !== undefined) {
@@ -476,11 +497,17 @@ export class WorkspaceHost {
     }
   }
 
-  /** 委派开关；与 CLI 同义（下一次执行生效，不影响已开跑的那个） */
-  setSubAgentEnabled(enabled: unknown): boolean {
+  /**
+   * 委派开关；与 CLI 同义（下一次执行生效，不影响已开跑的那个）。
+   *
+   * 必须落盘：客户端里这个开关是全局选项，新建的宿主在 `start()` 时从
+   * settings 读取。只改内存的话，打开第二个工作区就悄悄变回默认值。
+   */
+  async setSubAgentEnabled(enabled: unknown): Promise<boolean> {
     if (typeof enabled !== "boolean") {
       throw new HttpError(400, "subAgent 必须是布尔值");
     }
+    await this.settingsStore.setSubagentEnabled(enabled);
     this.subAgentEnabled = enabled;
     return this.subAgentEnabled;
   }
@@ -818,6 +845,29 @@ export class WorkspaceHost {
     return [...this.records.values()].some(
       (r) => r.status === "running" || r.status === "blocked" || r.status === "queued",
     );
+  }
+
+  /**
+   * 还有哪些隔离 Run 的改动没落地、也没被丢弃。
+   *
+   * 关闭工作区 / 退出进程前必须问这一句：`WorkspaceManager.dispose()` 会
+   * `git worktree remove --force`，把用户还没审阅的产物一起删掉。
+   * 已合并或已丢弃的 Run 不在列表里——那两种情况下删除目录是预期行为。
+   */
+  unmergedIsolatedRuns(): Array<{
+    runId: string;
+    title: string;
+    root: string;
+    baseRoot: string;
+  }> {
+    return [...this.records.values()]
+      .filter((r) => r.isolated && !r.workspaceReleased && !r.workspaceMerged)
+      .map((r) => ({
+        runId: r.runId,
+        title: r.title,
+        root: r.workspaceRoot,
+        baseRoot: this.workspaceRoot,
+      }));
   }
 
   /**

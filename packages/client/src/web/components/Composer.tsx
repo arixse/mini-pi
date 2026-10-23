@@ -298,7 +298,13 @@ function ModelPicker(): React.ReactElement {
                       return;
                     }
                     void actions
-                      .saveModel({ provider: entry.provider, model: entry.model })
+                      // 换模型同时清掉上一个模型的显式窗口：否则 200k 的
+                      // 配置会套到 8k 的模型上
+                      .saveModel({
+                        provider: entry.provider,
+                        model: entry.model,
+                        contextWindow: null,
+                      })
                       .catch(() => undefined);
                   }}
                 >

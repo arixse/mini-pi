@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import { HttpError, requireString } from "./errors";
 import { WorkspaceHost, errorMessage, listDirectory, type WorkspaceHostOptions } from "./host";
 import { errorHandler, localGuard, noStore } from "./http";
@@ -30,6 +30,7 @@ import { openSse } from "./sse";
 import { isTier, type AppState, type ApprovalAnswer, type ServerEvent, type Tier, type WorkspaceStateView } from "../shared/types";
 import type { ServeArgs } from "./serveArgs";
 import { logger } from "@minipi/core/shared/logger";
+import { ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import {
   nullWorkspaceMemory,
   type RememberedWorkspaces,
@@ -151,6 +152,15 @@ export class AppServer {
   private readonly app: Express = express();
   private readonly options: AppServerOptions;
   private readonly webRoot: string;
+  /**
+   * 模型供应商与设置是**应用级**的，不是工作区级。
+   *
+   * 以前每个 WorkspaceHost 各 new 一份：在 A 里加的自定义供应商，切到 B
+   * 就看不见；改默认模型后 B 的宿主仍拿着旧模型。这里建一份共享实例，
+   * 新建宿主也注入同一份，路由改完再统一让所有宿主重读模型。
+   */
+  private readonly providerService: ModelProviderService;
+  private readonly settingsStore: SettingsStore;
   private readonly rememberWorkspace: WorkspaceMemory;
   /** 全局 `run_state` / 审批 / 结束事件；正文增量不进来 */
   private readonly journal: EventJournal;
@@ -166,6 +176,8 @@ export class AppServer {
   constructor(options: AppServerOptions) {
     this.options = options;
     this.webRoot = options.webRoot ?? defaultWebRoot();
+    this.providerService = options.providerService ?? new ModelProviderService();
+    this.settingsStore = options.settingsStore ?? new SettingsStore();
     this.rememberWorkspace = options.workspaceMemory ?? nullWorkspaceMemory;
     this.journal = options.journal ?? new EventJournal();
     this.maxWorkspaces =
@@ -271,6 +283,21 @@ export class AppServer {
     if (host.hasActiveRun()) {
       throw new HttpError(409, "这个工作区还有任务在跑，先停止它们再关闭");
     }
+    // 关闭宿主会 dispose 全部 worktree。还没合并的隔离改动是用户产物，
+    // 不能因为点了一下「关闭工作区」就 `git worktree remove --force`：
+    // 先把待审阅的 Run 报出来，用户在主列顶部看变更、合并或丢弃后再关。
+    const unmerged = host.unmergedIsolatedRuns();
+    if (unmerged.length > 0) {
+      const names = unmerged
+        .slice(0, 3)
+        .map((run) => `「${run.title}」`)
+        .join("、");
+      const more = unmerged.length > 3 ? ` 等 ${unmerged.length} 个任务` : "";
+      throw new HttpError(
+        409,
+        `这个工作区还有未处理的隔离改动：${names}${more}。先在主列顶部看变更，合并或丢弃后再关闭`,
+      );
+    }
     await this.forget(root);
     host.close();
     this.hosts.delete(root);
@@ -290,9 +317,13 @@ export class AppServer {
     await this.activeHost()?.start();
     const port = this.options.port ?? DEFAULT_PORT;
     const host = this.options.host ?? "127.0.0.1";
+    // 不用 `app.listen`：Express 5 把监听回调也当成 error 监听器注册，
+    // Windows 上端口冲突时回调会先拿到 EADDRINUSE 被调用一次。这里直接
+    // 建 http.Server，错误只走 error 事件，不会出现"先 resolve 再报错"。
     const server = await new Promise<Server>((resolve, reject) => {
-      const created = this.app.listen(port, host, () => resolve(created));
+      const created = createServer(this.app);
       created.once("error", reject);
+      created.listen(port, host, () => resolve(created));
     });
     this.server = server;
     const address = server.address();
@@ -310,7 +341,17 @@ export class AppServer {
     }
     this.streams.clear();
     for (const host of this.hosts.values()) {
-      host.close();
+      const unmerged = host.unmergedIsolatedRuns();
+      if (unmerged.length > 0) {
+        // 进程要退了，没有界面可以再点；把目录留在磁盘上并写清路径，
+        // 让用户还能自己去审阅/取回。静默删除是最坏的失败方式
+        for (const run of unmerged) {
+          logger.warn(
+            `退出时保留未合并的隔离工作区：${run.root}（任务「${run.title}」，基准 ${run.baseRoot}）`,
+          );
+        }
+      }
+      host.close({ keepWorktrees: unmerged.length > 0 });
     }
     this.hosts.clear();
     this.activeRoot = null;
@@ -398,6 +439,16 @@ export class AppServer {
       return;
     }
     this.globalActive = Math.max(0, this.globalActive - 1);
+  }
+
+  /**
+   * 全局模型/供应商变更后，让池里每个宿主都重读一次默认模型。
+   *
+   * 设置是全局的，但 `model`/`contextWindow` 解析结果各自缓存在宿主上。
+   * 只刷新活动根会让别的已打开工作区继续用旧模型，切过去才突然变。
+   */
+  private async reloadAllModels(): Promise<void> {
+    await Promise.all([...this.hosts.values()].map((host) => host.reloadModelFromSettings()));
   }
 
   /**
@@ -499,8 +550,9 @@ export class AppServer {
         ? { concurrency: this.options.concurrency }
         : {}),
       ...(this.options.resolveModel ? { resolveModel: this.options.resolveModel } : {}),
-      ...(this.options.providerService ? { providerService: this.options.providerService } : {}),
-      ...(this.options.settingsStore ? { settingsStore: this.options.settingsStore } : {}),
+      // 所有宿主共享同一份供应商注册表与全局设置：A 里加的供应商 B 也要看见
+      providerService: this.providerService,
+      settingsStore: this.settingsStore,
       // Host 只负责把控制事件交出来；日志归 AppServer，切工作区时不跟着换。
       // root 跟着宿主走：每条控制事件都标上它属于哪个工作区
       onRunEvent: (runId, event) => this.journal.push(runId, event, workspaceRoot),
@@ -702,6 +754,8 @@ export class AppServer {
     app.delete("/api/providers/:name", wrap(async (req, res) => {
       const host = this.requiredActiveHost();
       await host.deleteCustomProvider(pathParam(req.params.name));
+      // 供应商注册表是共享的；默认模型若指着它，所有宿主都要一起失效
+      await this.reloadAllModels();
       res.json(await this.composeState());
     }));
 
@@ -716,6 +770,8 @@ export class AppServer {
     app.post("/api/model", wrap(async (req, res) => {
       const host = this.requiredActiveHost();
       await host.configureModel(asRecord(req.body));
+      // 默认模型与窗口是全局设置：池里每个宿主都换，而不是只换活动根
+      await this.reloadAllModels();
       res.json(await this.composeState());
     }));
 
@@ -735,10 +791,11 @@ export class AppServer {
     app.post("/api/options", wrap(async (req, res) => {
       const payload = asRecord(req.body);
       if (payload.subAgent !== undefined) {
-        // 委派开关同理：对所有宿主生效，与设置里的同一份语义
-        for (const host of this.hosts.values()) {
-          host.setSubAgentEnabled(payload.subAgent);
-        }
+        // 委派开关同理：对所有宿主生效，与设置里的同一份语义。
+        // 落盘由宿主负责，新开的工作区启动时才能读到同一个值
+        await Promise.all(
+          [...this.hosts.values()].map((host) => host.setSubAgentEnabled(payload.subAgent)),
+        );
       }
       if (payload.isolate !== undefined) {
         // 不支持时这里 409 并带上原因；state 里的 isolateError 也会同时更新。
@@ -1013,8 +1070,33 @@ export async function bootAppServer(
       logger.error(`启动恢复：读取工作区记忆失败（不影响本次启动）: ${errorMessage(error)}`);
     }
   }
-  const running = await server.start();
+  let running: RunningAppServer;
+  try {
+    running = await server.start();
+  } catch (error) {
+    // 端口被占是用户最常见的启动失败：Electron 与 serve 都必须给出
+    // "哪个端口、怎么办"，而不是把 EADDRINUSE 原样抛到进程顶层
+    await server.stop().catch(() => undefined);
+    const port = options.port ?? DEFAULT_PORT;
+    if (isAddressInUse(error)) {
+      streams.stderr.write(
+        `mini-pi 客户端：端口 ${port} 已被占用。请关闭占用它的程序，或用 --port 换一个端口\n`,
+      );
+    } else {
+      streams.stderr.write(`mini-pi 客户端：启动失败：${errorMessage(error)}\n`);
+    }
+    return { code: 1, server: null, url: null, port: null };
+  }
   return { code: 0, server, url: running.url, port: running.port };
+}
+
+/** Node 的 listen 失败带 `code: "EADDRINUSE"`；不依赖 message 文案 */
+function isAddressInUse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "EADDRINUSE"
+  );
 }
 
 /**

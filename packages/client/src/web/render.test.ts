@@ -17,6 +17,7 @@ import { App } from "./App";
 import { ClientProvider, ClientStore } from "./store";
 import { initialState, type TimelineItem } from "./state";
 import { TimelineItemRow } from "./components/TimelineItems";
+import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
@@ -29,7 +30,7 @@ const fakeActions = {
   stop: () => undefined,
   recall: async () => undefined,
   cancelRun: async () => undefined,
-  discardWorktree: async () => undefined,
+  discardWorktree: async () => true,
   openDiff: () => undefined,
   closeDiff: () => undefined,
   mergeWorktree: async () => undefined,
@@ -372,7 +373,7 @@ describe("时间线条目的 markup", () => {
     assert.doesNotMatch(short, /tool-links/, "短输出全在眼前，链接只是噪音");
   });
 
-  it("审批卡四个动作：允许一次 / 本会话全部允许 / 拒绝（非隔离没有看变更）", () => {
+  it("审批卡三个动作：允许一次 / 本会话全部允许 / 拒绝（变更入口不在卡上）", () => {
     const html = renderItem({
       kind: "approval",
       id: "ap:ap1",
@@ -383,7 +384,75 @@ describe("时间线条目的 markup", () => {
     assert.match(html, /允许一次/);
     assert.match(html, /本会话内全部允许 bash/);
     assert.match(html, /拒绝/);
-    assert.doesNotMatch(html, /看变更/, "非隔离任务没有 diff，不摆必然 409 的按钮");
+    assert.doesNotMatch(html, /看变更/, "审批挂起时读 diff 必然 409：入口挪到主列");
+  });
+
+  it("隔离改动条：列出未合并 Run；运行中禁用「看变更」，合并/丢弃后不再出现", () => {
+    const store = new ClientStore();
+    const base = {
+      sessionId: "s1.jsonl",
+      model: "m",
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      root: "/tmp/ws",
+    };
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.activeRoot = "/tmp/ws";
+      state.view.root = "/tmp/ws";
+      state.runs = [
+        {
+          ...base,
+          runId: "run_live",
+          title: "还在跑的任务",
+          status: "running",
+          startedAt: 30,
+          workspace: { root: "/tmp/wt/live", isolated: true, released: false, merged: false },
+        },
+        {
+          ...base,
+          runId: "run_done",
+          title: "等待审阅的任务",
+          status: "done",
+          startedAt: 20,
+          workspace: { root: "/tmp/wt/done", isolated: true, released: false, merged: false },
+        },
+        {
+          ...base,
+          runId: "run_merged",
+          title: "已经合并的任务",
+          status: "done",
+          startedAt: 10,
+          workspace: { root: "/tmp/wt/merged", isolated: true, released: false, merged: true },
+        },
+        {
+          ...base,
+          runId: "run_released",
+          title: "已经丢弃的任务",
+          status: "done",
+          startedAt: 5,
+          workspace: { root: "/tmp/wt/released", isolated: true, released: true, merged: false },
+        },
+      ];
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(RunHead),
+      ),
+    );
+    assert.match(html, /待审阅的隔离改动/);
+    assert.match(html, /还在跑的任务/);
+    assert.match(html, /等待审阅的任务/);
+    assert.match(html, /运行中/);
+    assert.match(html, /待审阅/);
+    assert.strictEqual((html.match(/看变更/g) ?? []).length, 2);
+    assert.match(html, /disabled=""/, "运行中的任务不能读 diff");
+    assert.doesNotMatch(html, /已经合并的任务/);
+    assert.doesNotMatch(html, /已经丢弃的任务/);
   });
 
   it("高危审批换 danger-soft：完整命令 + 不可撤销，不叠降级理由", () => {

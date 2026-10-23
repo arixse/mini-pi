@@ -22,7 +22,6 @@ import type { Actions } from "../actions";
 import type { TimelineItem, ToolStatus } from "../state";
 import { approvalStatusText, describeArgs, noticeTone } from "../items";
 import { formatClock, formatDuration, riskMeta, toolMetaLine } from "../format";
-import { useClient } from "../store";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -246,9 +245,9 @@ function ToolCard({
  * 成块（danger-soft），不叠加降级理由：一次列五条"删除文件/网络请求"
  * 会把最致命的那条淹掉（设计稿第 10 条）。
  *
- * 第四个动作「看变更」只在"确实有变更可看"时出现：它打开这个 Run 的
- * 隔离工作区 diff，非隔离的任务没有 diff，摆一颗必然 409 的按钮
- * 比不摆更糟。
+ * 这里**不放「看变更」**：审批挂起时 Run 仍是 blocked，服务端按契约
+ * 拒绝读 diff（`git add -N` 不能和正在执行的目录抢索引）。变更入口放在
+ * 主列的隔离改动条上，任务结束后才可点。
  */
 function ApprovalCard({
   item,
@@ -257,18 +256,10 @@ function ApprovalCard({
   item: Extract<TimelineItem, { kind: "approval" }>;
   actions: Actions;
 }): React.ReactElement {
-  const state = useClient();
   const request = item.request;
   const risk = riskMeta(request.risk.level);
   const high = request.risk.level === "high";
   const pending = item.state === "pending";
-  const workspace = state.view.workspace;
-  const canDiff =
-    pending &&
-    workspace !== null &&
-    workspace.runId === request.runId &&
-    workspace.isolated === true &&
-    workspace.released === false;
 
   return (
     <div className="row">
@@ -358,16 +349,6 @@ function ApprovalCard({
             >
               拒绝
             </button>
-            {canDiff ? (
-              <button
-                className="btn btn-ghost"
-                title="查看这次隔离执行改了什么"
-                onClick={() => actions.openDiff(request.runId)}
-              >
-                <Icon name="copy" size={12} />
-                看变更
-              </button>
-            ) : null}
           </div>
         </div>
       </div>

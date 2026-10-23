@@ -694,19 +694,26 @@ svg.ic {
   padding: 0 16px;
 }
 
+.run-heads {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 10px;
+  border-bottom: 1px solid var(--Client-border-subtle);
+}
+
 .run-head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 10px;
-  padding: 6px 0 8px;
-  border-bottom: 1px solid var(--Client-border-subtle);
-  background: var(--Client-bg-canvas);
+  min-height: 30px;
+  padding: 4px 0;
   font-size: 12px;
   color: var(--Client-text-tertiary);
+}
+
+.run-head + .run-head {
+  border-top: 1px solid var(--Client-border-subtle);
 }
 
 .run-head .title {
@@ -716,6 +723,17 @@ svg.ic {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--Client-text-secondary);
+}
+
+.run-head .run-status {
+  flex: none;
+  color: var(--Client-text-tertiary);
+}
+
+.run-head .btn {
+  flex: none;
+  padding: 3px 9px;
+  font-size: 12px;
 }
 
 .row {

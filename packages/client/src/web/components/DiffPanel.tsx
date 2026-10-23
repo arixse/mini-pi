@@ -44,11 +44,10 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
   const empty = !state.diffLoading && !state.diffError && files.length === 0;
 
   const discard = async (): Promise<void> => {
-    await actions.discardWorktree(runId);
-    // 成功后隔离工作区已经没了：面板留着只会对着一份过期 patch。
-    // 失败时动作层只报错、不收面板——用户接着看原图，原因在横幅里
-    const current = state.runs.find((item) => item.runId === runId);
-    if (current?.workspace.released) {
+    // 动作层返回"真的丢成功了"：不能拿渲染时这份 state 猜，动作完成后
+    // 组件还没重画，旧快照里的 released 一定是 false，面板会愣在原地
+    const ok = await actions.discardWorktree(runId);
+    if (ok) {
       actions.closeDiff();
     }
   };
@@ -153,7 +152,7 @@ function DiffDialog({ runId }: { runId: string }): React.ReactElement {
           ) : (
             <button
               className="btn btn-ghost"
-              disabled={!diff || files.length === 0 || released}
+              disabled={!diff || released}
               onClick={() => setDiscarding(true)}
             >
               放弃变更

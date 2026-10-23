@@ -35,8 +35,13 @@ export type Actions = {
    * （内核对排队中的 Run 直接出队并给 cancelled 结论）。
    */
   cancelRun: (runId: string) => Promise<void>;
-  /** 丢弃某个 Run 的隔离工作区（M3）：跑着的任务服务端会拒绝 */
-  discardWorktree: (runId: string) => Promise<void>;
+  /**
+   * 丢弃某个 Run 的隔离工作区（M3）：跑着的任务服务端会拒绝。
+   *
+   * 返回是否真的丢弃成功：面板据此决定关不关，不能拿渲染时那份旧
+   * `state` 猜（动作完成后组件还没重画）。
+   */
+  discardWorktree: (runId: string) => Promise<boolean>;
   /** 打开某个隔离 Run 的变更面板（读 diff） */
   openDiff: (runId: string) => void;
   closeDiff: () => void;

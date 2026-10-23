@@ -135,11 +135,13 @@ function ModelPage({ model }: { model: ClientState["model"] }): React.ReactEleme
         result.models.length > 0 ? result.models : (view?.defaultModels ?? []);
       setModels(options2);
       const wanted = options.initial ? wantedModel.current : null;
-      if (wanted && options2.includes(wanted)) {
-        setModelName(wanted);
-      } else {
-        setModelName(options2[0] ?? "");
+      const next = wanted && options2.includes(wanted) ? wanted : (options2[0] ?? "");
+      // 首屏回填不能清掉已保存的显式窗口；但用户主动拉列表导致模型
+      // 被动换人时，旧窗口已经不属于这个模型了
+      if (!options.initial && next !== modelName) {
+        setContextWindow("");
       }
+      setModelName(next);
       if (result.error) {
         setError(result.error);
       } else if (options.force) {
@@ -177,9 +179,11 @@ function ModelPage({ model }: { model: ClientState["model"] }): React.ReactEleme
   const selectProvider = (name: string, list: ProviderView[] = providers): void => {
     setProvider(name);
     setConfirmDelete(false);
-    // 换供应商是人为动作：密钥与 Base URL 不再沿用上一家
+    // 换供应商是人为动作：密钥与 Base URL 不再沿用上一家；
+    // 旧的显式上下文窗口属于上一个模型，换家后必须清掉（回到推断）
     setApiKey("");
     setBaseUrl("");
+    setContextWindow("");
     setError("");
     void loadModels(name, list, { force: false, initial: false });
   };
@@ -337,18 +341,26 @@ function ModelPage({ model }: { model: ClientState["model"] }): React.ReactEleme
                   </Field>
                   <Field label="默认模型">
                     <div style={{ display: "flex", gap: 8 }}>
-                      <select
+                      {/*
+                        * 可输入而不是纯 select：自定义网关常常拉不到模型列表，
+                        * 用户仍然必须能填模型名（保存校验本来也允许"填写"）。
+                        */}
+                      <input
                         style={{ flex: 1 }}
+                        list="settings-model-options"
                         value={modelName}
-                        onChange={(event) => setModelName(event.target.value)}
-                      >
-                        {models.length === 0 ? <option value="">（先填模型名）</option> : null}
+                        placeholder={models.length === 0 ? "输入模型名" : "选择或输入模型名"}
+                        onChange={(event) => {
+                          setModelName(event.target.value);
+                          // 换模型后旧窗口不再代表这个模型
+                          setContextWindow("");
+                        }}
+                      />
+                      <datalist id="settings-model-options">
                         {models.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
+                          <option key={name} value={name} />
                         ))}
-                      </select>
+                      </datalist>
                       <button
                         className="btn btn-ghost"
                         disabled={busy}

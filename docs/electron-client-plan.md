@@ -89,8 +89,8 @@ M3 / M4 的落地方式（都是"只为 Electron 服务"的可选项，但两端
 - **M3 并行 + worktree**：裁决落在 `core/worktree.ts` 的 `WorkspaceManager`
   （三条硬规则：隔离不可用就报错不静默共用、不主动回收、diff 只给隔离
   工作区）。服务端 `serve --isolate` 或界面开关开启，每个 Run 一个独立检出，
-  `--concurrency <n>` 放开并行上限；审批动作行的「看变更」打开变更面板
-  （应用变更 / 放弃变更 / 返回审批）
+  `--concurrency <n>` 放开并行上限；主列顶部的「待审阅的隔离改动」条打开
+  变更面板（应用变更 / 放弃变更 / 返回审批；任务结束后才可读 diff）
   （`GET /api/runs/:id/diff`、`POST /api/runs/:id/merge`、
   `DELETE /api/runs/:id/worktree`）。合并不造提交，冲突先 `--check` 拦下并保留
   worktree。目录名后缀取 runId **后** 8 位——

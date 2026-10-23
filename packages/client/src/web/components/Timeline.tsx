@@ -13,6 +13,7 @@ import { pendingApprovals } from "../state";
 import { revisionOf } from "../items";
 import { useActions, useClient, useRevision } from "../store";
 import { Icon } from "./Icon";
+import { RunHead } from "./RunHead";
 import { TimelineItemRow } from "./TimelineItems";
 
 /** 距底多少像素算"贴着底部看" */
@@ -70,6 +71,7 @@ export function Timeline(): React.ReactElement {
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
       <div className="main-inner">
+        <RunHead />
         <Banners />
         {state.view.sessionId === null && state.view.items.length === 0 ? (
           <div className="empty-hint draft-hint">

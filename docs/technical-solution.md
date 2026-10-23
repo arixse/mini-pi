@@ -373,9 +373,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   待审批徽标 + 图标组；主列顶部一条 36px 状态行（per-Run 的模型 / 上下文进度槽 /
   步数）；侧栏是树形（工作区根 → 工作区名 → 会话，行操作 hover 才出现）；
   默认模型与档位是输入区附加行的两个下拉；发送与停止是同一个按钮的两种状态，
-  Tab 可排队下一条；工具卡单行渲染参数；审批动作行四个（允许一次 /
-  本会话全部允许 / 拒绝 / 看变更）；高危单独成块；输入区与会话同宽、
-  默认 68px 高；运行中发送照常入队。旧静态稿 mockup.html 已删除废弃。
+  Tab 可排队下一条；工具卡单行渲染参数；审批动作行三个（允许一次 /
+  本会话全部允许 / 拒绝）；高危单独成块；隔离变更入口在主列顶部的
+  「待审阅的隔离改动」条，任务结束后才可读 diff；输入区与会话同宽、
+  默认 68px 高；运行中发送照常入队，且不切走当前 Run 的事件订阅。
+  旧静态稿 mockup.html 已删除废弃。
 - **换盘**：`readdir` 到盘根就没有"上一级"了，所以 `GET /api/dirs` 额外
   返回 `drives`（Windows 枚举盘符，其他平台空数组），选择器浮层顶部画盘符条。
 
@@ -401,8 +403,10 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   两个 Run 时取头会撞目录，取尾则落在序号上（必然不同）。
 - **变更先看后合**：`GET /api/runs/:id/diff` 返回 `git diff HEAD` 的 patch
   （先 `add -N`，于是新建文件也在里面）与 `git status --porcelain` 的文件列表；
-  非隔离 / 跑着 / 已丢弃都回 409——非隔离时 `git diff` 混着用户自己的改动，
-  拼出来的不是"这次任务改了什么"。
+  非隔离 / 跑着 / 排队 / 等审批 / 已丢弃都回 409——非隔离时 `git diff` 混着
+  用户自己的改动，拼出来的不是"这次任务改了什么"；正在执行的目录也不能和
+  `git add -N` 抢索引。入口是主列顶部的「待审阅的隔离改动」条，列出当前
+  工作区所有未合并、未丢弃的 Run，任务结束后按钮才可点。
 - **合并是 apply patch，不是 merge 分支**：`POST /api/runs/:id/merge` 先把同一份
   patch 写到临时文件，`git apply --check` 过了才 apply；失败（主工作区改了同一个文件）
   返回 409，**一个文件都不会被改到一半**，worktree 保留、文件列表随错误返回。
@@ -411,6 +415,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   没开隔离 / 已丢弃都回 409；成功后 `released` 置位，前端不再提供该 Run 的
   变更入口。
   目录真没了（`worktree remove --force` + `branch -D`），不只是打标记。
+- **关闭 / 退出不静默删产物**：`DELETE /api/workspace` 在宿主还有
+  `isolated && !released && !merged` 的 Run 时回 409，文案点名任务并指回
+  主列顶部的变更入口；用户合并或丢弃后再关。进程退出走
+  `host.close({ keepWorktrees: true })`，目录留在磁盘上，worktree 路径与
+  基准根写进日志。只有"关闭工作区且已无未合并产物"或显式丢弃才会回收目录。
 
 ## 7.2 M4：审批三档
 
@@ -462,6 +471,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   的 `bootAppServer`，`--cwd` / `--port` / `--host` / `--isolate` /
   `--concurrency` 是同一套选项；`desktop` 额外只认 `--no-electron` 与
   `--no-open`。
+- **端口被占要说人话**：`bootAppServer` 捕获 `listen` 的 `EADDRINUSE`，
+  返回退出码 1 并写清"端口 N 已被占用，请关闭占用它的程序或用 `--port`
+  换一个端口"，不把错误抛到进程顶层。`AppServer.start()` 直接建
+  `http.Server`（不用 Express 的 `app.listen`），避免 Windows 上错误
+  回调先于 error 事件触发、Promise 被提前 resolve。
 
 **没有默认工作区**：从快捷方式 / Dock / 双击图标启动时 `process.cwd()`
 是哪儿都不一定（macOS 上甚至是 `/`），而 agent 会真的读写那个目录。

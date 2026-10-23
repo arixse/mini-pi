@@ -9,6 +9,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ import { bootAppServer } from "./app";
 import { EventJournal } from "./journal";
 import { WorkspaceHost } from "./host";
 import {
+  initGitRepo,
   scriptedModel,
   startTestServer,
   textResponse,
@@ -930,6 +932,27 @@ describe("App Server · 多工作区", () => {
     return mkdtempSync(join(tmpdir(), `minipi-${prefix}-`));
   }
 
+  it("委派开关落盘：之后打开的工作区沿用同一个值", async () => {
+    const server = await startTestServer();
+    const second = makeWorkspace("subagent");
+    try {
+      const on = await server.post<AppState>("/api/options", { subAgent: true });
+      assert.strictEqual(on.subAgent, true);
+
+      await server.post("/api/workspace", { path: second });
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.activeRoot, second);
+      assert.strictEqual(
+        state.subAgent,
+        true,
+        "新宿主必须从 settings 恢复，而不是退回默认 false",
+      );
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
   it("宿主池：打开第二个不销毁第一个，会话按 root 寻址不串根", async () => {
     // 会话文件的一行 message（与内核落盘同格式，读取才会解析得动）
     const messageLine = (text: string): string =>
@@ -1527,6 +1550,82 @@ describe("App Server · 工作区隔离（M3）", () => {
     }
   });
 
+  it("关闭工作区遇到未合并隔离改动：409 且 worktree 保留；丢弃后才关得掉", withGit, async () => {
+    const second = mkdtempSync(join(tmpdir(), "minipi-close-isolated-"));
+    initGitRepo(second);
+    const server = await startTestServer({
+      isolate: true,
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "kept.txt", content: "还没审阅" }, "call_1"),
+        textResponse("写好了"),
+      ],
+    });
+    try {
+      await server.post("/api/workspace", { path: second });
+      const created = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "留个产物",
+        root: server.workspace,
+      });
+      await server.stream(created.runId);
+      const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+      assert.strictEqual(summary.workspace.isolated, true);
+      assert.strictEqual(summary.workspace.merged, false);
+      assert.ok(existsSync(summary.workspace.root));
+
+      const blocked = await server.raw(
+        `/api/workspace?root=${encodeURIComponent(server.workspace)}`,
+        { method: "DELETE" },
+      );
+      assert.strictEqual(blocked.status, 409);
+      assert.match(
+        ((await blocked.json()) as { error: string }).error,
+        /未处理的隔离改动/,
+        "要告诉用户下一步是看变更、合并或丢弃",
+      );
+      assert.ok(existsSync(summary.workspace.root), "409 不能顺手删掉 worktree");
+
+      const dropped = await server.raw(`/api/runs/${created.runId}/worktree`, {
+        method: "DELETE",
+      });
+      assert.strictEqual(dropped.status, 204);
+
+      const closed = await server.raw(
+        `/api/workspace?root=${encodeURIComponent(server.workspace)}`,
+        { method: "DELETE" },
+      );
+      assert.strictEqual(closed.status, 204, "丢弃之后关工作区不再拦");
+    } finally {
+      await server.close();
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("进程退出保留未合并的 worktree，不静默删除用户产物", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "survive.txt", content: "别删" }, "call_1"),
+        textResponse("好了"),
+      ],
+    });
+    const created = await server.post<{ runId: string }>("/api/runs", { prompt: "留到下次" });
+    await server.stream(created.runId);
+    const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
+    try {
+      assert.strictEqual(summary.workspace.isolated, true);
+      assert.ok(existsSync(summary.workspace.root));
+      await server.app.stop();
+      assert.ok(
+        existsSync(summary.workspace.root),
+        "服务退出不能把还没合并的隔离改动一起删掉",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("变更与合并：diff 列出改动，合并后文件落到基准工作区，重复合并 409", withGit, async () => {
     const server = await startTestServer({
       isolate: true,
@@ -1716,6 +1815,14 @@ describe("App Server · 工作区隔离（M3）", () => {
       const seen: ServerEvent[] = [];
       const finished = server.stream(first.runId, { onEvent: (event) => seen.push(event) });
       await waitFor(() => seen.some((event) => event.type === "approval_request"));
+
+      // 排队消息还没落盘：RunSummary 必须带上完整 prompt，前端切走再回来
+      // 才重建得出那条空心气泡
+      const queuedSummary = await server.get<RunSummary>(`/api/runs/${second.runId}`);
+      assert.strictEqual(queuedSummary.status, "queued");
+      assert.strictEqual(queuedSummary.prompt, "再写");
+      const firstSummary = await server.get<RunSummary>(`/api/runs/${first.runId}`);
+      assert.strictEqual(firstSummary.prompt, undefined, "开跑后的正文以会话文件为准");
 
       // 排着队就删：409，且说清原因（不能把人锁在一个点不动的按钮上）
       const queuedDrop = await server.raw(`/api/runs/${second.runId}/worktree`, {
@@ -1953,6 +2060,111 @@ describe("bootAppServer", () => {
     assert.strictEqual(booted.server, null);
     assert.strictEqual(booted.url, null);
     assert.match(err.join(""), /工作区不可用/);
+  });
+
+  it("模型设置是全局的：改一次默认模型，所有已打开宿主都重读；换模型清掉旧窗口", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-boot-model-"));
+    const settings = new SettingsStore(join(root, "settings.json"));
+    const providers = new ModelProviderService(new ProviderStore(join(root, "auth.json")));
+    await settings.setDefaultModel("deepseek/old-model");
+    await settings.setContextWindow(12345);
+    let booted: Awaited<ReturnType<typeof bootAppServer>> | null = null;
+    try {
+      const workspace = join(root, "workspace");
+      const second = join(root, "second");
+      const sessionsDir = join(root, "sessions");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(second, { recursive: true });
+      mkdirSync(sessionsDir, { recursive: true });
+
+      booted = await bootAppServer(
+        {
+          cwd: workspace,
+          cwdGiven: true,
+          port: 0,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          sessionsDir,
+          settingsStore: settings,
+          providerService: providers,
+          resolveModel: async (_service, store) => {
+            const parsed = await store.parseDefaultModel();
+            return {
+              model: scriptedModel([textResponse("好")]),
+              providerName: parsed?.providerName ?? "unknown",
+              modelName: parsed?.modelName ?? "unknown",
+            };
+          },
+        },
+        { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+      );
+      const app = booted.server;
+      assert.ok(app);
+      await app.openWorkspace(second);
+      await app.openWorkspace(workspace);
+      await app.openWorkspace(second);
+      const before = (await (await fetch(`${booted.url}/api/state`)).json()) as AppState;
+      assert.strictEqual(before.model.model, "old-model");
+
+      await app.openWorkspace(workspace);
+      const saved = await fetch(`${booted.url}/api/model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "deepseek", model: "new-model" }),
+      });
+      assert.strictEqual(saved.status, 200);
+      assert.strictEqual(await settings.getContextWindow(), undefined, "换模型要清掉旧窗口");
+
+      // 第二个宿主在改设置之前就已经存在：它也必须换到新模型
+      await app.openWorkspace(second);
+      const after = (await (await fetch(`${booted.url}/api/state`)).json()) as AppState;
+      assert.strictEqual(after.model.model, "new-model");
+    } finally {
+      await booted?.server?.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("端口被占：返回码 1 并说清端口，不把 EADDRINUSE 抛到进程顶层", async () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-boot-busy-"));
+    const blocker = createServer();
+    try {
+      const workspace = join(root, "workspace");
+      const sessionsDir = join(root, "sessions");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(sessionsDir, { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        blocker.once("error", reject);
+        blocker.listen(0, "127.0.0.1", () => resolve());
+      });
+      const address = blocker.address();
+      assert.ok(address && typeof address === "object");
+      const port = address.port;
+      const err: string[] = [];
+
+      const booted = await bootAppServer(
+        {
+          cwd: workspace,
+          cwdGiven: true,
+          port,
+          host: "127.0.0.1",
+          isolate: false,
+          concurrency: 1,
+          sessionsDir,
+        },
+        { stdout: { write: () => undefined }, stderr: { write: (chunk) => void err.push(chunk) } },
+      );
+
+      assert.strictEqual(booted.code, 1);
+      assert.strictEqual(booted.server, null);
+      assert.strictEqual(booted.url, null);
+      assert.match(err.join(""), new RegExp(`端口 ${port} 已被占用`));
+      assert.match(err.join(""), /--port/);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   /**
