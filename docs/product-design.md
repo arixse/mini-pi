@@ -15,9 +15,10 @@ Mini Pi Code Agent 是一个轻量级的 AI 编程助手，具备 pi-code-agent 
 - 实时流式输出
 - 斜杠命令支持（`/new`、`/login`、`/model`、`/help` 等）
 
-### 2.2 页面交互（第二阶段，尚未实现）
+### 2.2 页面交互（第二阶段，已实现）
 
-> 当前仓库只包含第一阶段的 CLI 实现，尚无 `packages/client/src/server` 与 `packages/client/src`。
+> Web 界面与 Electron 桌面壳均已落地，共用同一套内核与 HTTP + SSE 契约；
+> 服务端与前端入口分别在 `packages/client/src/server` 与 `packages/client/src/web`。
 
 - Web 图形界面
 - 可视化文件操作

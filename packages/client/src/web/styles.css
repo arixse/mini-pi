@@ -468,8 +468,9 @@ svg.ic {
   color: var(--Client-accent-text);
 }
 
-/* 缩进：工作区 4、工作区名 11、会话 18、Run 26（多工作区三层树，见
-   docs/client-multi-workspace.md §5——比单工作区版多一层工作区名） */
+/* 缩进：工作区 4、工作区名 11、会话 18（多工作区三层树，见
+   docs/client-multi-workspace.md §5——比单工作区版多一层工作区名）。
+   `lv-run` 规则留给仍未渲染的 Run 行，当前侧栏没有这一层。 */
 .tree-row.lv-root {
   padding-left: 4px;
   font-weight: 550;

@@ -58,7 +58,8 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 | `/last [n]`                                | 回看上一条工具输出的完整内容            |
 | `/reload`                                  | 重载配置、`AGENTS.md` 与 Skills       |
 | `/skills` · `/load <name>`              | 列出 / 手动加载 Skill 全文              |
-| `/trust`                                   | 本会话内跳过写文件与执行命令的确认      |
+| `/trust`                                   | 在 `full-access` / `workspace-write` 之间快切 |
+| `/approval [mode]`                          | 查看或切换审批档位（read-only / workspace-write / full-access） |
 | `/subagent [on\|off\|trace on\|trace off]`    | 子 Agent 委派及排障落盘（默认关闭）     |
 | `/update [on\|off]`                         | 立即检查新版本 / 开关启动检测           |
 | `/clear` · `/exit` · `/quit`         | 清空历史 / 退出                         |
@@ -77,8 +78,8 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 | 防线           | 说明                                                                                                                     |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | 审批           | `write_file` / `edit_file` / `bash` / `verify_command` / `task` 执行前必须确认；拒绝时把「被拒绝」结果交回模型 |
-| 信任模式       | `/trust` 或确认时按 `a`，本会话内不再逐次确认；**只在内存里，重开即恢复**                                      |
-| 非交互终端     | 无法询问时一律按拒绝处理，不静默放行                                                                                     |
+| 信任模式       | `/trust` 在 `/approval full-access` 与 `/approval workspace-write` 之间快切；确认时按 `a` 等价于本会话内全放行；**只在内存里，重开即恢复** |
+| 非交互终端     | `exec` 默认 `read-only`（写与执行一律拒绝）；只有显式 `--approval full-access` 才放行，不静默放行 |
 | 只读工具免确认 | `list_files` / `glob` / `grep` / `read_file` / `load_skill` 免确认且同批并发执行                               |
 | 受限验证       | `verify_command` 只接受测试 / 构建 / 检查类命令，网络与删除类命令进不来                                                |
 | 路径限制       | 所有操作限制在工作区内，symlink 指向外部同样被拒绝                                                                       |
@@ -215,12 +216,12 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
-| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M5 已全部落地）   |
+| [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M6 已全部落地）   |
 | [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、26 条已定决策（视觉基准为 Ardot 画布，交接见下一行）         |
 | [客户端视觉稿交接](docs/client-visual-handoff.md) | 视觉交互稿定稿说明：物料清单、十屏验收要点、内核缺口、开发指令模板                      |
 | [客户端事件流](docs/client-event-stream.md)      | 两条 SSE 的分工：当前 Run 的正文与所有 Run 的控制事件，以及游标、缺口与降级语义 |
-| [客户端多工作区方案](docs/client-multi-workspace.md) | 方案待定：单活动工作区的理由、宿主池改法、会话寻址与分期（未实施）           |
-| [开发日志索引](notes/README.md)                 | day1 ~ day28，按真实提交日期编排                                             |
+| [客户端多工作区方案](docs/client-multi-workspace.md) | 已落地：宿主池、三层侧栏树、会话寻址与启动恢复（W1 ~ W3 已合入）           |
+| [开发日志索引](notes/README.md)                 | day1 ~ day31，按真实提交日期编排                                             |
 
 ## 范围
 
@@ -236,9 +237,11 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 `--app=` 无地址栏窗口）与 `--no-open`（只起服务，无头机器用）。
 没装 Electron 或没跑过 `build:electron` 时会明说并自动退回浏览器壳。
 
-**工作区**：`serve` 默认当前目录；`desktop` **没有默认工作区**——首次启动
-时弹出系统目录框让用户选，选完记住（`~/.mini-pi/client-workspace.json`），
-之后直接开上次那个；在界面里切换工作区也会更新记忆。取消选择就退出，
+**工作区**：`serve` 不带 `--cwd` 时以**空工作区池**启动（"在哪儿敲的命令"
+不算默认工作区），等用户在界面里添加；显式 `--cwd` 才预开一个。`desktop`
+同样**没有默认工作区**——首次启动时弹出系统目录框让用户选，选完记住
+（`~/.mini-pi/client-workspace.json`），之后直接恢复上次那组工作区；
+在界面里添加或切换工作区也会更新记忆。取消选择就退出，
 不会悄悄拿启动目录顶替。
 
 ## 桌面安装包

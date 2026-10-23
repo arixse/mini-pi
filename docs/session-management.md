@@ -6,9 +6,10 @@ Mini Pi 现在支持多会话管理功能，每个会话都独立存储，且**�
 在 A 目录看不到、也切不到 B 目录的会话。
 
 本文只覆盖**存储层的实现细节**（目录推导、隔离判定、写盘语义、类接口）。
-用户可见的命令行为（`/new` / `/clear` / `/sessions` / `/switch`）与上下文压缩的
-完整口径以 [cli-interaction.md](./cli-interaction.md) 第 5、6 节为唯一权威来源，
-本文不重复；确需细节时以代码 `packages/core/src/agent/sessionManager.ts` 与
+用户可见的命令行为（`/new` / `/clear` / `/sessions` / `/switch`）以
+[cli-commands.md](./cli-commands.md) §5 为唯一权威来源；上下文压缩的完整口径见
+[cli-interaction.md](./cli-interaction.md) §4；本文不重复，确需细节时以代码
+`packages/core/src/agent/sessionManager.ts` 与
 `packages/core/src/agent/sessionStore.ts` 为准。
 
 ## 存储位置

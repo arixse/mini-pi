@@ -163,6 +163,7 @@ JSONL 是上下文的唯一事实来源，一行损坏不会让整份会话打�
 | `message_start` / `message_update` / `message_end` | 消息生命周期；`message_update` 携带流式 `delta` |
 | `tool_execution_start` / `tool_execution_end` | 工具执行开始 / 结束 |
 | `tool_permission` | 工具权限控制（`beforeToolCall` 钩子） |
+| `subagent_start` / `subagent_end` | 子 Agent 委派开始 / 结束（只对委派发出，CLI 与 Web 用它渲染嵌套结构） |
 | `compaction` | 上下文压缩（当前尚未发出） |
 | `branch_switch` | 切换会话分支叶子节点（当前尚未发出） |
 

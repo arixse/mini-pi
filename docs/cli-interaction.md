@@ -52,11 +52,13 @@ mini-pi --version                   # 只看版本号，不进 REPL
 mini-pi exec "读一下这个仓库的结构"     # 跑完一次执行就退出，不进 REPL
 mini-pi exec "..." --json               # stdout 只有 JSONL：一行一个事件，末行 exec_done
 mini-pi exec "..." --cwd /path/to/dir   # 指定工作区
+mini-pi exec "..." --approval full-access # 显式放行写操作与命令（CI 里由人背书）
 ```
 
-- **审批 fail closed**：没有终端可以问人，所以除只读工具外一律拒绝。
-  写文件与执行命令请用交互式 CLI —— headless 下"默认放行"会让一条脚本命令
-  在无人确认的情况下删东西。
+- **审批默认 fail closed**：没有终端可以问人，所以默认 `read-only`——除只读工具外
+  一律拒绝。需要写文件或执行命令时显式传 `--approval full-access`（CI 里由人背书）；
+  `workspace-write` 因为依赖逐次确认，在 headless 下直接报参数错误。
+  交互式 CLI 则默认走 `workspace-write` 的逐次确认。
 - `--json` 时 stdout 不会出现任何人类可读的输出（日志与错误一律走 stderr），
   因此可以直接被管道消费；末行 `exec_done` 带上 `status` 与正文，
   脚本只看这一行就知道成败。
@@ -153,7 +155,7 @@ CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
 **回合脚注**：
 
 ```
-↳ 8.6s · ↑1.2k ↓318 · 上下文 3.4k/6.0k
+↳ 8.6s · ↑1.2k ↓318 · 上下文 12.3k/76.8k
 ```
 
 - 耗时从"开始干活"起算；提供方没返回 usage 时省略用量段；上下文刻度与 `/status` 共用 `contextUsage()`。
@@ -206,7 +208,7 @@ CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
 │ ℹ pass 372
 └ 5 行 · 71 B
 
-🔧 packages/core/src/agent/model.ts                                                             ✅ 12ms
+🔧 packages/core/src/agent/model/openai.ts                                                             ✅ 12ms
 │ @@ -313,2 +313,3 @@
 │     const tools = this.convertTools(input.tools);
 │ -   const response = await this.client.chat.completions.create({

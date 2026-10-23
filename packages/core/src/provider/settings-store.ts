@@ -14,10 +14,10 @@ type Settings = {
    */
   contextWindow?: number;
   /**
-   * 子 Agent 委派是否可用（`/subagent` 开关，缺省 true）。
+   * 子 Agent 委派是否可用（`/subagent` 开关，缺省 false）。
    *
-   * 默认开、显式关才落 false：委派是已实现的能力，没必要让所有人都在
-   * settings.json 里写一行才能用；而一旦有人主动关掉，重开终端应当仍然关着。
+   * 只有显式写 true 才开启：委派会额外烧 token 且单次成本难以预估，
+   * opt-in 比 opt-out 稳妥；一旦用户主动打开或关闭，重开终端仍保持该选择。
    */
   subagentEnabled?: boolean;
   /**

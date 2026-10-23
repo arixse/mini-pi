@@ -302,7 +302,7 @@ pnpm check
 | 项目             | 现状                                                                                      |
 | ---------------- | ----------------------------------------------------------------------------------------- |
 | 类型检查         | `tsc --noEmit`，开启 `strict` + `noUnusedLocals` + `noUnusedParameters`           |
-| 单元测试         | `tsx --test "packages/*/src/**/*.test.ts"`（node:test + node:assert），不新增测试框架依赖          |
+| 单元测试         | `tsx --test` 跑 `packages/*/src/**/*.test.ts`、`tests/*.test.ts` 与 `scripts/*.test.ts`（node:test + node:assert），不新增测试框架依赖          |
 | 覆盖率门槛       | 行 85% / 分支 85% / 函数 90%，低于门槛即失败（随`pnpm check` 一起跑）                   |
 | 持续集成         | `.github/workflows/ci.yml`：install → **`pnpm check`**（push / PR / 手动触发） |
 | Lint / Formatter | **暂未引入**：会新增依赖（eslint/prettier），待与"依赖取舍"一并决策                 |
@@ -371,7 +371,7 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 - **界面基准**是 Ardot 画布 `738920616583250`（十帧，深浅两套只切 `data-theme`），
   交接说明见 `docs/client-visual-handoff.md`。UI 重做后的结构：顶栏只留品牌 +
   待审批徽标 + 图标组；主列顶部一条 36px 状态行（per-Run 的模型 / 上下文进度槽 /
-  步数）；侧栏是树形（工作区根 → 会话 → Run 子任务，行操作 hover 才出现）；
+  步数）；侧栏是树形（工作区根 → 工作区名 → 会话，行操作 hover 才出现）；
   默认模型与档位是输入区附加行的两个下拉；发送与停止是同一个按钮的两种状态，
   Tab 可排队下一条；工具卡单行渲染参数；审批动作行四个（允许一次 /
   本会话全部允许 / 拒绝 / 看变更）；高危单独成块；输入区与会话同宽、

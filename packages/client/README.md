@@ -107,7 +107,7 @@ macOS 两个 runner 上各打各的，产物挂在工作流运行记录里（30 
 ## 目录
 
 ```
-src/server/     App Server：Express 路由 + 自写 SSE 帧；workspaceMemory.ts 记"上次用哪个工作区"
+src/server/     App Server：Express 路由 + 自写 SSE 帧；workspaceMemory.ts 记一组工作区与活动根（下次启动恢复）
 src/web/        前端：React + Vite，界面照 docs/client-visual-handoff.md 的画布实现
 src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / workspace.ts 选工作区 / desktop.ts 命令
 src/shared/     线上契约（只有类型）：服务端产什么、前端消费什么

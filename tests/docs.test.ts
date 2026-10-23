@@ -313,3 +313,94 @@ describe("docs 数值与实现对得上", () => {
     );
   });
 });
+
+describe("docs 状态与清单不再回退", () => {
+  it("README 的多工作区状态与 notes 日志范围跟实现对得上", () => {
+    const readme = repoFile("README.md");
+    const row =
+      readme.split("\n").find((line) => line.includes("docs/client-multi-workspace.md")) ?? "";
+    assert.ok(row.length > 0, "README 文档表应登记 client-multi-workspace.md");
+    // W1~W3 已合入：README 再写"方案待定/未实施"会让读者以为功能不存在
+    assert.ok(!/待定|未实施/.test(row), `README 把已落地的多工作区写回了未实施：${row}`);
+
+    // 开发日志范围以 notes/README.md 的真实条目为准，避免新增日志后忘改 README
+    const days = [...repoFile(join("notes", "README.md")).matchAll(/\(\.\/day(\d+)\.md\)/g)].map(
+      (match) => Number(match[1]),
+    );
+    assert.ok(days.length > 0, "应能从 notes/README.md 读到开发日志条目");
+    const latest = Math.max(...days);
+    assert.ok(
+      readme.includes(`day1 ~ day${latest}`),
+      `README 的开发日志范围应写到 day${latest}（以 notes/README.md 为准）`,
+    );
+  });
+
+  it("README 的 serve 默认工作区与 serveArgs 的说法一致", () => {
+    const args = repoFile(join("packages", "client", "src", "server", "serveArgs.ts"));
+    // 行为若又改回"默认当前目录"，这条断言不替它做决定
+    if (!args.includes("不预开任何工作区")) {
+      return;
+    }
+    const readme = repoFile("README.md");
+    assert.ok(readme.includes("空工作区池"), "serve 未给 --cwd 时是空池启动，README 应写明");
+    assert.ok(!readme.includes("`serve` 默认当前目录"), "README 仍把 serve 写成默认当前目录");
+  });
+
+  it("README 命令表覆盖审批命令，事件表覆盖子 Agent 事件", () => {
+    const commands = repoFile(join("packages", "cli", "src", "commands.ts"));
+    assert.ok(commands.includes('usage: "/approval'), "前提：/approval 应已注册");
+    assert.ok(repoFile("README.md").includes("/approval"), "README 命令表漏了 /approval");
+
+    const doc = repoFile(join("docs", "cli-config.md"));
+    const protocol = repoFile(join("packages", "core", "src", "shared", "protocol.ts"));
+    for (const event of ["subagent_start", "subagent_end"]) {
+      assert.ok(protocol.includes(event), `前提：protocol.ts 应声明 ${event}`);
+      assert.ok(doc.includes(event), `cli-config.md 的事件表漏了 ${event}`);
+    }
+  });
+
+  it("UI 文档不再把侧栏写成带 Run 叶子", () => {
+    const sidebar = repoFile(join("packages", "client", "src", "web", "components", "Sidebar.tsx"));
+    assert.ok(sidebar.includes("工作区名"), "前提：侧栏已是三层树");
+    for (const file of [
+      "docs/client-ui-design.md",
+      "docs/technical-solution.md",
+      "docs/client-visual-handoff.md",
+    ]) {
+      const text = repoFile(file);
+      assert.ok(!text.includes("Run 叶子"), `${file} 仍把侧栏写成 Run 叶子`);
+      assert.ok(!text.includes("Run 子任务"), `${file} 仍把侧栏写成 Run 子任务`);
+    }
+  });
+
+  it("「xxx.md 第 N 节」引用的章节真的存在", () => {
+    // `docs.test.ts` 的 `§N` 检查抓不到"第 5、6 节"这种自然语言写法；
+    // 内容一搬家（命令表挪到 cli-commands.md）它就会静默悬空。
+    const sectionIds = new Map<string, Set<string>>();
+    for (const file of docFiles()) {
+      const ids = new Set<string>();
+      for (const line of repoFile(file).split("\n")) {
+        const match = line.match(/^#{2,4}\s+(\d+(?:\.\d+)*)/);
+        if (match) {
+          ids.add(match[1]);
+        }
+      }
+      sectionIds.set(file.split(/[\\/]/).pop() ?? file, ids);
+    }
+
+    for (const file of docFiles()) {
+      const text = repoFile(file);
+      for (const match of text.matchAll(/([\w-]+\.md)\)?[^\n。]{0,10}?第\s*(\d+(?:、\d+)*)\s*节/g)) {
+        const [, target, numbers] = match;
+        const ids = sectionIds.get(target);
+        assert.ok(ids, `${file} 引用了不存在的文档 ${target}`);
+        for (const id of numbers.split("、")) {
+          const topLevel = id.split(".")[0];
+          const exists: boolean =
+            ids.has(id) || [...ids].some((s) => s === topLevel || s.startsWith(`${topLevel}.`));
+          assert.ok(exists, `${file} 引用 ${target} 第 ${id} 节，但该文档没有这一节`);
+        }
+      }
+    }
+  });
+});
