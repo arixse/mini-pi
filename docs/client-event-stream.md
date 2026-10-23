@@ -145,13 +145,17 @@ per-run 游标与全局游标的编号空间互不相干。
 
 | 事件 | 动作 |
 | --- | --- |
-| `run_state` | 直接改 `state.runs` 里那条的 `status`（侧栏立刻变） |
-| `run_done` | 改 `status` / `elapsedMs` / `tokens`，`pendingApprovals` 归零，并**安排一次**状态刷新 |
+| `run_state` | 直接改 `state.runs` 里那条的 `status`（侧栏立刻变）；若当前会话没有活流，排队项开跑时顺手接上 per-run 流 |
+| `run_done` | 改 `status` / `elapsedMs` / `tokens`，`pendingApprovals` 归零，并**安排一次**状态刷新；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
 | `approval_request` / `approval_resolved` | 计数与 `oldestRunId` 以服务端为准，**安排一次**状态刷新 |
 | `stream_gap` | 立即安排状态刷新 |
 | Run 不在 `state.runs` 里 | 同上（可能来自另一个标签页或刚换的工作区） |
 
 - 刷新是**合并的**（100ms）：一轮里连着的审批/结束事件只发一次 `/api/state`。
+- 快照是状态真值：刷新后顺手对齐当前 Run 的元信息，并在没有活流时接管
+  当前会话的下一条 `running/blocked/queued` Run（忙时不会抢当前这条）。
+  排队消息尚未落盘，`RunSummary` 只在 `status === "queued"` 时带 `prompt`，
+  切回会话据此重建空心气泡。
 - 当前 Run 的正文与审批卡仍由 per-run 流归约；全局流不重复应用事件，
   因此不会出现"同一张卡按两次"。
 - 全局流的连接状态写进 `state.globalNote`，由时间线顶部的提示条展示；

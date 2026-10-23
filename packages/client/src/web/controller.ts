@@ -194,6 +194,12 @@ export class AppController {
         return;
       }
       this.store.update((state) => applySnapshot(state, snapshot));
+      // 服务端快照是状态的真值：跑着的 Run 可能在两次事件之间换了状态
+      // （排队 → 运行、审批解除），这里顺手把当前 Run 的元信息对齐一次。
+      this.syncActiveRunMeta();
+      // 切走再回来 / 刷新页面时，当前会话里可能已经有一条跑着的 Run。
+      // 快照与事件流都可能把它带进来，但没有 per-run 订阅就看不到正文。
+      this.attachNextRunIfIdle();
     } catch (error) {
       if (!quiet) {
         this.fail(error);
@@ -281,6 +287,9 @@ export class AppController {
     if (needsRefresh) {
       this.scheduleRefresh();
     }
+    // 排队中的 Run 真正开跑时，全局流先知道；此时把当前会话的时间线
+    // 接过去，用户不必切走再切回来。当前已有活流时这里不会抢。
+    this.attachNextRunIfIdle();
     if (this.notificationsArmed) {
       this.maybeNotify(envelope);
     }
@@ -478,17 +487,118 @@ export class AppController {
 
   /** 某个工作区名下的 Run 列表（池里每个根有自己的任务） */
   private runsOf(root: string) {
-    return this.store.current.workspaces.find((w) => w.root === root)?.runs ?? [];
+    const state = this.store.current;
+    const workspace = state.workspaces.find((w) => w.root === root);
+    if (workspace) {
+      return workspace.runs;
+    }
+    // 旧快照 / 单工作区形状可能只填了聚合的 runs（AppServer 也会同时给
+    // workspaces）；别因为缺那一层就看不到活 Run
+    return state.runs.filter((run) => run.root === undefined || run.root === root);
   }
 
   private liveRunOf(root: string, sessionId: string) {
+    const runs = this.runsOf(root).filter((run) => run.sessionId === sessionId);
+    // 同一段会话串行执行：真在跑的那条永远优先于后面排队的。
+    // 只有"没有活着的 Run"时才退到队列里的第一条（最早开始等的那条），
+    // 否则排队气泡会一直没人订阅，收不到它真正开跑的那条事件。
     return (
-      this.runsOf(root).find(
-        (run) =>
-          run.sessionId === sessionId &&
-          (run.status === "running" || run.status === "blocked" || run.status === "queued"),
-      ) ?? null
+      runs.find((run) => run.status === "running" || run.status === "blocked") ??
+      runs
+        .filter((run) => run.status === "queued")
+        .sort((a, b) => a.startedAt - b.startedAt)[0] ??
+      null
     );
+  }
+
+  /**
+   * 把某个 Run 的元信息同步到当前时间线（标题、模型、工作区、状态）。
+   *
+   * per-run 事件负责正文；这里补的是"这条 Run 是谁、在哪、什么状态"。
+   * 自动接管下一条排队 Run 时必须做这一步，否则状态栏还挂着上一条的模型。
+   */
+  private syncViewRun(runId: string): void {
+    this.store.update((state) => {
+      const run = state.runs.find((item) => item.runId === runId);
+      if (!run || run.sessionId !== state.view.sessionId) {
+        return;
+      }
+      if (run.root !== undefined && state.view.root !== null && run.root !== state.view.root) {
+        return;
+      }
+      state.view.title = run.title;
+      state.view.status = run.status;
+      state.view.model = run.model;
+      state.view.contextWindow = run.contextWindow;
+      state.view.startedAt = run.startedAt;
+      state.view.tokens = run.tokens;
+      state.view.elapsedMs = run.elapsedMs;
+      state.view.runError = run.error ?? null;
+      applyRunWorkspace(state.view, run);
+    });
+  }
+
+  private syncActiveRunMeta(): void {
+    const active = this.store.current.view.activeRunId;
+    if (active) {
+      this.syncViewRun(active);
+    }
+  }
+
+  /**
+   * 当前视图没有"正在订阅的活 Run"时，自动接上下一条。
+   *
+   * 这解决两件事：
+   * - 忙时发送的新 Run 只排队，不能在还看着上一条时硬 attach（会切断
+   *   上一条的正文与审批）；
+   * - 上一条跑完后，队列里那条不必等用户切走再切回来才看得到输出。
+   *
+   * 候选优先 `running/blocked`；没有才取最早排队的 `queued`。**只在这段
+   * 会话里找**：别的会话/工作区的 Run 不抢当前时间线。
+   */
+  private attachNextRunIfIdle(): void {
+    const state = this.store.current;
+    const view = state.view;
+    const sessionId = view.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    const root = view.root ?? state.activeRoot;
+    const activeId = view.activeRunId;
+    const activeRun = activeId
+      ? state.runs.find((run) => run.runId === activeId)
+      : undefined;
+    // 已经有一条活流在跑：不要动它。unknown Run 也保守地不动
+    if (activeId && this.stream && this.streamedRunId === activeId) {
+      if (!activeRun) {
+        return;
+      }
+      if (
+        activeRun.status === "running" ||
+        activeRun.status === "blocked" ||
+        activeRun.status === "queued"
+      ) {
+        return;
+      }
+    }
+    const candidates = state.runs.filter(
+      (run) =>
+        run.sessionId === sessionId &&
+        (run.root === undefined || root === run.root) &&
+        (run.status === "running" ||
+          run.status === "blocked" ||
+          run.status === "queued"),
+    );
+    const next =
+      candidates.find((run) => run.status === "running" || run.status === "blocked") ??
+      candidates
+        .filter((run) => run.status === "queued")
+        .sort((a, b) => a.startedAt - b.startedAt)[0];
+    if (!next) {
+      return;
+    }
+    // 同一条但流已经断了也要重订阅；attach 自己对"同一条且流还在"是幂等的
+    this.attach(next.runId);
   }
 
   private async openRun(runId: string): Promise<void> {
@@ -521,7 +631,13 @@ export class AppController {
   }
 
   private async send(text: string): Promise<void> {
-    const status = this.store.current.view.status;
+    const viewAtCall = this.store.current.view;
+    // 请求在途时用户可能切会话/新任务：把"这条消息属于哪块视图"钉在
+    // 调用那一刻。响应回来只回填同一个视图，绝不把结果按到新视图上。
+    const epoch = this.viewEpoch;
+    const sessionAtCall = viewAtCall.sessionId;
+    const rootAtCall = viewAtCall.root ?? this.store.current.activeRoot;
+    const status = viewAtCall.status;
     const busy = status === "running" || status === "blocked" || status === "queued";
     // 先让用户看见自己说了什么：网络往返可能几百毫秒，空着窗口最难受
     let optimisticId = "";
@@ -553,37 +669,48 @@ export class AppController {
 
     try {
       await previous;
-      // 等的这一下里，上一个请求可能已经建好会话了：优先用它
-      const sessionId = this.store.current.view.sessionId ?? undefined;
-      // 发给哪个根：看着的会话属于哪个根就回哪个根；草稿（新任务）去活动根
-      const targetRoot =
-        sessionId !== undefined
-          ? (this.store.current.view.root ?? this.store.current.activeRoot)
-          : this.store.current.activeRoot;
+      // 等的这一下里，上一个请求可能已经建好会话了：同一视图里优先用它。
+      // 已经切走时回到调用那一刻的会话/根，不能把旧消息发进新会话。
+      const sameView = epoch === this.viewEpoch;
+      const viewNow = this.store.current;
+      const sessionId = sameView
+        ? (viewNow.view.sessionId ?? sessionAtCall ?? undefined)
+        : (sessionAtCall ?? undefined);
+      const targetRoot = sameView
+        ? (viewNow.view.root ?? rootAtCall)
+        : rootAtCall;
       const created = await api.sendRun(text, sessionId, targetRoot);
       settle(created);
-      this.store.update((state) => {
-        if (state.view.sessionId === null) {
-          state.view.sessionId = created.sessionId;
-          // 草稿落了地：时间线从此属于这个根
-          if (state.view.root === null) {
-            state.view.root = targetRoot;
+
+      const stillSame = epoch === this.viewEpoch;
+      if (stillSame) {
+        this.store.update((state) => {
+          if (state.view.sessionId === null) {
+            state.view.sessionId = created.sessionId;
+            // 草稿落了地：时间线从此属于这个根
+            if (state.view.root === null) {
+              state.view.root = targetRoot;
+            }
           }
-        }
-        // runId 落到那条乐观消息上：撤回要点名它
-        attachQueuedRun(state.view, optimisticId, created.runId);
-      });
-      this.attach(created.runId);
+          // runId 落到那条乐观消息上：撤回要点名它
+          attachQueuedRun(state.view, optimisticId, created.runId);
+        });
+      }
       await this.refreshState();
-      // 隔离信息（M3）跟着这次执行走：刷新后的 runs 里已经有它的工作区
-      this.store.update((state) => {
-        const run = state.runs.find((item) => item.runId === created.runId);
-        if (run) {
-          applyRunWorkspace(state.view, run);
+      if (stillSame) {
+        // refreshState 已经会接管"下一条该看的 Run"（忙时不会抢当前这条）。
+        // 它没接管、当前也没有活流时，说明这次执行已经很快收尾了：补订阅
+        // 一次，把正文与 run_done 重放出来。
+        if (this.store.current.view.activeRunId === null) {
+          this.attach(created.runId);
         }
-      });
+      }
     } catch (error) {
-      if (this.pendingUsers.some((item) => item.id === optimisticId)) {
+      // 视图已经换掉时，旧气泡也已随旧视图丢弃；不要把正文塞进新输入框
+      if (
+        epoch === this.viewEpoch &&
+        this.pendingUsers.some((item) => item.id === optimisticId)
+      ) {
         this.store.update((state) => removeItem(state.view, optimisticId));
         this.pendingUsers = this.pendingUsers.filter((item) => item.id !== optimisticId);
         // 请求没成立：把刚打的字还回输入框，别让用户重打一遍
@@ -592,6 +719,8 @@ export class AppController {
       }
       this.fail(error);
     } finally {
+      // 失败时也要把票据收掉：撤回如果正等在这张票上，不能永远等下去
+      settle({ runId: "", sessionId: "" });
       this.sendTasks.delete(optimisticId);
       openGate();
     }
@@ -621,19 +750,20 @@ export class AppController {
     if (!item) {
       return;
     }
-    this.store.update((state) => removeItem(state.view, id));
-    this.pendingUsers = this.pendingUsers.filter((entry) => entry.id !== id);
     if (item.runId) {
       try {
         await api.cancelRun(item.runId);
-        this.banner("warn", "已撤回：这条消息不会执行");
       } catch (error) {
-        // 多半是这一小会儿里它已经开跑了：说清现状，别假装撤成了
+        // 多半是这一小会儿里它已经开跑了：气泡留着，别把说过的话
+        // 从时间线上抹掉；取消失败的原因原样告诉用户
         this.fail(error);
+        await this.refreshState();
+        return;
       }
-    } else {
-      this.banner("warn", "已撤回：如果任务已经排上，请在侧栏里取消它");
     }
+    this.store.update((state) => removeItem(state.view, id));
+    this.pendingUsers = this.pendingUsers.filter((entry) => entry.id !== id);
+    this.banner("warn", item.runId ? "已撤回：这条消息不会执行" : "已撤回这条消息");
     await this.refreshState();
   }
 
@@ -672,7 +802,7 @@ export class AppController {
    * 两步确认不放在这里——按钮自己收（见 RunHead）：动作层只认"点了确认"。
    * 成功后刷一次状态，让运行头的「已丢弃」以服务端为准，而不是本地猜。
    */
-  private async discardWorktree(runId: string): Promise<void> {
+  private async discardWorktree(runId: string): Promise<boolean> {
     try {
       await api.discardWorktree(runId);
       this.banner("ok", "已丢弃这个任务的隔离工作区");
@@ -683,8 +813,10 @@ export class AppController {
           applyRunWorkspace(state.view, run);
         }
       });
+      return true;
     } catch (error) {
       this.fail(error);
+      return false;
     }
   }
 
@@ -898,6 +1030,8 @@ export class AppController {
     this.store.update((state) => {
       state.view.activeRunId = runId;
     });
+    // 自动接管队列里的下一条时，状态行/运行头必须跟着换人
+    this.syncViewRun(runId);
     this.stream = subscribeRun(runId, 0, {
       onEvent: (event) => this.onEvent(runId, event),
       onStatus: (status) => {

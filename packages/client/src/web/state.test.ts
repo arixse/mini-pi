@@ -525,6 +525,115 @@ describe("乐观插入与快照", () => {
     openSession(state, "s3.jsonl", [], { tokens: 4321, steps: 3, liveRun: live });
     assert.equal(state.view.tokens, 999, "liveRun 的用量覆盖会话的历史值");
   });
+
+  it("排队消息不落盘：切回会话时从 runs 的 prompt 重建空心气泡", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot());
+    const queued: RunSummary = {
+      runId: "run_q",
+      title: "还没轮到",
+      sessionId: "s1.jsonl",
+      status: "queued",
+      model: "m",
+      startedAt: 20,
+      elapsedMs: null,
+      tokens: 0,
+      contextWindow: 128000,
+      pendingApprovals: 0,
+      prompt: "完整的那句排队提问",
+      workspace: runWorkspace(),
+    };
+    const otherRoot: RunSummary = {
+      ...queued,
+      runId: "run_other_root",
+      root: "D:\\other",
+      prompt: "别的工作区",
+    };
+    state.runs = [queued, otherRoot];
+
+    openSession(state, "s1.jsonl", [userMessage("已经执行过的")]);
+    const users = itemsOfKind(state.view, "user");
+    assert.strictEqual(users.length, 2);
+    const queuedItem = users[1]!;
+    assert.strictEqual(queuedItem.kind, "user");
+    if (queuedItem.kind !== "user") {
+      return;
+    }
+    assert.deepStrictEqual(
+      { id: queuedItem.id, text: queuedItem.text, queued: queuedItem.queued, runId: queuedItem.runId },
+      {
+        id: "q:run_q",
+        text: "完整的那句排队提问",
+        queued: true,
+        runId: "run_q",
+      },
+    );
+    assert.ok(
+      !users.some((item) => item.kind === "user" && item.runId === "run_other_root"),
+      "同名会话在别的工作区：排队气泡不能串根",
+    );
+  });
+
+  it("run_state running 只把对应的空心气泡变实心；cancelled 的排队气泡保持不变", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot());
+    state.runs = [
+      {
+        runId: "run_q",
+        title: "排队",
+        sessionId: "s1.jsonl",
+        status: "queued",
+        model: "m",
+        startedAt: 1,
+        elapsedMs: null,
+        tokens: 0,
+        contextWindow: 128000,
+        pendingApprovals: 0,
+        prompt: "排队的这句",
+        workspace: runWorkspace(),
+      },
+    ];
+    openSession(state, "s1.jsonl", []);
+    const bubble = state.view.items[0]!;
+    assert.strictEqual(bubble.kind, "user");
+    if (bubble.kind !== "user") {
+      return;
+    }
+    assert.strictEqual(bubble.queued, true);
+    const revision = bubble.rev;
+
+    feed(state.view, "run_q", [{ type: "run_state", status: "running" }]);
+    assert.strictEqual(bubble.queued, false);
+    assert.notStrictEqual(bubble.rev, revision, "变实心要让界面重画");
+
+    // 重新开一段：这轮根本没开跑就被取消，气泡仍应是空心
+    state.runs[0] = { ...state.runs[0]!, status: "queued" };
+    openSession(state, "s1.jsonl", []);
+    const cancelled = state.view.items[0]!;
+    assert.strictEqual(cancelled.kind, "user");
+    if (cancelled.kind !== "user") {
+      return;
+    }
+    feed(state.view, "run_q", [{ type: "run_done", status: "cancelled", elapsedMs: 0, tokens: 0 }]);
+    assert.strictEqual(cancelled.queued, true, "没执行就不伪装成实心");
+  });
+
+  it("run_state queued 把乐观插入的实心气泡改回空心", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot());
+    state.view.sessionId = "s1.jsonl";
+    const id = addUserMessage(state.view, "服务端还没轮到我", false);
+    attachQueuedRun(state.view, id, "run_q");
+
+    feed(state.view, "run_q", [{ type: "run_state", status: "queued" }]);
+
+    const bubble = state.view.items[0]!;
+    assert.strictEqual(bubble.kind, "user");
+    if (bubble.kind !== "user") {
+      return;
+    }
+    assert.strictEqual(bubble.queued, true, "排队态以服务端为准，不能一直显示实心");
+  });
 });
 
 describe("applyRunMetaEvent：应用级事件只改 runs", () => {

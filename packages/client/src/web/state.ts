@@ -510,6 +510,10 @@ export function openSession(
   view.sessionId = sessionId;
   view.root = options.root ?? state.activeRoot;
   view.items = itemsFromMessages(messages);
+  // 排队中的提问还没落进会话文件：切走再回来时从 runs 把它们补回时间线。
+  // 只补 queued 的那几条；开跑后服务端会把用户消息写进 history，届时以
+  // 会话文件为准，不会再叠一条。
+  appendQueuedRuns(state, view, sessionId);
   view.title = options.title ?? "";
   view.readOnly = options.readOnly ?? false;
   view.contextWindow = state.model.contextWindow;
@@ -530,6 +534,37 @@ export function openSession(
   view.workspace = head ? { runId: head.runId, ...head.workspace } : null;
   view.runError = options.run?.error ?? null;
   state.view = view;
+}
+
+/**
+ * 把这段会话里还在排队的 Run 补成空心用户气泡。
+ *
+ * 排队消息与已执行消息的来源不同：前者只存在于 RunRecord 的内存里
+ * （真正落盘发生在开跑之后），所以 `itemsFromMessages` 找不到它。切回
+ * 这段会话时如果不补，用户会以为那条消息根本没发出去。
+ *
+ * 根要一起对：会话文件名跨工作区会撞（见 docs/client-multi-workspace.md §4）。
+ */
+function appendQueuedRuns(state: ClientState, view: View, sessionId: string): void {
+  const queued = state.runs
+    .filter(
+      (run) =>
+        run.sessionId === sessionId &&
+        run.status === "queued" &&
+        (run.root === undefined || run.root === view.root),
+    )
+    .sort((a, b) => a.startedAt - b.startedAt);
+  for (const run of queued) {
+    upsertItem(view, {
+      kind: "user",
+      id: `q:${run.runId}`,
+      text: run.prompt ?? run.title,
+      queued: true,
+      locked: true,
+      at: run.startedAt,
+      runId: run.runId,
+    });
+  }
 }
 
 /**
@@ -593,6 +628,16 @@ export function attachQueuedRun(view: View, id: string, runId: string): void {
   }
 }
 
+/** 把某条 Run 对应的用户气泡切成空心 / 实心（按 runId 幂等） */
+function markUserQueued(view: View, runId: string, queued: boolean): void {
+  for (const item of view.items) {
+    if (item.kind === "user" && item.runId === runId && item.queued !== queued) {
+      item.queued = queued;
+      bump(item);
+    }
+  }
+}
+
 /**
  * 单条 Run 事件的归约。
  *
@@ -618,6 +663,12 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       // 新的一轮开始：上一轮的失败原因不该继续挂着
       if (event.status === "queued" || event.status === "running") {
         view.runError = null;
+      }
+      // 排队态是服务端的真值：全局并发满时，乐观插入的实心气泡也要
+      // 变回空心。开跑后切回实心；事件重放按 runId 幂等，不会误清
+      // 后面还在排队的那几条
+      if (event.status === "queued" || event.status === "running") {
+        markUserQueued(view, runId, event.status === "queued");
       }
       if (event.status === "running" && view.startedAt === null) {
         view.startedAt = Date.now();
@@ -830,6 +881,12 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       view.elapsedMs = event.elapsedMs;
       view.streamingAssistantId = null;
       view.streamNote = null;
+      // 已经执行完（含失败）的 Run 一定离开过队列；正常路径上 running 那
+      // 条事件已经清了，这里兜住"事件被裁掉/重连只补到收尾"的情况。
+      // cancelled 不清：可能根本没开跑，保持空心比伪装成已执行更诚实
+      if (event.status !== "cancelled") {
+        markUserQueued(view, runId, false);
+      }
       // 失败原因只有这一处能拿到；不存下来，界面就只剩一个"失败"徽标
       view.runError = event.error ?? null;
       if (event.tokens > 0) {

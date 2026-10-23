@@ -151,6 +151,9 @@ export class RunRecord {
       tokens: this.tokens,
       contextWindow,
       pendingApprovals,
+      // 排队中的提问还没有写进会话文件；前端切走再回来要靠它重建空心气泡。
+      // 开跑之后不再返回：正文以会话文件为准，避免与历史消息叠成两条
+      ...(this.status === "queued" ? { prompt: this.prompt } : {}),
       workspace: this.workspaceView(),
       ...(this.error ? { error: this.error } : {}),
     };

@@ -69,6 +69,13 @@ export type RunSummary = {
   contextWindow: number;
   /** 这个 Run 上还挂着的审批数 */
   pendingApprovals: number;
+  /**
+   * 排队中的完整提问（只有 `status === "queued"` 时由服务端给出）。
+   *
+   * 排队消息在真正开跑前不会落进会话文件；切走再回来只能从 `runs` 重建
+   * 那个空心气泡。跑起来之后不再返回：正文以会话文件为准。
+   */
+  prompt?: string;
   /** 这次执行实际用的根目录；开隔离时是独立 worktree */
   workspace: RunWorkspace;
   /**

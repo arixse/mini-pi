@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { AgentMessage } from "@minipi/core/shared/protocol";
 import { AppController } from "./controller";
-import type { AppState, SessionDetail } from "../shared/types";
+import type { AppState, RunSummary, SessionDetail } from "../shared/types";
 import type { ClientState } from "./state";
 
 /** 假的 EventSource：记下订阅，并能手动投递一帧（测试里模拟服务端推送） */
@@ -86,11 +86,13 @@ const requested: Array<{ url: string; body: string; method: string }> = [];
 
 /** 按 URL 前缀给响应的假 fetch */
 function installFetch(routes: Record<string, Route | (() => Route)>): void {
-  const respond = (route: Route): Response =>
-    new Response(JSON.stringify(route.body ?? {}), {
-      status: route.status ?? 200,
+  const respond = (route: Route): Response => {
+    const status = route.status ?? 200;
+    return new Response(status === 204 ? null : JSON.stringify(route.body ?? {}), {
+      status,
       headers: { "Content-Type": "application/json" },
     });
+  };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     requested.push({ url, body: typeof init?.body === "string" ? init.body : "", method: init?.method ?? "GET" });
@@ -161,6 +163,29 @@ function snapshot(overrides: Partial<AppState> = {}): AppState {
     isolateError: null,
     ...overrides,
   } as AppState;
+}
+
+/** 测试用的 RunSummary：默认落在快照的 D:/ws 上，隔离信息按需覆盖 */
+function runSummary(
+  runId: string,
+  status: RunSummary["status"],
+  overrides: Partial<RunSummary> = {},
+): RunSummary {
+  return {
+    runId,
+    title: `任务 ${runId}`,
+    sessionId: "s1.jsonl",
+    status,
+    model: "deepseek / deepseek-flash",
+    startedAt: 1,
+    elapsedMs: null,
+    tokens: 0,
+    contextWindow: 128000,
+    pendingApprovals: 0,
+    workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
+    root: "D:/ws",
+    ...overrides,
+  };
 }
 
 describe("AppController", () => {
@@ -308,6 +333,128 @@ describe("AppController", () => {
 
     assert.match(FakeEventSource.last?.url ?? "", /\/api\/runs\/run_9\/events\?cursor=0/);
     assert.strictEqual(controller.store.current.view.activeRunId, "run_9");
+  });
+
+  it("忙时发送只排队：不把当前 Run 的正文流切走", async () => {
+    const active = runSummary("run_active", "running");
+    const runs = [active];
+    installFetch({
+      "/api/state": () => ({ body: snapshot({ currentSessionId: "s1.jsonl", runs }) }),
+      "/api/sessions/": { body: sessionDetail("s1.jsonl", "上一条") },
+      "/api/runs": { status: 201, body: { runId: "run_queued", sessionId: "s1.jsonl" } },
+    });
+    await controller.boot();
+    await settle();
+    assert.strictEqual(controller.store.current.view.activeRunId, "run_active");
+    const activeStreams = FakeEventSource.all.filter((source) =>
+      source.url.includes("/api/runs/run_active/events"),
+    ).length;
+    assert.strictEqual(activeStreams, 1);
+
+    controller.actions.send("排在这条后面");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+
+    const view = controller.store.current.view;
+    assert.strictEqual(view.activeRunId, "run_active", "当前 Run 不能被新排队项顶掉");
+    assert.strictEqual(view.status, "running");
+    const queued = view.items.find(
+      (item) => item.kind === "user" && item.runId === "run_queued",
+    );
+    assert.ok(queued, "排队的消息要有自己的气泡");
+    assert.strictEqual(queued.kind === "user" && queued.queued, true);
+    assert.strictEqual(
+      FakeEventSource.all.some((source) => source.url.includes("/api/runs/run_queued/events")),
+      false,
+      "忙时不能订阅排队项：那会切断正在看的正文",
+    );
+    assert.strictEqual(controller.store.current.view.streamNote, null);
+  });
+
+  it("当前 Run 结束后自动接管队列里的下一条", async () => {
+    let runs = [
+      runSummary("run_first", "running", { startedAt: 1 }),
+      runSummary("run_next", "queued", { startedAt: 2, prompt: "队列里的下一条" }),
+    ];
+    installFetch({
+      "/api/state": () => ({ body: snapshot({ currentSessionId: "s1.jsonl", runs }) }),
+      "/api/sessions/": { body: sessionDetail("s1.jsonl", "第一条") },
+    });
+    await controller.boot();
+    await settle();
+    assert.strictEqual(controller.store.current.view.activeRunId, "run_first");
+
+    const global = FakeEventSource.all.find((source) => source.url.includes("/api/events"));
+    assert.ok(global);
+    runs = [
+      { ...runs[0]!, status: "done", elapsedMs: 5, tokens: 2 },
+      { ...runs[1]!, status: "running" },
+    ];
+    global.emit(
+      "run_done",
+      {
+        runId: "run_first",
+        event: { type: "run_done", status: "done", elapsedMs: 5, tokens: 2 },
+      },
+      1,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await settle();
+
+    const view = controller.store.current.view;
+    assert.strictEqual(view.activeRunId, "run_next", "上一条收尾后要自动接上下一条");
+    assert.strictEqual(view.status, "running");
+    assert.ok(
+      FakeEventSource.all.some((source) => source.url.includes("/api/runs/run_next/events")),
+      "下一条要开始订阅，用户才看得到它开跑后的正文",
+    );
+  });
+
+  it("发送在途时切会话：响应只回填原视图，不污染新会话", async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      requested.push({
+        url,
+        body: typeof init?.body === "string" ? init.body : "",
+        method: init?.method ?? "GET",
+      });
+      if (init?.method === "POST" && url.endsWith("/api/runs")) {
+        await gate;
+        return jsonResponse({ runId: "run_slow", sessionId: "new.jsonl" });
+      }
+      if (url.includes("/api/sessions/other.jsonl")) {
+        return jsonResponse(sessionDetail("other.jsonl", "别的会话"));
+      }
+      if (url.includes("/api/state")) {
+        return jsonResponse(snapshot({ currentSessionId: null }));
+      }
+      return jsonResponse({});
+    }) as typeof fetch;
+
+    await controller.boot();
+    await settle();
+    controller.actions.send("旧视图的那句话");
+    await settle();
+
+    // 请求还在路上就切到另一段会话
+    controller.actions.openSession("other.jsonl");
+    await settle();
+    release!();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
+
+    const view = controller.store.current.view;
+    assert.strictEqual(view.sessionId, "other.jsonl");
+    assert.deepStrictEqual(
+      view.items.map((item) => (item.kind === "user" ? item.text : item.kind)),
+      ["别的会话"],
+      "旧请求的结果不能按到新会话的时间线上",
+    );
+    assert.strictEqual(view.activeRunId, null, "也不能把新会话的流订阅成旧 Run");
   });
 
   it("新任务只换一块白板：不发请求，也不创建会话", async () => {
@@ -925,7 +1072,7 @@ describe("撤回已入队的消息", () => {
         return jsonResponse(snapshot());
       }
       if (url.includes("/cancel")) {
-        return new Response("{}", { status: 204 });
+        return new Response(null, { status: 204 });
       }
       return jsonResponse({});
     }) as typeof fetch;
