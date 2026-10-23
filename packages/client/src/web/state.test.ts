@@ -572,6 +572,20 @@ describe("乐观插入与快照", () => {
       !users.some((item) => item.kind === "user" && item.runId === "run_other_root"),
       "同名会话在别的工作区：排队气泡不能串根",
     );
+
+    // 真正开跑后服务端会发回同一条用户消息：占位气泡必须让位，不能留两份
+    const actual = userMessage("完整的那句排队提问", 2000);
+    feed(state.view, "run_q", [{ type: "message_start", message: actual }]);
+    const afterStart = itemsOfKind(state.view, "user");
+    assert.strictEqual(afterStart.length, 2);
+    assert.deepStrictEqual(
+      afterStart.map((item) => (item.kind === "user" ? item.id : "")),
+      [messageId(userMessage("已经执行过的")), messageId(actual)],
+    );
+    assert.ok(
+      afterStart.every((item) => item.kind !== "user" || item.queued === false),
+      "开跑后的气泡是实心",
+    );
   });
 
   it("run_state running 只把对应的空心气泡变实心；cancelled 的排队气泡保持不变", () => {

@@ -696,9 +696,18 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         return;
       }
       if (event.message.role === "user") {
+        const id = messageId(event.message);
+        // 排队气泡可能是切回会话时从 RunSummary.prompt 重建的（id 为
+        // `q:<runId>`）。真正开跑后服务端会发回同一条用户消息；按 runId
+        // 摘掉占位气泡，否则同一句话会在时间线上留两份。
+        for (const item of [...view.items]) {
+          if (item.kind === "user" && item.runId === runId && item.id !== id) {
+            removeItem(view, item.id);
+          }
+        }
         upsertItem(view, {
           kind: "user",
-          id: messageId(event.message),
+          id,
           text: textOf(event.message),
           queued: false,
           locked: true,
