@@ -2,7 +2,7 @@
  * 侧栏：树形导航，不随执行过程重排。
  *
  * 结构来自多工作区方案（docs/client-multi-workspace.md §5）：
- * **工作区（根，纯分组标题）→ 工作区名 → 会话 → Run 叶子**，层级靠缩进
+ * **工作区（根，纯分组标题）→ 工作区名 → 会话，层级靠缩进
  * 表达，不用竖线画树干。两条交互硬要求（视觉交接稿 §4）：
  * - 行操作默认不占位：`+`（在这段会话接着写）与 `···`（行菜单）只在
  *   hover 该行时出现——常驻按钮会吃掉近 1/3 行宽；
@@ -26,9 +26,9 @@
 import { useState } from "react";
 import { workspaceGroups, type ClientState, type WorkspaceGroup } from "../state";
 import { useActions, useClient } from "../store";
-import { formatDuration, formatSessionTime, statusMeta } from "../format";
+import { formatSessionTime } from "../format";
 import type { RunSummary, SessionSummary } from "../../shared/types";
-import { Icon, StatusRing } from "./Icon";
+import { Icon } from "./Icon";
 
 /** 行菜单的一项：今天只放后端真的支持的动作 */
 type MenuItem = { label: string; danger?: boolean; onPick: () => void };
@@ -255,63 +255,6 @@ function SessionNode({
             },
           ]}
         />
-      </span>
-      {group.runs.length > 0 ? (
-        <div className="tree-kids">
-          {group.runs.map((run) => (
-            <RunNode key={run.runId} run={run} root={root} state={state} />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RunNode({
-  run,
-  root,
-  state,
-}: {
-  run: RunSummary;
-  root: string;
-  state: ClientState;
-}): React.ReactElement {
-  const actions = useActions();
-  const active = state.view.activeRunId === run.runId;
-  const meta = statusMeta(run.status);
-  const elapsed =
-    run.elapsedMs === null
-      ? run.status === "queued"
-        ? "排队中"
-        : formatDuration(Date.now() - run.startedAt)
-      : formatDuration(run.elapsedMs);
-  const busy = run.status === "running" || run.status === "blocked" || run.status === "queued";
-  const items: MenuItem[] = busy
-    ? [{ label: "取消这个任务", danger: true, onPick: () => void actions.cancelRun(run.runId) }]
-    : [];
-
-  return (
-    <div className={`tree-row lv-run${active ? " is-active" : ""}`}>
-      <button
-        className="tree-main"
-        title={`${run.title}（${meta.label}）`}
-        onClick={() => actions.openRun(run.runId)}
-      >
-        <StatusRing phase={run.status} />
-        <span className="tree-label">{run.title}</span>
-        <span className="tree-meta">{elapsed}</span>
-      </button>
-      {/* 行操作 hover 才出现（§4）：+ 接着写这段会话，··· 是行菜单 */}
-      <span className="row-acts">
-        <button
-          className="row-act"
-          title="在这段会话接着写"
-          aria-label="在这段会话接着写"
-          onClick={() => void actions.continueSession(run.sessionId, root)}
-        >
-          <Icon name="plus" size={12} />
-        </button>
-        {items.length > 0 ? <RowMenu items={items} /> : null}
       </span>
     </div>
   );
