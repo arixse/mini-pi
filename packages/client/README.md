@@ -50,9 +50,12 @@ serve 的默认当前目录不在此列：它根本不会被开成工作区，�
 「关闭工作区」会把它从列表里摘掉。记忆文件与 `auth.json` / `settings.json`
 同目录，找得到、删得掉；删掉就等于"回到首次启动"。
 
-Electron 窗口的三个性质（都是断言钉住的）：**关窗即退出**（服务活在主进程
-里，不收掉下次启动直接 EADDRINUSE）、**单实例**（再敲一次只是把已有窗口叫到
-前台）、**服务与 `serve` 同源**（都走 `src/server/app.ts` 的 `bootAppServer`）。
+Electron 窗口的四个性质（都是断言钉住的）：**关窗收进托盘**（服务继续跑，
+一次误点不会把跑了一半的任务连服务一起杀掉）、**托盘可叫回也可真退出**
+（左键 / 「显示主窗口」/「退出 mini-pi」，退出前先收服务）、**单实例**
+（再敲一次只是把已有窗口叫到前台）、**服务与 `serve` 同源**（都走
+`src/server/app.ts` 的 `bootAppServer`）。托盘图标缺失时退回"关窗即退出"
+——宁可退出，也不把窗口藏进一个不存在、叫不回来的托盘。
 
 Electron 是开发依赖（上百 MB 二进制），npm 包里不带它。没装或没跑过
 `build:electron` 时 `desktop` 会明说并自动退回浏览器壳——因此"装了但二进制
@@ -93,6 +96,8 @@ Electron 是开发依赖（上百 MB 二进制），npm 包里不带它。没装
 | `win.target`          | `nsis` + `portable` | 装到哪儿要让用户看见（`oneClick: false`）                  |
 | `mac.target`          | `dmg` + `zip`       | zip 是"不用过 Apple 那道门"的分发形态                      |
 | `asar`                | `true`                | 前端产物在 asar 里也能被 `findWebRoot()` 找到              |
+| `artifactName`        | `mini-pi-${version}-${os}-${arch}.${ext}` | 自动更新按文件名找包，默认名在不同平台会漂 |
+| 签名 / 公证           | `CSC_*` / `APPLE_*`   | 配了就走真签名；没配只警告，仍能出包                        |
 
 打包前先构建两步（三个脚本顺序都是 `build:web →  build:electron →
 electron-builder`），顺序反了不会报错、只会把旧产物打进包里。
@@ -101,8 +106,20 @@ electron-builder`），顺序反了不会报错、只会把旧产物打进包里
 国内通常不可达，设 `ELECTRON_BUILDER_BINARIES_MIRROR` 走镜像（Electron
 二进制本身另有 `ELECTRON_MIRROR`，两者是两回事）。
 
-**不做签名**：没有配 `CSC_*` 环境变量时，Windows 会弹 SmartScreen、macOS
-会提示"来自身份不明的开发者"。这是刻意留的口子——签名需要自己的证书。
+**签名是可配的，不是写死不做**：Windows 传 `CSC_LINK` / `CSC_KEY_PASSWORD`
+（时间戳由配置打开），macOS 传 `CSC_LINK` / `CSC_KEY_PASSWORD` 以及
+`APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` 走公证
+（`build/entitlements.mac.plist` 是 hardened runtime 需要的那几条）。没配
+证书时构建照常成功、只是 SmartScreen / Gatekeeper 会提示——这是发布环境
+的事，不该让本地开发被卡住。
+
+**自动更新**（不引 `electron-updater`）：设置 `MINIPI_UPDATE_FEED` 为
+`latest.yml` 的 http(s) 地址后，应用启动查一次、之后每 6 小时一次。
+有更新就弹框问，同意后下载到临时目录、校验 `sha512`、再交给系统安装器；
+校验或下载失败会打开下载页留一条手动路径。元数据与安装包都由
+electron-builder 产出，发布时**把 `latest.yml` / `latest-mac.yml` 和安装包
+放在同一目录**（`.github/workflows/desktop.yml` 已把 `*.yml` 一并上传）。
+没有配置这个变量就不发任何网络请求。
 
 **只能在本平台打本平台的包**：electron-builder 在 Windows 上收到 `--mac`
 会直接报 `Build for macOS is supported only on macOS` 并退出。要同时拿到
@@ -114,7 +131,7 @@ macOS 两个 runner 上各打各的，产物挂在工作流运行记录里（30 
 ```
 src/server/     App Server：Express 路由 + 自写 SSE 帧；workspaceMemory.ts 记一组工作区与活动根（下次启动恢复）
 src/web/        前端：React + Vite，界面照 docs/client-visual-handoff.md 的画布实现
-src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / workspace.ts 选工作区 / desktop.ts 命令
+src/electron/   桌面壳（M5）：api.ts 窄接口 / main.ts 主进程 / workspace.ts 选工作区 / update.ts 更新检查 / desktop.ts 命令
 src/shared/     线上契约（只有类型）：服务端产什么、前端消费什么
 vite.config.ts  前端构建：src/web → dist/web
 ```
@@ -140,6 +157,11 @@ vite.config.ts  前端构建：src/web → dist/web
 **没有令牌门禁**——前提是"这个端口只有本机能碰到"，绑到 `0.0.0.0` 等于把
 agent 交出去。密钥只写不读：保存后前端连打码的明文都拿不到。
 
+工具输出里点路径走只读的 `GET /api/file`，权限边界与内核的 read_file 同一套：
+路径必须落在工作区内（`resolveInsideWorkspace`）、凭据文件拒读、目录拒读、
+超过 256KB 截断、含 NUL 的二进制只回元信息不回内容；带 `runId` 时读的是
+那次执行的隔离 worktree，而不是基准工作区。
+
 ## 界面
 
 视觉基准是 Ardot 画布 `738920616583250`（十帧：上排五帧 Dark、下排五帧 Light，
@@ -158,6 +180,19 @@ agent 交出去。密钥只写不读：保存后前端连打码的明文都拿�
 （刷新/重连/重放不会叠出两份）、工具卡必须渲染参数、风险等级由内核算好前端只配色。
 运行中发送只入队：不切走当前 Run 的正文/审批流；当前 Run 收尾后自动接管
 队列里的下一条，排队消息切走再回来也能从 `RunSummary.prompt` 重建空心气泡。
+
+**工具输出**按语言做轻量高亮（`web/highlight.ts`：JSON / TS / JS / CSS /
+HTML / Python / Shell，超过 60KB 只高亮前一段、内容一字不少），并且把路径
+切成可点片段（`web/linkify.ts`）——点一下就在预览面板里读到那个文件，而不用
+复制路径再去找。判定刻意保守：URL、`--flag=value`、`12:30` 不会被误标。
+
+**变更面板**按「文件 → hunk → 行」三层渲染：文件与 hunk 都能单独折叠，
+一次改十几个文件时不至于在几百行里找；服务端传 `truncated` 时顶部有独立
+横幅（不藏在正文末尾），说明"看到的不是全部，但应用的是完整改动"。
+
+**时间线窗口化**（`web/virtual.ts`）：条目超过 80 条后只渲染视口附近的一段，
+上下用等高的占位块撑住滚动条；实测高度由 `ResizeObserver` 回填，贴底时自动
+跟随新输出。审批跳转时会临时全量渲染，保证那张卡真的在 DOM 里可以滚到。
 
 状态刻意**就地修改**（`state.ts`），再由 `store.ts` 的 `revision` 告诉 React
 "该重画了"：流式输出每秒几十条事件，每来一条克隆整棵时间线纯属浪费。
