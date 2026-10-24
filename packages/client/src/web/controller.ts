@@ -908,12 +908,31 @@ export class AppController {
    * 请求竞态用 key 守——否则连点两个路径时，先发的那条回来会把后点的
    * 内容盖掉（服务端读大文件可能慢得多）。
    */
-  private async openFile(path: string, runId?: string): Promise<void> {
+  private async openFile(path: string, runId?: string, line?: number): Promise<void> {
     const root = this.store.current.view.root ?? this.store.current.activeRoot;
     const key = `${root}\u0000${runId ?? ""}\u0000${path}`;
+    // 行号只接受正整数：路径里的 `:0`、`:-1` 与解析失败的都当作“没给”
+    const targetLine = typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null;
+    const current = this.store.current;
+    /**
+     * 同一个文件换一行：不再读一遍，只改定位。
+     *
+     * 工具输出里常连着几个 `src/a.ts:12` / `src/a.ts:40`，每次都把正文清空
+     * 重取会让面板闪一下，且滚动位置也丢；文件内容没变，没必要重读。
+     */
+    if (
+      current.file &&
+      current.ui.file?.path === path &&
+      current.ui.file.runId === (runId ?? null)
+    ) {
+      this.store.update((state) => {
+        state.ui.file = { path, runId: runId ?? null, line: targetLine };
+      });
+      return;
+    }
     this.fileKey = key;
     this.store.update((state) => {
-      state.ui.file = { path, runId: runId ?? null };
+      state.ui.file = { path, runId: runId ?? null, line: targetLine };
       state.file = null;
       state.fileError = null;
       state.fileLoading = true;
@@ -1354,7 +1373,7 @@ export class AppController {
       discardWorktree: (runId) => this.discardWorktree(runId),
       openDiff: (runId) => void this.openDiff(runId),
       closeDiff: () => this.closeDiff(),
-      openFile: (path, runId) => void this.openFile(path, runId),
+      openFile: (path, runId, line) => void this.openFile(path, runId, line),
       closeFile: () => this.closeFile(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),

@@ -78,7 +78,7 @@ export function LinkifiedText({
                 ? `预览 ${segment.path}`
                 : `预览 ${segment.path}（第 ${segment.line} 行）`
             }
-            onClick={() => actions.openFile(segment.path, runId)}
+            onClick={() => actions.openFile(segment.path, runId, segment.line ?? undefined)}
           >
             {segment.text}
           </button>

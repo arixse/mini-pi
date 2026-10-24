@@ -10,9 +10,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   highlight,
+  highlightLines,
   languageOfPath,
   languageOfTool,
   MAX_HIGHLIGHT_CHARS,
+  splitLines,
   type CodeToken,
 } from "./highlight";
 
@@ -159,5 +161,54 @@ describe("highlight", () => {
     const elapsed = Date.now() - started;
     assert.equal(text(tokens), code);
     assert.ok(elapsed < 2_000, `高亮 60KB 花了 ${elapsed}ms，说明又回到 O(n²) 了`);
+  });
+});
+
+describe("splitLines / highlightLines", () => {
+  it("按行切开；末尾换行不多算一行", () => {
+    assert.deepEqual(splitLines("a\nb\n"), ["a", "b"]);
+    assert.deepEqual(splitLines("a\nb"), ["a", "b"]);
+    assert.deepEqual(splitLines("a\n\n"), ["a", ""], "空行要保留，只丢掉末尾换行造成的那一行");
+    assert.deepEqual(splitLines(""), []);
+  });
+
+  it("CRLF 按一个换行处理，行尾不留 \\r", () => {
+    assert.deepEqual(splitLines("a\r\nb\r\n"), ["a", "b"]);
+    assert.deepEqual(splitLines("a\rb"), ["a", "b"]);
+  });
+
+  it("行号从 1 起，切法与 splitLines 完全一致", () => {
+    const code = "const a = 1;\n// c\n\nconst b = 2;\n";
+    const lines = highlightLines(code, "ts");
+    assert.deepEqual(lines.map((line) => line.number), [1, 2, 3, 4]);
+    assert.equal(lines.length, splitLines(code).length);
+    assert.equal(
+      lines.map((line) => text(line.tokens)).join("\n"),
+      splitLines(code).join("\n"),
+      "带行号渲染不能改动原文",
+    );
+  });
+
+  /** 逐行重新高亮会让第二行起不再是注释——颜色从这里开始错位 */
+  it("跨行的块注释仍然是注释", () => {
+    const lines = highlightLines("/* a\nb */\nconst x = 1;", "ts");
+    assert.deepEqual(lines[0]?.tokens.map((token) => token.kind), ["comment"]);
+    assert.deepEqual(lines[1]?.tokens.map((token) => token.kind), ["comment"]);
+    assert.ok(lines[2]?.tokens.some((token) => token.kind === "keyword"));
+  });
+
+  it("字符串被换行拆开时，两边都还是字符串", () => {
+    const lines = highlightLines('const s = "a\nb";\n', "ts");
+    assert.equal(lines.length, 2);
+    assert.ok(lines[0]?.tokens.some((token) => token.kind === "string"));
+    assert.ok(lines[1]?.tokens.some((token) => token.kind === "string"));
+    assert.equal(lines.map((line) => text(line.tokens)).join("\n"), 'const s = "a\nb";');
+  });
+
+  it("空文件没有行号；只有一个换行时是一行空行", () => {
+    assert.deepEqual(highlightLines("", "ts"), []);
+    const lines = highlightLines("\n", "text");
+    assert.deepEqual(lines.map((line) => line.number), [1]);
+    assert.deepEqual(lines[0]?.tokens, []);
   });
 });

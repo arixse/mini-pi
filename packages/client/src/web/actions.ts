@@ -50,8 +50,9 @@ export type Actions = {
    *
    * `runId` 用来定位**那次执行**的目录：隔离任务改的是 worktree，
    * 不传就会去基准工作区找，找到的是另一份内容（或根本不存在）。
+   * `line` 来自路径里的 `:12`：文件打开后滚到那一行并高亮，省掉再找一遍。
    */
-  openFile: (path: string, runId?: string) => void;
+  openFile: (path: string, runId?: string, line?: number) => void;
   closeFile: () => void;
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;

@@ -1370,13 +1370,81 @@ describe("事件流自愈与文件预览", () => {
     await settle();
 
     const state = controller.store.current;
-    assert.deepEqual(state.ui.file, { path: "src/a.ts", runId: "run_1" });
+    assert.deepEqual(state.ui.file, { path: "src/a.ts", runId: "run_1", line: null });
     assert.equal(state.file?.content, "export const a = 1;");
     assert.equal(state.fileLoading, false);
     const call = requested.find((entry) => entry.url.includes("/api/file"));
     assert.ok(call?.url.includes("path=src%2Fa.ts"), call?.url ?? "");
     assert.ok(call?.url.includes("runId=run_1"), "隔离任务必须读 worktree，而不是基准工作区");
     assert.ok(call?.url.includes("root=D%3A%2Fws"), "跨工作区的文件名会撞，根也要带上");
+  });
+
+  it("openFile 带行号：定位进 store，请求仍只按路径读", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": {
+        body: { path: "src/a.ts", content: "a\nb\nc\n", size: 6, truncated: false, binary: false },
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("src/a.ts", undefined, 12);
+    await settle();
+
+    assert.deepEqual(controller.store.current.ui.file, {
+      path: "src/a.ts",
+      runId: null,
+      line: 12,
+    });
+    assert.equal(controller.store.current.file?.content, "a\nb\nc\n");
+  });
+
+  /**
+   * 工具输出里常连着好几个 `src/a.ts:12` / `src/a.ts:40`。每次都重读会让
+   * 面板闪一下、滚动位置也丢；文件没变就只改定位。
+   */
+  it("同一文件再点另一行：不重读，只改定位", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": {
+        body: { path: "src/a.ts", content: "a\nb\nc\n", size: 6, truncated: false, binary: false },
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("src/a.ts", undefined, 1);
+    await settle();
+    const reads = requested.filter((entry) => entry.url.includes("/api/file")).length;
+
+    controller.actions.openFile("src/a.ts", undefined, 3);
+    await settle();
+
+    assert.equal(controller.store.current.ui.file?.line, 3);
+    assert.equal(controller.store.current.file?.content, "a\nb\nc\n", "正文不该被清空重取");
+    assert.equal(
+      requested.filter((entry) => entry.url.includes("/api/file")).length,
+      reads,
+      "内容没变就不该再请求",
+    );
+  });
+
+  it("行号只收正整数：0 / 负数 / 小数当作没给", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": {
+        body: { path: "a.ts", content: "x", size: 1, truncated: false, binary: false },
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    for (const line of [0, -3, 2.5]) {
+      controller.actions.openFile("a.ts", undefined, line);
+      await settle();
+      assert.strictEqual(controller.store.current.ui.file?.line, null, `line=${line}`);
+    }
   });
 
   it("openFile 失败：错误留在面板里，而不是弹一条转瞬即逝的提示", async () => {

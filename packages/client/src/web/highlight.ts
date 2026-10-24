@@ -302,6 +302,71 @@ export function highlight(code: string, language: CodeLanguage): CodeToken[] {
   return tokens;
 }
 
+/** 统一换行：预览是只读展示，CRLF 里的 `\r` 不该在行尾留一个不可见字符 */
+function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * 按行切开，行号就是下标 + 1。
+ *
+ * 末尾换行**不额外算一行**：`"a\n"` 是一行，而不是“一行正文 + 一行空白”。
+ * 否则每个以换行结尾的文件都会多出一个空号，行号与编辑器对不上。
+ */
+export function splitLines(text: string): string[] {
+  const normalized = normalizeNewlines(text);
+  if (normalized.length === 0) {
+    return [];
+  }
+  const lines = normalized.split("\n");
+  if (normalized.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
+export type HighlightedLine = {
+  /** 1 起的行号（与编辑器一致） */
+  number: number;
+  tokens: CodeToken[];
+};
+
+/**
+ * 高亮后按行切分：行号与颜色都要，且**不改变原文**。
+ *
+ * 不能“每行单独 highlight”：块注释、模板串会跨行，逐行切开后第二行起就
+ * 不再是注释/字符串，颜色会跳。所以先把整段点亮，再按 token 内的换行拆到
+ * 各行；末尾换行的处理与 {@link splitLines} 一致。
+ */
+export function highlightLines(code: string, language: CodeLanguage): HighlightedLine[] {
+  const normalized = normalizeNewlines(code);
+  if (normalized.length === 0) {
+    return [];
+  }
+  const lines: HighlightedLine[] = [];
+  let tokens: CodeToken[] = [];
+  let number = 1;
+  for (const token of highlight(normalized, language)) {
+    const parts = token.text.split("\n");
+    for (let index = 0; index < parts.length; index += 1) {
+      if (index > 0) {
+        lines.push({ number, tokens });
+        number += 1;
+        tokens = [];
+      }
+      const part = parts[index] ?? "";
+      if (part.length > 0) {
+        tokens.push({ text: part, kind: token.kind });
+      }
+    }
+  }
+  lines.push({ number, tokens });
+  if (normalized.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
 /*
  * 粘性正则（`y`）而不是"切出剩余串再从头匹配"。
  *

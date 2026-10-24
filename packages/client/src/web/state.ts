@@ -212,8 +212,9 @@ export type ClientState = {
      *
      * 与 `diffRunId` 一样只放"看哪一份"，数据在下面 `file` 里：
      * 请求竞态由动作层守，组件不做二次判断。
+     * `line` 来自路径里的 `:12`：只说"看哪个文件的哪一行"，读取仍按路径。
      */
-    file: { path: string; runId: string | null } | null;
+    file: { path: string; runId: string | null; line: number | null } | null;
     /**
      * 审批徽标跳转：时间线看到这一条后把最早挂起的审批卡滚进视野。
      *

@@ -2132,6 +2132,44 @@ svg.ic {
   word-break: break-word;
 }
 
+/*
+ * 带行号的预览：行号固定一列、正文占满剩余宽度。
+ * 行号 `user-select: none`——复制正文时不该把一列数字一起带走。
+ */
+.file-body.code-lines {
+  padding: 8px 0;
+  white-space: normal;
+}
+
+.code-line {
+  display: flex;
+  gap: 12px;
+  min-height: 1.65em;
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 路径里的 `:12` 点进来时，那一行要一眼看得见 */
+.code-line.is-target {
+  background: var(--Client-accent-soft);
+}
+
+.code-no {
+  flex: none;
+  min-width: 3ch;
+  text-align: right;
+  color: var(--Client-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.code-text {
+  flex: 1;
+  font: inherit;
+  color: inherit;
+}
+
 .file-meta {
   flex: none;
   font-size: 11.5px;

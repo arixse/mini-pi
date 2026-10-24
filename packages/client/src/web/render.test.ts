@@ -20,6 +20,7 @@ import { Composer } from "./components/Composer";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
+import { FilePreview } from "./components/FilePreview";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import type { ComposerHandle } from "./controller";
@@ -379,6 +380,72 @@ describe("变更面板", () => {
       ),
     );
     assert.strictEqual(html, "");
+  });
+});
+
+describe("文件预览", () => {
+  function fileStore(
+    options: { path?: string; content?: string; line?: number | null; binary?: boolean } = {},
+  ): ClientStore {
+    const store = new ClientStore();
+    const path = options.path ?? "src/a.ts";
+    const content = options.content ?? "const a = 1;\nconst b = 2;\n";
+    store.update((state) => {
+      state.ui.file = { path, runId: null, line: options.line ?? null };
+      state.file = {
+        path,
+        content,
+        size: Buffer.byteLength(content),
+        truncated: false,
+        binary: options.binary ?? false,
+      };
+    });
+    return store;
+  }
+
+  function render(store: ClientStore): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(FilePreview),
+      ),
+    );
+  }
+
+  it("正文带行号：每行一个 code-no，从 1 起（不是一列装饰）", () => {
+    const html = render(fileStore());
+    assert.equal((html.match(/class="code-line"/g) ?? []).length, 2);
+    assert.match(html, /class="code-no"[^>]*>1</);
+    assert.match(html, /class="code-no"[^>]*>2</);
+    assert.match(html, /data-line="1"[^>]*class="code-line"/);
+    assert.match(html, /data-line="2"[^>]*class="code-line"/);
+  });
+
+  it("从 `path:12` 进来：目标行被标成 is-target，且只高亮一行", () => {
+    const html = render(fileStore({ line: 2 }));
+    assert.match(html, /data-line="2"[^>]*class="code-line is-target"/);
+    assert.equal((html.match(/is-target/g) ?? []).length, 1);
+    assert.match(html, /第 2 行/, "头部说明定位到了哪一行");
+  });
+
+  it("目标行越界：不假装定位成功，给出提示", () => {
+    const html = render(fileStore({ line: 99 }));
+    assert.match(html, /第 99 行不在预览范围内/);
+    assert.doesNotMatch(html, /is-target/);
+  });
+
+  it("二进制文件不给行号，只说明看不了", () => {
+    const html = render(fileStore({ content: "", binary: true }));
+    assert.doesNotMatch(html, /code-line/);
+    assert.match(html, /二进制文件/);
+  });
+
+  /** 文本文件里仍要能点路径：加了行号不等于退化成一块死文本 */
+  it("文本文件里的路径仍可点，并带上行号去预览", () => {
+    const html = render(fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" }));
+    assert.match(html, /class="path-link"/);
+    assert.match(html, /title="预览 src\/b\.ts（第 12 行）"/);
   });
 });
 
