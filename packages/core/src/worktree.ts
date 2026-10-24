@@ -81,6 +81,13 @@ export type WorkspaceDiff = {
   /** 变更文件（`git status --porcelain` 的路径） */
   files: string[];
   isolated: boolean;
+  /**
+   * `patch` 是否被 {@link MAX_DIFF_CHARS} 截断。
+   *
+   * 单独给一个布尔值而不是只把说明塞进 patch：界面要能显式标注"这份改动
+   * 不完整"，否则用户会以为看到的行数就是全部，然后据此决定合并。
+   */
+  truncated: boolean;
 };
 
 export type ReleaseResult = {
@@ -284,15 +291,16 @@ export class WorkspaceManager {
     );
 
     const raw = patch.status === 0 ? patch.stdout : "";
-    const truncated =
-      raw.length > MAX_DIFF_CHARS
-        ? `${raw.slice(0, MAX_DIFF_CHARS)}\n\n… diff 过长已截断，完整内容见 ${workspace.root}\n`
-        : raw;
+    const over = raw.length > MAX_DIFF_CHARS;
+    const truncated = over
+      ? `${raw.slice(0, MAX_DIFF_CHARS)}\n\n… diff 过长已截断，完整内容见 ${workspace.root}\n`
+      : raw;
 
     return {
       patch: truncated,
       files: parseStatusFiles(status.status === 0 ? status.stdout : ""),
       isolated: true,
+      truncated: over,
     };
   }
 

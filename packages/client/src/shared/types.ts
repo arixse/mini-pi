@@ -305,6 +305,24 @@ export type RunDiff = {
 
 export type DirEntry = { name: string; path: string };
 
+/**
+ * 工作区里一个文件的只读内容（工具输出里点路径时打开）。
+ *
+ * 这是**只读预览**，不是文件浏览器：没有写入、没有目录遍历，路径必须落在
+ * 某个已打开的工作区内（服务端用 `resolveInsideWorkspace` 做真实路径校验）。
+ */
+export type FileContent = {
+  /** 相对工作区根的路径（输入是绝对路径时服务端也会换回相对形式） */
+  path: string;
+  content: string;
+  /** 文件字节数（不是正文字符数：截断时它仍回答"原文件多大"） */
+  size: number;
+  /** 超过读取上限：`content` 只是开头一段 */
+  truncated: boolean;
+  /** 含 NUL 字节，按二进制处理，不返回正文 */
+  binary: boolean;
+};
+
 export type DirListing = {
   path: string;
   parent: string | null;

@@ -1933,6 +1933,189 @@ describe("App Server · 安全边界", () => {
   });
 });
 
+/**
+ * 工具输出里点路径（只读文件预览）。
+ *
+ * 这个接口是**新的读权限**，因此用例的重点不是"能读到文件"，而是
+ * "读不到的边界都在"：越界、凭据、目录、二进制、超大文件。
+ */
+describe("App Server · 文件预览", () => {
+  const BIG = 256 * 1024;
+
+  function fileUrl(path: string, extra: { root?: string; runId?: string } = {}): string {
+    const params = new URLSearchParams({ path });
+    if (extra.root) {
+      params.set("root", extra.root);
+    }
+    if (extra.runId) {
+      params.set("runId", extra.runId);
+    }
+    return `/api/file?${params.toString()}`;
+  }
+
+  it("读工作区里的文本：原样返回内容，并报出真实字节数", async () => {
+    const server = await startTestServer({
+      workspaceFiles: { "note.txt": "第一行\n第二行\n" },
+    });
+    try {
+      const file = await server.get<{
+        path: string;
+        content: string;
+        size: number;
+        truncated: boolean;
+        binary: boolean;
+      }>(fileUrl("note.txt"));
+      assert.deepStrictEqual(file, {
+        path: "note.txt",
+        content: "第一行\n第二行\n",
+        size: Buffer.byteLength("第一行\n第二行\n"),
+        truncated: false,
+        binary: false,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  /**
+   * 越界必须 400 且**不返回任何内容**：这类请求是攻击面，不是"用户输错了"。
+   * 只把状态码做成 400 却在 body 里带上文件内容，等于没有拦。
+   */
+  it("越界路径 400，且响应里没有文件内容", async () => {
+    const server = await startTestServer({ workspaceFiles: { "note.txt": "inside" } });
+    try {
+      for (const bad of ["../outside.txt", "..\\outside.txt", "a/../../outside.txt"]) {
+        const response = await server.raw(fileUrl(bad));
+        assert.strictEqual(response.status, 400, bad);
+        const body = (await response.json()) as { error: string; content?: string };
+        assert.strictEqual(body.content, undefined, "错误响应里不许夹带内容");
+        assert.match(body.error, /Path escapes workspace|越界|工作区/);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("凭据文件 400；`.env.example` 这类样板放行（它有扩展名，不是真凭据）", async () => {
+    const server = await startTestServer({
+      workspaceFiles: { ".env": "SECRET=1", ".env.example": "SECRET=" },
+    });
+    try {
+      const blocked = await server.raw(fileUrl(".env"));
+      assert.strictEqual(blocked.status, 400);
+      assert.match(((await blocked.json()) as { error: string }).error, /凭据/);
+
+      const allowed = await server.get<{ content: string }>(fileUrl(".env.example"));
+      assert.strictEqual(allowed.content, "SECRET=");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("不存在 404、目录 400，且报的是哪个路径（不能只说\"失败\"）", async () => {
+    const server = await startTestServer({ workspaceFiles: { "note.txt": "x" } });
+    try {
+      const missing = await server.raw(fileUrl("nope.txt"));
+      assert.strictEqual(missing.status, 404);
+      assert.match(((await missing.json()) as { error: string }).error, /nope\.txt/);
+
+      mkdirSync(join(server.workspace, "dir"));
+      const directory = await server.raw(fileUrl("dir"));
+      assert.strictEqual(directory.status, 400);
+      assert.match(((await directory.json()) as { error: string }).error, /不是一个文件/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("二进制：`content` 留空但 `binary` 为真（别把 NUL 拼进 pre 里）", async () => {
+    const server = await startTestServer();
+    try {
+      writeFileSync(join(server.workspace, "blob.bin"), Buffer.from([0x41, 0x00, 0x42]));
+      const file = await server.get<{ content: string; binary: boolean; size: number }>(
+        fileUrl("blob.bin"),
+      );
+      assert.strictEqual(file.binary, true);
+      assert.strictEqual(file.content, "");
+      assert.strictEqual(file.size, 3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  /**
+   * 上限存在的理由：这个接口会被一次点击触发，读进内存再序列化成 JSON。
+   * 一个 2GB 的日志不该让浏览器假死——截断比"尽力而为"更诚实。
+   */
+  it("超过 256KB 截断：`truncated` 为真，`size` 仍是原大小", async () => {
+    const server = await startTestServer();
+    try {
+      const content = "a".repeat(BIG + 1024);
+      writeFileSync(join(server.workspace, "big.log"), content);
+      const file = await server.get<{
+        content: string;
+        size: number;
+        truncated: boolean;
+      }>(fileUrl("big.log"));
+      assert.strictEqual(file.truncated, true);
+      assert.strictEqual(file.content.length, BIG);
+      assert.strictEqual(file.size, content.length);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("缺 path 400；未知 runId / 未打开的 root 404", async () => {
+    const server = await startTestServer({ workspaceFiles: { "note.txt": "x" } });
+    try {
+      const noPath = await server.raw("/api/file");
+      assert.strictEqual(noPath.status, 400);
+      assert.match(((await noPath.json()) as { error: string }).error, /path/);
+
+      assert.strictEqual((await server.raw(fileUrl("note.txt", { runId: "run_nope" }))).status, 404);
+      assert.strictEqual(
+        (await server.raw(fileUrl("note.txt", { root: join(server.workspace, "no-such") }))).status,
+        404,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  /**
+   * 隔离执行里点路径，读到的是**那次执行真正改动过的那份**。
+   * 若退化成基准工作区，用户会看到一个文件"没改过"——而 diff 面板明明有改动。
+   */
+  const withGit = gitAvailable() ? { skip: false } : { skip: "环境里没有 git" };
+  it("带 runId 时读隔离 worktree：基准工作区里还没这个文件", withGit, async () => {
+    const server = await startTestServer({
+      isolate: true,
+      initGit: true,
+      tier: "full-access",
+      responses: [
+        toolCallResponse("write_file", { path: "only-here.txt", content: "隔离里的内容" }),
+        textResponse("写好了"),
+      ],
+    });
+    try {
+      const created = await server.post<{ runId: string }>("/api/runs", { prompt: "写文件" });
+      await server.stream(created.runId);
+
+      const file = await server.get<{ content: string }>(
+        fileUrl("only-here.txt", { runId: created.runId }),
+      );
+      assert.strictEqual(file.content, "隔离里的内容");
+      assert.strictEqual(
+        (await server.raw(fileUrl("only-here.txt"))).status,
+        404,
+        "没合并之前基准工作区里不该有它",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 /** 隔离靠真 git：环境里没有就跳过相关用例，而不是让它们红得莫名其妙 */
 function gitAvailable(): boolean {
   const probe = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true });

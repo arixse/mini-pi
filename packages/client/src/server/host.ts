@@ -14,8 +14,8 @@
  * 这个类只负责把它们的入参从"进程全局状态"翻译成"请求参数"。
  */
 
-import { basename, dirname, join, resolve } from "node:path";
-import { readdirSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createModelFromProvider, type LlmModel } from "@minipi/core/agent/model";
 import { createToolRegistry, READ_ONLY_TOOLS } from "@minipi/core/agent/tools/registry";
 import type { ToolRegistry } from "@minipi/core/agent/tools/registry";
@@ -23,7 +23,11 @@ import {
   SubAgentRuntimeProvider,
   createSubAgentTool,
 } from "@minipi/core/agent/subagentTool";
-import { workspaceFileExists } from "@minipi/core/agent/tools/workspace";
+import {
+  assertNotCredentialFile,
+  resolveInsideWorkspace,
+  workspaceFileExists,
+} from "@minipi/core/agent/tools/workspace";
 import { SkillLoader } from "@minipi/core/agent/skillLoader";
 import { SessionManager } from "@minipi/core/agent/sessionManager";
 import { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
@@ -60,6 +64,7 @@ import {
   type ApprovalAnswer,
   type ApprovalRequest,
   type DirListing,
+  type FileContent,
   type HostState,
   type ProviderView,
   type RunDiff,
@@ -136,6 +141,14 @@ type SessionContext = {
 
 /** 侧栏最多显示多少个 Run：再多的历史属于会话列表，不属于"进行中" */
 const MAX_RUNS = 50;
+
+/**
+ * 只读文件预览的上限：再大就不是"看一眼"，而是把服务端当编辑器。
+ *
+ * 超过时仍返回开头一段（并标 `truncated`），而不是直接拒绝——用户点开一个
+ * 大文件时想知道的通常就是"它是什么"。
+ */
+const MAX_FILE_PREVIEW_BYTES = 256 * 1024;
 
 export class WorkspaceHost {
   readonly workspaceRoot: string;
@@ -628,6 +641,47 @@ export class WorkspaceHost {
       compactedCount: summary?.compactedCount ?? 0,
       tokens: context.store.estimateContextTokens(),
       turns: countTurns(context.messages),
+    };
+  }
+
+  /**
+   * 只读预览一个工作区文件（工具输出里点路径）。
+   *
+   * 两处边界：
+   * - 路径必须落在**这次执行真正干活的目录**里：传了 `runId` 就是隔离
+   *   worktree，否则是基准工作区。否则"点了工具输出里的路径"会看到另一份内容；
+   * - 凭据类文件与服务端自己的读取上限复用内核同一套判定，不在这里另写一份。
+   */
+  readFile(input: string, runId?: string): FileContent {
+    const base = runId ? this.record(runId).workspaceRoot || this.workspaceRoot : this.workspaceRoot;
+    let target: string;
+    try {
+      target = resolveInsideWorkspace(base, input);
+      assertNotCredentialFile(target, base);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new HttpError(400, message);
+    }
+    const stats = (() => {
+      try {
+        return statSync(target);
+      } catch {
+        throw new HttpError(404, `文件不存在：${input}`);
+      }
+    })();
+    if (!stats.isFile()) {
+      throw new HttpError(400, `不是一个文件：${input}`);
+    }
+    const buffer = readFileSync(target);
+    const binary = buffer.includes(0);
+    const truncated = buffer.length > MAX_FILE_PREVIEW_BYTES;
+    const shown = binary ? "" : buffer.subarray(0, MAX_FILE_PREVIEW_BYTES).toString("utf8");
+    return {
+      path: isAbsolute(input) ? relative(base, target) : input,
+      content: shown,
+      size: stats.size,
+      truncated,
+      binary,
     };
   }
 

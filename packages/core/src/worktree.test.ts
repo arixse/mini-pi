@@ -246,6 +246,7 @@ describe("WorkspaceManager（假命令出口）", () => {
     assert.ok(!(diff?.patch.includes(huge) ?? true), "超长 diff 必须被截断");
     assert.match(diff?.patch ?? "", /已截断/);
     assert.match(diff?.patch ?? "", /完整内容见/);
+    assert.strictEqual(diff?.truncated, true, "截断要能被界面单独看见，而不是只能读正文尾巴");
   });
 
   it("merge：没有改动时是空操作，不下 apply", () => {

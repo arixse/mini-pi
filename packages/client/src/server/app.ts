@@ -815,6 +815,20 @@ export class AppServer {
       res.json(host ? host.listDir(target) : listDirectory(target, homedir()));
     }));
 
+    // 只读文件预览：工具输出与变更面板里点路径时打开。
+    //
+    // 带 `runId` 就读**这次执行真正干活的那个目录**（隔离时是 worktree）：
+    // 否则用户点了工具栏里的路径，看到的却是基准工作区里的另一份内容。
+    // 路径逃逸、凭据文件、超大/二进制都在宿主里统一处理，路由不做第二套判定。
+    app.get("/api/file", wrap((req, res) => {
+      const path = requireString(queryParam(req.query.path), "path");
+      const runId = queryParam(req.query.runId);
+      const host = runId
+        ? this.hostForRun(runId)
+        : this.hostForRoot(queryParam(req.query.root));
+      res.json(host.readFile(path, runId || undefined));
+    }));
+
     // 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务
     app.post("/api/workspace", wrap(async (req, res) => {
       const root = requireString(asRecord(req.body).path, "path");
