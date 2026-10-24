@@ -1,28 +1,37 @@
 /**
- * Electron 主进程：起服务 → 开窗口 → 关窗即退出。
+ * Electron 主进程：起服务 → 开窗口 → 关窗收进托盘。
  *
- * 关键取舍：**Electron 只承担"窗口"这一件事**。业务（模型、会话、审批、
- * 事件流）全部住在 App Server 里，主进程只做一次 `loadURL`。于是：
+ * 关键取舍：**Electron 只承担"窗口与托盘"这一件事**。业务（模型、会话、
+ * 审批、事件流）全部住在 App Server 里，主进程只做一次 `loadURL`。于是：
  * - Web 客户端一行都不用改：它面对的还是同一套 HTTP + SSE 契约；
  * - 内核一行都不用改：Electron 是第四个客户端，与 CLI / `exec` / 浏览器并列；
  * - 坏了只坏窗口：服务在哪个进程里，就由哪个进程的生命周期决定。
  *
  * 那为什么还要真上 Electron，而不是用浏览器 `--app=` 开个无地址栏窗口？
- * - **关窗即退出**：服务活在主进程里，窗口一关必须一起收掉，否则端口一直
- *   被占着，下次启动直接 EADDRINUSE。浏览器壳没有这层关系——它关了，
- *   serve 进程还留在那儿，谁也没告诉它该退了。
+ * - **后台常驻**：关窗只是隐藏，长任务继续跑；托盘里能叫回来或真正退出。
+ *   浏览器壳没有"关掉窗口但留住服务"这层关系——它关了，serve 进程还留在
+ *   那儿，谁也没告诉它该退了。
  * - **单实例**：再敲一次 `desktop` 是把已有窗口叫到前台，而不是再起一个
  *   服务去撞同一个端口。
+ * - **自动更新**：启动时读 `latest.yml`，比版本、下载、校验、交给系统安装。
  * - **可打包**：有主进程入口，才谈得上 electron-builder 出安装包。
  *
  * 依赖方向刻意是单向的：这里只 import `server` 与 `electron/api`，
  * 绝不 import `cli`——客户端之间不许互相依赖。
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { asElectronApi, importElectron } from "./api";
 import type { ElectronApi, ElectronWindowHandle, ElectronWindowOptions } from "./api";
 import { resolveDesktopWorkspace, type WorkspaceResolution } from "./workspace";
+import {
+  checkForUpdate,
+  downloadUpdate,
+  resolveUpdateFeed,
+  UPDATE_CHECK_INTERVAL_MS,
+  type FetchLike,
+} from "./update";
 import {
   bootAppServer,
   findWebRoot,
@@ -54,6 +63,66 @@ export const WINDOW_OPTIONS: ElectronWindowOptions = {
  */
 export function resolveClientDir(appPath: string): string | undefined {
   return findWebRoot(appPath) ?? findWebRoot(join(appPath, ".."));
+}
+
+/**
+ * 托盘图标：打包后与 `dist-electron` 同级，开发时在包的 `build/` 里。
+ *
+ * 两处都找一遍而不是把路径写死：`app.getAppPath()` 在"脚本启动"与
+ * "安装后启动"两种情况下指的目录不同（见 {@link resolveClientDir}）。
+ * 都找不到时返回最后一个候选，由 API 层静默跳过托盘——图标缺失不该
+ * 连带窗口一起起不来。
+ */
+export function resolveTrayIcon(appPath: string): string {
+  const candidates = [
+    join(appPath, "build", "icon.png"),
+    join(appPath, "..", "build", "icon.png"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1]!;
+}
+
+/**
+ * 检查一次更新，并（在用户同意后）把安装包交给系统。
+ *
+ * 失败一律静默或只写 stderr：离线、代理、Release 还没建好都不影响
+ * 应用本身。下载失败时退回"打开下载页"，让用户还能自己装。
+ */
+export async function runUpdateCheck(
+  electron: ElectronApi,
+  streams: BootStreams,
+  feed: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<void> {
+  let info;
+  try {
+    info = await checkForUpdate(feed, electron.version(), fetchImpl);
+  } catch {
+    return;
+  }
+  if (!info) {
+    return;
+  }
+  let proceed = false;
+  try {
+    proceed = await electron.confirmUpdate(info.version);
+  } catch {
+    return;
+  }
+  if (!proceed) {
+    return;
+  }
+  try {
+    const file = await downloadUpdate(info, electron.tempDir(), fetchImpl);
+    await electron.openPath(file);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    streams.stderr.write(`mini-pi desktop: 更新包准备失败（${message}），改为打开下载页。\n`);
+    try {
+      await electron.openExternal(info.url);
+    } catch {
+      // 连系统浏览器都打不开时没有更好的兜底：用户仍可在发布页手动下载
+    }
+  }
 }
 
 /**
@@ -100,6 +169,15 @@ export type ElectronMainDeps = {
   ) => Promise<WorkspaceResolution>;
   /** 记忆文件路径；只有默认的解析器会用到它 */
   workspaceMemoryFile?: string;
+  /**
+   * 更新源（`latest.yml` 的完整 URL）。
+   *
+   * 缺省读 `MINIPI_UPDATE_FEED`：不在源码里写死仓库地址，否则 fork 之后
+   * 会把更新装到上游发行版上。
+   */
+  updateFeed?: string;
+  /** 网络出口；测试注入 */
+  fetchImpl?: FetchLike;
 };
 
 /** 默认的"用哪个工作区"：记忆优先，没有就问 */
@@ -199,33 +277,77 @@ export async function runElectronMain(
   }
 
   /**
-   * 关窗即退出。
+   * 关窗 ≠ 退出：收进托盘，长任务继续跑。
    *
-   * 服务活在主进程里，留一个没有窗口的实例会把端口一直占着；
-   * macOS 上 Electron 默认也不随手退出（它期望你还有别的窗口），
-   * 这里必须显式说清。
+   * 原来的行为是"关窗即 quit"，代价是一次误点就把跑了一半的任务连服务
+   * 一起杀掉。现在关窗只是 hide；真正的退出只有托盘菜单的「退出 mini-pi」
+   * （或应用菜单的 Quit）。因此关闭保护分两层：
+   * - `onClose`：拦下默认关闭，只隐藏；
+   * - `onClosed`：窗口真的销毁时（退出流程里）才收服务并 quit。
    *
-   * 退出前先把服务收掉：`AppServer.stop()` 会关 SSE、回收已合并/已丢弃的
-   * 隔离 worktree，并把未合并 worktree 的路径写进日志。只 quit 不 stop
-   * 会把这些都漏掉（`.git/worktrees` 元数据也会残留）。
+   * 退出前把服务收掉：`AppServer.stop()` 会关 SSE、回收已合并/已丢弃的
+   * 隔离 worktree，并把未合并 worktree 的路径写进日志。
    */
-  let closing = false;
-  primary.onClosed(() => {
-    if (closing) {
+  let quitting = false;
+  const stopAndQuit = async (): Promise<void> => {
+    if (quitting) {
       return;
     }
-    closing = true;
-    void (async () => {
-      try {
-        await booted.server?.stop();
-      } catch {
-        // 收尾失败也不能把窗口关不掉；进程退出本身仍会释放端口
-      }
-      electron.quit();
-    })();
+    quitting = true;
+    try {
+      await booted.server?.stop();
+    } catch {
+      // 收尾失败也不能把窗口关不掉；进程退出本身仍会释放端口
+    }
+    electron.quit();
+  };
+  const showWindow = (): void => {
+    primary?.show();
+    primary?.focus();
+  };
+
+  primary.onClosed(() => {
+    void stopAndQuit();
   });
+
+  /**
+   * 托盘先建，再决定"关窗"的语义。
+   *
+   * 图标缺失时 `createTray` 返回 false：此时把关闭拦下来只会让窗口藏进
+   * 一个不存在的托盘——进程还在、端口还占着，用户却再也叫不回来。所以
+   * 没有托盘就退回"关窗即退出"（`onClosed` 负责收服务）。
+   */
+  const trayReady = electron.createTray({
+    tooltip: "mini-pi",
+    iconPath: resolveTrayIcon(electron.appPath()),
+    onActivate: showWindow,
+    onShow: showWindow,
+    onQuit: () => void stopAndQuit(),
+  });
+  if (trayReady) {
+    primary.onClose((prevent) => {
+      if (quitting) {
+        return;
+      }
+      prevent();
+      primary?.hide();
+    });
+  }
+
   await primary.loadURL(booted.url);
   primary.show();
+
+  // 更新检查放在窗口显示之后：网络慢时它不该挡住首屏
+  const feed = deps.updateFeed ?? resolveUpdateFeed();
+  if (feed) {
+    const fetchImpl = deps.fetchImpl ?? fetch;
+    void runUpdateCheck(electron, streams, feed, fetchImpl);
+    const timer = setInterval(() => {
+      void runUpdateCheck(electron, streams, feed, fetchImpl);
+    }, UPDATE_CHECK_INTERVAL_MS);
+    // 后台检查不该把进程钉住：托盘/窗口才有权决定应用活多久
+    timer.unref?.();
+  }
   return 0;
 }
 

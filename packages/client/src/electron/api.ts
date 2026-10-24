@@ -13,12 +13,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-/** 一个窗口；只暴露桌面壳真会用到的四个动作 */
+/** 一个窗口；只暴露桌面壳真会用到的动作 */
 export type ElectronWindowHandle = {
   loadURL(url: string): Promise<void>;
   show(): void;
   focus(): void;
-  /** 关窗回调：用它把"关窗 → 退出"这条关系钉在主进程里 */
+  /** 关窗≠退出：收进托盘，长任务继续跑 */
+  hide(): void;
+  /**
+   * 关窗回调：`prevent()` 取消这次关闭。
+   *
+   * 托盘常驻的全部实现就是这里——伸手拦一下，然后 hide()；只有托盘菜单
+   * 的「退出」才真的让窗口关掉。
+   */
+  onClose(handler: (prevent: () => void) => void): void;
   onClosed(handler: () => void): void;
 };
 
@@ -57,19 +65,64 @@ export type ElectronApi = {
    * 一个原生壳。
    */
   pickDirectory(): Promise<string | null>;
+  /**
+   * 托盘常驻：关窗后从这里把窗口叫回来，或真正退出。
+   *
+   * 返回是否真的建起了托盘：图标缺失时实现方会静默跳过，调用方必须
+   * 据此决定"关窗"还能不能只隐藏——否则窗口会被藏到一个不存在的托盘里。
+   */
+  createTray(options: ElectronTrayOptions): boolean;
+  /** 当前应用版本（自动更新比较的基准） */
+  version(): string;
+  /** 临时目录：更新包先落在这里，再交给系统安装 */
+  tempDir(): string;
+  /** 询问"发现新版本，要现在更新吗"；返回 true 表示用户点了更新 */
+  confirmUpdate(version: string): Promise<boolean>;
+  /** 用系统默认程序打开（安装包 / Release 页面） */
+  openExternal(target: string): Promise<void>;
+  /** 用系统默认程序打开本地文件（下载好的安装包） */
+  openPath(path: string): Promise<void>;
   quit(): void;
 };
 
+export type ElectronTrayOptions = {
+  tooltip: string;
+  /** 托盘图标路径；找不到时实现方应静默降级为无图标托盘，而不是崩 */
+  iconPath: string;
+  /** 左键单击托盘：显示并聚焦主窗口 */
+  onActivate: () => void;
+  /** 菜单「显示主窗口」 */
+  onShow: () => void;
+  /** 菜单「退出 mini-pi」：真正结束进程（会先停服务） */
+  onQuit: () => void;
+};
+
 /** electron 模块的真实形状（只取用到的部分） */
+type RawCloseEvent = { preventDefault(): void };
+
 type RawWindow = {
   loadURL(url: string): Promise<void>;
   show(): void;
   focus(): void;
+  hide(): void;
+  on(event: "close", handler: (event: RawCloseEvent) => void): void;
   on(event: "closed", handler: () => void): void;
+};
+
+type RawTray = {
+  setToolTip(text: string): void;
+  setContextMenu(menu: unknown): void;
+  on(event: "click", handler: () => void): void;
+};
+
+type RawMenu = {
+  buildFromTemplate(template: ReadonlyArray<Record<string, unknown>>): unknown;
 };
 
 /** `dialog.showOpenDialog` 的结果：取消与空选都算"没选" */
 type RawDirectoryChoice = { canceled: boolean; filePaths: string[] };
+
+type RawMessageChoice = { response: number };
 
 type RawDialog = {
   showOpenDialog(options: {
@@ -77,6 +130,20 @@ type RawDialog = {
     properties: string[];
     title: string;
   }): Promise<RawDirectoryChoice>;
+  showMessageBox(options: {
+    type: "info";
+    title: string;
+    message: string;
+    detail: string;
+    buttons: string[];
+    defaultId: number;
+    cancelId: number;
+  }): Promise<RawMessageChoice>;
+};
+
+type RawShell = {
+  openExternal(url: string): Promise<void>;
+  openPath(path: string): Promise<string>;
 };
 
 type RawElectron = {
@@ -85,10 +152,15 @@ type RawElectron = {
     on(event: "second-instance", handler: () => void): void;
     whenReady(): Promise<void>;
     getAppPath(): string;
+    getVersion(): string;
+    getPath(name: "temp"): string;
     quit(): void;
   };
   BrowserWindow: new (options: ElectronWindowOptions) => RawWindow;
+  Tray: new (icon: string) => RawTray;
+  Menu: RawMenu;
   dialog: RawDialog;
+  shell: RawShell;
 };
 
 /**
@@ -98,12 +170,14 @@ type RawElectron = {
  * `desktop` 那边则只看得到"有没有可执行文件"——两种场景各取所需。
  */
 export function createElectronApi(raw: RawElectron): ElectronApi {
-  const { app, BrowserWindow, dialog } = raw;
+  const { app, BrowserWindow, dialog, Menu, Tray, shell } = raw;
   return {
     requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
     onSecondInstance: (handler) => app.on("second-instance", handler),
     whenReady: () => app.whenReady(),
     appPath: () => app.getAppPath(),
+    version: () => app.getVersion(),
+    tempDir: () => app.getPath("temp"),
     createWindow: (options) => {
       const window = new BrowserWindow(options);
       return {
@@ -112,8 +186,29 @@ export function createElectronApi(raw: RawElectron): ElectronApi {
         },
         show: () => window.show(),
         focus: () => window.focus(),
+        hide: () => window.hide(),
+        onClose: (handler) =>
+          window.on("close", (event) => handler(() => event.preventDefault())),
         onClosed: (handler) => window.on("closed", handler),
       };
+    },
+    createTray: (options) => {
+      // 图标缺失时宁可不建托盘，也不要让主进程在启动阶段抛错——
+      // 那会把"窗口能打开"一起赔进去。返回 false 让调用方改走"关窗即退出"。
+      if (!existsSync(options.iconPath)) {
+        return false;
+      }
+      const tray = new Tray(options.iconPath);
+      tray.setToolTip(options.tooltip);
+      tray.setContextMenu(
+        Menu.buildFromTemplate([
+          { label: "显示主窗口", click: options.onShow },
+          { type: "separator" },
+          { label: "退出 mini-pi", click: options.onQuit },
+        ]),
+      );
+      tray.on("click", options.onActivate);
+      return true;
     },
     pickDirectory: async () => {
       const choice = await dialog.showOpenDialog({
@@ -123,6 +218,26 @@ export function createElectronApi(raw: RawElectron): ElectronApi {
       // 取消和"选了 0 个"是同一件事；对话框保证返回的一定是已存在的目录
       const [first] = choice.filePaths;
       return choice.canceled || !first ? null : first;
+    },
+    confirmUpdate: async (version) => {
+      const choice = await dialog.showMessageBox({
+        type: "info",
+        title: "发现新版本",
+        message: `mini-pi ${version} 已发布`,
+        detail: "现在下载并打开安装包；当前任务不会被中断，可以先装完再退出。",
+        buttons: ["现在更新", "稍后"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      return choice.response === 0;
+    },
+    openExternal: (target) => shell.openExternal(target),
+    openPath: async (path) => {
+      const error = await shell.openPath(path);
+      // openPath 用返回值表示失败（不是抛）：空串才是成功
+      if (error.length > 0) {
+        throw new Error(error);
+      }
     },
     quit: () => app.quit(),
   };
@@ -239,6 +354,10 @@ function isElectronApiShape(value: unknown): value is RawElectron {
       typeof candidate.app?.requestSingleInstanceLock === "function" &&
       typeof candidate.app?.getAppPath === "function" &&
       typeof candidate.BrowserWindow === "function" &&
+      typeof candidate.Tray === "function" &&
+      typeof candidate.Menu?.buildFromTemplate === "function" &&
+      typeof candidate.shell?.openExternal === "function" &&
+      typeof candidate.app?.getVersion === "function" &&
       typeof candidate.dialog?.showOpenDialog === "function",
   );
 }

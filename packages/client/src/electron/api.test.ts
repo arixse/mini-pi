@@ -52,16 +52,31 @@ function fakeRaw(
     appPath?: string;
     /** 目录框的返回值：null 表示用户取消，缺省同取消 */
     pick?: string | null;
+    /** 更新对话框点的是哪个按钮：0 = 现在更新，缺省 1 = 稍后 */
+    updateChoice?: number;
+    /** `shell.openPath` 的返回值：空串表示成功 */
+    openPathError?: string;
   } = {},
 ): {
   raw: RawElectronLike;
   calls: string[];
   fireClosed: () => void;
   fireSecondInstance: () => void;
+  /** 模拟点关闭按钮；返回这次关闭是否被 prevent 住 */
+  fireClose: () => boolean;
+  /** 模拟左键单击托盘图标 */
+  fireTrayClick: () => void;
+  /** 托盘菜单项（按 label 索引），用来点「显示主窗口」/「退出」 */
+  trayMenu: () => Record<string, Record<string, unknown>>;
+  trayTooltip: () => string | null;
 } {
   const calls: string[] = [];
   let onClosed: (() => void) | null = null;
   let onSecond: (() => void) | null = null;
+  let onClose: ((event: { preventDefault(): void }) => void) | null = null;
+  let trayClick: (() => void) | null = null;
+  let trayTooltip: string | null = null;
+  const menu: Record<string, Record<string, unknown>> = {};
 
   class FakeWindow {
     constructor(options: ElectronWindowOptions) {
@@ -76,9 +91,39 @@ function fakeRaw(
     focus(): void {
       calls.push("focus");
     }
-    on(event: string, handler: () => void): void {
+    hide(): void {
+      calls.push("hide");
+    }
+    on(event: string, handler: (event: { preventDefault(): void }) => void): void {
       if (event === "closed") {
-        onClosed = handler;
+        onClosed = handler as () => void;
+      } else if (event === "close") {
+        onClose = handler;
+      }
+    }
+  }
+
+  class FakeTray {
+    constructor(icon: string) {
+      calls.push(`tray:${icon}`);
+    }
+    setToolTip(text: string): void {
+      trayTooltip = text;
+    }
+    setContextMenu(built: unknown): void {
+      calls.push("tray:menu");
+      // 只认"按 label 收起来"的形状：真正的 Menu 对象在这里没有意义
+      if (Array.isArray(built)) {
+        for (const item of built) {
+          if (item && typeof item === "object" && "label" in item) {
+            menu[String((item as { label: unknown }).label)] = item as Record<string, unknown>;
+          }
+        }
+      }
+    }
+    on(event: string, handler: () => void): void {
+      if (event === "click") {
+        trayClick = handler;
       }
     }
   }
@@ -95,11 +140,21 @@ function fakeRaw(
         calls.push("whenReady");
       },
       getAppPath: () => options.appPath ?? "/app",
+      getVersion: () => "1.2.3",
+      getPath: (name: string) => {
+        calls.push(`getPath:${name}`);
+        return join(tmpdir(), "mini-pi-temp");
+      },
       quit: () => {
         calls.push("quit");
       },
     },
     BrowserWindow: FakeWindow,
+    Tray: FakeTray,
+    Menu: {
+      // 真实模块返回 Menu 实例；这里返回模板本身，夹具按 label 取 click
+      buildFromTemplate: (template) => template as unknown as Record<string, unknown>[],
+    },
     dialog: {
       showOpenDialog: async (dialogOptions) => {
         calls.push(`showOpenDialog:${dialogOptions.properties.join(",")}`);
@@ -107,6 +162,19 @@ function fakeRaw(
         return picked === null
           ? { canceled: true, filePaths: [] }
           : { canceled: false, filePaths: [picked] };
+      },
+      showMessageBox: async (messageOptions) => {
+        calls.push(`showMessageBox:${messageOptions.title}`);
+        return { response: options.updateChoice ?? 1 };
+      },
+    },
+    shell: {
+      openExternal: async (url) => {
+        calls.push(`openExternal:${url}`);
+      },
+      openPath: async (path) => {
+        calls.push(`openPath:${path}`);
+        return options.openPathError ?? "";
       },
     },
   };
@@ -116,6 +184,16 @@ function fakeRaw(
     calls,
     fireClosed: () => onClosed?.(),
     fireSecondInstance: () => onSecond?.(),
+    fireClose: () => {
+      let prevented = false;
+      onClose?.({ preventDefault: () => {
+        prevented = true;
+      } });
+      return prevented;
+    },
+    fireTrayClick: () => trayClick?.(),
+    trayMenu: () => menu,
+    trayTooltip: () => trayTooltip,
   };
 }
 
@@ -176,6 +254,117 @@ describe("createElectronApi", () => {
   it("pickDirectory：用户取消（或选了 0 个）返回 null", async () => {
     const api = createElectronApi(fakeRaw().raw);
     assert.strictEqual(await api.pickDirectory(), null);
+  });
+
+  /**
+   * 关窗收进托盘的全部分量就在这两行：prevent() 取消默认关闭，hide() 藏窗口。
+   * 少了 prevent，关一下就退；少了 hide，窗口"关不掉"却还在屏幕上。
+   */
+  it("onClose：prevent() 取消这次关闭，hide() 只是隐藏", () => {
+    const fake = fakeRaw();
+    const api = createElectronApi(fake.raw);
+    const window = api.createWindow(WINDOW);
+    let calls = 0;
+    // 桌面壳传进来的是"取消这次关闭"的回调：不调它，窗口就真的关掉了
+    window.onClose((prevent) => {
+      calls += 1;
+      prevent();
+    });
+
+    assert.strictEqual(fake.fireClose(), true, "必须 prevent，否则窗口直接销毁");
+    assert.strictEqual(calls, 1);
+    window.hide();
+    assert.ok(fake.calls.includes("hide"));
+  });
+
+  it("version / tempDir 直接取主进程的值（更新比较与下载落地都靠它们）", () => {
+    const fake = fakeRaw();
+    const api = createElectronApi(fake.raw);
+    assert.strictEqual(api.version(), "1.2.3");
+    assert.strictEqual(api.tempDir(), join(tmpdir(), "mini-pi-temp"));
+    assert.ok(fake.calls.includes("getPath:temp"));
+  });
+
+  /**
+   * 托盘菜单必须**两条都通**：没有「显示主窗口」就再也叫不回窗口，
+   * 没有「退出」就只能去任务管理器杀进程——而那个进程里可能正跑着任务。
+   */
+  it("createTray：tooltip + 两项菜单 + 左键唤起", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mini-pi-tray-"));
+    const icon = join(directory, "icon.png");
+    writeFileSync(icon, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    try {
+      const fake = fakeRaw();
+      const api = createElectronApi(fake.raw);
+      let shown = 0;
+      let activated = 0;
+      let quit = 0;
+      const created = api.createTray({
+        tooltip: "mini-pi",
+        iconPath: icon,
+        onShow: () => {
+          shown += 1;
+        },
+        onActivate: () => {
+          activated += 1;
+        },
+        onQuit: () => {
+          quit += 1;
+        },
+      });
+
+      assert.strictEqual(created, true, "建起了托盘就要如实回报");
+      assert.strictEqual(fake.trayTooltip(), "mini-pi");
+      const menu = fake.trayMenu();
+      assert.deepStrictEqual(Object.keys(menu), ["显示主窗口", "退出 mini-pi"]);
+
+      (menu["显示主窗口"]!.click as () => void)();
+      (menu["退出 mini-pi"]!.click as () => void)();
+      fake.fireTrayClick();
+      assert.strictEqual(shown, 1);
+      assert.strictEqual(quit, 1);
+      assert.strictEqual(activated, 1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 图标缺失时宁可不建托盘：打包漏了资源是发布错误，但代价不该是
+   * "应用起不来"。静默降级后窗口照常打开，只是关窗即退回原语义。
+   */
+  it("createTray：图标不存在时静默跳过，不抛", () => {
+    const fake = fakeRaw();
+    const api = createElectronApi(fake.raw);
+    const created = api.createTray({
+      tooltip: "mini-pi",
+      iconPath: join(tmpdir(), "mini-pi-no-such-icon", "icon.png"),
+      onShow: () => undefined,
+      onActivate: () => undefined,
+      onQuit: () => undefined,
+    });
+    assert.strictEqual(created, false, "没建起来要如实回报——调用方靠它决定关窗语义");
+    assert.ok(!fake.calls.some((call) => call.startsWith("tray:")), "不该去 new Tray");
+  });
+
+  it("confirmUpdate：默认按钮是「稍后」，只有点「现在更新」才算同意", async () => {
+    const declined = createElectronApi(fakeRaw({ updateChoice: 1 }).raw);
+    assert.strictEqual(await declined.confirmUpdate("1.3.0"), false);
+
+    const accepted = createElectronApi(fakeRaw({ updateChoice: 0 }).raw);
+    assert.strictEqual(await accepted.confirmUpdate("1.3.0"), true);
+  });
+
+  /**
+   * `shell.openPath` 用**返回值**表示失败（不是抛）。不看这个返回值，
+   * 下载失败的安装包会静默地"什么都没发生"，用户以为已经更新了。
+   */
+  it("openPath：返回非空串就是失败，要抛出去", async () => {
+    const ok = createElectronApi(fakeRaw().raw);
+    await ok.openPath("C:\\temp\\mini-pi.exe");
+
+    const broken = createElectronApi(fakeRaw({ openPathError: "Access denied" }).raw);
+    await assert.rejects(() => broken.openPath("C:\\temp\\mini-pi.exe"), /Access denied/);
   });
 });
 

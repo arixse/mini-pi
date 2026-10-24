@@ -8,16 +8,19 @@
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ElectronApi, ElectronWindowOptions } from "./api";
+import type { ElectronApi, ElectronTrayOptions, ElectronWindowOptions } from "./api";
 import {
   DESKTOP_ELECTRON_USAGE,
   WINDOW_OPTIONS,
   bootstrapElectron,
   extractElectronArgv,
   resolveClientDir,
+  resolveTrayIcon,
+  runUpdateCheck,
   runElectronMain,
 } from "./main";
 import type { BootOptions, BootResult, BootStreams } from "../server/app";
@@ -36,18 +39,32 @@ const MISSING_DIR = join(tmpdir(), "mini-pi-no-such-workspace", String(Date.now(
  * 缺省（null）是"用户取消了选择"——两种情况主进程都必须处理。
  */
 function fakeElectron(
-  options: { lock?: boolean; appPath?: string; pick?: string | null } = {},
+  options: {
+    lock?: boolean;
+    appPath?: string;
+    pick?: string | null;
+    version?: string;
+    confirmUpdate?: boolean;
+    /** 托盘图标是否存在：false 时主进程必须退回"关窗即退出" */
+    tray?: boolean;
+  } = {},
 ): {
   api: ElectronApi;
   calls: string[];
   fireClosed: () => void;
   fireSecondInstance: () => void;
+  /** 模拟点窗口的关闭按钮；返回这次关闭是否被拦下（收进托盘） */
+  fireClose: () => boolean;
+  tray: () => ElectronTrayOptions | null;
   windowOptions: ElectronWindowOptions[];
 } {
   const calls: string[] = [];
   const windowOptions: ElectronWindowOptions[] = [];
   let onClosed: (() => void) | null = null;
+  let onClose: ((prevent: () => void) => void) | null = null;
   let onSecond: (() => void) | null = null;
+  let trayOptions: ElectronTrayOptions | null = null;
+  let updateDir: string | null = null;
 
   const api: ElectronApi = {
     requestSingleInstanceLock: () => options.lock ?? true,
@@ -70,12 +87,44 @@ function fakeElectron(
         focus: () => {
           calls.push("focus");
         },
+        hide: () => {
+          calls.push("hide");
+        },
+        onClose: (handler) => {
+          onClose = handler;
+        },
         onClosed: (handler) => {
           onClosed = handler;
         },
       };
     },
     appPath: () => options.appPath ?? "/app",
+    version: () => options.version ?? "1.0.0",
+    tempDir: () => {
+      // 更新包真的会写到这里：给一个已存在的空目录，别让下载因为 ENOENT 失败
+      if (!updateDir) {
+        updateDir = mkdtempSync(join(tmpdir(), "minipi-updates-"));
+      }
+      return updateDir;
+    },
+    createTray: (tray) => {
+      calls.push("createTray");
+      if (options.tray === false) {
+        return false;
+      }
+      trayOptions = tray;
+      return true;
+    },
+    confirmUpdate: async (version) => {
+      calls.push(`confirmUpdate:${version}`);
+      return options.confirmUpdate ?? false;
+    },
+    openExternal: async (target) => {
+      calls.push(`openExternal:${target}`);
+    },
+    openPath: async (target) => {
+      calls.push(`openPath:${target}`);
+    },
     pickDirectory: async () => {
       calls.push("pickDirectory");
       return options.pick ?? null;
@@ -89,8 +138,16 @@ function fakeElectron(
     api,
     calls,
     windowOptions,
+    tray: () => trayOptions,
     fireClosed: () => onClosed?.(),
     fireSecondInstance: () => onSecond?.(),
+    fireClose: () => {
+      let prevented = false;
+      onClose?.(() => {
+        prevented = true;
+      });
+      return prevented;
+    },
   };
 }
 
@@ -197,6 +254,161 @@ describe("resolveClientDir", () => {
   });
 });
 
+describe("resolveTrayIcon", () => {
+  /**
+   * 两种启动方式的 appPath 不一样：脚本启动时是 `dist-electron/`，
+   * 安装后是 app 根目录。写死一处必有一边找不到图标。
+   */
+  it("优先应用目录下的 build/icon.png", () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-tray-"));
+    try {
+      mkdirSync(join(root, "build"), { recursive: true });
+      writeFileSync(join(root, "build", "icon.png"), "png");
+      assert.strictEqual(resolveTrayIcon(root), join(root, "build", "icon.png"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("应用目录自身没有就退到上一级", () => {
+    const root = mkdtempSync(join(tmpdir(), "minipi-tray-"));
+    try {
+      const appDir = join(root, "dist-electron");
+      mkdirSync(appDir, { recursive: true });
+      mkdirSync(join(root, "build"), { recursive: true });
+      writeFileSync(join(root, "build", "icon.png"), "png");
+      assert.strictEqual(resolveTrayIcon(appDir), join(root, "build", "icon.png"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 都找不到也要返回一个路径：调用方（`createTray`）靠 existsSync 判断，
+   * 这里返回 undefined 会让那层多一个分支，且报错位置离原因更远。
+   */
+  it("都找不到时返回候选路径，由 API 层静默跳过托盘", () => {
+    const root = join(tmpdir(), "minipi-no-such-tray", String(Date.now()));
+    assert.strictEqual(resolveTrayIcon(root), join(root, "..", "build", "icon.png"));
+  });
+});
+
+describe("runUpdateCheck", () => {
+  /** 一份最小可用的 latest.yml（electron-builder 的产物形态） */
+  const LATEST = [
+    "version: 1.3.0",
+    "files:",
+    "  - url: mini-pi-1.3.0.exe",
+    "    sha512: abc",
+    "path: mini-pi-1.3.0.exe",
+    "sha512: abc",
+    "releaseDate: '2026-01-01T00:00:00.000Z'",
+  ].join("\n");
+
+  function fakeFetch(
+    replies: { yml?: string; file?: Uint8Array<ArrayBuffer>; failDownload?: boolean } = {},
+  ): { fetch: (url: string) => Promise<Response>; urls: string[] } {
+    const urls: string[] = [];
+    const fetchImpl = async (url: string): Promise<Response> => {
+      urls.push(url);
+      if (url.endsWith("latest.yml")) {
+        return new Response(replies.yml ?? LATEST, { status: 200 });
+      }
+      if (replies.failDownload) {
+        return new Response("nope", { status: 500 });
+      }
+      return new Response(new Blob([replies.file ?? new Uint8Array([1, 2, 3])]), {
+        status: 200,
+      });
+    };
+    return { fetch: fetchImpl, urls };
+  }
+
+  /** 拿到 sha512 才能让下载校验通过：省得每处手写一串 base64 */
+  function sha512Of(bytes: Uint8Array): string {
+    return createHash("sha512").update(bytes).digest("base64");
+  }
+
+  it("没有更新时什么都不做（不弹框、不下载）", async () => {
+    const electron = fakeElectron({ version: "1.3.0" });
+    const { fetch } = fakeFetch();
+    const io = collector();
+
+    await runUpdateCheck(electron.api, io.streams, "https://dl.example/latest.yml", fetch);
+    assert.deepStrictEqual(electron.calls, [], "同版本不该有任何交互");
+  });
+
+  /**
+   * 更新属于"网络能失败的一切都失败"的场景：离线、代理、发布页还没建好。
+   * 任何一条都不该变成一个错误对话框挡住应用启动。
+   */
+  it("拉元数据失败时静默返回", async () => {
+    const electron = fakeElectron({ version: "1.0.0" });
+    const io = collector();
+    const boom = async (): Promise<Response> => {
+      throw new Error("offline");
+    };
+    await runUpdateCheck(electron.api, io.streams, "https://dl.example/latest.yml", boom);
+    assert.deepStrictEqual(electron.calls, []);
+    assert.strictEqual(io.err.join(""), "");
+  });
+
+  it("用户选「稍后」：只弹一次框，不下载", async () => {
+    const electron = fakeElectron({ version: "1.0.0", confirmUpdate: false });
+    const { fetch, urls } = fakeFetch();
+
+    await runUpdateCheck(electron.api, collector().streams, "https://dl.example/latest.yml", fetch);
+    assert.deepStrictEqual(electron.calls, ["confirmUpdate:1.3.0"]);
+    assert.deepStrictEqual(urls, ["https://dl.example/latest.yml"], "没同意就不该下载");
+  });
+
+  it("同意更新：下载、校验、交给系统安装", async () => {
+    const bytes = new TextEncoder().encode("installer-bytes");
+    const electron = fakeElectron({ version: "1.0.0", confirmUpdate: true });
+    const { fetch } = fakeFetch({
+      yml: LATEST.replace(/sha512: abc/g, `sha512: ${sha512Of(bytes)}`),
+      file: bytes,
+    });
+
+    await runUpdateCheck(electron.api, collector().streams, "https://dl.example/latest.yml", fetch);
+    assert.ok(electron.calls.includes("confirmUpdate:1.3.0"));
+    const opened = electron.calls.find((call) => call.startsWith("openPath:"));
+    assert.ok(opened, "校验通过后要交给系统安装");
+    assert.match(opened!, /mini-pi-1\.3\.0\.exe$/);
+  });
+
+  /**
+   * 校验失败绝不能执行——那等于把"下载到什么就跑什么"写进了更新流程。
+   * 退路是打开下载页，至少用户还能自己装。
+   */
+  it("sha512 不匹配：不执行安装包，改为打开下载页", async () => {
+    const electron = fakeElectron({ version: "1.0.0", confirmUpdate: true });
+    const { fetch } = fakeFetch({ file: new TextEncoder().encode("tampered") });
+    const io = collector();
+
+    await runUpdateCheck(electron.api, io.streams, "https://dl.example/latest.yml", fetch);
+    assert.ok(!electron.calls.some((call) => call.startsWith("openPath:")), "不许执行");
+    assert.ok(
+      electron.calls.some((call) => call.startsWith("openExternal:")),
+      "校验失败要留一条手动下载的路",
+    );
+    assert.match(io.err.join(""), /校验失败/);
+  });
+
+  it("下载失败：同样是打开下载页，而不是留着用户干瞪眼", async () => {
+    const electron = fakeElectron({ version: "1.0.0", confirmUpdate: true });
+    const { fetch } = fakeFetch({ failDownload: true });
+    const io = collector();
+
+    await runUpdateCheck(electron.api, io.streams, "https://dl.example/latest.yml", fetch);
+    assert.ok(
+      electron.calls.some((call) => call.startsWith("openExternal:")),
+      "下载失败也要给手动入口",
+    );
+    assert.match(io.err.join(""), /HTTP 500/);
+  });
+});
+
 describe("runElectronMain", () => {
   it("正常路径：起服务 → 开窗口 → 加载地址 → 显示", async () => {
     const electron = fakeElectron({ appPath: "/app" });
@@ -214,6 +426,7 @@ describe("runElectronMain", () => {
     assert.deepStrictEqual(electron.calls, [
       "whenReady",
       "createWindow:mini-pi",
+      "createTray",
       "loadURL:http://127.0.0.1:4788",
       "show",
     ]);
@@ -223,7 +436,65 @@ describe("runElectronMain", () => {
     assert.strictEqual(boot.seen[0]?.cwd, "/ws", "起服务用的必须是解析出来的工作区");
   });
 
-  it("关窗先收服务再退出：否则隔离 worktree 与退出日志都会漏掉", async () => {
+  /**
+   * 关窗 ≠ 退出。
+   *
+   * 这里钉的是那次审计里的原话：「关窗即退出会误杀长任务」。所以点一次
+   * 关闭按钮必须只做两件事——拦下默认关闭、隐藏窗口；服务一行都不许动。
+   */
+  it("关窗只收进托盘：拦下关闭并隐藏，服务继续跑", async () => {
+    const electron = fakeElectron();
+    const calls: string[] = [];
+    const boot = fakeBoot({
+      server: {
+        stop: async () => {
+          calls.push("stop");
+        },
+      } as unknown as NonNullable<BootResult["server"]>,
+    });
+    await runElectronMain([], {
+      electron: electron.api,
+      streams: collector().streams,
+      boot: boot.boot,
+      resolveWorkspace: fixedWorkspace("/ws"),
+    });
+
+    assert.strictEqual(electron.fireClose(), true, "必须 preventDefault");
+    assert.ok(electron.calls.includes("hide"), "拦住之后要把窗口藏起来");
+    assert.deepStrictEqual(calls, [], "收进托盘不等于收服务");
+    assert.ok(!electron.calls.includes("quit"), "更不该退出进程");
+  });
+
+  /**
+   * 托盘建不起来（图标缺失）时，"关窗只隐藏"必须失效：否则窗口藏进一个
+   * 不存在的托盘，用户再也叫不回来。退路是原来的"关窗即退出"。
+   */
+  it("托盘建不起来时关窗退回退出语义（不会把窗口藏没）", async () => {
+    const electron = fakeElectron({ tray: false });
+    const calls: string[] = [];
+    const boot = fakeBoot({
+      server: {
+        stop: async () => {
+          calls.push("stop");
+        },
+      } as unknown as NonNullable<BootResult["server"]>,
+    });
+    await runElectronMain([], {
+      electron: electron.api,
+      streams: collector().streams,
+      boot: boot.boot,
+      resolveWorkspace: fixedWorkspace("/ws"),
+    });
+
+    assert.strictEqual(electron.fireClose(), false, "没有托盘就不该拦下关闭");
+    assert.ok(!electron.calls.includes("hide"), "也不该把窗口藏起来");
+    electron.fireClosed();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepStrictEqual(calls, ["stop"], "关窗销毁后照常收服务");
+    assert.ok(electron.calls.includes("quit"));
+  });
+
+  it("托盘「退出」：先收服务再退出（否则隔离 worktree 与退出日志都会漏掉）", async () => {
     const electron = fakeElectron();
     const calls: string[] = [];
     const boot = fakeBoot({
@@ -242,11 +513,65 @@ describe("runElectronMain", () => {
       resolveWorkspace: fixedWorkspace("/ws"),
     });
 
-    assert.ok(!electron.calls.includes("quit"), "关窗之前不该退出");
-    electron.fireClosed();
+    assert.ok(!electron.calls.includes("quit"), "启动完不该退出");
+    electron.tray()?.onQuit();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepStrictEqual(calls, ["stop"], "关窗必须先收服务");
+    assert.deepStrictEqual(calls, ["stop"], "退出必须先收服务");
     assert.ok(electron.calls.includes("quit"), "收完服务后必须退出");
+  });
+
+  /**
+   * 兜底：窗口真的被销毁时（系统关机、会话结束、原生菜单 Quit）也要把
+   * 服务收掉。而托盘「退出」与这条路径可能同时到达——所以只能收一次。
+   */
+  it("窗口销毁是兜底退出路径，且与托盘退出同时到达时只收一次服务", async () => {
+    const electron = fakeElectron();
+    const calls: string[] = [];
+    const boot = fakeBoot({
+      server: {
+        stop: async () => {
+          calls.push("stop");
+        },
+      } as unknown as NonNullable<BootResult["server"]>,
+    });
+    await runElectronMain([], {
+      electron: electron.api,
+      streams: collector().streams,
+      boot: boot.boot,
+      resolveWorkspace: fixedWorkspace("/ws"),
+    });
+
+    electron.fireClosed();
+    electron.tray()?.onQuit();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepStrictEqual(calls, ["stop"], "只许收一次");
+    assert.strictEqual(
+      electron.calls.filter((call) => call === "quit").length,
+      1,
+      "quit 也只许一次",
+    );
+  });
+
+  /**
+   * 收进托盘之后，唯一的回头路就是托盘这两下。少一处，窗口就再也叫不回来
+   * ——而进程还活着、端口还占着，用户只能去任务管理器。
+   */
+  it("托盘左键与「显示主窗口」都把窗口叫回来", async () => {
+    const electron = fakeElectron();
+    await runElectronMain([], {
+      electron: electron.api,
+      streams: collector().streams,
+      boot: fakeBoot().boot,
+      resolveWorkspace: fixedWorkspace("/ws"),
+    });
+
+    electron.calls.length = 0;
+    electron.tray()?.onActivate();
+    assert.deepStrictEqual(electron.calls, ["show", "focus"]);
+
+    electron.calls.length = 0;
+    electron.tray()?.onShow();
+    assert.deepStrictEqual(electron.calls, ["show", "focus"]);
   });
 
   it("第二个实例只是把已有窗口叫到前台", async () => {
@@ -545,13 +870,16 @@ describe("bootstrapElectron", () => {
    */
   it("起不了服务时退出 Electron（工作区不存在是最容易构造的失败）", async () => {
     const calls: string[] = [];
-    // 必须是**原始模块形状**：bootstrapElectron 自己过 asElectronApi 那一关
+    // 必须是**原始模块形状**：bootstrapElectron 自己过 asElectronApi 那一关。
+    // 形状少一项就会被判成"不在 Electron 里"，那样测到的就不是这条路径了。
     const raw = {
       app: {
         requestSingleInstanceLock: () => true,
         on: () => undefined,
         whenReady: async () => undefined,
         getAppPath: () => "/app",
+        getVersion: () => "1.0.0",
+        getPath: () => tmpdir(),
         quit: () => {
           calls.push("quit");
         },
@@ -566,12 +894,34 @@ describe("bootstrapElectron", () => {
         focus(): void {
           return undefined;
         }
+        hide(): void {
+          return undefined;
+        }
         on(): void {
           return undefined;
         }
       },
+      Tray: class {
+        setToolTip(): void {
+          return undefined;
+        }
+        setContextMenu(): void {
+          return undefined;
+        }
+        on(): void {
+          return undefined;
+        }
+      },
+      Menu: {
+        buildFromTemplate: () => [],
+      },
       dialog: {
         showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+        showMessageBox: async () => ({ response: 1 }),
+      },
+      shell: {
+        openExternal: async () => undefined,
+        openPath: async () => "",
       },
     };
     const io = collector();

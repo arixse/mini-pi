@@ -145,6 +145,7 @@ jobs:
             packages/client/dist/installer/*.exe
             packages/client/dist/installer/*.dmg
             packages/client/dist/installer/*.zip
+            packages/client/dist/installer/*.yml
           if-no-files-found: error
           retention-days: 30
 
@@ -180,7 +181,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          FILES=(dist/*.exe dist/*.dmg dist/*.zip)
+          FILES=(dist/*.exe dist/*.dmg dist/*.zip dist/*.yml)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::没有取回任何安装包"
             exit 1

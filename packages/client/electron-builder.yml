@@ -28,6 +28,8 @@ files:
   - dist-electron/main.cjs
   - dist/web/**
   - package.json
+  # 托盘图标：运行时由主进程按 appPath 找（见 resolveTrayIcon）
+  - build/icon.png
 
 # express 在 dependencies 里，electron-builder 会按"生产依赖"把它连同传递依赖
 # 装进 app 的 node_modules——运行时其实用不到（已内联），留着当"哪天 bundle
@@ -38,6 +40,17 @@ asar: true
 win:
   # 一张 ≥256×256 的 PNG 即可，ico 由 electron-builder 生成
   icon: build/icon.png
+  # 签名：在 CI 里配 CSC_LINK + CSC_KEY_PASSWORD（或 Azure Trusted Signing 的
+  # 一组环境变量）后自动生效，不把密钥写进仓库。
+  #
+  # 为什么必须签：未签名的 exe 在 Windows 11 上会被 SmartScreen 拦成
+  # "Windows 已保护你的电脑"，用户要点"仍要运行"；证书 + 时间戳之后，
+  # 至少能证明"这个安装包来自同一个发布者"。
+  #
+  # rfc3161 时间戳：证书过期后，已签名的安装包仍然有效——少了这一项，
+  # 证书一到期，所有旧版本的签名都会一起失效。
+  signtoolOptions:
+    rfc3161TimeStampServer: http://timestamp.digicert.com
   target:
     - nsis
     - portable
@@ -47,10 +60,25 @@ nsis:
   # 分发出去的东西要让用户看清装到哪儿
   oneClick: false
   perMachine: false
+  # 自动更新的元数据：electron-builder 会生成 latest.yml（放在
+  # directories.output 里），客户端读它比较版本。发布时要和安装包一起上传
+  # ——只传 exe 的话，更新检查永远看不到新版本。
+  artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   icon: build/icon.png
   category: public.app-category.developer-tools
+  # 公证（notarytool）：配好 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+  # APPLE_TEAM_ID 后 electron-builder 会自动提交。没有这一步，macOS 会
+  # 把安装包标成"未识别开发者"，用户要在"隐私与安全性"里手动放行。
+  #
+  # hardenedRuntime 是公证的前提；权限文件只授予 Electron 自身需要的
+  # 最小集合（见 build/entitlements.mac.plist）。
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
   target:
     - dmg
     - zip
