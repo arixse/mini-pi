@@ -76,6 +76,14 @@ import {
   type Tier,
 } from "../shared/types";
 
+/**
+ * 只读文件预览的上限：再大就不是"看一眼"，而是把服务端当编辑器。
+ *
+ * 超过时仍返回开头一段（并标 `truncated`），而不是直接拒绝——用户点开一个
+ * 大文件时想知道的通常就是"它是什么"。
+ */
+const MAX_FILE_PREVIEW_BYTES = 256 * 1024;
+
 /** 模型解析的结果：三个字段一起用，单独看任何一个都答不出"用谁在跑" */
 export type ResolvedModel = {
   model: LlmModel | null;
@@ -141,14 +149,6 @@ type SessionContext = {
 
 /** 侧栏最多显示多少个 Run：再多的历史属于会话列表，不属于"进行中" */
 const MAX_RUNS = 50;
-
-/**
- * 只读文件预览的上限：再大就不是"看一眼"，而是把服务端当编辑器。
- *
- * 超过时仍返回开头一段（并标 `truncated`），而不是直接拒绝——用户点开一个
- * 大文件时想知道的通常就是"它是什么"。
- */
-const MAX_FILE_PREVIEW_BYTES = 256 * 1024;
 
 export class WorkspaceHost {
   readonly workspaceRoot: string;
@@ -826,7 +826,7 @@ export class WorkspaceHost {
     if (!diff) {
       throw new HttpError(409, "这个任务的隔离工作区已经不在了");
     }
-    return { runId, patch: diff.patch, files: diff.files };
+    return { runId, patch: diff.patch, files: diff.files, truncated: diff.truncated };
   }
 
   /**

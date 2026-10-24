@@ -1231,3 +1231,256 @@ describe("撤回已入队的消息", () => {
     assert.match(controller.store.current.banner?.text ?? "", /任务已结束/);
   });
 });
+
+/**
+ * 事件流自愈与只读文件预览。
+ *
+ * 两条链路都曾在审计里被点过：
+ * - 缺口只挂一句"刷新页面"，等于把恢复动作推给用户；
+ * - 工具输出里的路径不可点，等于让人自己复制路径再去目录里找。
+ */
+describe("事件流自愈与文件预览", () => {
+  let controller: AppController;
+
+  beforeEach(() => {
+    (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    (globalThis as { Notification?: unknown }).Notification = FakeNotification;
+    FakeEventSource.all = [];
+    FakeEventSource.last = null;
+    FakeNotification.reset();
+    requested.length = 0;
+    controller = new AppController();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { EventSource?: unknown }).EventSource;
+    delete (globalThis as { Notification?: unknown }).Notification;
+  });
+
+  /** 打开一条正在跑的 Run，让 per-run 事件流真的连上 */
+  async function openLiveRun(): Promise<void> {
+    const run = runSummary("run_1", "running");
+    installFetch({
+      "/api/state": { body: snapshot({ runs: [run], currentSessionId: "s1.jsonl" }) },
+      "/api/sessions/s1.jsonl": { body: sessionDetail("s1.jsonl", "历史问题") },
+    });
+    await controller.boot();
+    await settle();
+    await controller.actions.openRun("run_1");
+    await settle();
+  }
+
+  const runStreams = (): FakeEventSource[] =>
+    FakeEventSource.all.filter((source) => source.url.includes("/api/runs/run_1/events"));
+
+  it("retryStreams：两条流都重开、标记清空，并带着游标续订", async () => {
+    await openLiveRun();
+    const stream = runStreams()[0];
+    assert.ok(stream, "打开 Run 时应当连上 per-run 流");
+    // 收到一帧之后游标推进到 7：手动重连要接着它续，而不是从 0 重放
+    stream.emit("run_state", { type: "run_state", status: "running" }, 7);
+
+    controller.store.update((state) => {
+      state.globalNote = "后台流断了";
+      state.globalLost = true;
+      state.view.streamNote = "事件流断开";
+      state.view.streamLost = true;
+    });
+    const before = FakeEventSource.all.length;
+
+    controller.actions.retryStreams();
+    await settle();
+
+    const state = controller.store.current;
+    assert.equal(state.globalNote, null);
+    assert.equal(state.globalLost, false);
+    assert.equal(state.view.streamNote, null);
+    assert.equal(state.view.streamLost, false);
+    assert.ok(FakeEventSource.all.length >= before + 2, "全局流与 Run 流都要重开");
+    const resumed = runStreams().at(-1);
+    assert.ok(resumed?.url.endsWith("cursor=7"), `游标要接着上次的：${resumed?.url}`);
+  });
+
+  it("retryStreams：没有活动的 Run 时回到排队中的下一条", async () => {
+    installFetch({ "/api/state": { body: snapshot() } });
+    await controller.boot();
+    await settle();
+
+    controller.actions.retryStreams();
+    await settle();
+
+    assert.ok(
+      requested.some((entry) => entry.url.includes("/api/state")),
+      "重连要顺手对齐一次服务端状态",
+    );
+    assert.equal(controller.store.current.view.streamLost, false);
+  });
+
+  /**
+   * 缺口的自愈由 stream_gap 自己触发：拉会话详情、对齐时间线、从缺口处续订。
+   * 这条用例同时钉住"不许从 0 重放"——重放会把已经上屏的正文再叠一遍。
+   */
+  it("stream_gap：用会话历史对齐时间线，并从缺口处续订", async () => {
+    await openLiveRun();
+    const stream = runStreams()[0]!;
+    const before = runStreams().length;
+
+    stream.emit("stream_gap", { type: "stream_gap", lastSeq: 42 }, 0);
+    await settle();
+
+    const state = controller.store.current;
+    assert.equal(state.view.gap, false, "自愈成功后不该再挂着缺口横幅");
+    assert.ok(
+      state.view.items.some((item) => item.kind === "user" && item.text === "历史问题"),
+      "落盘的历史要被合进时间线",
+    );
+    assert.equal(runStreams().length, before + 1, "要重新挂一条流");
+    const resumed = runStreams().at(-1)!;
+    assert.ok(resumed.url.endsWith("cursor=42"), `从缺口最后一条续订：${resumed.url}`);
+  });
+
+  it("stream_gap：重同步失败时保留缺口并说清原因（横幅不会假消失）", async () => {
+    await openLiveRun();
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/sessions/s1.jsonl": { status: 500, body: { error: "会话文件坏了" } },
+    });
+    const stream = runStreams()[0]!;
+
+    stream.emit("stream_gap", { type: "stream_gap", lastSeq: 9 }, 0);
+    await settle();
+
+    const state = controller.store.current;
+    assert.equal(state.view.gap, true);
+    assert.match(state.view.streamNote ?? "", /自动重同步失败/);
+    assert.match(state.view.streamNote ?? "", /会话文件坏了/);
+  });
+
+  it("openFile：带上 runId 读那次执行的目录，内容落到 store", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": {
+        body: { path: "src/a.ts", content: "export const a = 1;", size: 20, truncated: false, binary: false },
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("src/a.ts", "run_1");
+    await settle();
+
+    const state = controller.store.current;
+    assert.deepEqual(state.ui.file, { path: "src/a.ts", runId: "run_1" });
+    assert.equal(state.file?.content, "export const a = 1;");
+    assert.equal(state.fileLoading, false);
+    const call = requested.find((entry) => entry.url.includes("/api/file"));
+    assert.ok(call?.url.includes("path=src%2Fa.ts"), call?.url ?? "");
+    assert.ok(call?.url.includes("runId=run_1"), "隔离任务必须读 worktree，而不是基准工作区");
+    assert.ok(call?.url.includes("root=D%3A%2Fws"), "跨工作区的文件名会撞，根也要带上");
+  });
+
+  it("openFile 失败：错误留在面板里，而不是弹一条转瞬即逝的提示", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": { status: 400, body: { error: "路径越界：不在工作区内" } },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("../etc/passwd");
+    await settle();
+
+    const state = controller.store.current;
+    assert.equal(state.file, null);
+    assert.equal(state.fileLoading, false);
+    assert.match(state.fileError ?? "", /路径越界/);
+  });
+
+  /**
+   * 连点两个路径时，先发的那条可能后回来（大文件更慢）。后点的必须赢，
+   * 否则用户看到的是上一个文件的内容，标题却写着这一个。
+   */
+  it("openFile：慢请求回来不能盖掉后点的文件", async () => {
+    const pending: Array<(body: unknown) => void> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/file")) {
+        return new Promise<Response>((resolve) => {
+          pending.push((body) =>
+            resolve(
+              new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            ),
+          );
+        });
+      }
+      return jsonResponse(snapshot());
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("slow.ts");
+    controller.actions.openFile("fast.ts");
+    await settle();
+    assert.equal(pending.length, 2);
+
+    pending[1]!({ path: "fast.ts", content: "FAST", size: 4, truncated: false, binary: false });
+    await settle();
+    assert.equal(controller.store.current.file?.content, "FAST");
+
+    pending[0]!({ path: "slow.ts", content: "SLOW", size: 4, truncated: false, binary: false });
+    await settle();
+    assert.equal(controller.store.current.file?.content, "FAST", "后点的文件不能被旧请求覆盖");
+  });
+
+  it("closeFile：关掉后连在路上的请求也不该再写回状态", async () => {
+    const pending: Array<(body: unknown) => void> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/file")) {
+        return new Promise<Response>((resolve) => {
+          pending.push((body) =>
+            resolve(
+              new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            ),
+          );
+        });
+      }
+      return jsonResponse(snapshot());
+    }) as typeof fetch;
+    await controller.boot();
+    await settle();
+
+    controller.actions.openFile("a.ts");
+    await settle();
+    controller.actions.closeFile();
+    pending[0]!({ path: "a.ts", content: "LATE", size: 4, truncated: false, binary: false });
+    await settle();
+
+    assert.equal(controller.store.current.ui.file, null);
+    assert.equal(controller.store.current.file, null);
+  });
+
+  it("Esc 先收文件预览，再收别的层（预览在最上面）", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/file": {
+        body: { path: "a.ts", content: "x", size: 1, truncated: false, binary: false },
+      },
+    });
+    await controller.boot();
+    await settle();
+    controller.actions.openFile("a.ts");
+    await settle();
+    assert.ok(controller.store.current.ui.file);
+
+    controller.handleEscape();
+    assert.equal(controller.store.current.ui.file, null);
+    assert.equal(controller.store.current.ui.settings, false, "一次 Esc 只收一层");
+  });
+});

@@ -13,8 +13,10 @@ import {
   diffStatsByFile,
   formatClock,
   formatDuration,
+  formatBytes,
   formatSessionTime,
   formatTokens,
+  parseDiffFiles,
   parseDiffRows,
   resultText,
   riskMeta,
@@ -296,6 +298,117 @@ describe("diffStatsByFile", () => {
 
   it("空 patch 给空数组", () => {
     assert.deepEqual(diffStatsByFile(""), []);
+  });
+});
+
+describe("parseDiffFiles", () => {
+  const PATCH = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "index 111..222 100644",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,2 +1,3 @@",
+    " keep",
+    "-gone",
+    "+one",
+    "+two",
+    "@@ -10,2 +11,2 @@",
+    " ctx",
+    "-old",
+    "+new",
+    "diff --git a/src/b.ts b/src/b.ts",
+    "--- a/src/b.ts",
+    "+++ b/src/b.ts",
+    "@@ -1 +1,2 @@",
+    "keep",
+    "+added",
+  ].join("\n");
+
+  it("按文件分组，hunk 头单独一层，增删统计与 diffStatsByFile 一致", () => {
+    const blocks = parseDiffFiles(PATCH);
+    assert.equal(blocks.length, 2);
+    const [a, b] = blocks;
+    assert.equal(a?.file, "src/a.ts");
+    assert.equal(a?.hunks.length, 2, "两个 @@ 就是两个可折叠的块");
+    assert.equal(a?.hunks[0]?.header, "@@ -1,2 +1,3 @@");
+    assert.equal(a?.hunks[0]?.rows.length, 4);
+    assert.equal(a?.hunks[1]?.rows.length, 3);
+    assert.equal(a?.additions, 3);
+    assert.equal(a?.deletions, 2);
+    assert.equal(b?.file, "src/b.ts");
+    assert.deepEqual(
+      blocks.map((block) => [block.file, block.additions, block.deletions]),
+      diffStatsByFile(PATCH).map((stat) => [stat.file, stat.additions, stat.deletions]),
+    );
+  });
+
+  it("文件头（diff --git / index / --- / +++）留在 headerRows，不混进 hunk", () => {
+    const [first] = parseDiffFiles(PATCH);
+    assert.deepEqual(
+      first?.headerRows.map((row) => row.text),
+      ["diff --git a/src/a.ts b/src/a.ts", "index 111..222 100644", "--- a/src/a.ts", "+++ b/src/a.ts"],
+    );
+    assert.ok(first?.hunks.every((hunk) => hunk.rows.every((row) => row.kind !== "meta")));
+  });
+
+  it("重命名以 +++ 的 b 侧为准（折叠标题要显示最终文件名）", () => {
+    const patch = [
+      "diff --git a/old/name.ts b/new/name.ts",
+      "similarity index 90%",
+      "rename from old/name.ts",
+      "rename to new/name.ts",
+      "--- a/old/name.ts",
+      "+++ b/new/name.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    assert.equal(parseDiffFiles(patch)[0]?.file, "new/name.ts");
+  });
+
+  /** 399 之前 patch 被截断时，第一段可能没有 `diff --git`：仍要能折叠 */
+  it("从文件中间开始的截断 patch 也有容器，不丢行", () => {
+    const blocks = parseDiffFiles(["@@ -1 +1 @@", "-a", "+b"].join("\n"));
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0]?.file, "（未知文件）");
+    assert.equal(blocks[0]?.hunks[0]?.header, "@@ -1 +1 @@");
+    assert.equal(blocks[0]?.hunks[0]?.rows.length, 2);
+  });
+
+  it("hunk 之前的增删行（极少见）归到一个无头 hunk，而不是被丢掉", () => {
+    const blocks = parseDiffFiles(["diff --git a/a.ts b/a.ts", "+orphan"].join("\n"));
+    assert.equal(blocks[0]?.hunks[0]?.header, null);
+    assert.equal(blocks[0]?.hunks[0]?.rows[0]?.text, "orphan");
+    assert.equal(blocks[0]?.additions, 1);
+  });
+
+  it("CRLF 的 patch 也按行拆（Windows 上 git 输出过 CRLF）", () => {
+    const blocks = parseDiffFiles(PATCH.split("\n").join("\r\n"));
+    assert.equal(blocks.length, 2);
+    assert.equal(blocks[0]?.file, "src/a.ts");
+    assert.equal(blocks[0]?.additions, 3);
+  });
+
+  it("空 patch 给空数组", () => {
+    assert.deepEqual(parseDiffFiles(""), []);
+  });
+});
+
+describe("formatBytes", () => {
+  it("按 1024 进位，不是 1000（文件大小与 `ls -l` 对得上）", () => {
+    assert.equal(formatBytes(0), "0 B");
+    assert.equal(formatBytes(512), "512 B");
+    assert.equal(formatBytes(1024), "1 KB");
+    assert.equal(formatBytes(1536), "1.5 KB");
+    assert.equal(formatBytes(12_800), "13 KB", "两位以上取整，别写成 12.5 KB");
+    assert.equal(formatBytes(1024 * 1024), "1 MB");
+    assert.equal(formatBytes(256 * 1024), "256 KB");
+  });
+
+  it("非法输入不炸", () => {
+    assert.equal(formatBytes(-1), "0 B");
+    assert.equal(formatBytes(Number.NaN), "0 B");
+    assert.equal(formatBytes(Number.POSITIVE_INFINITY), "0 B");
   });
 });
 

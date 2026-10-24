@@ -22,6 +22,8 @@ import type { Actions } from "../actions";
 import type { TimelineItem, ToolStatus } from "../state";
 import { approvalStatusText, describeArgs, noticeTone } from "../items";
 import { formatClock, formatDuration, riskMeta, toolMetaLine } from "../format";
+import { languageOfTool } from "../highlight";
+import { CodeBlock } from "./CodeBlock";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -92,7 +94,9 @@ export const TimelineItemRow = memo(
         );
 
       case "tool":
-        return <ToolCard item={item} expanded={expanded} onToggle={onToggle} />;
+        return (
+          <ToolCard item={item} expanded={expanded} onToggle={onToggle} actions={actions} />
+        );
 
       case "approval":
         return <ApprovalCard item={item} actions={actions} />;
@@ -172,10 +176,12 @@ function ToolCard({
   item,
   expanded,
   onToggle,
+  actions,
 }: {
   item: Extract<TimelineItem, { kind: "tool" }>;
   expanded: boolean;
   onToggle: (id: string) => void;
+  actions: Actions;
 }): React.ReactElement {
   const args = describeArgs(item);
   const lines = item.output.split("\n");
@@ -187,6 +193,9 @@ function ToolCard({
       ? item.output
       : lines.slice(0, OUTPUT_PREVIEW_LINES).join("\n");
   const hasOutput = item.output.length > 0;
+  // 只有"读/写文件"的输出有确定的语言；grep / bash 的输出是若干行异源文本，
+  // 硬套语法色只会让每行颜色乱跳（见 highlight.ts）
+  const language = languageOfTool(item.name, item.args);
 
   return (
     <div className="row">
@@ -207,11 +216,21 @@ function ToolCard({
         </button>
         {hasOutput ? (
           <>
-            <pre
+            <CodeBlock
+              text={shown}
+              language={language}
+              actions={actions}
+              runId={item.runId}
               className={`tool-out${item.status === "failed" ? " err" : ""}`}
-            >
-              {shown}
-            </pre>
+            />
+            {/* 被裁过才说明"这不是全部"：否则用户会以为 grep 的结果就这几行 */}
+            {!expanded && long ? (
+              <div className="tool-links">
+                <span className="tool-trunc">
+                  {`只显示前 ${OUTPUT_PREVIEW_LINES} 行 / ${OUTPUT_PREVIEW_CHARS} 字`}
+                </span>
+              </div>
+            ) : null}
             {/* 输出被裁过才给这两个链接：看全的入口与复制。短输出本来就
                 全在眼前，再摆一排链接只是噪音（设计稿第 2 页同此） */}
             {long ? (

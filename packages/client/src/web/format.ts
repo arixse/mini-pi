@@ -298,54 +298,124 @@ function plusPath(rest: string): string | null {
  * patch 被截断（`MAX_DIFF_CHARS`）时统计也是截断的，不假装完整。
  */
 export function diffStatsByFile(patch: string): FileDiffStats[] {
-  const order: string[] = [];
-  const counts = new Map<string, { additions: number; deletions: number }>();
-  const slot = (file: string | null): void => {
-    if (file === null || counts.has(file)) {
-      return;
-    }
-    order.push(file);
-    counts.set(file, { additions: 0, deletions: 0 });
+  return parseDiffFiles(patch).map((block) => ({
+    file: block.file,
+    additions: block.additions,
+    deletions: block.deletions,
+  }));
+}
+
+/** 一个 hunk：头 + 正文，可整块折叠 */
+export type DiffHunk = {
+  /** hunk 头原文（`@@ -12,3 +12,4 @@`）；极少见的无头块为 null */
+  header: string | null;
+  rows: DiffRow[];
+};
+
+/** 一个文件的改动块：面板按它渲染「文件 → hunk → 行」三层 */
+export type DiffFileBlock = {
+  file: string;
+  /** hunk 之前的文件头（`diff --git` / `index` / `---` / `+++`） */
+  headerRows: DiffRow[];
+  hunks: DiffHunk[];
+  additions: number;
+  deletions: number;
+};
+
+/**
+ * 把 unified patch 拆成「文件 → hunk → 行」。
+ *
+ * 与 {@link parseDiffRows} 共用同一套行判定：折叠只是**展示**上的分组，
+ * 行号、增删统计的口径不另算一份——否则展开/收起会改变数字。
+ */
+export function parseDiffFiles(patch: string): DiffFileBlock[] {
+  // 空 patch 不是"一个未知文件的空改动"：什么都不该画
+  if (patch.trim().length === 0) {
+    return [];
+  }
+  const blocks: DiffFileBlock[] = [];
+  let current: DiffFileBlock | null = null;
+  let hunk: DiffHunk | null = null;
+
+  const startBlock = (file: string, row?: DiffRow): DiffFileBlock => {
+    const block: DiffFileBlock = {
+      file,
+      headerRows: row ? [row] : [],
+      hunks: [],
+      additions: 0,
+      deletions: 0,
+    };
+    blocks.push(block);
+    return block;
   };
 
-  let current: string | null = null;
-  for (const line of patch.split("\n")) {
-    if (line.startsWith("diff --git ")) {
-      current = gitDiffPath(line.slice("diff --git ".length));
-      slot(current);
+  for (const row of parseDiffRows(patch)) {
+    if (row.kind === "meta" && row.text.startsWith("diff --git ")) {
+      const file = gitDiffPath(row.text.slice("diff --git ".length)) ?? "（未知文件）";
+      current = startBlock(file, row);
+      hunk = null;
       continue;
     }
-    if (line.startsWith("+++ ")) {
-      // +++ 是这个块的权威路径：diff --git 行对不出路径时（坏 patch）由它兜底。
-      // 整文件删除（+++ /dev/null）没有 b 侧：保持 diff --git 给的 a 侧路径，
-      // 让删除行仍能记到那个文件头上，而不是凭空丢掉统计
-      const path = plusPath(line.slice(4));
-      if (path !== null) {
-        current = path;
+    if (!current) {
+      // 截断的 patch 可能从文件中间开始：仍然给它一个可折叠的容器
+      current = startBlock("（未知文件）");
+      hunk = null;
+    }
+    if (row.kind === "hunk") {
+      hunk = { header: row.text, rows: [] };
+      current.hunks.push(hunk);
+      continue;
+    }
+    if (row.kind === "meta") {
+      if (row.text.startsWith("+++ ")) {
+        const path = plusPath(row.text.slice(4));
+        // 整文件删除时 +++ 是 /dev/null：保留 diff --git 给的 a 侧路径
+        if (path !== null) {
+          current.file = path;
+        }
       }
-      slot(current);
+      if (hunk) {
+        hunk.rows.push(row);
+      } else {
+        current.headerRows.push(row);
+      }
       continue;
     }
-    if (
-      line.startsWith("--- ") ||
-      line.startsWith("index ") ||
-      line.startsWith("@@") ||
-      line.startsWith("\\")
-    ) {
-      continue;
+    if (!hunk) {
+      hunk = { header: null, rows: [] };
+      current.hunks.push(hunk);
     }
-    if (current === null) {
-      continue;
-    }
-    const entry = counts.get(current);
-    if (!entry) {
-      continue;
-    }
-    if (line.startsWith("+")) {
-      entry.additions += 1;
-    } else if (line.startsWith("-")) {
-      entry.deletions += 1;
+    hunk.rows.push(row);
+    if (row.kind === "add") {
+      current.additions += 1;
+    } else if (row.kind === "del") {
+      current.deletions += 1;
     }
   }
-  return order.map((file) => ({ file, ...counts.get(file)! }));
+
+  return blocks;
+}
+
+/**
+ * 字节数：文件预览头部的 `12.4 KB`。
+ *
+ * 与 token 数分开一个函数：一个按 1024 进位、一个按 1000，混用会在
+ * "这个文件多大"这种只需要大致数量的地方给出对不上的数字。
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const shown = value >= 10 ? Math.round(value) : Number(value.toFixed(1));
+  return `${shown} ${units[unit]}`;
 }

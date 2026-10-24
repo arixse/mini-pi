@@ -741,6 +741,11 @@ svg.ic {
   margin-bottom: 12px;
 }
 
+/* 窗口化的条目容器：子元素的 margin 也要算进自身高度（见 Timeline.MeasuredItem） */
+.v-item {
+  display: flow-root;
+}
+
 .row.right {
   justify-content: flex-end;
 }
@@ -1061,6 +1066,62 @@ svg.ic {
   margin: 0;
 }
 
+/* 输出被裁时的说明：必须自己说出来，别让人以为输出就这几行 */
+.tool-trunc {
+  font-size: 11px;
+  color: var(--Client-text-tertiary);
+}
+
+/* 工具输出里的可点路径：像是链接，但按按钮处理（键盘可达、不跳页） */
+.path-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--Client-accent-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.path-link:hover {
+  text-decoration-style: solid;
+}
+
+/* 语法高亮的四类 token：只借"语义色"的色相，不表示对错 */
+.tok-keyword {
+  color: var(--Client-accent-text);
+}
+
+.tok-string {
+  color: var(--Client-ok-text);
+}
+
+.tok-number {
+  color: var(--Client-warn-text);
+}
+
+.tok-key {
+  color: var(--Client-diff-add-text);
+}
+
+.tok-tag {
+  color: var(--Client-accent-solid);
+}
+
+.tok-comment {
+  color: var(--Client-text-tertiary);
+  font-style: italic;
+}
+
+.tok-plain {
+  color: inherit;
+}
+
 /* ---------------- 审批卡片 ---------------- */
 
 /* warn-soft 底：中等风险。高危单独换 danger-soft，不叠加降级理由 */
@@ -1276,6 +1337,25 @@ svg.ic {
 .bar-ok {
   background: var(--Client-ok-soft);
   color: var(--Client-ok-text);
+}
+
+/* 提示条里的动作：不撑高整条，也不抢警告文字的颜色 */
+.bar-action {
+  margin-left: auto;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: var(--r-input);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.bar-action:hover {
+  opacity: 1;
 }
 
 /* ---------------- 输入区 ----------------
@@ -1932,25 +2012,58 @@ svg.ic {
   overflow: hidden;
 }
 
-/* 文件条：一行一文件，路径居左、该文件的 +48 −6 居右 */
-.diff-files {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* 每个文件一块：头部可折叠，块内再按 hunk 折叠。
+   折叠只影响展示，+x −y 始终来自整份 patch 的同一次解析 */
+.diff-file-block {
+  border-bottom: 1px solid var(--Client-border-subtle);
 }
 
-.diff-file {
+.diff-file-block:last-child {
+  border-bottom: 0;
+}
+
+.diff-file-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--Client-text-secondary);
-  background: var(--Client-bg-input);
-  border: 1px solid var(--Client-border-subtle);
-  border-radius: 6px;
+  gap: 8px;
   padding: 4px 8px;
+  background: var(--Client-bg-input);
+  border-bottom: 1px solid var(--Client-border-subtle);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.diff-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.diff-caret {
+  flex: none;
+  width: 12px;
+  color: var(--Client-text-tertiary);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.diff-file-head .diff-file-path {
+  flex: 1 1 auto;
+}
+
+.diff-file-head .tool-more {
+  flex: none;
+  margin: 0;
 }
 
 .diff-file-path {
@@ -1958,6 +2071,43 @@ svg.ic {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--Client-text-secondary);
+}
+
+/* hunk 头本身也是折叠开关：点 `@@` 那一行收起这一段 */
+.diff-hunk-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 1px 8px;
+  border: 0;
+  background: var(--Client-bg-hover);
+  color: var(--Client-diff-gutter);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-hunk-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-hunk-note {
+  flex: none;
+  color: var(--Client-text-tertiary);
+}
+
+.diff-file-body {
+  padding-bottom: 2px;
 }
 
 .diff-stat {
@@ -1965,6 +2115,27 @@ svg.ic {
   gap: 8px;
   font-family: var(--mono);
   font-size: 12px;
+  flex: none;
+}
+
+/* 文件预览：整段正文按代码块摆，超长行折行（不横向滚动整页） */
+.file-body {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--Client-bg-code);
+  border-radius: var(--r-input);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--Client-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-meta {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--Client-text-tertiary);
 }
 
 .diff-stat .add {

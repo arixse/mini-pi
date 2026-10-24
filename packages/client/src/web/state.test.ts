@@ -25,6 +25,7 @@ import {
   openSession,
   pendingApprovals,
   removeItem,
+  syncItemsFromMessages,
   upsertItem,
   workspaceGroups,
   workspaceMatches,
@@ -961,5 +962,77 @@ describe("步数：turn_start 的序号直接当权威值", () => {
     view.activeRunId = "run1";
     applyRunEvent(view, "run2", { type: "turn_start", turn: 7 });
     assert.equal(view.steps, 0);
+  });
+});
+
+/**
+ * 缺口自愈：用会话文件重建的权威条目去对齐当前时间线。
+ *
+ * 这里最容易写错的两件事：
+ * - 整条替换会把"还没落盘的当前回合"抹掉——那正是用户此刻在看的东西；
+ * - 不认 id 会叠成两份，同一段回答在屏幕上出现两次。
+ */
+describe("syncItemsFromMessages", () => {
+  /** 造一条流式中的助手条目：它不在会话文件里，但必须活下来 */
+  function liveAssistant(view: View, id: string, text: string): void {
+    upsertItem(view, {
+      kind: "assistant",
+      id,
+      text,
+      streaming: true,
+      locked: false,
+    });
+  }
+
+  it("快照里的条目以快照为准，没落盘的条目原地保留在后面", () => {
+    const view = emptyView();
+    view.items = itemsFromMessages([userMessage("旧问题")]);
+    liveAssistant(view, "live:1", "正在输出的回答");
+    view.gap = true;
+
+    syncItemsFromMessages(view, [userMessage("旧问题"), assistantText("已落盘的回答")]);
+
+    assert.deepEqual(
+      view.items.map((item) => item.kind),
+      ["user", "assistant", "assistant"],
+    );
+    assert.equal(view.items[2]?.kind === "assistant" ? view.items[2].text : "", "正在输出的回答");
+    assert.equal(view.gap, false, "缺口已经由权威历史覆盖");
+  });
+
+  it("同一 id 不会出现两份：快照覆盖原位，而不是追加", () => {
+    const view = emptyView();
+    const messages = [userMessage("问题"), assistantText("回答")];
+    view.items = itemsFromMessages(messages);
+    const before = view.items.length;
+
+    syncItemsFromMessages(view, messages);
+    assert.equal(view.items.length, before);
+    assert.equal(new Set(view.items.map((item) => item.id)).size, before);
+  });
+
+  it("快照里有的顺序优先：权威历史排在前面，实时条目跟在后面", () => {
+    const view = emptyView();
+    liveAssistant(view, "live:1", "实时");
+    syncItemsFromMessages(view, [userMessage("一"), assistantText("二")]);
+    assert.deepEqual(
+      view.items.map((item) => item.id),
+      [messageId(userMessage("一")), messageId(assistantText("二")), "live:1"],
+    );
+  });
+
+  it("两边都空时只清掉缺口标记，不塞一个空条目", () => {
+    const view = emptyView();
+    view.gap = true;
+    syncItemsFromMessages(view, []);
+    assert.deepEqual(view.items, []);
+    assert.equal(view.gap, false);
+  });
+
+  it("快照为空但有实时条目：一个都不丢（会话文件还没落盘）", () => {
+    const view = emptyView();
+    liveAssistant(view, "live:1", "唯一的回答");
+    syncItemsFromMessages(view, []);
+    assert.equal(view.items.length, 1);
   });
 });

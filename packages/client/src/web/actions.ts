@@ -45,6 +45,14 @@ export type Actions = {
   /** 打开某个隔离 Run 的变更面板（读 diff） */
   openDiff: (runId: string) => void;
   closeDiff: () => void;
+  /**
+   * 只读预览一个文件（工具输出里的可点路径、变更面板文件头的「打开」）。
+   *
+   * `runId` 用来定位**那次执行**的目录：隔离任务改的是 worktree，
+   * 不传就会去基准工作区找，找到的是另一份内容（或根本不存在）。
+   */
+  openFile: (path: string, runId?: string) => void;
+  closeFile: () => void;
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
@@ -115,4 +123,10 @@ export type Actions = {
   cancelDelete: () => void;
   confirmDelete: () => Promise<void>;
   retry: () => void;
+  /**
+   * 手动重连两条事件流（自动重连放弃后界面上的「重试连接」）。
+   *
+   * 只重建流并对齐一次状态，不刷新整页——草稿、滚动位置与展开状态都留着。
+   */
+  retryStreams: () => void;
 };

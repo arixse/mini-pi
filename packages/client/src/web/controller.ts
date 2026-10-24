@@ -20,6 +20,7 @@ import {
   emptyView,
   openSession as openSessionIn,
   removeItem,
+  syncItemsFromMessages,
   type TimelineItem,
 } from "./state";
 import { ClientStore } from "./store";
@@ -76,6 +77,16 @@ export class AppController {
   private composer: ComposerRef | null = null;
   private stream: StreamHandle | null = null;
   private streamedRunId: string | null = null;
+  /**
+   * 已确认收到的最后一条事件序号。
+   *
+   * 断线重连 / 手动重试都从它续上；从 0 重放会把已经追加过的正文叠一遍。
+   */
+  private streamCursor = 0;
+  /** 正在进行的缺口恢复：同一个 Run 的多次 gap 只跑一次 */
+  private readonly gapRecovery = new Set<string>();
+  /** 当前文件预览的请求标识：连点两个路径时，先回来的那份不该覆盖后点的 */
+  private fileKey: string | null = null;
   /** 乐观插入的用户消息：等服务端把同一条消息发回来时让位给它 */
   private pendingUsers: Array<{ id: string; text: string }> = [];
   /**
@@ -212,6 +223,7 @@ export class AppController {
     this.viewEpoch += 1;
     this.closeStream();
     this.closeDiff();
+    this.closeFile();
     this.pendingUsers = [];
     this.store.update((state) => {
       state.view = emptyView();
@@ -253,13 +265,17 @@ export class AppController {
       onStatus: (status) => {
         this.store.update((state) => {
           state.globalNote = status === "reconnecting" ? "后台事件流断开，正在重连……" : null;
+          if (status === "open") {
+            state.globalLost = false;
+          }
         });
       },
       onError: (message) => {
-        // 停止自动重连：把"刷新页面可恢复"留在界面上，而不是无限转圈
+        // 停止自动重连：把原因留在界面上，并让"重试连接"成为可见的出口
         this.globalStream = null;
         this.store.update((state) => {
           state.globalNote = message;
+          state.globalLost = true;
         });
       },
     });
@@ -429,6 +445,8 @@ export class AppController {
 
   private async openSession(sessionId: string, root?: string): Promise<void> {
     const epoch = ++this.viewEpoch;
+    // 上一个会话的预览属于上一份时间线，换了就不该继续挂在眼前
+    this.closeFile();
     // 跨根打开必须显式带根：sessionId 是文件名，跨工作区会撞
     const targetRoot = root ?? this.store.current.activeRoot;
     try {
@@ -884,6 +902,57 @@ export class AppController {
   }
 
   /**
+   * 只读预览一个文件。
+   *
+   * 与 diff 同一套状态分工：`ui.file` 记住"在看哪个"，数据放 store，
+   * 请求竞态用 key 守——否则连点两个路径时，先发的那条回来会把后点的
+   * 内容盖掉（服务端读大文件可能慢得多）。
+   */
+  private async openFile(path: string, runId?: string): Promise<void> {
+    const root = this.store.current.view.root ?? this.store.current.activeRoot;
+    const key = `${root}\u0000${runId ?? ""}\u0000${path}`;
+    this.fileKey = key;
+    this.store.update((state) => {
+      state.ui.file = { path, runId: runId ?? null };
+      state.file = null;
+      state.fileError = null;
+      state.fileLoading = true;
+    });
+    try {
+      const content = await api.file(path, root || undefined, runId);
+      if (this.fileKey !== key) {
+        return; // 已经换了一份，或用户关掉了
+      }
+      this.store.update((state) => {
+        state.file = content;
+      });
+    } catch (error) {
+      if (this.fileKey !== key) {
+        return;
+      }
+      this.store.update((state) => {
+        state.fileError = describe(error, "读取文件失败");
+      });
+    } finally {
+      if (this.fileKey === key) {
+        this.store.update((state) => {
+          state.fileLoading = false;
+        });
+      }
+    }
+  }
+
+  private closeFile(): void {
+    this.fileKey = null;
+    this.store.update((state) => {
+      state.ui.file = null;
+      state.file = null;
+      state.fileError = null;
+      state.fileLoading = false;
+    });
+  }
+
+  /**
    * 把隔离改动合并回基准工作区。
    *
    * 失败（多半是主工作区也改了同一个文件）不关面板：用户正看着 diff，
@@ -921,6 +990,7 @@ export class AppController {
     this.viewEpoch += 1;
     this.closeStream();
     this.closeDiff();
+    this.closeFile();
     this.pendingUsers = [];
     this.store.update((state) => {
       state.view = emptyView();
@@ -1005,6 +1075,7 @@ export class AppController {
         this.viewEpoch += 1;
         this.closeStream();
         this.closeDiff();
+        this.closeFile();
         this.pendingUsers = [];
         this.store.update((state) => {
           state.view = emptyView();
@@ -1034,36 +1105,44 @@ export class AppController {
   /**
    * 订阅一条 Run。
    *
-   * 游标从 0 起：服务端会把这轮已发生的事件重放一遍，于是"刷新页面"、
+   * `cursor` 缺省 0：服务端会把这轮已发生的事件重放一遍，于是"刷新页面"、
    * "从侧栏点进一个跑了一半的任务"都能补齐完整时间线。归约按 id 幂等，
-   * 重放不会叠出两份。
+   * 重放不会叠出两份。手动重连时传已收到的最后序号，避免重放。
    */
-  private attach(runId: string): void {
-    if (this.streamedRunId === runId && this.stream) {
+  private attach(runId: string, cursor = 0, force = false): void {
+    if (!force && this.streamedRunId === runId && this.stream) {
       return;
     }
     this.closeStream();
     this.streamedRunId = runId;
+    this.streamCursor = cursor;
     this.store.update((state) => {
       state.view.activeRunId = runId;
     });
     // 自动接管队列里的下一条时，状态行/运行头必须跟着换人
     this.syncViewRun(runId);
-    this.stream = subscribeRun(runId, 0, {
+    this.stream = subscribeRun(runId, cursor, {
       onEvent: (event) => this.onEvent(runId, event),
+      onCursor: (seq) => {
+        this.streamCursor = seq;
+      },
       onStatus: (status) => {
         this.store.update((state) => {
           // 断线要显式说出来，别让人以为卡住了
           state.view.streamNote = status === "reconnecting" ? "事件流断开，正在重连……" : null;
+          if (status === "open") {
+            state.view.streamLost = false;
+          }
         });
       },
       onError: (message) => {
-        // 重连无望（多半是这个 Run 已随服务重启消失）：停止重连，
-        // 把原因留在界面上，而不是让"正在重连"无限转下去
+        // 自动重连已放弃（多半是这个 Run 已随服务重启消失）：停止重连，
+        // 把原因留在界面上，并让"重试连接"成为可见的出口
         this.stream = null;
         this.streamedRunId = null;
         this.store.update((state) => {
           state.view.streamNote = message;
+          state.view.streamLost = true;
         });
       },
     });
@@ -1073,6 +1152,78 @@ export class AppController {
     this.stream?.close();
     this.stream = null;
     this.streamedRunId = null;
+  }
+
+  /**
+   * 事件流缺口自愈。
+   *
+   * 服务端的缓冲有上限，长任务的早期事件会被挤掉；此时 `stream_gap` 只告诉
+   * "中间少了一段"。光挂一条横幅等于把修复动作推给用户（"刷新页面"）。
+   * 这里改成：
+   * 1. 拉一次会话详情，用落盘的权威历史对齐时间线（`syncItemsFromMessages`
+   *    保留还在流式输出、尚未落盘的条目）；
+   * 2. 从缺口给出的最后序号续订，而不是从 0 重放（重放会叠正文）。
+   */
+  private async recoverGap(runId: string, lastSeq: number): Promise<void> {
+    if (this.gapRecovery.has(runId)) {
+      return;
+    }
+    const view = this.store.current.view;
+    const sessionId = view.sessionId;
+    const root = view.root ?? this.store.current.activeRoot;
+    if (!sessionId) {
+      return;
+    }
+    this.gapRecovery.add(runId);
+    try {
+      const detail = await api.session(sessionId, root);
+      // 请求回来时用户可能已经切走：这份快照不再属于眼前的时间线
+      if (this.store.current.view.sessionId !== sessionId) {
+        return;
+      }
+      this.store.update((state) => {
+        syncItemsFromMessages(state.view, detail.messages);
+      });
+      // 续订从"缺口最后一条"与"已收到的最新一条"里取较大者：
+      // 缺口帧之后紧跟的重放帧已经处理过，不能再放一遍
+      const resume = Math.max(lastSeq, this.streamCursor);
+      this.attach(runId, resume, true);
+    } catch (error) {
+      this.store.update((state) => {
+        state.view.gap = true;
+        state.view.streamNote = `事件流有缺口，自动重同步失败：${describe(error, "未知原因")}`;
+      });
+    } finally {
+      this.gapRecovery.delete(runId);
+    }
+  }
+
+  /**
+   * 手动重连：两条流都重开，并对齐一次服务端状态。
+   *
+   * 自动重连放弃后，用户唯一的恢复手段曾经是刷新整页——草稿、滚动位置、
+   * 展开状态全丢。这里只重建流，不动时间线。
+   */
+  private retryStreams(): void {
+    this.globalStream?.close();
+    this.globalStream = null;
+    this.store.update((state) => {
+      state.globalNote = null;
+      state.globalLost = false;
+      state.view.streamNote = null;
+      state.view.streamLost = false;
+    });
+    this.startGlobalStream();
+
+    const runId = this.store.current.view.activeRunId;
+    if (runId) {
+      // 带着上次的游标续订：服务端若还有这段缓冲，缺口会被补上
+      this.attach(runId, this.streamCursor, true);
+    } else {
+      this.closeStream();
+      this.attachNextRunIfIdle();
+    }
+    void this.refreshState(true);
   }
 
   private onEvent(runId: string, event: ServerEvent): void {
@@ -1086,9 +1237,19 @@ export class AppController {
 
     this.store.update((state) => applyRunEvent(state.view, runId, event));
 
+    if (event.type === "stream_gap") {
+      // 先如实标记缺口，再自动对齐一次历史：横幅只在自愈失败时留下
+      void this.recoverGap(runId, event.lastSeq);
+      return;
+    }
+
     if (event.type === "run_done") {
       this.stream = null;
       this.streamedRunId = null;
+      this.streamCursor = 0;
+      this.store.update((state) => {
+        state.view.streamLost = false;
+      });
       void this.refreshState().then(() => {
         // 收尾后再同步一次工作区：隔离的「已丢弃」标记要以服务端为准。
         // 带会话守卫：这一小会儿里用户可能已经切去别的会话，
@@ -1169,6 +1330,10 @@ export class AppController {
       this.actions.closeDiff();
       return;
     }
+    if (state.ui.file) {
+      this.actions.closeFile();
+      return;
+    }
     if (state.ui.deleteTarget) {
       this.actions.cancelDelete();
       return;
@@ -1189,6 +1354,8 @@ export class AppController {
       discardWorktree: (runId) => this.discardWorktree(runId),
       openDiff: (runId) => void this.openDiff(runId),
       closeDiff: () => this.closeDiff(),
+      openFile: (path, runId) => void this.openFile(path, runId),
+      closeFile: () => this.closeFile(),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
       newTaskIn: (root) => this.newTaskIn(root),
@@ -1310,6 +1477,7 @@ export class AppController {
         this.booted = null;
         void this.boot();
       },
+      retryStreams: () => this.retryStreams(),
     };
   }
 }

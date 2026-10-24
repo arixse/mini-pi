@@ -14,6 +14,7 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   DirListing,
+  FileContent,
   ProviderView,
   RunDiff,
   RunEventEnvelope,
@@ -43,13 +44,29 @@ export class ApiError extends Error {
  */
 export const REQUEST_TIMEOUT_MS = 15_000;
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * 长操作的超时：读 diff、合并 worktree 都要等 git 扫完整个仓库。
+ *
+ * 15s 对本地小仓库够用，对几万文件的仓库不够——报"超时"时服务端其实还在跑，
+ * 用户重试就会产生第二次合并/第二次 `git add -N`。这类操作宁可等久一点，
+ * 也不要用一句假失败诱导重复操作。
+ */
+export const LONG_REQUEST_TIMEOUT_MS = 120_000;
+
+/** 拉模型列表要经过供应商网络：比本地操作慢，但也不该无限等 */
+export const MODEL_LIST_TIMEOUT_MS = 45_000;
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const abort = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     abort.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
   if (init?.signal) {
     if (init.signal.aborted) {
       abort.abort();
@@ -83,7 +100,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new ApiError(
         0,
         timedOut
-          ? `请求超时（${REQUEST_TIMEOUT_MS / 1000}s）：本地服务没有响应`
+          ? `请求超时（${Math.round(timeoutMs / 1000)}s）：本地服务没有响应`
           : "请求已取消",
       );
     }
@@ -101,8 +118,16 @@ function safeParse(text: string): unknown {
   }
 }
 
-const post = <T>(path: string, body?: unknown): Promise<T> =>
-  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+const post = <T>(
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+): Promise<T> =>
+  request<T>(
+    path,
+    { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) },
+    timeoutMs,
+  );
 
 export const api = {
   state: (): Promise<AppState> => request<AppState>("/api/state"),
@@ -127,10 +152,14 @@ export const api = {
     request<void>(`/api/runs/${encodeURIComponent(runId)}/worktree`, { method: "DELETE" }),
   /** 这次隔离执行改了什么；非隔离 / 跑着 / 已丢弃都是 409 */
   runDiff: (runId: string): Promise<RunDiff> =>
-    request<RunDiff>(`/api/runs/${encodeURIComponent(runId)}/diff`),
+    request<RunDiff>(
+      `/api/runs/${encodeURIComponent(runId)}/diff`,
+      undefined,
+      LONG_REQUEST_TIMEOUT_MS,
+    ),
   /** 把隔离改动应用回基准工作区；冲突时 409，worktree 保留 */
   mergeWorktree: (runId: string): Promise<{ files: string[] }> =>
-    post(`/api/runs/${encodeURIComponent(runId)}/merge`),
+    post(`/api/runs/${encodeURIComponent(runId)}/merge`, undefined, LONG_REQUEST_TIMEOUT_MS),
   runSummaries: (): Promise<RunSummary[]> => request<RunSummary[]>("/api/runs"),
 
   approvals: (): Promise<ApprovalRequest[]> => request<ApprovalRequest[]>("/api/approvals"),
@@ -159,7 +188,11 @@ export const api = {
   removeProvider: (name: string): Promise<AppState> =>
     request<AppState>(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" }),
   models: (provider: string): Promise<{ models: string[]; error: string | null }> =>
-    request(`/api/models?provider=${encodeURIComponent(provider)}`),
+    request(
+      `/api/models?provider=${encodeURIComponent(provider)}`,
+      undefined,
+      MODEL_LIST_TIMEOUT_MS,
+    ),
   saveModel: (payload: {
     provider: string;
     model: string;
@@ -174,6 +207,19 @@ export const api = {
 
   dirs: (path?: string): Promise<DirListing> =>
     request<DirListing>(`/api/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  /**
+   * 读一个工作区文件（工具输出里点路径时用的只读预览）。
+   *
+   * `root` 缺省 = 活动根；跨工作区的工具输出必须带上它，否则文件名会撞。
+   * `runId` 让服务端去**这次执行真正干活的那个目录**找（隔离时是 worktree）：
+   * 隔离任务新建的文件在基准工作区里根本不存在。
+   */
+  file: (path: string, root?: string, runId?: string): Promise<FileContent> =>
+    request<FileContent>(
+      `/api/file?path=${encodeURIComponent(path)}${
+        root ? `&root=${encodeURIComponent(root)}` : ""
+      }${runId ? `&runId=${encodeURIComponent(runId)}` : ""}`,
+    ),
   /** 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务 */
   openWorkspace: (path: string): Promise<WorkspaceView> => post("/api/workspace", { path }),
   /** 显式关闭一个工作区；跑着任务时服务端 409 */
@@ -215,6 +261,13 @@ export type StreamHandlers = {
   onStatus: (status: "open" | "reconnecting") => void;
   /** 重连彻底失败：界面要说清原因并停止重连，而不是永远显示"正在重连" */
   onError: (message: string) => void;
+  /**
+   * 已确认收到的最后一个事件序号。
+   *
+   * 手动重连时从它续上，而不是从 0 重放——重放会把已经追加过的
+   * `message_update` 再叠一遍。
+   */
+  onCursor?: (seq: number) => void;
 };
 
 /** 应用级流：每帧多一个 `runId`，其余语义与 per-run 流相同 */
@@ -222,9 +275,11 @@ export type GlobalStreamHandlers = {
   onEvent: (envelope: RunEventEnvelope) => void;
   onStatus: (status: "open" | "reconnecting") => void;
   onError: (message: string) => void;
+  onCursor?: (seq: number) => void;
 };
 
-export type StreamHandle = { close: () => void };
+/** 一条事件流的句柄：`cursor()` 给手动重连用（见 controller.retryStreams） */
+export type StreamHandle = { close: () => void; cursor: () => number };
 
 /**
  * 第 n 次重连失败后等多久（毫秒）。
@@ -244,6 +299,7 @@ type WireHandlers = {
   onPayload: (payload: unknown) => void;
   onStatus: (status: "open" | "reconnecting") => void;
   onError: (message: string) => void;
+  onCursor?: (seq: number) => void;
 };
 
 /**
@@ -263,6 +319,7 @@ export function subscribeRun(
       onPayload: (payload) => handlers.onEvent(payload as ServerEvent),
       onStatus: handlers.onStatus,
       onError: handlers.onError,
+      ...(handlers.onCursor ? { onCursor: handlers.onCursor } : {}),
     },
     "事件流已断开：这个任务可能已随服务重启消失。刷新页面可重新加载。",
     // 终态之后没有更多事件：主动收掉连接，别等浏览器反复重连
@@ -295,6 +352,7 @@ export function subscribeEvents(cursor: number, handlers: GlobalStreamHandlers):
       },
       onStatus: handlers.onStatus,
       onError: handlers.onError,
+      ...(handlers.onCursor ? { onCursor: handlers.onCursor } : {}),
     },
     "后台事件流已断开：任务状态可能不再自动更新。刷新页面可恢复。",
   );
@@ -359,7 +417,13 @@ function connect(
       source.addEventListener(type, (event) => {
         const message = event as MessageEvent<string>;
         if (message.lastEventId) {
-          current = Number(message.lastEventId);
+          const seq = Number(message.lastEventId);
+          // 游标只能前进：`stream_gap` 那帧带的是"请求时的游标"，
+          // 盲目赋值会把游标退回断点之前，下一次重连再放一遍
+          if (Number.isFinite(seq) && seq > current) {
+            current = seq;
+            handlers.onCursor?.(seq);
+          }
         }
         let payload: unknown;
         try {
@@ -388,6 +452,7 @@ function connect(
       source?.close();
       source = null;
     },
+    cursor: () => current,
   };
 
   open();

@@ -18,6 +18,7 @@ import type { AgentMessage } from "@minipi/core/shared/protocol";
 import type {
   AppState as ServerSnapshot,
   ApprovalRequest,
+  FileContent,
   RunDiff,
   RunPhase,
   RunSummary,
@@ -77,6 +78,12 @@ export type TimelineItem = {
       output: string;
       startedAt: number | null;
       durationMs: number | null;
+      /**
+       * 产出这条输出的 Run。点输出里的路径时要读**那次执行**的目录
+       * （隔离时是 worktree，基准工作区里可能根本没有这个文件）。
+       * 历史重建出来的条目没有它，退回活动根。
+       */
+      runId?: string;
     }
   | {
       kind: "approval";
@@ -120,6 +127,14 @@ export type View = {
   gap: boolean;
   /** 断流提示：SSE 断了、重连中…… */
   streamNote: string | null;
+  /**
+   * 断流已到"自动重连放弃"的程度。
+   *
+   * 与 `streamNote` 分开：`streamNote` 也用来显示"正在重连……"，
+   * 那种情况不该出现"重试"按钮（它正在试）。只有这里为真时，
+   * 界面才给一个真正能恢复的动作。
+   */
+  streamLost: boolean;
   /**
    * 这个 Run 的失败原因（服务端 `run_done.error`）。
    *
@@ -193,6 +208,13 @@ export type ClientState = {
     /** 正在看变更的 Run；null 表示面板关着 */
     diffRunId: string | null;
     /**
+     * 正在预览的文件（工具输出 / 变更面板里点开的路径）。
+     *
+     * 与 `diffRunId` 一样只放"看哪一份"，数据在下面 `file` 里：
+     * 请求竞态由动作层守，组件不做二次判断。
+     */
+    file: { path: string; runId: string | null } | null;
+    /**
      * 审批徽标跳转：时间线看到这一条后把最早挂起的审批卡滚进视野。
      *
      * `nonce` 让"同一条 Run 再点一次"仍然算一次新的跳转；时间线用本地
@@ -204,6 +226,10 @@ export type ClientState = {
   diff: RunDiff | null;
   diffLoading: boolean;
   diffError: string | null;
+  /** 文件预览的数据（与 ui.file 同一条路径） */
+  file: FileContent | null;
+  fileLoading: boolean;
+  fileError: string | null;
   banner: Banner;
   /**
    * 应用级事件流的断线提示。
@@ -212,6 +238,8 @@ export type ClientState = {
    * 这个说的是"别的任务的状态可能不再自动更新"。两者的处置也不一样。
    */
   globalNote: string | null;
+  /** 后台事件流也放弃了自动重连：界面给"重试连接" */
+  globalLost: boolean;
 };
 
 export function emptyView(): View {
@@ -231,6 +259,7 @@ export function emptyView(): View {
     readOnly: false,
     gap: false,
     streamNote: null,
+    streamLost: false,
     runError: null,
     streamingAssistantId: null,
     workspace: null,
@@ -278,13 +307,18 @@ export function initialState(): ClientState {
       sidebar: false,
       deleteTarget: null,
       diffRunId: null,
+      file: null,
       approvalJump: null,
     },
     diff: null,
     diffLoading: false,
     diffError: null,
+    file: null,
+    fileLoading: false,
+    fileError: null,
     banner: null,
     globalNote: null,
+    globalLost: false,
   };
 }
 
@@ -352,11 +386,15 @@ export function findItem<T extends TimelineItem["kind"]>(
  */
 export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineItem[] {
   const items: TimelineItem[] = [];
+  // 按 id 建索引：历史可能有几百条消息，逐条 findIndex 是 O(n²)，
+  // 打开长会话时会明显卡一下
+  const indexById = new Map<string, number>();
   const push = (item: TimelineItem): void => {
-    const index = items.findIndex((existing) => existing.id === item.id);
-    if (index >= 0) {
+    const index = indexById.get(item.id);
+    if (index !== undefined) {
       items[index] = item;
     } else {
+      indexById.set(item.id, items.length);
       items.push(item);
     }
   };
@@ -407,10 +445,11 @@ export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineIt
 
     // toolResult：把结论补回对应的那张卡片
     const id = `t:${message.toolCallId}`;
-    const existing = items.find(
-      (item): item is Extract<TimelineItem, { kind: "tool" }> =>
-        item.kind === "tool" && item.id === id,
-    );
+    const existingIndex = indexById.get(id);
+    const existing =
+      existingIndex === undefined
+        ? undefined
+        : (items[existingIndex] as Extract<TimelineItem, { kind: "tool" }> | undefined);
     const result = {
       kind: "tool" as const,
       id,
@@ -426,6 +465,33 @@ export function itemsFromMessages(messages: readonly AgentMessage[]): TimelineIt
   }
 
   return items;
+}
+
+/**
+ * 用会话文件重建的条目对齐当前时间线（事件流缺口的自愈）。
+ *
+ * 为什么不是整条替换：会话文件只在**回合结束**时落盘，当前这一轮还在流式
+ * 输出的正文、刚发生的工具卡与审批卡都不在文件里。整条替换会把它们抹掉，
+ * 而它们恰恰是用户此刻在看的东西。因此快照里有的以快照为准（权威），
+ * 快照里没有的保留原位追加在后面——它们比文件更新。
+ *
+ * 调用方随后会从缺口的最后一条序号续订事件流，而不是从 0 重放：
+ * 重放会把已经追加过的 `message_update` 再叠一遍。
+ */
+export function syncItemsFromMessages(
+  view: View,
+  messages: readonly AgentMessage[],
+): void {
+  const snapshot = itemsFromMessages(messages);
+  if (snapshot.length === 0 && view.items.length === 0) {
+    view.gap = false;
+    return;
+  }
+  const known = new Set(snapshot.map((item) => item.id));
+  const live = view.items.filter((item) => !known.has(item.id));
+  view.items = [...snapshot, ...live];
+  // 缺口已被权威历史覆盖；剩下没恢复的部分会由后续 delta / message_end 补全
+  view.gap = false;
 }
 
 /** 把服务端快照并进客户端状态；时间线只在"换了会话"时重建 */
@@ -796,6 +862,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         output: "",
         startedAt: Date.now(),
         durationMs: null,
+        runId,
       });
       return;
     }
@@ -816,6 +883,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
           existing?.startedAt === undefined || existing?.startedAt === null
             ? null
             : Date.now() - existing.startedAt,
+        runId: existing?.runId ?? runId,
       });
       return;
     }

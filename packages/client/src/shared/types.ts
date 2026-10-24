@@ -301,6 +301,12 @@ export type RunDiff = {
   runId: string;
   patch: string;
   files: string[];
+  /**
+   * `patch` 是否被服务端截断（`MAX_DIFF_CHARS`）。
+   *
+   * 界面据此单独标注"不完整"，而不是让用户从正文尾巴里那句话去猜。
+   */
+  truncated: boolean;
 };
 
 export type DirEntry = { name: string; path: string };

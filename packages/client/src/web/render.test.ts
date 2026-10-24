@@ -277,6 +277,7 @@ describe("变更面板", () => {
     const diff: RunDiff = {
       runId: "run_1",
       files: ["src/a.ts", "src/b.ts"],
+      truncated: false,
       patch: [
         "diff --git a/src/a.ts b/src/a.ts",
         "--- a/src/a.ts",
