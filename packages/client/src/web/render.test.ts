@@ -35,6 +35,8 @@ const fakeActions = {
   discardWorktree: async () => true,
   openDiff: () => undefined,
   closeDiff: () => undefined,
+  openFile: () => undefined,
+  closeFile: () => undefined,
   mergeWorktree: async () => undefined,
   newTask: () => undefined,
   newTaskIn: async () => undefined,
@@ -64,6 +66,7 @@ const fakeActions = {
   cancelDelete: () => undefined,
   confirmDelete: async () => undefined,
   retry: () => undefined,
+  retryStreams: () => undefined,
 } as unknown as Actions;
 
 function renderComposer(store: ClientStore): string {
@@ -259,7 +262,7 @@ describe("前端组件树", () => {
 });
 
 describe("变更面板", () => {
-  function diffStore(): ClientStore {
+  function diffStore(truncated = false): ClientStore {
     const store = new ClientStore();
     const run: RunSummary = {
       runId: "run_1",
@@ -298,7 +301,7 @@ describe("变更面板", () => {
     store.update((state) => {
       state.runs = [run];
       state.ui.diffRunId = "run_1";
-      state.diff = diff;
+      state.diff = { ...diff, truncated };
     });
     return store;
   }
@@ -314,8 +317,10 @@ describe("变更面板", () => {
 
     assert.match(html, /class="diff-row diff-add"/, "新增行要带 diff-add");
     assert.match(html, /class="diff-row diff-del"/, "删除行要带 diff-del");
-    assert.match(html, /class="diff-row diff-meta"/, "文件头不当成增删行");
-    assert.match(html, /class="diff-row diff-hunk"/);
+    assert.match(html, /class="diff-file-block"/, "按文件分组，一次改十几个文件才折叠得起来");
+    assert.match(html, /class="diff-hunk-head"/, "hunk 头单独一层，可整段折叠");
+    assert.match(html, /@@ -1,2 \+1,3 @@/, "hunk 头原样显示（行号范围是定位信息）");
+    assert.doesNotMatch(html, /diff-row diff-meta/, "文件头不再混进行列表");
     assert.match(html, /\+3/, "面板头给出整体增行数");
     assert.match(html, /−1/, "面板头给出整体删行数");
     assert.match(html, /\+2/, "文件条给出每个文件自己的增行数");
@@ -323,6 +328,33 @@ describe("变更面板", () => {
     assert.match(html, /应用变更/);
     assert.match(html, /放弃变更/);
     assert.match(html, /返回/);
+  });
+
+  /**
+   * 截断的话必须单独挂在顶部：正文尾巴里那句提示会被折叠或滚动藏起来，
+   * 而"这份改动不完整"直接决定用户敢不敢点应用。
+   */
+  it("被截断时有独立横幅（不是藏在正文末尾）", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(true), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.match(html, /变更过大/, "顶部要有截断横幅");
+    assert.match(html, /应用时按完整改动落地/, "截断只是显示不全，应用仍是完整的那份");
+  });
+
+  it("没截断时没有这条横幅（别让提示一直挂着）", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: diffStore(false), actions: fakeActions } },
+        createElement(DiffPanel),
+      ),
+    );
+    assert.doesNotMatch(html, /变更过大/);
   });
 
   it("面板画在主列里：内嵌面板而非遮罩模态", () => {
