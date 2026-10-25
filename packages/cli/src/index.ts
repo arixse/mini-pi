@@ -36,13 +36,17 @@ import chalk from "chalk";
  *
  * 启动时、/reload 与 /model 之后都要走它——换了模型却不换窗口，
  * 小窗口模型（如 gpt-3.5-turbo 的 16k）会在压缩触发前就把请求发过上限（400）。
+ *
+ * `providerName` 用于供应商专属覆盖：同一模型名经不同网关代销时窗口可能不同
+ * （如百炼的 `MiniMax-M3` 只有 192K），不传时只能按全局表推断。
  */
 export async function resolveContextWindowFromSettings(
   settingsStore: SettingsStore,
   modelName: string | null,
+  providerName?: string | null,
 ): Promise<ResolvedContextWindow> {
   const configured = await settingsStore.getContextWindow();
-  return resolveContextWindow({ configured, modelName });
+  return resolveContextWindow({ configured, modelName, providerName });
 }
 
 /**
@@ -69,7 +73,11 @@ export async function applyModelChange(deps: {
   if (model) {
     deps.sessionManager.setModel(model);
   }
-  const resolved = await resolveContextWindowFromSettings(deps.settingsStore, modelName);
+  const resolved = await resolveContextWindowFromSettings(
+    deps.settingsStore,
+    modelName,
+    providerName,
+  );
   return {
     model,
     providerName,
@@ -337,7 +345,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // 上下文窗口：settings.json 的 contextWindow 优先，否则按当前模型名推断
   // （认不出模型名时回退到 128k），用于推导压缩阈值
   const { window: contextWindow, source: contextWindowSource } =
-    await resolveContextWindowFromSettings(settingsStore, modelName);
+    await resolveContextWindowFromSettings(settingsStore, modelName, providerName);
 
   // 子 Agent 开关：默认关闭，打开过就一直开着（/subagent 写回 settings.json）
   const subAgentEnabled = await settingsStore.getSubagentEnabled();

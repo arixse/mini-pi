@@ -346,6 +346,7 @@ export class WorkspaceHost {
     const resolvedWindow = resolveContextWindow({
       configured,
       modelName: this.modelName,
+      providerName: this.providerName,
     });
     this.contextWindow = resolvedWindow.window;
     this.contextWindowSource = resolvedWindow.source;

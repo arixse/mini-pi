@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
+  CONTEXT_WINDOW_RULES,
   DEFAULT_CONTEXT_WINDOW,
+  PROVIDER_CONTEXT_WINDOW_OVERRIDES,
   inferContextWindow,
   matchContextWindowRule,
   normalizeModelName,
@@ -314,5 +316,95 @@ describe("resolveContextWindow（配置 > 推断 > 默认）", () => {
       resolveContextWindow({ configured: 12_345.6 }).window,
       12_345,
     );
+  });
+});
+
+describe("供应商专属覆盖（同一模型名在不同网关）", () => {
+  it("百炼代销的 MiniMax 按 192K 算，不传供应商仍是原厂窗口", () => {
+    assert.strictEqual(inferContextWindow("MiniMax-M3", "bailian"), 196_608);
+    assert.strictEqual(inferContextWindow("MiniMax-M2.7", "bailian"), 196_608);
+    assert.strictEqual(
+      inferContextWindow("MiniMax-M2.5-highspeed", "bailian"),
+      196_608,
+    );
+    // 不传供应商 = 原厂口径，改造前后行为一致
+    assert.strictEqual(inferContextWindow("MiniMax-M3"), 1_000_000);
+    assert.strictEqual(inferContextWindow("MiniMax-M2.7"), 204_800);
+    // 其它供应商不参与覆盖，仍按全局表
+    assert.strictEqual(inferContextWindow("MiniMax-M3", "minimax-cn"), 1_000_000);
+    assert.strictEqual(inferContextWindow("MiniMax-M3", "某个自定义网关"), 1_000_000);
+  });
+
+  it("供应商名去空白、大小写不敏感", () => {
+    assert.strictEqual(inferContextWindow("MiniMax-M3", "  Bailian "), 196_608);
+    assert.strictEqual(inferContextWindow("MiniMax-M3", "BAILIAN"), 196_608);
+  });
+
+  it("供应商可以从 供应商/模型名 标签的第一段取", () => {
+    assert.strictEqual(inferContextWindow("bailian/MiniMax-M3"), 196_608);
+    assert.strictEqual(inferContextWindow("BAILIAN/minimax-m3"), 196_608);
+    // 模型名自身可能带 `/`：供应商永远是最前一段
+    assert.strictEqual(inferContextWindow("bailian/meta-llama/MiniMax-M3"), 196_608);
+    // 显式参数优先于标签
+    assert.strictEqual(
+      inferContextWindow("bailian/MiniMax-M3", "minimax-cn"),
+      1_000_000,
+    );
+  });
+
+  it("覆盖只作用于登记过的前缀，不吞掉更具体的型号", () => {
+    // 百炼的 glm-5.2 仍是 1M；glm-5 / 5.1 的 198K 差异未登记，按全局 200K 取
+    assert.strictEqual(inferContextWindow("glm-5.2", "bailian"), 1_000_000);
+    assert.strictEqual(inferContextWindow("glm-5.1", "bailian"), 200_000);
+    assert.strictEqual(inferContextWindow("MiniMax-M2-her", "bailian"), 65_536);
+    // 千问系列没有覆盖，全部走全局表
+    assert.strictEqual(inferContextWindow("qwen-max", "bailian"), 32_768);
+  });
+
+  it("百炼在售但原厂已下线的型号（mimo-v2.5-pro）", () => {
+    assert.strictEqual(inferContextWindow("mimo-v2.5-pro", "bailian"), 1_000_000);
+    // 其它入口仍是"认不出"，回落到默认窗口
+    assert.strictEqual(inferContextWindow("mimo-v2.5-pro"), DEFAULT_CONTEXT_WINDOW);
+    // 覆盖只认完整前缀，不能把同族的其它型号一起带出来
+    assert.strictEqual(inferContextWindow("mimo-v2.5", "bailian"), DEFAULT_CONTEXT_WINDOW);
+  });
+
+  it("显式配置仍然优先于任何供应商覆盖", () => {
+    assert.deepStrictEqual(
+      resolveContextWindow({
+        configured: 64_000,
+        modelName: "MiniMax-M3",
+        providerName: "bailian",
+      }),
+      { window: 64_000, source: "configured" },
+    );
+  });
+
+  it("resolveContextWindow 透传供应商（显式参数与标签两种来源）", () => {
+    assert.deepStrictEqual(
+      resolveContextWindow({ modelName: "MiniMax-M3", providerName: "bailian" }),
+      { window: 196_608, source: "inferred" },
+    );
+    assert.deepStrictEqual(resolveContextWindow({ modelName: "bailian/MiniMax-M3" }), {
+      window: 196_608,
+      source: "inferred",
+    });
+  });
+
+  it("覆盖条目的前缀不得比它遮蔽的全局条目更短", () => {
+    // 反例：`bailian` 下写一条 `glm-5`，会把 `glm-5.2`（1M）一起盖成 200K。
+    // 运行时不做守卫（会引入未覆盖分支），用这条数据约束把问题挡在 CI。
+    for (const override of PROVIDER_CONTEXT_WINDOW_OVERRIDES) {
+      for (const global of CONTEXT_WINDOW_RULES) {
+        if (
+          global.prefix.startsWith(override.prefix) &&
+          global.prefix.length > override.prefix.length
+        ) {
+          assert.fail(
+            `供应商覆盖 ${override.provider}/${override.prefix} 会遮蔽更具体的全局条目 ${global.prefix}`,
+          );
+        }
+      }
+    }
   });
 });

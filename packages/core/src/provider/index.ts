@@ -294,9 +294,13 @@ export class ModelProviderService {
 export { ProviderStore } from "./provider-store";
 export { SettingsStore } from "./settings-store";
 export {
+  CONTEXT_WINDOW_RULES,
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_CONTEXT_WINDOW,
+  PROVIDER_CONTEXT_WINDOW_OVERRIDES,
+  type ContextWindowRule,
   type ContextWindowSource,
+  type ProviderContextWindowRule,
   type ResolveContextWindowParams,
   type ResolvedContextWindow,
   inferContextWindow,

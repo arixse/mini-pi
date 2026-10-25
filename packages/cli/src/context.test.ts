@@ -32,6 +32,13 @@ describe("上下文窗口的来源与展示", () => {
     assert.deepStrictEqual(info, { window: 204_800, source: "inferred" });
   });
 
+  it("标签里的供应商参与推断：百炼的 MiniMax-M3 只有 192K", () => {
+    const info = contextWindowInfo(
+      makeReplOptions({ modelLabel: "bailian/MiniMax-M3" }),
+    );
+    assert.deepStrictEqual(info, { window: 196_608, source: "inferred" });
+  });
+
   it("认不出模型名时回退到默认 128k", () => {
     const info = contextWindowInfo(makeReplOptions({ modelLabel: "acme/私有模型" }));
     assert.deepStrictEqual(info, {

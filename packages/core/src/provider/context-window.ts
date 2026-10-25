@@ -8,7 +8,8 @@
  *
  * 因此这里的策略是「默认 128k 兜底 + 按模型名推断」：
  * 1. `settings.json` 的 `contextWindow` 最优先（用户显式配置的真实值）；
- * 2. 其次按**当前模型名**匹配内置窗口表（启动时、`/reload`、`/model` 都会重算）；
+ * 2. 其次按**当前模型名 + 供应商**匹配内置窗口表（启动时、`/reload`、`/model`
+ *    都会重算）：先查供应商覆盖表，未命中再查全局表；
  * 3. 认不出的模型名一律回退到 {@link DEFAULT_CONTEXT_WINDOW}。
  *
  * 推断表只登记**有明确出处**的模型，且刻意保守：拿不准的模型宁可让它落到 128k
@@ -27,7 +28,7 @@ export const CONTEXT_WINDOW_SOURCE_LABEL: Record<ContextWindowSource, string> = 
   default: `默认值 ${DEFAULT_CONTEXT_WINDOW}`,
 };
 
-type ContextWindowRule = {
+export type ContextWindowRule = {
   /** 小写模型名前缀；**最长前缀优先**，所以更具体的条目要写得更长 */
   prefix: string;
   /** 该模型（族）的上下文窗口 */
@@ -36,12 +37,18 @@ type ContextWindowRule = {
   note: string;
 };
 
+/** 供应商专属的窗口覆盖：同一模型名经不同网关代销时窗口可能不同 */
+export type ProviderContextWindowRule = ContextWindowRule & {
+  /** 供应商注册名（小写），如 `bailian`；自定义网关不参与 */
+  provider: string;
+};
+
 /**
  * 已知模型的窗口表。
  *
  * 顺序无关（按最长前缀匹配），但同族请按「从具体到笼统」书写，方便阅读。
  */
-const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
+export const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   // ---- OpenAI ----
   // 出处：官方 Models 目录（2026-10）。GPT-6 全系与 GPT-5.4 起都是 1.05M，
   // GPT-5 ~ 5.3 是 400K，GPT-4.1 是 1M，GPT-4o 世代仍是 128K。
@@ -285,6 +292,49 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
 ];
 
 /**
+ * 供应商专属覆盖表：**先查这里，未命中再落到全局表**。
+ *
+ * 只登记「同一模型名经该网关代销时，窗口比全局表更小或更准确」的条目：
+ * - 代销窗口更小的必须登记——估大会在压缩触发前就超窗（400）；
+ * - 全局表里没有的（原厂已下线、网关仍在售）也登记在这里，免得白压几次。
+ *
+ * 匹配规则与全局表一致（最长前缀优先），但覆盖条目的前缀**不得比它遮蔽的
+ * 全局条目更短**：`bailian` 下写一条 `glm-5` 会连 `glm-5.2`（1M）一起盖掉。
+ * 这条约束由单测的数据检查兜住，不在运行时加守卫（会引入未覆盖分支）。
+ */
+export const PROVIDER_CONTEXT_WINDOW_OVERRIDES: readonly ProviderContextWindowRule[] =
+  [
+    // 出处：百炼「文本生成」模型的上下文列（2026-10）。192K = 196_608。
+    {
+      provider: "bailian",
+      prefix: "minimax-m3",
+      window: 196_608,
+      note: "百炼代销 MiniMax-M3（192K；原厂 1M）",
+    },
+    {
+      provider: "bailian",
+      prefix: "minimax-m2.7",
+      window: 196_608,
+      note: "百炼代销 MiniMax-M2.7（192K；原厂 204.8K）",
+    },
+    {
+      provider: "bailian",
+      prefix: "minimax-m2.5",
+      window: 196_608,
+      note: "百炼代销 MiniMax-M2.5（192K；原厂 204.8K）",
+    },
+    // 原厂已下线（调用即 404），百炼仍在售 1M：全局表删掉后只有这里能认出来
+    {
+      provider: "bailian",
+      prefix: "mimo-v2.5-pro",
+      window: 1_000_000,
+      note: "百炼代销 MiMo-V2.5-Pro（1M；原厂已下线）",
+    },
+    // 百炼的 glm-5.1 / glm-5 标 198K，全局表按 200K 取：阈值上只差约 1.2K
+    // token，登记收益抵不过多一份漂移面，故不覆盖。
+  ];
+
+/**
  * 规范化模型名：去空白、转小写、去掉 `settings.json` 里带的 `供应商/` 前缀。
  *
  * 例如 `minimax-cn/MiniMax-M2.7` → `minimax-m2.7`，`gpt-4o-2024-08-06` 保持原样
@@ -296,17 +346,33 @@ export function normalizeModelName(modelName: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-/** 命中的窗口规则；未命中返回 null */
-export function matchContextWindowRule(
-  modelName?: string | null,
-): ContextWindowRule | null {
-  const name = normalizeModelName(modelName ?? "");
-  if (!name) {
-    return null;
-  }
+/** 供应商名规范化：去空白、转小写；空值返回 null（表示未指定） */
+function normalizeProviderName(providerName?: string | null): string | null {
+  const trimmed = providerName?.trim().toLowerCase() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
 
+/**
+ * 从 `供应商/模型名` 标签里取供应商名（**第一段**）。
+ *
+ * 不能用最后一段：模型名自身可能带 `/`（如 `openrouter/meta-llama/llama-3`），
+ * 供应商永远是最前面那一段。
+ */
+function providerNameFromLabel(modelName?: string | null): string | null {
+  const trimmed = modelName?.trim() ?? "";
+  const slash = trimmed.indexOf("/");
+  return slash > 0
+    ? normalizeProviderName(trimmed.slice(0, slash))
+    : null;
+}
+
+/** 在给定规则集里按最长前缀匹配；未命中返回 null */
+function longestPrefixMatch(
+  name: string,
+  rules: readonly ContextWindowRule[],
+): ContextWindowRule | null {
   let best: ContextWindowRule | null = null;
-  for (const rule of CONTEXT_WINDOW_RULES) {
+  for (const rule of rules) {
     if (!name.startsWith(rule.prefix)) {
       continue;
     }
@@ -319,13 +385,50 @@ export function matchContextWindowRule(
 }
 
 /**
+ * 命中的窗口规则；未命中返回 null。
+ *
+ * 供应商优先取显式参数，其次从 `供应商/模型名` 标签里取。先查供应商覆盖表，
+ * 未命中再落全局表——provider 缺省或认不出时行为与只有全局表时完全一致。
+ */
+export function matchContextWindowRule(
+  modelName?: string | null,
+  providerName?: string | null,
+): ContextWindowRule | null {
+  const name = normalizeModelName(modelName ?? "");
+  if (!name) {
+    return null;
+  }
+
+  const provider =
+    normalizeProviderName(providerName) ?? providerNameFromLabel(modelName);
+  if (provider) {
+    const override = longestPrefixMatch(
+      name,
+      PROVIDER_CONTEXT_WINDOW_OVERRIDES.filter(
+        (rule) => rule.provider === provider,
+      ),
+    );
+    if (override) {
+      return override;
+    }
+  }
+  return longestPrefixMatch(name, CONTEXT_WINDOW_RULES);
+}
+
+/**
  * 按模型名推断上下文窗口（token）。
  *
  * 认不出模型名时返回 {@link DEFAULT_CONTEXT_WINDOW}——宁可提前压缩，
  * 也不要因为估大而让请求超窗（400）。
  */
-export function inferContextWindow(modelName?: string | null): number {
-  return matchContextWindowRule(modelName)?.window ?? DEFAULT_CONTEXT_WINDOW;
+export function inferContextWindow(
+  modelName?: string | null,
+  providerName?: string | null,
+): number {
+  return (
+    matchContextWindowRule(modelName, providerName)?.window ??
+    DEFAULT_CONTEXT_WINDOW
+  );
 }
 
 export type ResolveContextWindowParams = {
@@ -333,6 +436,8 @@ export type ResolveContextWindowParams = {
   configured?: number | null;
   /** 当前模型名，可以是 `供应商/模型名`，也可以只是模型名 */
   modelName?: string | null;
+  /** 当前供应商注册名（如 `bailian`）；缺省时从 `modelName` 的标签里取 */
+  providerName?: string | null;
 };
 
 export type ResolvedContextWindow = {
@@ -358,7 +463,7 @@ export function resolveContextWindow(
     return { window: Math.floor(configured), source: "configured" };
   }
 
-  const rule = matchContextWindowRule(params.modelName);
+  const rule = matchContextWindowRule(params.modelName, params.providerName);
   return rule
     ? { window: rule.window, source: "inferred" }
     : { window: DEFAULT_CONTEXT_WINDOW, source: "default" };
