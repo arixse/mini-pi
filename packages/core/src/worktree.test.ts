@@ -54,6 +54,19 @@ function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
+/**
+ * 假出口那组用的 worktree 根目录。
+ *
+ * 必须是真目录：`allocate` 会 `mkdirSync(root)`。此前这里写死 `"/wt"`——
+ * Windows 上它落在当前盘根目录、恰好建得出来；Linux 上非 root 写不进去，
+ * 整组用例以 EACCES 挂掉，而开发者本地（Windows）永远绿着。根目录里
+ * 放什么无所谓（git 命令全是假的），用临时目录即可；清理交给文件
+ * 末尾的 `after` 钩子（它认 `mini-pi-wt-` 前缀）。
+ */
+function fakeWtRoot(): string {
+  return tempDir("mini-pi-wt-fake-");
+}
+
 /** 一个"什么都支持"的假出口：能力探测全绿，其余命令一律成功 */
 function permissive(patch = "", status = ""): CommandRunner & { calls: RecordedCall[] } {
   return scripted((args) => {
@@ -75,7 +88,7 @@ function gitAvailable(): boolean {
 describe("WorkspaceManager（假命令出口）", () => {
   it("不要求隔离时直接返回基准目录，一个 git 命令都不下", () => {
     const run = scripted(() => ok("true"));
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
 
     const workspace = manager.allocate("/repo", { runId: "r1", isolate: false });
 
@@ -85,7 +98,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("能力探测：git 不在 PATH 上", () => {
     const manager = new WorkspaceManager({
-      root: "/wt",
+      root: fakeWtRoot(),
       run: () => ({ status: null, stdout: "", stderr: "", spawnError: "ENOENT" }),
     });
 
@@ -97,7 +110,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("能力探测：不在 git 工作区内", () => {
     const manager = new WorkspaceManager({
-      root: "/wt",
+      root: fakeWtRoot(),
       run: scripted((args) =>
         args[0] === "--version" ? ok("git version 2.55.0") : fail("not a git repository"),
       ),
@@ -111,7 +124,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("能力探测：仓库还没有提交", () => {
     const manager = new WorkspaceManager({
-      root: "/wt",
+      root: fakeWtRoot(),
       run: scripted((args) => {
         if (args[0] === "--version") return ok("git version 2.55.0");
         if (args.includes("--is-inside-work-tree")) return ok("true");
@@ -126,7 +139,7 @@ describe("WorkspaceManager（假命令出口）", () => {
   });
 
   it("能力探测：三个条件都满足", () => {
-    const manager = new WorkspaceManager({ root: "/wt", run: permissive() });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run: permissive() });
 
     assert.deepStrictEqual(manager.capability("/repo"), { supported: true, reasons: [] });
   });
@@ -159,7 +172,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("隔离不可用就抛错，不静默退回共用目录", () => {
     const manager = new WorkspaceManager({
-      root: "/wt",
+      root: fakeWtRoot(),
       run: () => ({ status: null, stdout: "", stderr: "", spawnError: "ENOENT" }),
     });
 
@@ -192,7 +205,7 @@ describe("WorkspaceManager（假命令出口）", () => {
       if (args.includes("branch")) return fail("branch not found");
       return ok();
     });
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const result = manager.release("run_abc12345");
@@ -206,7 +219,7 @@ describe("WorkspaceManager（假命令出口）", () => {
   });
 
   it("回收不存在的工作区：明确失败而不是假装成功", () => {
-    const manager = new WorkspaceManager({ root: "/wt", run: permissive() });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run: permissive() });
     const result = manager.release("nope");
     assert.strictEqual(result.ok, false);
     assert.match(result.error ?? "", /没有找到该工作区/);
@@ -214,7 +227,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("diff：先 add -N 再 diff HEAD（否则新文件不出现在 diff 里）", () => {
     const run = permissive("diff --git a/x b/x\n", "?? new.txt\n");
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const diff = manager.diff("run_abc12345");
@@ -228,7 +241,7 @@ describe("WorkspaceManager（假命令出口）", () => {
   });
 
   it("diff：非隔离时返回 null（那会儿 diff 会混进别人未提交的改动）", () => {
-    const manager = new WorkspaceManager({ root: "/wt", run: permissive() });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run: permissive() });
     manager.allocate("/repo", { runId: "r1", isolate: false });
     assert.strictEqual(manager.diff("r1"), null);
   });
@@ -236,7 +249,7 @@ describe("WorkspaceManager（假命令出口）", () => {
   it("diff 超长时截断并指明完整内容在哪", () => {
     const huge = "x".repeat(MAX_DIFF_CHARS + 10);
     const run = permissive(huge);
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const diff = manager.diff("run_abc12345");
@@ -251,7 +264,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("merge：没有改动时是空操作，不下 apply", () => {
     const run = permissive("", "");
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const result = manager.merge("run_abc12345");
@@ -277,7 +290,7 @@ describe("WorkspaceManager（假命令出口）", () => {
       }
       return ok();
     });
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const result = manager.merge("run_abc12345");
@@ -291,7 +304,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("merge：check 通过后应用，且先 add -N（新文件也要合）", () => {
     const run = permissive("diff --git a/a.txt b/a.txt\n", " M a.txt\n");
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_abc12345", isolate: true });
 
     const result = manager.merge("run_abc12345");
@@ -307,7 +320,7 @@ describe("WorkspaceManager（假命令出口）", () => {
   });
 
   it("merge：非隔离 / 未知工作区都明确失败", () => {
-    const manager = new WorkspaceManager({ root: "/wt", run: permissive() });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run: permissive() });
     manager.allocate("/repo", { runId: "plain", isolate: false });
 
     assert.strictEqual(manager.merge("plain").ok, false);
@@ -318,7 +331,7 @@ describe("WorkspaceManager（假命令出口）", () => {
 
   it("dispose：回收全部，退出时不留 .git/worktrees 元数据", () => {
     const run = permissive();
-    const manager = new WorkspaceManager({ root: "/wt", run });
+    const manager = new WorkspaceManager({ root: fakeWtRoot(), run });
     manager.allocate("/repo", { runId: "run_aaaaaaaa", isolate: true });
     manager.allocate("/repo", { runId: "run_bbbbbbbb", isolate: true });
 

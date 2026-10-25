@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { bootAppServer } from "./app";
 import { EventJournal } from "./journal";
@@ -1980,11 +1980,16 @@ describe("App Server · 文件预览", () => {
   /**
    * 越界必须 400 且**不返回任何内容**：这类请求是攻击面，不是"用户输错了"。
    * 只把状态码做成 400 却在 body 里带上文件内容，等于没有拦。
+   *
+   * 分隔符按平台取：反斜杠只在 Windows 上是分隔符，POSIX 上它是合法
+   * 文件名字符——`..\outside.txt` 在 Linux 上根本不越界，会一路走到
+   * "文件不存在"的 404。写死反斜杠等于让这条用例只在 Windows 上成立。
    */
   it("越界路径 400，且响应里没有文件内容", async () => {
     const server = await startTestServer({ workspaceFiles: { "note.txt": "inside" } });
     try {
-      for (const bad of ["../outside.txt", "..\\outside.txt", "a/../../outside.txt"]) {
+      const esc = `..${sep}outside.txt`;
+      for (const bad of ["../outside.txt", esc, `a${sep}..${sep}..${sep}outside.txt`]) {
         const response = await server.raw(fileUrl(bad));
         assert.strictEqual(response.status, 400, bad);
         const body = (await response.json()) as { error: string; content?: string };

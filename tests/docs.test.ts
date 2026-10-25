@@ -53,6 +53,17 @@ function isUnimplemented(path: string): boolean {
   );
 }
 
+/**
+ * 构建产物目录（`dist/`、`dist-electron/`）不进 git（见 .gitignore）：
+ * 文档引用它们只在"本地跑过构建"的机器上成立，CI 的全新 checkout 里
+ * 必然不存在。这类引用说的是"构建完产物落在哪"，不是"仓库里有什么"，
+ * 因此不参与存在性断言——否则文档每提一次产物位置，CI 就红一次，
+ * 而红色传达的还是一个假问题。
+ */
+function isBuildOutput(path: string): boolean {
+  return path.split("/").some((segment) => segment === "dist" || segment === "dist-electron");
+}
+
 describe("docs 链路完整性", () => {
   it("Markdown 相对链接都指向存在的文件", () => {
     for (const file of docFiles()) {
@@ -71,7 +82,7 @@ describe("docs 链路完整性", () => {
         const raw = match[1];
         // 去掉行尾说明：`src/a.ts:12` 这类带行号的引用只校验文件本身
         const path = raw.replace(/[:：].*$/, "").replace(/\/+$/, "");
-        if (path.includes("*") || isUnimplemented(path)) {
+        if (path.includes("*") || isUnimplemented(path) || isBuildOutput(path)) {
           continue;
         }
         if (!existsSync(path.split("/")[0])) {

@@ -257,12 +257,16 @@ describe("fileWorkspaceMemory", () => {
   it("list / remember / forget 转调同一份文件（默认位置）", async () => {
     const memory = tempMemory();
     const savedHome = process.env.USERPROFILE;
+    const savedPosixHome = process.env.HOME;
     const savedDrive = process.env.HOMEDRIVE;
     const savedPath = process.env.HOMEPATH;
     try {
-      // homedir() 在 Windows 上认 USERPROFILE：指到临时目录，免得写进真家目录
+      // homedir() 在 Windows 上认 USERPROFILE、在 POSIX 上认 HOME：
+      // 两个都要指到临时目录。只改 USERPROFILE 的话，Linux/macOS 上
+      // 记忆文件会写进真家目录，而断言照着临时路径去找——必然对不上。
       const fakeHome = join(memory.file, "..");
       process.env.USERPROFILE = fakeHome;
+      process.env.HOME = fakeHome;
       delete process.env.HOMEDRIVE;
       delete process.env.HOMEPATH;
 
@@ -283,6 +287,11 @@ describe("fileWorkspaceMemory", () => {
         delete process.env.USERPROFILE;
       } else {
         process.env.USERPROFILE = savedHome;
+      }
+      if (savedPosixHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = savedPosixHome;
       }
       if (savedDrive !== undefined) {
         process.env.HOMEDRIVE = savedDrive;
