@@ -471,6 +471,7 @@ export class AppController {
           root: targetRoot,
           tokens: detail.tokens,
           steps: detail.turns,
+          cache: detail.cache,
         });
         state.ui.sidebar = false;
       });
@@ -550,6 +551,7 @@ export class AppController {
       state.view.contextWindow = run.contextWindow;
       state.view.startedAt = run.startedAt;
       state.view.tokens = run.tokens;
+      state.view.cache = run.cache;
       state.view.elapsedMs = run.elapsedMs;
       state.view.runError = run.error ?? null;
       applyRunWorkspace(state.view, run);

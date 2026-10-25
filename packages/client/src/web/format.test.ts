@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protocol";
 import {
   CONTEXT_WARN_PCT,
+  cacheHitPercent,
   contextPercent,
   diffStats,
   diffStatsByFile,
@@ -142,6 +143,33 @@ describe("contextPercent", () => {
     assert.equal(CONTEXT_WARN_PCT, 80);
     assert.equal(contextPercent(102_400, 128_000) >= CONTEXT_WARN_PCT, true);
     assert.equal(contextPercent(51_200, 128_000) >= CONTEXT_WARN_PCT, false);
+  });
+});
+
+describe("cacheHitPercent", () => {
+  it("命中率 = read / input，取整", () => {
+    assert.equal(cacheHitPercent({ input: 1000, read: 680, reported: true }), 68);
+    assert.equal(cacheHitPercent({ input: 3, read: 1, reported: true }), 33);
+    assert.equal(cacheHitPercent({ input: 1000, read: 0, reported: true }), 0);
+  });
+
+  /**
+   * 回归：提供方没返回缓存字段 ≠ 命中 0%。后者会被读成"缓存一次都没生效"。
+   */
+  it("未上报时返回 null（界面显示 —），而不是 0", () => {
+    assert.equal(cacheHitPercent({ input: 1000, read: 0, reported: false }), null);
+    assert.equal(cacheHitPercent(null), null);
+    assert.equal(cacheHitPercent(undefined), null);
+  });
+
+  it("没有输入（分母为 0）时不给假百分比", () => {
+    assert.equal(cacheHitPercent({ input: 0, read: 0, reported: true }), null);
+    assert.equal(cacheHitPercent({ input: Number.NaN, read: 1, reported: true }), null);
+    assert.equal(cacheHitPercent({ input: 100, read: Number.NaN, reported: true }), null);
+  });
+
+  it("网关把命中量报成输入之外时钳到 100", () => {
+    assert.equal(cacheHitPercent({ input: 100, read: 300, reported: true }), 100);
   });
 });
 

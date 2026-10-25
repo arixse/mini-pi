@@ -12,7 +12,17 @@ import type { ServerEvent } from "../shared/types";
 import { EventJournal, MAX_JOURNAL_EVENTS, isRunMetaEvent } from "./journal";
 
 const running: ServerEvent = { type: "run_state", status: "running" };
-const done: ServerEvent = { type: "run_done", status: "done", elapsedMs: 1, tokens: 2 };
+const done: ServerEvent = {
+  type: "run_done",
+  status: "done",
+  elapsedMs: 1,
+  tokens: 2,
+  cache: { input: 10, read: 4, write: 0, reported: true },
+};
+const usage: ServerEvent = {
+  type: "run_usage",
+  cache: { input: 10, read: 4, write: 0, reported: true },
+};
 const delta: ServerEvent = {
   type: "message_update",
   message: {
@@ -120,8 +130,9 @@ describe("EventJournal", () => {
 });
 
 describe("isRunMetaEvent", () => {
-  it("只收状态、审批与结束", () => {
+  it("只收状态、用量、审批与结束", () => {
     assert.strictEqual(isRunMetaEvent(running), true);
+    assert.strictEqual(isRunMetaEvent(usage), true);
     assert.strictEqual(isRunMetaEvent(done), true);
     assert.strictEqual(
       isRunMetaEvent({

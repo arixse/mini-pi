@@ -1,5 +1,5 @@
 /**
- * 状态行（视觉交接稿 §2：36px，三枚指标，属于主列）。
+ * 状态行（视觉交接稿 §2：36px，四枚指标，属于主列）。
  *
  * - **指标-模型**：当前这个任务实际用的模型。输入区的下拉答的是"新任务
  *   用什么"（设计稿第 20 条），这里答的是"现在这个在用谁"——两者
@@ -7,6 +7,8 @@
  * - **指标-上下文**：token 占用 / 窗口，附进度槽；超八成换警戒色。
  *   分母为 0（没配模型）时不说百分比——没有分母的百分比是假的。
  * - **指标-步数**：模型回合数，直接取 `turn_start` 的序号。
+ * - **指标-缓存**：累计输入里命中的比例（`read / input`）。提供方没返回
+ *   缓存字段时显示「—」而不是 0%：那是"看不到"，不是"没命中"。
  *
  * 这一条不放在运行头里：运行头跟着 Run 走，而"我在哪、用谁、占到
  * 多少"是**整个界面**的常驻上下文，切会话、看历史时都该在场。
@@ -15,7 +17,7 @@
  */
 
 import { useClient } from "../store";
-import { CONTEXT_WARN_PCT, contextPercent, formatTokens } from "../format";
+import { CONTEXT_WARN_PCT, cacheHitPercent, contextPercent, formatTokens } from "../format";
 import { Icon } from "./Icon";
 
 export function Statusbar(): React.ReactElement | null {
@@ -29,6 +31,7 @@ export function Statusbar(): React.ReactElement | null {
   const model = view.model ?? state.model.label;
   const window = view.contextWindow > 0 ? view.contextWindow : state.model.contextWindow;
   const pct = contextPercent(view.tokens, window);
+  const cachePct = cacheHitPercent(view.cache);
 
   return (
     <div className="statusbar">
@@ -62,8 +65,38 @@ export function Statusbar(): React.ReactElement | null {
         <span className="k">步数</span>
         <span className="v">{view.steps > 0 ? `${view.steps} 步` : "—"}</span>
       </span>
+      <span className="status-metric" title={cacheTitle(view.cache, cachePct)}>
+        <span className="k">缓存</span>
+        <span className="v">{cachePct === null ? "—" : `${cachePct}%`}</span>
+      </span>
     </div>
   );
+}
+
+/**
+ * 「缓存」指标的悬浮说明。
+ *
+ * 三种状态必须说清，否则一个「—」会被当成"0% 但懒得显示"：
+ * - 没有百分比且没上报 → 提供方未返回缓存数据；
+ * - 没有百分比但上报过 → 还没有输入（分母为 0）；
+ * - 有百分比 → 读/写明细 + 命中率。
+ */
+function cacheTitle(
+  cache: { input: number; read: number; write: number; reported: boolean },
+  pct: number | null,
+): string {
+  if (pct === null) {
+    return cache.reported
+      ? "缓存命中率：还没有输入 token"
+      : "缓存命中率：提供方未返回缓存数据";
+  }
+  const parts = [
+    `缓存命中 ${pct}%`,
+    `读 ${formatTokens(cache.read)}`,
+    `写 ${formatTokens(cache.write)}`,
+    `输入 ${formatTokens(cache.input)}`,
+  ];
+  return parts.join(" · ");
 }
 
 function modelTitle(defaultLabel: string | null, runModel: string | null): string {

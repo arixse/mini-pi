@@ -252,6 +252,7 @@ const EVENT_TYPES = [
   "approval_resolved",
   "stream_gap",
   "journal_ready",
+  "run_usage",
   "run_done",
 ] as const;
 

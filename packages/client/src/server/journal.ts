@@ -28,6 +28,7 @@ export function isRunMetaEvent(event: ServerEvent): boolean {
     case "run_state":
     case "approval_request":
     case "approval_resolved":
+    case "run_usage":
     case "run_done":
       return true;
     default:

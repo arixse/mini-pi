@@ -53,6 +53,26 @@ export type RunWorkspace = {
   merged: boolean;
 };
 
+/**
+ * 缓存命中统计（状态行的「缓存」指标）。
+ *
+ * 与 `tokens` 不是一回事：那个是**当前上下文的占用估算**，这个是
+ * **累计输入里有多少命中了缓存**。命中率恒为 `read / input`。
+ *
+ * `reported` 单独存在是因为 `read: 0` 有两种含义：真的没命中，或者
+ * 提供方压根没返回缓存字段。界面必须把后者显示成「—」，不能显示成 0%。
+ */
+export type CacheUsage = {
+  /** 累计输入 token（含缓存命中部分，与内核 `Usage.input` 同口径） */
+  input: number;
+  /** 命中缓存的输入 token */
+  read: number;
+  /** 写入缓存的输入 token（没返回时为 0，`reported` 仍为真） */
+  write: number;
+  /** 提供方是否返回过缓存字段 */
+  reported: boolean;
+};
+
 export type RunSummary = {
   runId: string;
   /** 首条提问的前几个字，侧栏与运行头都用它 */
@@ -66,6 +86,8 @@ export type RunSummary = {
   elapsedMs: number | null;
   /** 上下文占用（token），由会话文件估算 */
   tokens: number;
+  /** 累计缓存命中统计（随 `turn_end` 增长；未开跑时为 0 且未上报） */
+  cache: CacheUsage;
   contextWindow: number;
   /** 这个 Run 上还挂着的审批数 */
   pendingApprovals: number;
@@ -156,8 +178,20 @@ export type ServerEvent =
       status: RunPhase;
       elapsedMs: number;
       tokens: number;
+      /** 这个 Run 收尾时的累计缓存统计（绝对值快照） */
+      cache: CacheUsage;
       error?: string;
-    };
+    }
+  /**
+   * 累计用量的**绝对值快照**（不是增量）。
+   *
+   * 增量事件在重放时会重复累加：切回一个跑了一半的 Run，服务端会把缓冲
+   * 里的事件重发一遍。绝对值快照无论重放几次，落到状态上都是同一个数。
+   *
+   * 每个 `turn_end` 之后发一条，状态行的「缓存」指标因此能在回合间更新，
+   * 而不是等 `run_done` 才跳一次。
+   */
+  | { type: "run_usage"; cache: CacheUsage };
 
 /** 已缓冲的事件 + 它的游标（游标就是 seq，1 起） */
 export type BufferedEvent = { seq: number; event: ServerEvent };
@@ -207,6 +241,14 @@ export type SessionDetail = {
    * `tokens` 的口径保持一致（两者说的都是"现在还剩多少"）。
    */
   turns: number;
+  /**
+   * 当前上下文里累计的缓存命中统计。
+   *
+   * 与 `tokens` / `turns` 同一把尺子：只统计**还在上下文里**的那些回合。
+   * 压缩掉的历史不再计入，因此这里回答的是"现在这段上下文当初有多少
+   * 命中了缓存"，而不是"这个会话一共花过多少"。
+   */
+  cache: CacheUsage;
 };
 
 export type ProviderView = {

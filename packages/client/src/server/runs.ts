@@ -11,8 +11,11 @@
  */
 
 import type { Run } from "@minipi/core/run";
+import type { Usage } from "@minipi/core/shared/protocol";
+import { emptyUsage } from "@minipi/core/agent/usage";
 import type {
   BufferedEvent,
+  CacheUsage,
   RunPhase,
   RunSummary,
   RunWorkspace,
@@ -32,6 +35,22 @@ export function titleFromPrompt(prompt: string): string {
     return "新任务";
   }
   return flat.length > TITLE_LENGTH ? `${flat.slice(0, TITLE_LENGTH)}…` : flat;
+}
+
+/**
+ * 把内核的 `Usage` 折成状态行要的那几个数。
+ *
+ * `cacheRead` / `cacheWrite` 是可选的：`undefined` 表示"提供方没返回"，
+ * 必须与"返回了 0"区分开。这里用 `reported` 把这个区别带过线上契约，
+ * 界面据此决定显示百分比还是「—」。
+ */
+export function cacheUsageOf(usage: Usage): CacheUsage {
+  return {
+    input: usage.input,
+    read: usage.cacheRead ?? 0,
+    write: usage.cacheWrite ?? 0,
+    reported: usage.cacheRead !== undefined || usage.cacheWrite !== undefined,
+  };
 }
 
 export class RunRecord {
@@ -61,6 +80,14 @@ export class RunRecord {
   endedAt: number | null = null;
   error: string | null = null;
   tokens = 0;
+  /**
+   * 本 Run 的累计用量。
+   *
+   * 开跑时先把会话历史折进来（`sumUsage(session.messages)`），之后每个
+   * `turn_end` 再累加这一回合的用量。于是"正在跑"和"回看历史"读到的是
+   * 同一把尺子：都是这段会话到目前为止的累计值。
+   */
+  usage: Usage = emptyUsage();
   /** 内核的 Run；排队期间为 null（那时还没有 context 可跑） */
   run: Run | null = null;
 
@@ -164,6 +191,7 @@ export class RunRecord {
       startedAt: this.startedAt,
       elapsedMs: this.elapsedMs,
       tokens: this.tokens,
+      cache: cacheUsageOf(this.usage),
       contextWindow,
       pendingApprovals,
       // 排队中的提问还没有写进会话文件；前端切走再回来要靠它重建空心气泡。
