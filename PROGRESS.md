@@ -8,9 +8,9 @@
 客户端状态栏已新增第 4 枚指标「缓存」，位置在「步数」之后，显示
 `cacheRead / input` 的整数百分比；提供方没返回缓存字段时显示 `—`。
 
-- 分支：`feature/client-cache-hit-rate`
+- 状态：已合入 `main`（分支 `feature/client-cache-hit-rate` 已合并）
 - 门禁：`pnpm check` 全绿（2133 tests / 2130 pass / 0 fail，覆盖率
-  97.60% / 90.89% / 93.13%）
+  97.60% / 90.87% / 93.13%）
 - 端到端验证：
   - `app.test.ts` 起真 HTTP 服务 + 假模型，断言 `run_usage` / `run_done` /
     `/api/sessions/:id` 三处都带回缓存统计
