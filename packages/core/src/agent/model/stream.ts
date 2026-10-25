@@ -1,4 +1,4 @@
-import { AssistantMessage, ToolCallContent } from "../../shared/protocol";
+import { AssistantMessage, ToolCallContent, Usage } from "../../shared/protocol";
 import { createTextContent } from "../message";
 import { STREAM_IDLE_TIMEOUT_MS } from "./config";
 import { StreamIdleTimeoutError } from "./errors";
@@ -158,6 +158,20 @@ export type ChatCompletionChunkLike = {
     prompt_tokens?: number | null;
     completion_tokens?: number | null;
     total_tokens?: number | null;
+    /**
+     * OpenAI 兼容的缓存明细。`cached_tokens` / `cache_write_tokens` 与
+     * "未命中的剩余部分"互斥，三者之和等于 `prompt_tokens`（Kimi 文档口径），
+     * 因此两者都是 `input` 的子集。
+     */
+    prompt_tokens_details?: {
+      cached_tokens?: number | null;
+      cache_write_tokens?: number | null;
+    } | null;
+    /**
+     * DeepSeek 原生字段：命中的输入 token。部分网关不透传
+     * `prompt_tokens_details`，但会保留这个字段。
+     */
+    prompt_cache_hit_tokens?: number | null;
   } | null;
   choices?: Array<{
     delta?: {
@@ -171,6 +185,36 @@ export type ChatCompletionChunkLike = {
     finish_reason?: string | null;
   }> | null;
 };
+
+/** 只接受真正的数字：`null` / `undefined` 表示"提供方没给这个字段"，不能当成 0 */
+export function optionalTokenCount(
+  value: number | null | undefined,
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * 从 OpenAI 兼容的 usage 里抽出缓存字段。
+ *
+ * 按字段存在性兜底而不是按 provider 名硬编码：同一家厂商的不同网关
+ * （官方 / 第三方代理 / 兼容层）给不给 `prompt_tokens_details` 并不一致。
+ * 一个字段都没有时返回空对象，避免在 `Usage` 上写出 `cacheRead: undefined`——
+ * 下游用"键是否存在"区分"未返回"与"返回了 0"。
+ */
+function pickCacheUsage(
+  usage: ChatCompletionChunkLike["usage"],
+): Pick<Usage, "cacheRead" | "cacheWrite"> {
+  const cacheRead =
+    optionalTokenCount(usage?.prompt_tokens_details?.cached_tokens) ??
+    optionalTokenCount(usage?.prompt_cache_hit_tokens);
+  const cacheWrite = optionalTokenCount(
+    usage?.prompt_tokens_details?.cache_write_tokens,
+  );
+  return {
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+  };
+}
 
 /**
  * 把提供方的 finish_reason 映射成统一的 stopReason。
@@ -284,6 +328,7 @@ export async function collectOpenAIStream(
       input: usage?.prompt_tokens ?? 0,
       output: usage?.completion_tokens ?? 0,
       totalTokens: usage?.total_tokens ?? 0,
+      ...pickCacheUsage(usage),
     },
     timestamp: Date.now(),
   };

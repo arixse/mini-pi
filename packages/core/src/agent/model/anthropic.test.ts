@@ -269,4 +269,76 @@ describe("anthropic（响应转换）", () => {
     );
     assert.deepStrictEqual(message.usage, { input: 3, output: 4, totalTokens: 7 });
   });
+
+  /**
+   * 回归：Anthropic 的 `input_tokens` 只算未命中缓存的部分。若直接照抄，
+   * 一旦缓存生效，输入与合计都会显著低报，命中率分母也会算错。
+   */
+  it("缓存读写应计入输入总量，并保留命中/写入量", () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    const convertResponse = (
+      model as unknown as {
+        convertResponse(response: Anthropic.Message): {
+          usage: {
+            input: number;
+            output: number;
+            totalTokens: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+          };
+        };
+      }
+    ).convertResponse.bind(model);
+
+    const message = convertResponse({
+      id: "msg_2",
+      type: "message",
+      role: "assistant",
+      model: "claude",
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "hi", citations: [] }],
+      usage: {
+        input_tokens: 3,
+        output_tokens: 4,
+        cache_read_input_tokens: 100,
+        cache_creation_input_tokens: 50,
+      },
+    } as unknown as Anthropic.Message);
+
+    assert.deepStrictEqual(message.usage, {
+      input: 153,
+      output: 4,
+      totalTokens: 157,
+      cacheRead: 100,
+      cacheWrite: 50,
+    });
+  });
+
+  it("缓存字段为 null 时按未返回处理，不写成 0", () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    const convertResponse = (
+      model as unknown as {
+        convertResponse(response: Anthropic.Message): {
+          usage: Record<string, number>;
+        };
+      }
+    ).convertResponse.bind(model);
+
+    const message = convertResponse({
+      id: "msg_3",
+      type: "message",
+      role: "assistant",
+      model: "claude",
+      stop_reason: "end_turn",
+      content: [],
+      usage: {
+        input_tokens: 3,
+        output_tokens: 4,
+        cache_read_input_tokens: null,
+        cache_creation_input_tokens: null,
+      },
+    } as unknown as Anthropic.Message);
+
+    assert.deepStrictEqual(message.usage, { input: 3, output: 4, totalTokens: 7 });
+  });
 });

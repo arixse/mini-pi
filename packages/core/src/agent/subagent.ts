@@ -12,6 +12,7 @@ import { LlmModel } from "./model";
 import { alignCompactionStart, estimateTokens } from "./sessionStore";
 import { ToolRegistry } from "./tools/registry";
 import { createUserMessage } from "./message";
+import { mergeOptionalCount } from "./usage";
 
 /**
  * 子 Agent 运行时。
@@ -256,6 +257,15 @@ export function addUsage(target: Usage, addition: Usage): void {
   target.input += addition.input;
   target.output += addition.output;
   target.totalTokens += addition.totalTokens;
+  // 缓存字段是可选的：两边都没返回时保持缺失，别把"看不到"写成 0
+  const cacheRead = mergeOptionalCount(target.cacheRead, addition.cacheRead);
+  const cacheWrite = mergeOptionalCount(target.cacheWrite, addition.cacheWrite);
+  if (cacheRead !== undefined) {
+    target.cacheRead = cacheRead;
+  }
+  if (cacheWrite !== undefined) {
+    target.cacheWrite = cacheWrite;
+  }
 }
 
 /** 合并各轮用量 */

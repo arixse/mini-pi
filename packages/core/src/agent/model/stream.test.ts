@@ -222,6 +222,73 @@ describe("stream（collectOpenAIStream 拼装）", () => {
     assert.deepStrictEqual(message.usage, { input: 12, output: 2, totalTokens: 14 });
   });
 
+  it("应解析 OpenAI 兼容的缓存命中与写入量", async () => {
+    const message = await collectOpenAIStream([
+      {
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 20 },
+        },
+      },
+    ]);
+
+    assert.deepStrictEqual(message.usage, {
+      input: 100,
+      output: 10,
+      totalTokens: 110,
+      cacheRead: 60,
+      cacheWrite: 20,
+    });
+  });
+
+  it("没有 prompt_tokens_details 时应回落到 DeepSeek 的 prompt_cache_hit_tokens", async () => {
+    const message = await collectOpenAIStream([
+      {
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          prompt_cache_hit_tokens: 40,
+        },
+      },
+    ]);
+
+    assert.strictEqual(message.usage.cacheRead, 40);
+    assert.strictEqual(
+      "cacheWrite" in message.usage,
+      false,
+      "没给写入量时不能凭空补 0",
+    );
+  });
+
+  it("两处都给了命中量时以 prompt_tokens_details 为准", async () => {
+    const message = await collectOpenAIStream([
+      {
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          prompt_tokens_details: { cached_tokens: 60 },
+          prompt_cache_hit_tokens: 40,
+        },
+      },
+    ]);
+
+    assert.strictEqual(message.usage.cacheRead, 60);
+  });
+
+  it("提供方完全不返回缓存字段时不写出 cacheRead/cacheWrite 键", async () => {
+    const message = await collectOpenAIStream([
+      { usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+
+    assert.deepStrictEqual(message.usage, { input: 1, output: 1, totalTokens: 2 });
+    assert.strictEqual("cacheRead" in message.usage, false);
+    assert.strictEqual("cacheWrite" in message.usage, false);
+  });
+
   it("应把跨分片切开的工具调用拼回完整参数", async () => {
     const message = await collectOpenAIStream([
       {

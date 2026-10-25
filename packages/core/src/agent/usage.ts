@@ -15,6 +15,12 @@ export type UsageSnapshot = {
   input: number;
   output: number;
   totalTokens: number;
+  /** 命中缓存的输入 token（`input` 的子集） */
+  cacheRead: number;
+  /** 写入缓存的输入 token（`input` 的子集） */
+  cacheWrite: number;
+  /** 提供方是否返回过缓存字段（区分"命中 0%"与"根本没有这个数据"） */
+  cacheReported: boolean;
   /** 已完成的模型请求次数（含失败与取消的那一次） */
   requests: number;
   /** 上一轮（最近一次用户回合）的用量 */
@@ -27,15 +33,35 @@ export function emptyUsage(): Usage {
   return { input: 0, output: 0, totalTokens: 0 };
 }
 
+/**
+ * 可选计数字段相加。
+ *
+ * 两边都没值 → 仍是 `undefined`（提供方没返回）；只要有一边有值，另一边按 0 计。
+ * 不能一律按 0 相加，否则"未返回"会被算成"返回了 0"。
+ */
+export function mergeOptionalCount(
+  a: number | undefined,
+  b: number | undefined,
+): number | undefined {
+  if (a === undefined && b === undefined) {
+    return undefined;
+  }
+  return (a ?? 0) + (b ?? 0);
+}
+
 /** 用量相加：缺失字段按 0 处理（模型实现可能不返回 usage） */
 export function addUsage(base: Usage, extra: Usage | undefined): Usage {
   if (!extra) {
     return base;
   }
+  const cacheRead = mergeOptionalCount(base.cacheRead, extra.cacheRead);
+  const cacheWrite = mergeOptionalCount(base.cacheWrite, extra.cacheWrite);
   return {
     input: base.input + (extra.input ?? 0),
     output: base.output + (extra.output ?? 0),
     totalTokens: base.totalTokens + (extra.totalTokens ?? 0),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
   };
 }
 
@@ -81,6 +107,30 @@ export function formatTokenCount(value: number): string {
 }
 
 /**
+ * `/status` 里的缓存命中段。
+ *
+ * 命中率的分母是 `input`（已归一为"含缓存的输入总量"），因此 OpenAI 系的
+ * `cached / prompt_tokens` 与 Anthropic 系的 `cache_read / (input + read + write)`
+ * 在这里是同一个公式。提供方没返回缓存字段时**不能**显示成 0%——那会被
+ * 读成"一次都没命中"，而真相是"看不到"。
+ */
+function formatCacheUsage(snapshot: UsageSnapshot): string {
+  if (!snapshot.cacheReported) {
+    return "缓存命中 未返回";
+  }
+  // 个别网关会把 cached_tokens 报成 prompt_tokens 之外的量，展示层夹到 100%
+  const rate =
+    snapshot.input > 0
+      ? Math.min(100, (snapshot.cacheRead / snapshot.input) * 100)
+      : 0;
+  const detail =
+    snapshot.cacheWrite > 0
+      ? `读 ${formatTokenCount(snapshot.cacheRead)} / 写 ${formatTokenCount(snapshot.cacheWrite)}`
+      : `读 ${formatTokenCount(snapshot.cacheRead)}`;
+  return `缓存命中 ${rate.toFixed(1)}%（${detail}）`;
+}
+
+/**
  * `/status` 里的用量文案。
  *
  * 两种"看不到消耗"要区分开：
@@ -100,6 +150,7 @@ export function formatUsage(snapshot: UsageSnapshot): string {
     `输入 ${formatTokenCount(snapshot.input)}`,
     `输出 ${formatTokenCount(snapshot.output)}`,
     `合计 ${formatTokenCount(snapshot.totalTokens)}`,
+    formatCacheUsage(snapshot),
     `${snapshot.requests} 次请求`,
   ];
   if (snapshot.lastTurn && snapshot.lastTurn.totalTokens > 0) {
@@ -138,6 +189,10 @@ export function createUsageTracker(): UsageTracker {
         input: total.input,
         output: total.output,
         totalTokens: total.totalTokens,
+        cacheRead: total.cacheRead ?? 0,
+        cacheWrite: total.cacheWrite ?? 0,
+        cacheReported:
+          total.cacheRead !== undefined || total.cacheWrite !== undefined,
         requests,
         lastTurn,
         reported,
