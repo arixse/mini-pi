@@ -37,10 +37,16 @@ describe("KimiProvider", () => {
     it("should return default models list", () => {
       const models = provider.getDefaultModels();
       assert.ok(Array.isArray(models));
+      assert.ok(models.includes("kimi-k3.1-pro"));
+      assert.ok(models.includes("kimi-k3.1-pro-highspeed"));
       assert.ok(models.includes("kimi-k3"));
       assert.ok(models.includes("kimi-k2.7-code"));
       assert.ok(models.includes("kimi-k2.7-code-highspeed"));
       assert.ok(models.includes("kimi-k2.6"));
+    });
+
+    it("默认模型应以官方旗舰 kimi-k3.1-pro 打头", () => {
+      assert.strictEqual(provider.getDefaultModels()[0], "kimi-k3.1-pro");
     });
 
     it("默认模型不应包含已下线系列", () => {

@@ -51,7 +51,6 @@ describe("openai（模型实例）", () => {
   it("模型实例应带上配置的 maxTokens，缺省回落默认值", () => {
     const custom = createOpenAIModel({ apiKey: "k", maxTokens: 999 });
     assert.strictEqual((custom as unknown as { maxTokens: number }).maxTokens, 999);
-
     // 缺省与非法值都应回落到默认上限
     assert.strictEqual(
       (createOpenAIModel({ apiKey: "k" }) as unknown as { maxTokens: number }).maxTokens,
@@ -62,6 +61,11 @@ describe("openai（模型实例）", () => {
         .maxTokens,
       DEFAULT_MAX_TOKENS,
     );
+  });
+
+  it("未配置 model 时回落到当前在售型号，而不是已关停的 gpt-3.5-turbo", () => {
+    const model = createOpenAIModel({ apiKey: "k" });
+    assert.strictEqual((model as unknown as { model: string }).model, "gpt-6-astra");
   });
 });
 

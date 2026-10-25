@@ -65,7 +65,7 @@ export class AnthropicModel implements LlmModel {
       // 同 OpenAI：SDK 默认 maxRetries=2，必须关掉以免与应用层重试叠加
       maxRetries: 0,
     });
-    this.model = config?.model || "claude-3-sonnet-20240229";
+    this.model = config?.model || "claude-opus-5-5";
     this.maxTokens = resolveMaxTokens(config?.maxTokens);
     this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }

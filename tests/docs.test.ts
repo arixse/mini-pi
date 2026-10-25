@@ -269,6 +269,7 @@ describe("docs 数值与实现对得上", () => {
       "mimo-7b",
       "glm-4.1v-thinking",
       "glm-4v-flash",
+      "autoglm-phone",
     ]) {
       const rule = matchContextWindowRule(name);
       assert.ok(rule, `${name} 应命中推断表`);

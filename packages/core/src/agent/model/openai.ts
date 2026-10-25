@@ -135,7 +135,7 @@ export class OpenAIModel implements LlmModel {
       // （prompt token 反复计费）。重试统一由 withRetry 负责，它还会读 Retry-After。
       maxRetries: 0,
     });
-    this.model = config?.model || "gpt-3.5-turbo";
+    this.model = config?.model || "gpt-6-astra";
     this.maxTokens = resolveMaxTokens(config?.maxTokens);
     this.streamIdleTimeoutMs = resolveStreamIdleTimeout(config?.streamIdleTimeoutMs);
   }

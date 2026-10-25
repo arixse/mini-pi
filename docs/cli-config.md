@@ -91,23 +91,27 @@
 | `gpt-3.5-turbo` | 16384 | OpenAI |
 | `gpt-4-32k` | 32768 | OpenAI |
 | `gpt-4`（裸 gpt-4，8k） | 8192 | OpenAI |
+| `gpt-6*` / `gpt-5.6*` / `gpt-5.5*` / `gpt-5.4*` | 1050000 | OpenAI |
+| `gpt-5.3-codex-spark` | 128000 | OpenAI |
+| `gpt-5*`（5 ~ 5.3） | 400000 | OpenAI |
+| `gpt-4.1*` | 1000000 | OpenAI |
 | `gpt-4o*` / `gpt-4-turbo` / `o1-mini` | 128000 | OpenAI |
 | `o1` / `o3` / `o4-mini` | 200000 | OpenAI |
-| `deepseek-*` | 128000 | DeepSeek |
+| `deepseek-*` | 1000000 | DeepSeek |
 | `MiniMax-M3` | 1000000 | MiniMax |
 | `MiniMax-M2-her` | 65536 | MiniMax |
 | `MiniMax-M2*` | 204800 | MiniMax |
 | `MiniMax-*`（其它） | 204800 | MiniMax |
-| `mimo-v2.6*` / `mimo-v2.5` / `mimo-v2.5-pro` | 1000000 | 小米 MiMo |
-| `mimo-v2.5-omni` / `mimo-v2-flash` | 131072 | 小米 MiMo |
+| `mimo-v2.6*` | 1000000 | 小米 MiMo |
 | `mimo-7b*` | 32768 | 小米 MiMo |
-| `kimi-k3` | 1000000 | Kimi |
+| `kimi-k3*`（含 K3.1） | 1000000 | Kimi |
 | `kimi-k2.6` / `kimi-k2.7*` | 262144 | Kimi |
 | `glm-5.3` / `glm-5.2` / `glm-4-long` | 1000000 | 智谱 |
 | `glm-5.1` / `glm-5` / `glm-4.7` / `glm-4.6` | 200000 | 智谱 |
 | `glm-4.6v` / `glm-4.5*` / `glm-4`（其它） | 128000 | 智谱 |
 | `glm-4.1v-thinking*` | 65536 | 智谱 |
 | `glm-4v-flash` | 16384 | 智谱 |
+| `autoglm-phone` | 20480 | 智谱 |
 | `qwen3.8*` / `qwen3.7*` / `qwen3.6*` | 1000000 | 阿里百炼 |
 | `qwen3.5-plus` / `qwen3.5-flash` / `qwen3-coder` / `qwen-plus` / `qwen-flash` | 1000000 | 阿里百炼 |
 | `qwen3.5*` | 262144 | 阿里百炼 |
@@ -118,7 +122,7 @@
 | `doubao-seed-evolving` / `doubao-seed-2-1-pro-260915` / `doubao-seed-2-1-lite-260915` | 1000000 | 火山方舟 |
 | `doubao-seed-2-1*` / `doubao-seed-2-0*` | 262144 | 火山方舟 |
 | `doubao-seed-character*` | 131072 | 火山方舟 |
-| `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 |
+| `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 |
 | `claude-opus-5` / `claude-sonnet-5` | 1000000 | Claude 5 |
 | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5 |
 | `claude-opus-4*` / `claude-sonnet-4*` / `claude-haiku-4*` | 200000 | Claude 4.x |

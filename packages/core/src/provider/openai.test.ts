@@ -37,9 +37,19 @@ describe("OpenAIProvider", () => {
     it("should return default models list", () => {
       const models = provider.getDefaultModels();
       assert.ok(Array.isArray(models));
-      assert.ok(models.includes("gpt-4o"));
-      assert.ok(models.includes("gpt-4o-mini"));
-      assert.ok(models.includes("gpt-3.5-turbo"));
+      assert.ok(models.includes("gpt-6-astra"));
+      assert.ok(models.includes("gpt-6.1-sol"));
+      assert.ok(models.includes("gpt-6-luna"));
+      assert.ok(models.includes("gpt-5.6-sol"));
+      assert.ok(models.includes("gpt-4.1"));
+    });
+
+    it("默认模型不应包含已关停的型号", () => {
+      // gpt-3.5-turbo / gpt-4-turbo / o1 / o1-mini 均已关停，调用直接 404
+      const models = provider.getDefaultModels();
+      for (const retired of ["gpt-3.5-turbo", "gpt-4-turbo", "o1", "o1-mini"]) {
+        assert.ok(!models.includes(retired), `不应包含已关停的 ${retired}`);
+      }
     });
   });
 
