@@ -86,13 +86,18 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      # 只装客户端包（与它的依赖 @minipi/core）：打安装包用不到 CLI，
-      # 而 electron 是上百 MB 的二进制，装在谁身上谁就慢。
+      # 全量安装，与 gate / ci.yml / publish.yml 同一条命令。
       #
-      # 不能省掉 `...`（依赖）：@minipi/core 是 workspace 包，
-      # 只装 @minipi/client 会拿到一个解析不到内核的包。
+      # 曾经这里是 `pnpm install --frozen-lockfile --filter "@minipi/client..."`
+      # （只装客户端包与内核），想省下 CLI 的依赖。但根 package.json 的
+      # prepare 会在每次 install 时触发 build:cli，而 filter 装法下
+      # packages/cli 的 node_modules 是空的——两个平台同时死在
+      # `esbuild: command not found` 上（2026-10-25 手动 dispatch 复现）。
+      # 且 electron 是 client 的 devDependency，filter 一样要下它，省的只有
+      # CLI 的几个小 devDependency，却换来一条与 gate 分岔的安装路径——
+      # 而"门禁标准分岔"正是这个文件开头要避免的东西。
       - name: Install
-        run: pnpm install --frozen-lockfile --filter "@minipi/client..."
+        run: pnpm install --frozen-lockfile
 
       # 版本号以 tag 为唯一事实来源，理由与 publish.yml 里那条一致：
       # tag 打的是 v1.2.3 而包里还是 1.0.0 时，用户装到的东西与他以为的

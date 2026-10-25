@@ -147,10 +147,16 @@ describe("桌面安装包接线", () => {
       );
       assert.ok(pkg.scripts?.[name], `客户端包没有 ${name} 脚本`);
     }
-    // 只装客户端包（含它的依赖）：漏掉 `...` 会装出一个解析不到内核的包
+    // gate 与 installer 必须同一条全量 install。曾经 installer 用
+    // `--filter "@minipi/client..."` 想省下 CLI 的依赖，但根 package.json 的
+    // prepare 会在每次 install 时触发 build:cli，filter 装法下
+    // packages/cli 的 node_modules 是空的，两个平台同时死在
+    // `esbuild: command not found`（2026-10-25 手动 dispatch 复现）。
+    const installs = workflow.match(/^\s*run: pnpm install\b.*$/gm) ?? [];
     assert.ok(
-      /--filter\s+"?@minipi\/\w+\.\.\."/.test(workflow),
-      "desktop.yml 应只安装客户端包及其依赖（`...` 不能省）",
+      installs.length === 2 &&
+        installs.every((line) => line.trim() === "run: pnpm install --frozen-lockfile"),
+      `gate 与 installer 都应全量安装（--frozen-lockfile，不带 filter），实际：${JSON.stringify(installs)}`,
     );
   });
 
