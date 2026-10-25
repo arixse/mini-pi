@@ -195,7 +195,7 @@ describe("前端组件树", () => {
     assert.match(html, />68%</);
   });
 
-  it("只读历史会话里挂着 live Run 时，唯一的停止键仍然在", () => {
+  it("历史会话里挂着 live Run 时，唯一的停止键仍然在", () => {
     const store = new ClientStore();
     store.update((state) => {
       state.workspace = { root: "/tmp/ws", name: "ws" };
@@ -203,18 +203,21 @@ describe("前端组件树", () => {
       state.sendable = true;
       state.view.sessionId = "s1.jsonl";
       state.view.root = "/tmp/ws";
-      state.view.readOnly = true;
       state.view.status = "running";
       state.view.activeRunId = "run_1";
     });
     const html = renderComposer(store);
     const button = sendButton(html);
-    assert.match(button, /停止/, "只读不等于不能停");
+    assert.match(button, /停止/, "停任务不该因为看的是历史而被藏起来");
     assert.doesNotMatch(button, /新任务/, "有 live Run 时按钮不能变成开新任务");
     assert.doesNotMatch(button, /disabled/, "停止键不能被禁用");
   });
 
-  it("只读且没有 live Run 时，「新任务」空输入也可点", () => {
+  /*
+   * 回归：历史会话曾经只读——发送键会换成「新任务」。
+   * 2026-10-25 起续写必须能发：键还是那颗键，发的是接回这段会话的消息。
+   */
+  it("历史会话也能续写：发送键就是发送，不再换成「新任务」", () => {
     const store = new ClientStore();
     store.update((state) => {
       state.workspace = { root: "/tmp/ws", name: "ws" };
@@ -222,13 +225,13 @@ describe("前端组件树", () => {
       state.sendable = true;
       state.view.sessionId = "s1.jsonl";
       state.view.root = "/tmp/ws";
-      state.view.readOnly = true;
       state.view.status = "idle";
     });
     const html = renderComposer(store);
     const button = sendButton(html);
-    assert.match(button, /新任务/);
-    assert.doesNotMatch(button, /disabled/, "提示语让点「新任务」，就不能把它灰掉");
+    assert.match(button, /发送/, "历史会话的发送键发的是这条消息，不是换白板");
+    assert.doesNotMatch(button, /新任务/);
+    assert.match(button, /disabled/, "空输入仍旧禁言：没话可说，不是不能聊");
   });
 
   it("模型下拉的悬浮说明：会话实际用的模型与默认值不同时才补一句", () => {
