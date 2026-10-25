@@ -35,6 +35,14 @@ describe("anthropic（模型实例）", () => {
     const model = createAnthropicModel({ apiKey: "k", maxTokens: 999 });
     assert.strictEqual((model as unknown as { maxTokens: number }).maxTokens, 999);
   });
+
+  it("未配置 model 时回落到当前在售型号，而不是已下线的 claude-3-sonnet", () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    assert.strictEqual(
+      (model as unknown as { model: string }).model,
+      "claude-opus-5-5",
+    );
+  });
 });
 
 describe("anthropic（请求体构造）", () => {

@@ -36,7 +36,8 @@
 |------|------|
 | `claude-opus-5-5` | 长程 Agent 编码与知识工作，1M 上下文 / 128K 输出，官方推荐的默认选择 |
 | `claude-sonnet-5-5` | 速度与智能最均衡，1M 上下文 / 128K 输出 |
-| `claude-haiku-4-5` | 最快、成本最低，200K 上下文 / 64K 输出 |
+| `claude-haiku-5-5` | 最快、成本最低的小模型，1M 上下文 / 128K 输出 |
+| `claude-haiku-4-5` | 上一代小模型，200K 上下文 / 64K 输出 |
 | `claude-fable-5-1` | 最强推理与超长程 Agent，1M 上下文 / 128K 输出 |
 
 ### 接入方式
@@ -60,7 +61,8 @@ https://api.anthropic.com/v1/models
 Anthropic
 ```
 
-> **上下文窗口**：Fable 5.1 / Opus 5.5 / Sonnet 5.5 官方标 1M；Haiku 4.5 为 200K。
+> **上下文窗口**：Fable 5 / 5.1、Opus 5.5、Sonnet 5.5、Haiku 5.5 官方都标 1M；
+> Haiku 4.5 为 200K。
 > Claude Opus 4.x / Sonnet 4.x 的 1M 需要额外的 beta 头（`context-1m-*`）才生效，
 > 未开启时窗口是 200K——推断表按 200K 登记（估大会超窗 400），
 > 若确已开启请在 `settings.json` 显式配置 `contextWindow`。
@@ -93,13 +95,16 @@ Anthropic
 
 | 模型 | 说明 |
 |------|------|
-| `kimi-k3` | 旗舰模型（2.8T 参数，1M 上下文，原生视觉理解） |
+| `kimi-k3.1-pro` | 当前旗舰（3T 级参数，1M 上下文，原生视觉理解），官方迁移首选 |
+| `kimi-k3.1-pro-highspeed` | K3.1 Pro 的高速版（约为原版 2～3 倍速度） |
+| `kimi-k3` | 上一代旗舰（2.8T 参数，1M 上下文，原生视觉理解） |
 | `kimi-k2.7-code` | Coding 模型，长上下文下更可靠（256K） |
 | `kimi-k2.7-code-highspeed` | Coding 高速版（256K，约 180 Tokens/s） |
 | `kimi-k2.6` | 通用模型（256K，支持视觉/文本与思考模式） |
 
 > `kimi-k2.5` 与 `moonshot-v1` 全系列已于 **2026.08.31 下线**，`kimi-k2` 系列
 > 已于 **2026.05.25 下线**（调用返回 404），因此都不在默认模型列表里。
+> K2.7 / K2.6 官方计划 **2026 年 12 月底**下线，届时需同步从默认列表移除。
 
 ### 接入方式
 
@@ -152,6 +157,7 @@ OpenAI
 | `glm-5.1` | Coding 能力对齐 Claude Opus 4.6（200K / 128K） |
 | `glm-4.7` | 通用对话、推理与智能体能力升级（200K / 128K） |
 | `glm-4.6` | 擅长高级编码、复杂推理与工具调用（200K / 128K） |
+| `autoglm-phone` | 手机智能助理（视觉语言模型，20K 上下文 / 2K 输出，走同一对话接口） |
 
 > 视觉/图像/音视频/向量模型（GLM-5V / GLM-Image / CogView / CogVideoX /
 > Embedding 等）走各自专属接口，不在对话模型的默认列表里。
@@ -216,8 +222,9 @@ OpenAI
 | `mimo-v2.6-flash` | 高效推理模型（全模态，1M 上下文） |
 | `mimo-v2.6-pro-ultraspeed` | Pro 的超高速版本（最高 20 倍输出速度） |
 
-> `mimo-v2.5-pro` 与 `mimo-v2.5` 官方公告将于 **2026.10.21 10:00 下线**，
-> 因此不再放进默认模型列表；旧配置请尽快切到 V2.6 系列。
+> `mimo-v2.5-pro` / `mimo-v2.5` 已于 **2026.10.21** 下线，`mimo-v2-pro` /
+> `mimo-v2-omni` / `mimo-v2-flash` 已于 **2026.06.30** 下线（调用返回 404），
+> 因此都不在默认模型列表与上下文窗口推断表里；旧配置请切到 V2.6 系列。
 
 ### 接入方式
 
@@ -264,8 +271,12 @@ Token Plan（订阅制）使用专属端点，例如 `https://token-plan-cn.xiao
 
 | 模型 | 说明 |
 |------|------|
-| `deepseek-flash` | 快速响应模型 |
-| `deepseek-v4-pro` | 专业版模型 |
+| `deepseek-flash` | 快速响应模型（1M 上下文 / 384K 输出） |
+| `deepseek-v4-pro` | 专业版模型（1M 上下文 / 384K 输出） |
+
+> **上下文窗口**：V4 起官方标 1M（最大输出 384K）；当前只有
+> `deepseek-flash` 与 `deepseek-v4-pro` 两个模型名，旧名 `deepseek-chat` /
+> `deepseek-reasoner` 已不再出现在官方模型表里。
 
 ### 接入方式
 
@@ -306,7 +317,11 @@ OpenAI
 
 | 模型 | 说明 |
 |------|------|
-| `MiniMax-M3` | MiniMax 最新模型 |
+| `MiniMax-M3.1-Flash` | 最新一代快速模型（1M 上下文，原生多模态） |
+| `MiniMax-M3` | MiniMax 上一代旗舰（1M 上下文） |
+
+> `MiniMax-M2.5` / `M2.7` 按量付费 API 存量用户可继续调用至 **2026.11.18**，
+> 之后正式下线；新接入请直接用 `MiniMax-M3.1-Flash`。
 
 ### 接入方式
 
@@ -354,15 +369,18 @@ https://api.minimax.cn/v1/models
 
 | 模型 | 说明 |
 |------|------|
-| `gpt-4o` | GPT-4o 模型（128K 上下文） |
-| `gpt-4o-mini` | GPT-4o Mini 模型（128K 上下文） |
-| `gpt-4-turbo` | GPT-4 Turbo 模型（128K 上下文） |
-| `o1` | 推理模型（200K 上下文） |
-| `o1-mini` | 推理模型（128K 上下文） |
-| `gpt-3.5-turbo` | 经典对话模型（16K 上下文） |
+| `gpt-6-astra` | 当前旗舰（1.05M 上下文 / 128K 输出） |
+| `gpt-6.1-sol` | 接近旗舰、成本低一档（1.05M / 128K） |
+| `gpt-6-luna` | 小模型，适合高并发（1.05M / 128K） |
+| `gpt-5.6-sol` | 上一代旗舰，仍在售（1.05M / 128K） |
+| `gpt-4.1` | 经典 1M 窗口型号 |
 
-> 默认列表与 `packages/core/src/provider/openai.ts` 的 `getDefaultModels()` 一致；
-> `gpt-4`（裸型号，8K 上下文）等旧型号不在默认列表里。
+> 默认列表与 `packages/core/src/provider/openai.ts` 的 `getDefaultModels()` 一致。
+> **已关停**：`gpt-3.5-turbo` / `gpt-4-turbo` / `o1` / `o1-mini`（2026.10.23，
+> `o1-mini` 更早）与 `o1-pro` / `o3-mini` / `o4-mini`，调用即 404，不在默认列表里；
+> `gpt-4o` / `gpt-4o-mini` 官方公告 **2027.01.14** 关停，届时需同步移除。
+> 上下文窗口：GPT-6 全系与 GPT-5.4+ 是 1.05M，GPT-5 ~ 5.3 是 400K，
+> `gpt-5.3-codex-spark` 只有 128K。
 
 ### 接入方式
 

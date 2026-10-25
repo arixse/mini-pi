@@ -126,12 +126,12 @@ describe("createModelFromSettings", () => {
     assert.ok(result.model);
     assert.strictEqual(result.providerName, "openai");
     // 模型名应该是 openai 的第一个默认模型
-    assert.strictEqual(result.modelName, "gpt-4o");
+    assert.strictEqual(result.modelName, "gpt-6-astra");
     
     // 验证 settings.json 已被自动创建
     const settingsContent = await readFile(settingsFilePath, "utf-8");
     const settings = JSON.parse(settingsContent);
-    assert.strictEqual(settings.defaultModel, "openai/gpt-4o");
+    assert.strictEqual(settings.defaultModel, "openai/gpt-6-astra");
   });
 
   it("should auto-create default config for deepseek provider", async () => {

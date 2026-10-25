@@ -43,6 +43,22 @@ type ContextWindowRule = {
  */
 const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   // ---- OpenAI ----
+  // 出处：官方 Models 目录（2026-10）。GPT-6 全系与 GPT-5.4 起都是 1.05M，
+  // GPT-5 ~ 5.3 是 400K，GPT-4.1 是 1M，GPT-4o 世代仍是 128K。
+  // 注：gpt-3.5-turbo / gpt-4-turbo / o1 / o1-mini 已在 2025-10 ~ 2026-10 间关停，
+  // 规则保留只是为了老配置不落到 128K 兜底。
+  { prefix: "gpt-6", window: 1_050_000, note: "GPT-6 Astra / 6.1 Sol / 6 Luna（1.05M）" },
+  { prefix: "gpt-5.6", window: 1_050_000, note: "GPT-5.6 Sol / Terra / Luna（1.05M）" },
+  { prefix: "gpt-5.5", window: 1_050_000, note: "GPT-5.5（1.05M）" },
+  { prefix: "gpt-5.4", window: 1_050_000, note: "GPT-5.4 / 5.4 Pro（1.05M）" },
+  // Spark 是 128K 的小窗口型号，落在 gpt-5 的 400K 上会超窗（400）
+  {
+    prefix: "gpt-5.3-codex-spark",
+    window: 128_000,
+    note: "GPT-5.3-Codex-Spark（128K，官方公告）",
+  },
+  { prefix: "gpt-5", window: 400_000, note: "GPT-5 / 5.1 / 5.2 / 5.3（400K）" },
+  { prefix: "gpt-4.1", window: 1_000_000, note: "GPT-4.1 / 4.1-mini / 4.1-nano（1M）" },
   { prefix: "gpt-4o", window: 128_000, note: "gpt-4o / gpt-4o-mini" },
   { prefix: "gpt-4-turbo", window: 128_000, note: "gpt-4-turbo 系列" },
   { prefix: "gpt-4-32k", window: 32_768, note: "gpt-4-32k 系列" },
@@ -53,10 +69,12 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   { prefix: "o3", window: 200_000, note: "o3 / o3-mini" },
   { prefix: "o4-mini", window: 200_000, note: "o4-mini" },
   // ---- DeepSeek ----
+  // 出处：官方「模型 & 价格」（2026-10）：deepseek-flash 与 deepseek-v4-pro
+  // 的上下文长度都是 1M（最大输出 384K）。
   {
     prefix: "deepseek",
-    window: 128_000,
-    note: "deepseek-chat / deepseek-reasoner（V3.1 起同为 128K）",
+    window: 1_000_000,
+    note: "deepseek-flash / deepseek-v4-pro（V4 起 1M）",
   },
   // ---- MiniMax ----
   { prefix: "minimax-m3", window: 1_000_000, note: "MiniMax-M3（1M）" },
@@ -68,6 +86,8 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   },
   { prefix: "minimax", window: 204_800, note: "MiniMax 其它模型，按 M2 量级取" },
   // ---- Xiaomi MiMo ----
+  // 只登记在售的 V2.6 系列与开源的 MiMo-7B：V2.5 / V2.5-Pro / V2 / V2-Omni
+  // 已于 2026.06 ~ 2026.10 陆续下线（调用即 404），留着只会误导。
   {
     prefix: "mimo-v2.6-pro-ultraspeed",
     window: 1_000_000,
@@ -79,26 +99,6 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     note: "MiMo-V2.6-Pro / V2.6-Flash（官方：1M 上下文）",
   },
   {
-    prefix: "mimo-v2.5-pro",
-    window: 1_000_000,
-    note: "MiMo-V2.5-Pro（1M，官方公告 2026.10.21 下线）",
-  },
-  {
-    prefix: "mimo-v2.5-omni",
-    window: 131_072,
-    note: "MiMo-V2.5-Omni（全模态，接入文档标 128K）",
-  },
-  {
-    prefix: "mimo-v2.5",
-    window: 1_000_000,
-    note: "MiMo-V2.5（1M，官方公告 2026.10.21 下线）",
-  },
-  {
-    prefix: "mimo-v2-flash",
-    window: 131_072,
-    note: "MiMo-V2-Flash：官方博客标 256K、接入指南标 56K，取小值避免超窗（400）",
-  },
-  {
     prefix: "mimo-7b",
     window: 32_768,
     note: "MiMo-7B 系列（32K，小于 128k 必须登记）",
@@ -106,7 +106,7 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   // ---- Moonshot AI / Kimi ----
   // 只登记官方模型列表里的在售模型：kimi-k2.5 / moonshot-v1 / kimi-k2 系列
   // 均已下线（调用即 404），不登记也不会比"请求本身失败"更糟。
-  { prefix: "kimi-k3", window: 1_000_000, note: "Kimi K3（1M，官方模型列表）" },
+  { prefix: "kimi-k3", window: 1_000_000, note: "Kimi K3 / K3.1-Pro（1M，官方模型列表）" },
   {
     prefix: "kimi-k2.7-code-highspeed",
     window: 262_144,
@@ -142,6 +142,11 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     prefix: "glm-4-long",
     window: 1_000_000,
     note: "GLM-4-Long（1M 上下文，但最大输出只有 4K）",
+  },
+  {
+    prefix: "autoglm-phone",
+    window: 20_480,
+    note: "AutoGLM-Phone（20K，最大输出 2K，小于 128k 必须登记）",
   },
   {
     prefix: "glm-4",
@@ -221,12 +226,12 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     note: "Doubao Seed Character（128K）",
   },
   // ---- Anthropic ----
-  // 当前一代（官方 Models overview，2026-10）：Fable / Opus 5.5 / Sonnet 5.5 都是 1M，
-  // Haiku 4.5 是 200K。
+  // 当前一代（官方 Models overview，2026-10）：Fable 5 / 5.1、Opus 5.5、Sonnet 5.5、
+  // Haiku 5.5 都是 1M，Haiku 4.5 是 200K。
   {
-    prefix: "claude-fable-5-1",
+    prefix: "claude-fable-5",
     window: 1_000_000,
-    note: "Claude Fable 5.1（1M / 128K 输出）",
+    note: "Claude Fable 5 / 5.1（1M / 128K 输出）",
   },
   {
     prefix: "claude-opus-5-5",
@@ -247,6 +252,11 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     prefix: "claude-sonnet-5",
     window: 1_000_000,
     note: "Claude Sonnet 5（1M）",
+  },
+  {
+    prefix: "claude-haiku-5",
+    window: 1_000_000,
+    note: "Claude Haiku 5.5（1M / 128K 输出）",
   },
   {
     prefix: "claude-haiku-4-5",

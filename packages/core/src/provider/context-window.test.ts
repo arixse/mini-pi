@@ -46,9 +46,34 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("gpt-4o-2024-08-06"), 128_000);
     assert.strictEqual(inferContextWindow("gpt-4-turbo"), 128_000);
     assert.strictEqual(inferContextWindow("o1-mini"), 128_000);
-    assert.strictEqual(inferContextWindow("deepseek-chat"), 128_000);
-    assert.strictEqual(inferContextWindow("deepseek-reasoner"), 128_000);
-    assert.strictEqual(inferContextWindow("deepseek-flash"), 128_000);
+  });
+
+  it("OpenAI 当前一代：GPT-6 与 GPT-5.4+ 都是 1.05M", () => {
+    // 估小只是多压缩几次；估大会在压缩触发前超窗（400），所以这里逐个钉住
+    assert.strictEqual(inferContextWindow("gpt-6-astra"), 1_050_000);
+    assert.strictEqual(inferContextWindow("gpt-6.1-sol"), 1_050_000);
+    assert.strictEqual(inferContextWindow("gpt-6-luna"), 1_050_000);
+    assert.strictEqual(inferContextWindow("gpt-5.6-sol"), 1_050_000);
+    assert.strictEqual(inferContextWindow("gpt-5.5"), 1_050_000);
+    assert.strictEqual(inferContextWindow("gpt-5.4"), 1_050_000);
+    // GPT-5 ~ 5.3 是 400K
+    assert.strictEqual(inferContextWindow("gpt-5"), 400_000);
+    assert.strictEqual(inferContextWindow("gpt-5.2-codex"), 400_000);
+    assert.strictEqual(inferContextWindow("gpt-4.1"), 1_000_000);
+    assert.strictEqual(inferContextWindow("gpt-4.1-mini"), 1_000_000);
+    // Spark 只有 128K，落到 gpt-5 的 400K 上会超窗
+    assert.strictEqual(inferContextWindow("gpt-5.3-codex-spark"), 128_000);
+    assert.strictEqual(
+      matchContextWindowRule("gpt-5.3-codex-spark")?.prefix,
+      "gpt-5.3-codex-spark",
+    );
+  });
+
+  it("DeepSeek V4 起是 1M（官方定价页）", () => {
+    assert.strictEqual(inferContextWindow("deepseek-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("deepseek-v4-pro"), 1_000_000);
+    // 整条 deepseek 前缀共用一条规则：官方换代（V3 → V4）后不必逐个型号追着改
+    assert.strictEqual(matchContextWindowRule("deepseek-v4-flash")?.window, 1_000_000);
   });
 
   it("大窗口模型", () => {
@@ -61,19 +86,29 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("MiniMax-M3"), 1_000_000);
   });
 
-  it("小米 MiMo 系列", () => {
+  it("小米 MiMo 系列（只登记在售型号）", () => {
     assert.strictEqual(inferContextWindow("mimo-v2.6-pro"), 1_000_000);
     assert.strictEqual(inferContextWindow("mimo-v2.6-flash"), 1_000_000);
     assert.strictEqual(inferContextWindow("mimo-v2.6-pro-ultraspeed"), 1_000_000);
-    assert.strictEqual(inferContextWindow("mimo-v2.5-pro"), 1_000_000);
-    assert.strictEqual(inferContextWindow("mimo-v2.5"), 1_000_000);
     // 小窗口模型必须被认出来，否则会在压缩触发前超窗（400）
     assert.strictEqual(inferContextWindow("mimo-7b-instruct"), 32_768);
   });
 
-  it("MiMo 的窗口不能被同前缀的更通用条目盖掉", () => {
-    // 最长前缀优先：omni（128K）不能落到 mimo-v2.5 的 1M 上
-    assert.strictEqual(inferContextWindow("mimo-v2.5-omni"), 131_072);
+  it("已下线的 MiMo 型号不再登记（调用即 404，留着只会误导）", () => {
+    // V2.5 / V2.5-Pro 于 2026-10-21 下线，V2 / V2-Omni / V2-Flash 于 2026-06-30 下线
+    for (const name of [
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
+      "mimo-v2.5-omni",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
+      "mimo-v2-flash",
+    ]) {
+      assert.strictEqual(matchContextWindowRule(name), null, `${name} 不应再有窗口规则`);
+    }
+  });
+
+  it("MiMo 的高速版不能被更通用的条目盖掉", () => {
     assert.strictEqual(
       matchContextWindowRule("mimo-v2.6-pro-ultraspeed")?.prefix,
       "mimo-v2.6-pro-ultraspeed",
@@ -117,6 +152,8 @@ describe("inferContextWindow（按模型名推断）", () => {
     // 小窗口的视觉模型必须被认出来，否则会在压缩触发前超窗（400）
     assert.strictEqual(inferContextWindow("glm-4.1v-thinking-flashx"), 65_536);
     assert.strictEqual(inferContextWindow("glm-4v-flash"), 16_384);
+    // AutoGLM-Phone 官方标 20K，不登记会落到 128K 默认值
+    assert.strictEqual(inferContextWindow("autoglm-phone"), 20_480);
   });
 
   it("GLM 的同前缀模型不能被更通用的条目盖掉", () => {
@@ -190,7 +227,10 @@ describe("inferContextWindow（按模型名推断）", () => {
   it("Anthropic Claude 当前一代", () => {
     assert.strictEqual(inferContextWindow("claude-opus-5-5"), 1_000_000);
     assert.strictEqual(inferContextWindow("claude-sonnet-5-5"), 1_000_000);
+    assert.strictEqual(inferContextWindow("claude-fable-5"), 1_000_000);
     assert.strictEqual(inferContextWindow("claude-fable-5-1"), 1_000_000);
+    // Haiku 5.5 也是 1M；漏登记会落到 claude 兜底的 200K，等于白白多压几次
+    assert.strictEqual(inferContextWindow("claude-haiku-5-5"), 1_000_000);
     // Haiku 4.5 只有 200K，不能被 1M 的通用条目盖住
     assert.strictEqual(inferContextWindow("claude-haiku-4-5"), 200_000);
     assert.strictEqual(inferContextWindow("claude-haiku-4-5-20251001"), 200_000);
@@ -241,7 +281,7 @@ describe("resolveContextWindow（配置 > 推断 > 默认）", () => {
     for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       const resolved = resolveContextWindow({
         configured: bad,
-        modelName: "deepseek-chat",
+        modelName: "gpt-4o",
       });
       assert.deepStrictEqual(
         resolved,

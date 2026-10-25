@@ -35,22 +35,23 @@ export class OpenAIProvider implements Provider {
 
   /**
    * 获取默认模型列表
-   * 根据 OpenAI 文档，常用的模型包括：
-   * - gpt-4o
-   * - gpt-4o-mini
-   * - gpt-4-turbo
-   * - o1
-   * - o1-mini
-   * - gpt-3.5-turbo
+   * 根据 OpenAI 官方 Models 目录（2026-10），当前在售的常用模型包括：
+   * - gpt-6-astra（旗舰）
+   * - gpt-6.1-sol（接近旗舰、成本低一档）
+   * - gpt-6-luna（小模型，高并发）
+   * - gpt-5.6-sol（上一代旗舰，仍在售）
+   * - gpt-4.1（经典 1M 窗口）
+   *
+   * gpt-4-turbo / gpt-3.5-turbo / o1 / o1-mini 均已关停，
+   * 放进默认列表等于给新用户一个必然 404 的默认项。
    */
   getDefaultModels(): string[] {
     return [
-      "gpt-4o",
-      "gpt-4o-mini",
-      "gpt-4-turbo",
-      "o1",
-      "o1-mini",
-      "gpt-3.5-turbo",
+      "gpt-6-astra",
+      "gpt-6.1-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-4.1",
     ];
   }
 }

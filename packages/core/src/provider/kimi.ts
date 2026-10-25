@@ -74,12 +74,15 @@ export class KimiProvider implements Provider {
   /**
    * 获取默认模型列表（接口拿不到列表时的兜底，也是自动建配置的候选）。
    *
-   * 只列官方模型列表里的在售模型：`kimi-k2.5`、`moonshot-v1` 系列与
-   * `kimi-k2` 系列均已下线（官方公告 2026.08.31 / 2026.05.25），
-   * 放进默认列表等于给新用户一个必然 404 的默认项。
+   * 只列官方模型列表里的在售模型，旗舰 K3.1 Pro 排第一位。
+   * `kimi-k2.5`、`moonshot-v1` 系列与 `kimi-k2` 系列均已下线
+   * （官方公告 2026.08.31 / 2026.05.25），放进默认列表等于给新用户一个必然 404
+   * 的默认项；K2.7 / K2.6 官方计划 2026-12 底下线，届时需同步下架。
    */
   getDefaultModels(): string[] {
     return [
+      "kimi-k3.1-pro",
+      "kimi-k3.1-pro-highspeed",
       "kimi-k3",
       "kimi-k2.7-code",
       "kimi-k2.7-code-highspeed",

@@ -40,6 +40,7 @@ describe("AnthropicProvider", () => {
       assert.ok(Array.isArray(models));
       assert.ok(models.includes("claude-opus-5-5"));
       assert.ok(models.includes("claude-sonnet-5-5"));
+      assert.ok(models.includes("claude-haiku-5-5"));
       assert.ok(models.includes("claude-haiku-4-5"));
       assert.ok(models.includes("claude-fable-5-1"));
     });
