@@ -20,7 +20,6 @@ export interface Provider {
   /** 获取基础URL */
   getBaseUrl(): string;
   
-  /** 获取模型列表 */
   /**
    * 获取模型列表
    * @param apiKey API Key

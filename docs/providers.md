@@ -561,15 +561,25 @@ one-api / new-api 之类的聚合网关，或自建的 vLLM、Ollama OpenAI 兼�
 export interface Provider {
   /** 获取Provider名称 */
   getProviderName(): string;
-  
+
   /** 获取SDK类型（如Anthropic、OpenAI等） */
   getSdkType(): string;
-  
+
   /** 获取基础URL */
   getBaseUrl(): string;
-  
-  /** 获取模型列表 */
-  getModelList(apiKey: string): Promise<string[]>;
+
+  /**
+   * 获取模型列表
+   * @param apiKey API Key
+   * @param baseUrl 自定义 Base URL（用户可能配置代理或私有网关）；不传则用提供方默认值
+   */
+  getModelList(apiKey: string, baseUrl?: string): Promise<string[]>;
+
+  /** 模型列表接口地址（可选；默认 `baseUrl + "/models"`） */
+  getModelsUrl?(baseUrl: string): string;
+
+  /** 获取默认模型列表（可选，用于自动生成默认配置） */
+  getDefaultModels?(): string[];
 }
 ```
 
