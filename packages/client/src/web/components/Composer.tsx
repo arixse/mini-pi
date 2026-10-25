@@ -14,9 +14,10 @@
  * 只有"没配模型"和"无内容"才让发送键失效。失效时必须给出原因，
  * 一颗灰掉却不说为什么的按钮等于把用户关在门外。
  *
- * 两个下拉答的是"**新任务**用什么"（设计稿第 20 条：顶栏芯片也是默认值，
- * 某个 Run 实际用的模型画在运行头与状态栏）——摆在这里是因为改默认值
- * 的时刻正是"准备说下一句话"的时刻。
+ * 两个下拉答的是"**新任务**用什么"（设计稿第 20 条：顶栏芯片也是默认值）。
+ * 某个会话实际用的模型与默认值不同时，模型下拉的悬浮说明会补一句
+ * "当前会话用的是谁"——这样不必在状态行再占一枚指标。
+ * 摆在这里是因为改默认值的时刻正是"准备说下一句话"的时刻。
  *
  * 输入框的正文留在组件本地（它是"还没发出去的东西"，不是应用状态），
  * 只把两个命令（清空、聚焦）通过 `handleRef` 交回动作层。
@@ -270,7 +271,7 @@ function ModelPicker(): React.ReactElement {
       {open ? <div className="menu-catch" onClick={() => setOpen(false)} /> : null}
       <button
         className="composer-select"
-        title="新任务使用的模型（当前 Run 用的画在运行头与状态栏）"
+        title={modelSelectTitle(state.model.label, state.view.model)}
         onClick={() => setOpen((value) => !value)}
       >
         <Icon name="sparkles" size={12} />
@@ -324,6 +325,19 @@ function ModelPicker(): React.ReactElement {
       ) : null}
     </>
   );
+}
+
+/**
+ * 模型下拉的悬浮说明。
+ *
+ * 下拉本身只写"新任务用谁"。看历史会话时，那个会话实际用的模型可能
+ * 与默认值不同；不说一句，用户会以为下拉选错了。
+ */
+function modelSelectTitle(defaultLabel: string | null, viewModel: string | null): string {
+  if (viewModel && viewModel !== defaultLabel) {
+    return `新任务使用的模型；当前会话用的是 ${viewModel}`;
+  }
+  return "新任务使用的模型";
 }
 
 /**

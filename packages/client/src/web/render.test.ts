@@ -134,7 +134,7 @@ describe("前端组件树", () => {
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
   });
 
-  it("状态行属于主列且有四枚指标：模型 / 上下文 / 步数 / 缓存", () => {
+  it("状态行属于主列且有三枚指标：上下文 / 步数 / 缓存（模型交给输入区）", () => {
     const store = new ClientStore();
     store.update((state) => {
       state.workspace = { root: "/tmp/ws", name: "ws" };
@@ -147,11 +147,11 @@ describe("前端组件树", () => {
       ),
     );
     assert.match(html, /class="statusbar"/);
-    assert.match(html, />模型</);
     assert.match(html, />上下文</);
     assert.match(html, />步数</);
     assert.match(html, />缓存</);
-    assert.doesNotMatch(html, />状态</, "设计稿只有四枚指标，不画第五个");
+    assert.doesNotMatch(html, />模型</, "输入区下拉已经展示模型，状态行不再重复");
+    assert.doesNotMatch(html, />状态</, "设计稿只有三枚指标，不画第四个");
   });
 
   /**
@@ -229,6 +229,33 @@ describe("前端组件树", () => {
     const button = sendButton(html);
     assert.match(button, /新任务/);
     assert.doesNotMatch(button, /disabled/, "提示语让点「新任务」，就不能把它灰掉");
+  });
+
+  it("模型下拉的悬浮说明：会话实际用的模型与默认值不同时才补一句", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.model = {
+        ...state.model,
+        provider: "deepseek",
+        model: "deepseek-flash",
+        label: "deepseek/deepseek-flash",
+      };
+      state.view.model = "openai/gpt-6-astra";
+    });
+    const html = renderComposer(store);
+    assert.match(
+      html,
+      /title="新任务使用的模型；当前会话用的是 openai\/gpt-6-astra"/,
+      "看历史会话时不能让人以为下拉选错了",
+    );
+
+    store.update((state) => {
+      state.view.model = "deepseek/deepseek-flash";
+    });
+    const same = renderComposer(store);
+    assert.match(same, /title="新任务使用的模型"/);
+    assert.doesNotMatch(same, /当前会话用的是/, "两者一致时不要多一句废话");
   });
 
   it("没有工作区时主区是品牌引导：一句话 + 选择目录", () => {

@@ -5,47 +5,28 @@
 
 ## 当前状态
 
-客户端版式改为响应式：侧栏与主列不再写死 232 / 760，改为随视口变化的
-`clamp()`，并按 1199 / 1023 / 879 / 559 四档重排；Electron 窗口补上最小尺寸。
+时间线上面的状态行不再展示模型：模型只在输入区附加行的下拉里选（"新任务
+用什么"），会话实际用的模型与默认值不同时靠下拉的悬浮说明区分。状态行 36px
+只留随时间变化的三枚指标——上下文 / 步数 / 缓存。
 
-- 状态：分支 `feature/client-responsive-layout` 上完成，门禁与真浏览器冒烟
-  通过，合入 `main` 后即为当前版本
-- 门禁：`pnpm check` 全绿（2144 tests / 2141 pass / 0 fail / 3 skipped，
-  覆盖率 97.60% / 90.92% / 93.13%）
-- 端到端验证：`build:web` + `serve` + 同源 iframe 量宽页，测
-  360 / 414 / 559 / 768 / 879 / 1024 / 1280 / 1440 / 1920 / 2560
-  - 所有宽度页面无横向滚动；顶栏、状态栏自身也不溢出
-  - 侧栏：抽屉宽 310（360）/ 320（≥414）；常驻宽 240（879）/ 264（1024、
-    1280）/ 274（1440）/ 320（1920、2560）
-  - 主列内容宽：326（360）/ 380（414）/ 525（559）/ 725（768）/ 601（879，
-    侧栏常驻）/ 717（1024）/ 965（1280）/ 1110（1440）/ 1224（1920、2560）
-  - 879 以下汉堡出现、侧栏 `position: absolute`；`nav-open` 时
-    `transform` 归零（在关闭过渡的 iframe 里验证，见已知问题）
-  - 360 设置页：浮层 360×700 全屏、无圆角、`settings-shell` 单列、导航横排、
-    9 个供应商行换行且地址落到第二行、字段行 `wrap`、两个下拉各占一行、
-    发送键右对齐
+- 状态：分支 `fix/client-statusbar-drop-model` 上完成，`pnpm check` 全绿后
+  即可合入 `main`（响应式版式已在此前合入，见 `005cec8`）
+- 门禁：`pnpm check` 全绿（覆盖率 97.59% / 90.89% / 93.13%，高于 85 / 90 / 93）
+- 端到端验证：`web/render.test.ts` 断言状态行无「模型」指标、下拉悬浮说明
+  按"会话实际模型 ≠ 默认值"补一句；另需在真浏览器确认窄屏下三枚指标一行可读
 
 ## 已完成
 
-- `web/styles.css`：
-  - 宽度 token 改为 `clamp()`：侧栏 `264 → 320`、主列 `760 → 1280`、
-    留白 `12 → 28`；主列 / 输入区 / 变更面板共用 `--page-pad`
-  - 新增 1199（收间距、气泡 92%）、1023（侧栏 240）、879（抽屉 320 / 86vw）、
-    559（浮层全屏、设置单列横排、控件堆叠、diff 贴边）、`hover: none`
-    （行操作常驻）、399（状态行只留数值）各档规则
-  - 状态栏改横向滚动；侧栏标题不再被行操作挤掉 20%；输入区附加行 / 目录
-    路径行 / 字段行允许换行；`100dvh` 回退
-- `web/components/Picker.tsx`：路径输入行改用 `.picker-path-row`
-- `web/components/Settings.tsx`：默认模型行改用 `.field-row`
-- `electron/api.ts` + `electron/main.ts`：窗口最小尺寸 `420 × 480`
-- 测试：
-  - 新增 `web/styles.test.ts`：9 条版式契约（clamp 上下限、共用留白 token、
-    状态栏不换行、879 / 559 / 触摸设备规则）
-  - `web/render.test.ts`：目录路径行带可换行 class
-  - `electron/main.test.ts`：最小尺寸与默认尺寸的关系
-- 文档：`docs/client-ui-design.md` §2 / §7、`docs/client-visual-handoff.md` §2
-  写明 232 / 760 是 1280 画布基准，运行时为 clamp，并统一断点为 1199 /
-  1023 / 879 / 559
+- `web/components/Statusbar.tsx`：删掉「指标-模型」与 `modelTitle()`，头部
+  注释改为三枚指标；`Icon` 导入随之移除
+- `web/components/Composer.tsx`：模型下拉 title 改用 `modelSelectTitle()`——
+  会话实际用的模型与默认值不同时补一句"当前会话用的是谁"
+- `web/render.test.ts`：状态行断言改为三枚指标且不得出现「模型」；新增下拉
+  悬浮说明两条用例（不同时补一句、相同时不多嘴）
+- `web/styles.css`：状态栏注释里的"四枚"改"三枚"（窄屏滚动、399 档标签让位）
+- 文档：`DECISIONS.md`（新增"状态行不再画模型"）、`docs/client-ui-design.md`
+  §1/§2/§7 第 20 条、`docs/client-visual-handoff.md` §2、
+  `docs/technical-solution.md`、`packages/client/README.md` 同步
 
 ## 进行中
 
@@ -63,6 +44,6 @@
 
 ## 下一步
 
-- 合并 `feature/client-responsive-layout` 回 `main`
+- 合并 `fix/client-statusbar-drop-model` 回 `main`
 - 视需要记住上次窗口尺寸（Electron 关闭时保存、启动时恢复）
 - 移动端浏览器若要正式支持，补 `env(safe-area-inset-bottom)` 与真机触摸回归
