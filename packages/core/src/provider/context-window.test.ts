@@ -130,6 +130,63 @@ describe("inferContextWindow（按模型名推断）", () => {
     assert.strictEqual(inferContextWindow("glm-4-flashx-250414"), 128_000);
   });
 
+  it("阿里百炼 Qwen 系列", () => {
+    assert.strictEqual(inferContextWindow("qwen3.8-max"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.8-max-0902"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.8-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.7-plus"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.7-flash-2026-07-15"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3-coder-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.6-plus"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.5-plus"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen3.5-flash"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen-plus"), 1_000_000);
+    assert.strictEqual(inferContextWindow("qwen-flash"), 1_000_000);
+    // 开源型号与 omni 是 256K，不能被 1M 的 plus/flash 条目吞掉
+    assert.strictEqual(inferContextWindow("qwen3.5-397b-a17b"), 262_144);
+    assert.strictEqual(inferContextWindow("qwen3.5-omni-plus"), 262_144);
+    assert.strictEqual(inferContextWindow("qwen-long"), 10_000_000);
+    // 小窗口模型必须被认出来，否则会在压缩触发前超窗（400）
+    assert.strictEqual(inferContextWindow("qwen-max"), 32_768);
+    assert.strictEqual(inferContextWindow("qwen-plus-character"), 32_768);
+    assert.strictEqual(inferContextWindow("qwen-mt-plus"), 16_384);
+    assert.strictEqual(inferContextWindow("qwen-flash-character"), 8_192);
+  });
+
+  it("Qwen 的同前缀模型不能被更通用的条目盖掉", () => {
+    assert.strictEqual(
+      matchContextWindowRule("qwen-plus-character")?.prefix,
+      "qwen-plus-character",
+    );
+    assert.strictEqual(
+      matchContextWindowRule("qwen-flash-character")?.prefix,
+      "qwen-flash-character",
+    );
+    assert.strictEqual(matchContextWindowRule("qwen-mt-flash")?.prefix, "qwen-mt");
+    assert.strictEqual(matchContextWindowRule("qwen3.5-plus")?.prefix, "qwen3.5-plus");
+  });
+
+  it("字节跳动火山方舟 Doubao 系列", () => {
+    assert.strictEqual(inferContextWindow("doubao-seed-evolving"), 1_000_000);
+    assert.strictEqual(inferContextWindow("doubao-seed-2-1-pro-260915"), 1_000_000);
+    assert.strictEqual(inferContextWindow("doubao-seed-2-1-lite-260915"), 1_000_000);
+    // 2.1 的旧快照与 turbo 是 256K，不能被 1M 的 260915 条目盖住
+    assert.strictEqual(inferContextWindow("doubao-seed-2-1-turbo-260628"), 262_144);
+    assert.strictEqual(inferContextWindow("doubao-seed-2-1-pro-260628"), 262_144);
+    assert.strictEqual(inferContextWindow("doubao-seed-2-0-lite-260428"), 262_144);
+    assert.strictEqual(inferContextWindow("doubao-seed-2-0-mini-260428"), 262_144);
+    assert.strictEqual(inferContextWindow("doubao-seed-character-260628"), 131_072);
+  });
+
+  it("带供应商前缀的百炼 / 方舟模型同样命中", () => {
+    assert.strictEqual(inferContextWindow("bailian/qwen3.8-max"), 1_000_000);
+    assert.strictEqual(inferContextWindow("bailian/qwen-flash-character"), 8_192);
+    assert.strictEqual(
+      inferContextWindow("volcengine/doubao-seed-2-1-turbo-260628"),
+      262_144,
+    );
+  });
+
   it("Anthropic Claude 当前一代", () => {
     assert.strictEqual(inferContextWindow("claude-opus-5-5"), 1_000_000);
     assert.strictEqual(inferContextWindow("claude-sonnet-5-5"), 1_000_000);

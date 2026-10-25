@@ -32,7 +32,7 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 > /model     # 选供应商 → 选模型，立即生效
 ```
 
-内置 7 家供应商：DeepSeek、MiniMax-CN、OpenAI、MiMo、Kimi、智谱、Anthropic。
+内置 9 家供应商：DeepSeek、MiniMax-CN、OpenAI、MiMo、Kimi、智谱、阿里百炼、火山方舟、Anthropic。
 默认模型、上下文窗口与接入细节见 [providers.md](docs/providers.md)。
 
 配置与会话都在 `~/.mini-pi/` 下：
@@ -196,7 +196,7 @@ pnpm release patch             # 打 tag 并推，剩下的交给 CI
 | `agent/`       | Agent 循环、消息协议、会话读写与压缩、子 Agent、Skill 加载     |
 | `agent/model/` | 两家 SDK 的流式实现、重试、错误分类、静默看门狗                |
 | `agent/tools/` | 工具注册表与实现（文件 / 搜索 / bash / verify / skill / task） |
-| `provider/`    | 7 家供应商注册、凭据与设置的原子读写、上下文窗口推断           |
+| `provider/`    | 9 家供应商注册、凭据与设置的原子读写、上下文窗口推断           |
 | `shared/`      | 协议类型与日志出口                                             |
 
 CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 恒为空——
@@ -210,7 +210,7 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [CLI 命令参考](docs/cli-commands.md)            | 每条斜杠命令的用法、输出与边界（命令清单的唯一去处）                         |
 | [CLI 配置与存储](docs/cli-config.md)            | 配置文件、会话存储、供应商清单、事件类型与 Skill 目录                        |
 | [技术方案](docs/technical-solution.md)          | 核心模块设计（模型层 / 工具层 / 会话层 / 循环 / 审批 / 子 Agent）            |
-| [模型供应商对接](docs/providers.md)             | 7 家供应商的默认模型、上下文窗口、接入细节与踩坑记录                         |
+| [模型供应商对接](docs/providers.md)             | 9 家供应商的默认模型、上下文窗口、接入细节与踩坑记录                         |
 | [Session 管理功能](docs/session-management.md)  | 会话存储层实现（目录推导、写盘语义、压缩协议）                               |
 | [多 Agent 实现方案](docs/multi-agent-design.md) | 委派架构与里程碑（已全部落地，口径以技术方案 §3.6 为准）                    |
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |

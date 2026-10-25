@@ -108,6 +108,16 @@
 | `glm-4.6v` / `glm-4.5*` / `glm-4`（其它） | 128000 | 智谱 |
 | `glm-4.1v-thinking*` | 65536 | 智谱 |
 | `glm-4v-flash` | 16384 | 智谱 |
+| `qwen3.8*` / `qwen3.7*` / `qwen3.6*` | 1000000 | 阿里百炼 |
+| `qwen3.5-plus` / `qwen3.5-flash` / `qwen3-coder` / `qwen-plus` / `qwen-flash` | 1000000 | 阿里百炼 |
+| `qwen3.5*` | 262144 | 阿里百炼 |
+| `qwen-long` | 10000000 | 阿里百炼 |
+| `qwen-max` / `qwen-plus-character` | 32768 | 阿里百炼 |
+| `qwen-mt*` | 16384 | 阿里百炼 |
+| `qwen-flash-character` | 8192 | 阿里百炼 |
+| `doubao-seed-evolving` / `doubao-seed-2-1-pro-260915` / `doubao-seed-2-1-lite-260915` | 1000000 | 火山方舟 |
+| `doubao-seed-2-1*` / `doubao-seed-2-0*` | 262144 | 火山方舟 |
+| `doubao-seed-character*` | 131072 | 火山方舟 |
 | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 |
 | `claude-opus-5` / `claude-sonnet-5` | 1000000 | Claude 5 |
 | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5 |
@@ -146,6 +156,8 @@ JSONL 是上下文的唯一事实来源，一行损坏不会让整份会话打�
 | `mimo` | OpenAI | `https://api.xiaomimimo.com/v1` |
 | `kimi` | OpenAI | `https://api.moonshot.cn/v1` |
 | `zhipu` | OpenAI | `https://open.bigmodel.cn/api/paas/v4` |
+| `bailian` | OpenAI | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `volcengine` | OpenAI | `https://ark.cn-beijing.volces.com/api/v3` |
 | `anthropic` | Anthropic | `https://api.anthropic.com` |
 
 > 各供应商的默认模型列表、接入细节与踩坑见 [providers.md](./providers.md)（唯一来源）。
