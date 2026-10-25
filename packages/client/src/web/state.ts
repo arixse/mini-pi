@@ -130,8 +130,6 @@ export type View = {
   /** 运行头里的耗时：开始时记墙钟，结束后用服务端给的 elapsedMs */
   startedAt: number | null;
   elapsedMs: number | null;
-  /** 历史会话只读：发送按钮换成"新任务" */
-  readOnly: boolean;
   /** 事件流有缺口（游标被挤出缓冲） */
   gap: boolean;
   /** 断流提示：SSE 断了、重连中…… */
@@ -276,7 +274,6 @@ export function emptyView(): View {
     cache: emptyCacheUsage(),
     startedAt: null,
     elapsedMs: null,
-    readOnly: false,
     gap: false,
     streamNote: null,
     streamLost: false,
@@ -594,6 +591,10 @@ export function applyRunMetaEvent(
  * `liveRun` 是服务端认为属于这个会话、且还没结束的 Run；有它才订阅事件流。
  * `run` 是这个会话最近的一条 Run（不论结束没结束）——运行头的隔离信息
  * （M3）要看它：任务跑完了，「丢弃」按钮还得在。
+ *
+ * 历史会话与当前会话一视同仁：打开一段历史会话只是换一块时间线，输入区
+ * 照常可写——续写时把 `sessionId` 带给 `send()`，服务端会把它接回来
+ * （并设为当前会话）。
  */
 export function openSession(
   state: ClientState,
@@ -601,7 +602,6 @@ export function openSession(
   messages: readonly AgentMessage[],
   options: {
     title?: string;
-    readOnly?: boolean;
     liveRun?: RunSummary | null;
     run?: RunSummary | null;
     /** 这段会话当前上下文的占用（历史会话由服务端回看时算好） */
@@ -623,7 +623,6 @@ export function openSession(
   // 会话文件为准，不会再叠一条。
   appendQueuedRuns(state, view, sessionId);
   view.title = options.title ?? "";
-  view.readOnly = options.readOnly ?? false;
   view.contextWindow = state.model.contextWindow;
   view.model = state.model.label;
   // 历史用量、步数与缓存：切回一段旧会话时，顶部那几枚指标要说"这段历史
@@ -1157,13 +1156,10 @@ export function workspaceGroups(state: ClientState): WorkspaceGroup[] {
     }));
 }
 
-/** 输入区那一块地方只能说一套话：只读 → 缺配置 → 忙 → 就绪 */
-export type ComposerMode = "ready" | "busy" | "blocked" | "readonly";
+/** 输入区那一块地方只能说一套话：缺配置 → 忙 → 就绪 */
+export type ComposerMode = "ready" | "busy" | "blocked";
 
 export function modeOf(state: ClientState): ComposerMode {
-  if (state.view.readOnly) {
-    return "readonly";
-  }
   if (!state.sendable) {
     return "blocked";
   }

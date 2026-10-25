@@ -70,8 +70,9 @@ export type Actions = {
   /**
    * 打开一段会话并把焦点放进输入框（侧栏行的 `+`）。
    *
-   * 与 {@link Actions.openSession} 只差"聚焦"：对当前会话来说这就是
-   * "接着写"，对历史会话则打开只读回看——由 composer 自己说明状态。
+   * 与 {@link Actions.openSession} 只差"聚焦"：对任何会话（含历史会话）
+   * 这都是"接着写"——2026-10-25 起历史会话不再只读，续写由
+   * {@link Actions.send} 把 sessionId 带给服务端完成。
    * `root` 缺省 = 活动根。
    */
   continueSession: (sessionId: string, root?: string) => Promise<void>;

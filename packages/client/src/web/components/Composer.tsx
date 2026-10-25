@@ -76,12 +76,10 @@ export function Composer({
   }, [handleRef]);
 
   // 忙时同一个按钮就是停止键：两种状态一个位置，不玩"按钮跳来跳去"。
-  // 停止键只看"有没有一条活着的 Run"，不看输入区是不是只读——历史会话里
-  // 也可能挂着一条 live Run（它不是服务端 currentSessionId，却是真的在跑）。
+  // 停止键只看"有没有一条活着的 Run"——历史会话里也可能挂着一条 live Run
+  // （它不是服务端 currentSessionId，却是真的在跑），停它不该被藏起来。
   const stopping = state.view.activeRunId !== null && isLiveStatus(state.view.status);
-  const sendDisabled = stopping
-    ? false
-    : mode === "blocked" || (mode !== "readonly" && text.trim().length === 0);
+  const sendDisabled = stopping ? false : mode === "blocked" || text.trim().length === 0;
 
   /*
    * 发送：忙时**不禁用**（设计稿第 21 条）。
@@ -89,13 +87,11 @@ export function Composer({
    * 运行中按 Enter / Tab 发出去的那条不会插队——服务端 `RunManager`
    * 的并发上限是 1，它自动排到当前回合后面，时间线上标「已入队」。
    * 所以"能不能发"和"现在忙不忙"是两件事：忙只把按钮换成停止键。
+   * 历史会话同样直接发：`send()` 带着 `view.sessionId`，服务端会把
+   * 消息接回那段会话（并把它设为当前会话）。
    */
   const submit = (): void => {
     if (mode === "blocked") {
-      return;
-    }
-    if (mode === "readonly") {
-      actions.newTask();
       return;
     }
     const trimmed = text.trim();
@@ -169,7 +165,6 @@ export function Composer({
           {mode === "blocked" ? (
             <span className="composer-block">{state.blockReason ?? "暂时发不出任务"}</span>
           ) : null}
-          {mode === "readonly" && !stopping ? <span>历史会话只读；点「新任务」开一段新的</span> : null}
           {mode === "ready" ? (
             <>
               <span className="composer-hint">
@@ -181,9 +176,7 @@ export function Composer({
             </>
           ) : null}
           {stopping ? (
-            <span className="composer-hint">
-              {mode === "readonly" ? "任务仍在运行 · 可停止" : "运行中 · 输入照常排队"}
-            </span>
+            <span className="composer-hint">运行中 · 输入照常排队</span>
           ) : null}
 
           <button
@@ -192,7 +185,7 @@ export function Composer({
             onClick={stopping ? () => actions.stop() : submit}
           >
             {stopping ? <Icon name="stop" size={13} /> : <Icon name="send" size={13} />}
-            {stopping ? "停止" : mode === "readonly" ? "新任务" : "发送"}
+            {stopping ? "停止" : "发送"}
           </button>
         </div>
       </div>

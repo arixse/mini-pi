@@ -716,6 +716,38 @@ describe("AppController", () => {
     assert.strictEqual(view.steps, 7);
   });
 
+  /*
+   * 回归：历史会话曾经只读（发送键换成「新任务」）。2026-10-25 起续写
+   * 必须能发——请求带着打开的那段会话，服务端把消息接回去。
+   */
+  it("历史会话里续写：POST /api/runs 带着这段会话的 sessionId 与根", async () => {
+    installFetch({
+      "/api/state": { body: snapshot({ currentSessionId: "cur.jsonl" }) },
+      "/api/sessions/old.jsonl": { body: sessionDetail("old.jsonl", "很久以前的一段") },
+      "/api/runs": { status: 201, body: { runId: "run_c", sessionId: "old.jsonl" } },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.openSession("old.jsonl");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+
+    controller.actions.send("接着聊");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+
+    const sent = requested.filter(
+      (item) => item.method === "POST" && item.url.includes("/api/runs"),
+    );
+    assert.strictEqual(sent.length, 1, "续写就是一条普通的发送");
+    assert.ok(
+      sent[0]!.body.includes('"sessionId":"old.jsonl"'),
+      "必须接回打开的那段会话，而不是新开一段",
+    );
+    assert.ok(sent[0]!.body.includes('"root":"D:/ws"'), "跨根续写要带上那个根");
+  });
+
   it("boot 后建立应用级事件流：后台 Run 的状态变化不再等轮询", async () => {
     const running: AppState["runs"][number] = {
       runId: "run_bg",

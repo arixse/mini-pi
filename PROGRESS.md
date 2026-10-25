@@ -5,28 +5,39 @@
 
 ## 当前状态
 
-时间线上面的状态行不再展示模型：模型只在输入区附加行的下拉里选（"新任务
-用什么"），会话实际用的模型与默认值不同时靠下拉的悬浮说明区分。状态行 36px
-只留随时间变化的三枚指标——上下文 / 步数 / 缓存。
+历史会话可以接着发消息了：侧栏点开任何一段会话都直接能续写，发送请求带着
+那段会话的 `sessionId`（跨根连同 `root`），服务端把消息接回该会话并设为
+当前会话。前端删掉了 `View.readOnly` 与 `readonly` 输入区模式——当前会话与
+历史会话同一套发送逻辑。这是对 `client-ui-design.md` 第 15 条的反转
+（2026-10-25 用户要求"必须要续写"），决策记录见 `DECISIONS.md`。
 
-- 状态：分支 `fix/client-statusbar-drop-model` 上完成，`pnpm check` 全绿后
-  即可合入 `main`（响应式版式已在此前合入，见 `005cec8`）
-- 门禁：`pnpm check` 全绿（覆盖率 97.59% / 90.89% / 93.13%，高于 85 / 90 / 93）
-- 端到端验证：`web/render.test.ts` 断言状态行无「模型」指标、下拉悬浮说明
-  按"会话实际模型 ≠ 默认值"补一句；另需在真浏览器确认窄屏下三枚指标一行可读
+- 状态：分支 `feature/client-session-continue` 上完成，`pnpm check` 全绿，
+  已合入 `main`
+- 门禁：`pnpm check` 全绿（2146 tests / 2143 pass / 0 fail / 3 skipped，
+  覆盖率 97.62% / 90.92% / 93.13%）
+- 端到端验证：控制器层回归用例钉住"在打开的历史会话里发送，请求体带着
+  `sessionId` 与 `root`"；渲染层钉住"历史会话的发送键是发送、不是新任务"。
+  真浏览器冒烟待按需补（窄屏 / 跨根续写各点一次）
 
 ## 已完成
 
-- `web/components/Statusbar.tsx`：删掉「指标-模型」与 `modelTitle()`，头部
-  注释改为三枚指标；`Icon` 导入随之移除
-- `web/components/Composer.tsx`：模型下拉 title 改用 `modelSelectTitle()`——
-  会话实际用的模型与默认值不同时补一句"当前会话用的是谁"
-- `web/render.test.ts`：状态行断言改为三枚指标且不得出现「模型」；新增下拉
-  悬浮说明两条用例（不同时补一句、相同时不多嘴）
-- `web/styles.css`：状态栏注释里的"四枚"改"三枚"（窄屏滚动、399 档标签让位）
-- 文档：`DECISIONS.md`（新增"状态行不再画模型"）、`docs/client-ui-design.md`
-  §1/§2/§7 第 20 条、`docs/client-visual-handoff.md` §2、
-  `docs/technical-solution.md`、`packages/client/README.md` 同步
+- `web/state.ts`：删 `View.readOnly` 字段、`emptyView()` 初值、
+  `openSession()` 的 `readOnly` 选项；`ComposerMode` 去掉 `readonly`，
+  `modeOf` 不再有只读分支
+- `web/controller.ts`：`openSession` 不再按"是不是当前会话"判定只读
+  （`target` 局部变量随之移除）；`continueSession` 注释改为"任何会话都是接着写"
+- `web/components/Composer.tsx`：删只读分支（发送键恒为发送/停止、提示行
+  与 `submit` 的 `newTask` 分支移除）；`web/components/Timeline.tsx`：删
+  "只读浏览"提示条；`web/actions.ts`、`server/host.ts` 注释同步
+- 测试：
+  - `web/controller.test.ts`：新增"历史会话里续写带着 sessionId 与根"
+  - `web/state.test.ts`：新增"打开历史会话输入区仍是就绪态"；原
+    "openSession 挂上未结束的 Run 并标只读"改为不标只读
+  - `web/render.test.ts`：两个只读用例改为"历史会话发送键就是发送"
+    +"live Run 停止键仍在"
+  - `web/store.test.ts`：删"只读优先于一切"
+- 文档：`DECISIONS.md`（新增决策条目）、`client-ui-design.md` §1 对照表与
+  第 15 条、`technical-solution.md`、`packages/client/README.md`
 
 ## 进行中
 
@@ -44,6 +55,7 @@
 
 ## 下一步
 
-- 合并 `fix/client-statusbar-drop-model` 回 `main`
+- 真浏览器冒烟一次续写：点开一段历史会话直接发消息，确认时间线追加、
+  侧栏"当前"标记跟上、跨根续写落在正确的根
 - 视需要记住上次窗口尺寸（Electron 关闭时保存、启动时恢复）
 - 移动端浏览器若要正式支持，补 `env(safe-area-inset-bottom)` 与真机触摸回归

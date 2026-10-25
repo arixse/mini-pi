@@ -23,6 +23,7 @@ import {
   initialState,
   itemsFromMessages,
   messageId,
+  modeOf,
   openSession,
   pendingApprovals,
   removeItem,
@@ -430,7 +431,7 @@ describe("乐观插入与快照", () => {
     assert.strictEqual(state.view.sessionId, "history.jsonl", "正在看的历史不该被快照拽走");
   });
 
-  it("openSession 挂上未结束的 Run 并标只读", () => {
+  it("openSession 挂上未结束的 Run 与隔离信息", () => {
     const state = initialState();
     applySnapshot(state, snapshot({ currentSessionId: "other.jsonl" }));
     const live: RunSummary = {
@@ -449,9 +450,7 @@ describe("乐观插入与快照", () => {
     };
     state.runs = [live];
     const messages = [userMessage("历史"), assistantText("回答")];
-    // "只读"由装配层（app.ts）判断：打开的不是当前会话就传 true
-    openSession(state, "s1.jsonl", messages, { readOnly: true, liveRun: live });
-    assert.equal(state.view.readOnly, true);
+    openSession(state, "s1.jsonl", messages, { liveRun: live });
     assert.equal(state.view.activeRunId, "run_9");
     assert.equal(state.view.items.length, 2);
     // liveRun 的标题与模型覆盖会话默认值：运行头按 Run 回答"用谁在跑"
@@ -465,6 +464,22 @@ describe("乐观插入与快照", () => {
       released: false,
       merged: false,
     });
+  });
+
+  /*
+   * 回归：历史会话曾经是只读的（打开非当前会话就禁止发送）。
+   * 2026-10-25 起反悔了——续写必须能发，且与是不是"当前会话"无关。
+   */
+  it("打开历史会话也能续写：输入区仍是就绪态", () => {
+    const state = initialState();
+    applySnapshot(state, snapshot({ currentSessionId: "cur.jsonl" }));
+    openSession(state, "old.jsonl", [userMessage("以前的提问")]);
+    assert.strictEqual(state.view.sessionId, "old.jsonl");
+    assert.strictEqual(
+      modeOf(state),
+      "ready",
+      "打开的不是当前会话，也不能因此变成只读——续写靠 send 带 sessionId",
+    );
   });
 
   it("跑完的 Run 没有 liveRun：最近的一条照样把隔离信息带上（M3）", () => {

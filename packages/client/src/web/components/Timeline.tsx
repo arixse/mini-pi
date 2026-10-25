@@ -376,12 +376,6 @@ function Banners(): React.ReactElement {
           </button>
         </div>
       ) : null}
-      {view.readOnly ? (
-        <div className="bar bar-ok">
-          <Icon name="check" />
-          只读浏览：这里不能继续追问，想接着聊请新开一个任务
-        </div>
-      ) : null}
       {view.status === "queued" ? (
         <div className="bar bar-warn">
           <Icon name="shield" />

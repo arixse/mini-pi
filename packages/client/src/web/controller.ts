@@ -443,6 +443,12 @@ export class AppController {
 
   // ------------------------------------------------------------ 会话 / Run
 
+  /**
+   * 打开一段会话：换时间线、挂 live Run，**不限制能不能续写**。
+   *
+   * 历史会话与当前会话在这条路上没有分支：发送时 `send()` 自然把
+   * `view.sessionId` 带给服务端，那段会话会被接回来并成为当前会话。
+   */
   private async openSession(sessionId: string, root?: string): Promise<void> {
     const epoch = ++this.viewEpoch;
     // 上一个会话的预览属于上一份时间线，换了就不该继续挂在眼前
@@ -460,12 +466,8 @@ export class AppController {
       // （任务跑完了，「丢弃」按钮还得在）
       const recent =
         this.runsOf(targetRoot).find((run) => run.sessionId === sessionId) ?? null;
-      const target =
-        this.store.current.workspaces.find((w) => w.root === targetRoot) ?? null;
       this.store.update((state) => {
         openSessionIn(state, sessionId, detail.messages, {
-          // 只有"这个根的当前会话"能接着聊；其余历史会话只读回看
-          readOnly: sessionId !== (target?.currentSessionId ?? state.currentSessionId),
           liveRun: live,
           run: recent,
           root: targetRoot,
@@ -493,9 +495,9 @@ export class AppController {
   /**
    * 侧栏行的 `+`：打开这段会话并把焦点放进输入框。
    *
-   * 与 openSession 只差聚焦——对当前会话来说这就是"接着写"。
-   * 聚焦带会话守卫：打开期间用户可能又点了别处，那时不该把光标
-   * 抢到一个已经不在看的会话上。
+   * 与 openSession 只差聚焦——这就是"接着写"，对历史会话同样成立
+   * （2026-10-25 起历史会话不再只读）。聚焦带会话守卫：打开期间
+   * 用户可能又点了别处，那时不该把光标抢到一个已经不在看的会话上。
    */
   private async continueSession(sessionId: string, root?: string): Promise<void> {
     await this.openSession(sessionId, root);

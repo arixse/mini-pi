@@ -70,15 +70,6 @@ describe("modeOf：输入区那一块只说一套话", () => {
     return state;
   }
 
-  it("只读优先于一切", () => {
-    const state = stateWith((s) => {
-      s.view.readOnly = true;
-      s.sendable = false;
-      s.view.status = "running";
-    });
-    assert.strictEqual(modeOf(state), "readonly");
-  });
-
   it("发不出任务时说原因，而不是装作能发", () => {
     const state = stateWith((s) => {
       s.sendable = false;
