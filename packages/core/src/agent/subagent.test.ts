@@ -10,6 +10,7 @@ import {
   AssistantMessage,
   SubAgentResult,
   ToolCallContent,
+  Usage,
 } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { CompleteInput, LlmModel } from "./model";
@@ -61,7 +62,7 @@ function createSpyModel(responses: AssistantMessage[]): SpyModel {
 function assistant(
   content: AssistantMessage["content"],
   stopReason: AssistantMessage["stopReason"] = "stop",
-  usage = { input: 10, output: 20, totalTokens: 30 },
+  usage: Usage = { input: 10, output: 20, totalTokens: 30 },
 ): AssistantMessage {
   return {
     role: "assistant",
@@ -323,6 +324,42 @@ describe("subagent", () => {
         output: 7,
         totalTokens: 12,
       });
+    });
+
+    it("缓存字段也应累加，且未返回时保持缺失", () => {
+      const messages: AgentMessage[] = [
+        assistant([createTextContent("a")], "stop", {
+          input: 10,
+          output: 1,
+          totalTokens: 11,
+          cacheRead: 6,
+        }),
+        assistant([createTextContent("b")], "stop", {
+          input: 20,
+          output: 2,
+          totalTokens: 22,
+          cacheRead: 5,
+          cacheWrite: 3,
+        }),
+      ];
+
+      assert.deepStrictEqual(sumUsage(messages), {
+        input: 30,
+        output: 3,
+        totalTokens: 33,
+        cacheRead: 11,
+        cacheWrite: 3,
+      });
+
+      const withoutCache = sumUsage([
+        assistant([createTextContent("c")], "stop", {
+          input: 1,
+          output: 1,
+          totalTokens: 2,
+        }),
+      ]);
+      assert.strictEqual("cacheRead" in withoutCache, false);
+      assert.strictEqual("cacheWrite" in withoutCache, false);
     });
   });
 

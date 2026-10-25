@@ -14,6 +14,19 @@ export type Usage = {
     input:number
     output:number
     totalTokens:number
+    /**
+     * 命中缓存的输入 token（`input` 的子集）。
+     *
+     * `input` 的口径统一为"含缓存的输入总量"：OpenAI 系的 `prompt_tokens`
+     * 本就包含命中部分；Anthropic 系的 `input_tokens` 不含缓存读写，适配器
+     * 会先把它们补回 `input` 再填这里，因此命中率处处都是 `cacheRead / input`。
+     *
+     * 提供方没返回该字段时保持 `undefined`——"没这个数据"和"命中 0"必须能区分，
+     * 否则界面会把"看不到"报成"一次都没命中"。
+     */
+    cacheRead?:number
+    /** 写入缓存的输入 token（`input` 的子集；Anthropic 系 / 显式缓存才会返回） */
+    cacheWrite?:number
 }
 
 export type UserMessage = {

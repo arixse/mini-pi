@@ -18,6 +18,7 @@ import {
   classifyStreamFailure,
   createDeltaEmitter,
   createStreamIdleWatchdog,
+  optionalTokenCount,
 } from "./stream";
 import { CompleteInput, LlmModel, ModelConfig } from "./types";
 
@@ -242,14 +243,25 @@ export class AnthropicModel implements LlmModel {
       }
     }
 
+    // Anthropic 的 `input_tokens` 只算未命中缓存的部分，缓存读写另计；
+    // 这里归一到"含缓存的输入总量"，与 OpenAI 系同口径（cacheRead/cacheWrite 是 input 的子集）。
+    const cacheRead = optionalTokenCount(response.usage.cache_read_input_tokens);
+    const cacheWrite = optionalTokenCount(
+      response.usage.cache_creation_input_tokens,
+    );
+    const input = response.usage.input_tokens + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    const output = response.usage.output_tokens;
+
     return {
       role: "assistant",
       content,
       stopReason: mapStopReason(response.stop_reason),
       usage: {
-        input: response.usage.input_tokens,
-        output: response.usage.output_tokens,
-        totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+        input,
+        output,
+        totalTokens: input + output,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
       },
       timestamp: Date.now(),
     };

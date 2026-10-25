@@ -93,6 +93,33 @@ describe("/status 的条目与排版", () => {
     assert.ok(usage.includes("1 次请求"), `应显示请求次数，实际：${usage}`);
   });
 
+  it("sessionStatusEntries 的用量行应带上缓存命中率", () => {
+    const options = createOptions();
+    options.usageTracker = createUsageTracker();
+    options.usageTracker.recordTurn([
+      {
+        role: "assistant",
+        content: [createTextContent("yo")],
+        stopReason: "stop",
+        usage: {
+          input: 1_000,
+          output: 100,
+          totalTokens: 1_100,
+          cacheRead: 600,
+          cacheWrite: 100,
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    const usage = new Map(sessionStatusEntries(options, "workspace-write")).get("用量") ?? "";
+
+    assert.ok(
+      usage.includes("缓存命中 60.0%（读 600 / 写 100）"),
+      `命中率应以含缓存的 input 为分母，实际：${usage}`,
+    );
+  });
+
   it("sessionStatusEntries 无用量累计器时不显示用量行", () => {
     const entries = new Map(sessionStatusEntries(createOptions(), "workspace-write"));
     assert.strictEqual(entries.get("用量"), undefined);

@@ -243,6 +243,9 @@ describe("其余命令的分派接线", () => {
           input: 0,
           output: 0,
           totalTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cacheReported: false,
           requests: 0,
           lastTurn: null,
           reported: false,
@@ -283,7 +286,7 @@ describe("其余命令的分派接线", () => {
         usageTracker: {
           recordTurn: () => {},
           snapshot: () => ({
-            input: 0, output: 0, totalTokens: 0, requests: 0, lastTurn: null, reported: false,
+            input: 0, output: 0, totalTokens: 0, cacheRead: 0, cacheWrite: 0, cacheReported: false, requests: 0, lastTurn: null, reported: false,
           }),
           reset: () => resetCalls.push(1),
         },
@@ -628,7 +631,7 @@ describe("其余命令的分派接线", () => {
         usageTracker: {
           recordTurn: () => {},
           snapshot: () => ({
-            input: 0, output: 0, totalTokens: 0, requests: 0, lastTurn: null, reported: false,
+            input: 0, output: 0, totalTokens: 0, cacheRead: 0, cacheWrite: 0, cacheReported: false, requests: 0, lastTurn: null, reported: false,
           }),
           reset: () => resetCalls.push(1),
         },
