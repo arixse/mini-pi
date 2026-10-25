@@ -312,6 +312,48 @@ describe("docs 数值与实现对得上", () => {
     assert.ok(checked >= 20, `应校验到推断表的 20 个以上条目，实际 ${checked} 个`);
   });
 
+  it("供应商专属覆盖表的窗口数值与 context-window.ts 一致", () => {
+    const doc = repoFile(join("docs", "cli-config.md"));
+    assert.ok(doc.length > 0, "应能读到 cli-config.md");
+    const start = doc.indexOf("供应商专属覆盖");
+    assert.ok(start >= 0, "cli-config.md 应登记供应商专属覆盖表");
+    // 只看这张表：表格行结束后停，避免把后文其它表格误当覆盖表
+    let checked = 0;
+    for (const line of doc.slice(start).split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("|")) {
+        if (checked > 0) break;
+        continue;
+      }
+      const cells = trimmed.split("|").map((cell) => cell.trim());
+      const provider = cells[1] ?? "";
+      const window = /^\d+$/.test(cells[3] ?? "") ? Number(cells[3]) : Number.NaN;
+      const names = [...(cells[2] ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+      // 表头、分隔行与其它表都不满足这三个条件
+      if (
+        !/^[a-z][a-z0-9-]*$/.test(provider) ||
+        !Number.isFinite(window) ||
+        names.length === 0
+      ) {
+        continue;
+      }
+      for (const name of names) {
+        const rule = matchContextWindowRule(name, provider);
+        assert.ok(
+          rule,
+          `cli-config.md 登记了 ${provider}/${name}，但覆盖表里没有能命中它的规则`,
+        );
+        assert.strictEqual(
+          rule.window,
+          window,
+          `cli-config.md 把 ${provider}/${name} 写成 ${window}，实现是 ${rule.window}`,
+        );
+        checked += 1;
+      }
+    }
+    assert.ok(checked >= 4, `应校验到供应商覆盖表的 4 个条目，实际 ${checked} 个`);
+  });
+
   it("压缩阈值与上下文字面量一致", () => {
     const doc = repoFile(join("docs", "cli-config.md"));
     assert.strictEqual(MAX_CONTEXT_TOKENS, resolveContextBudget(DEFAULT_CONTEXT_WINDOW));

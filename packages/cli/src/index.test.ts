@@ -171,6 +171,31 @@ describe("createModelFromSettings", () => {
     assert.deepStrictEqual(noModel, { window: 128_000, source: "default" });
   });
 
+  it("resolveContextWindowFromSettings：供应商覆盖优先于全局表", async () => {
+    // 百炼代销的 MiniMax-M3 只有 192K，按原厂 1M 估大会在压缩前超窗（400）
+    const bailian = await resolveContextWindowFromSettings(
+      settingsStore,
+      "MiniMax-M3",
+      "bailian",
+    );
+    assert.deepStrictEqual(bailian, { window: 196_608, source: "inferred" });
+
+    // 不传供应商时仍是原厂口径，向后兼容
+    const original = await resolveContextWindowFromSettings(
+      settingsStore,
+      "MiniMax-M3",
+    );
+    assert.deepStrictEqual(original, { window: 1_000_000, source: "inferred" });
+
+    // 只给了 供应商/模型名 标签时同样能识别
+    const fromLabel = await resolveContextWindowFromSettings(
+      settingsStore,
+      "bailian/MiniMax-M3",
+      null,
+    );
+    assert.deepStrictEqual(fromLabel, { window: 196_608, source: "inferred" });
+  });
+
   it("resolveContextWindowFromSettings：显式配置优先于推断", async () => {
     const settingsPath = settingsFilePath;
     await writeFile(settingsPath, JSON.stringify({ contextWindow: 64_000 }));
