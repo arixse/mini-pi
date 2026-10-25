@@ -28,8 +28,8 @@
 
 **目标**
 
-- 一条连接覆盖所有 Run 的生命周期与审批：`run_state` / `approval_request` /
-  `approval_resolved` / `run_done`。
+- 一条连接覆盖所有 Run 的生命周期与审批：`run_state` / `run_usage` /
+  `approval_request` / `approval_resolved` / `run_done`。
 - 可续传：断线重连从最后收到的序号补，补不上（被挤出缓冲 / 服务重启）时
   明确告诉前端"重新同步"，而不是假装连续。
 - 前端只开一条全局连接；当前 Run 的正文仍走原有的 per-run 流（见 §3）。
@@ -77,8 +77,8 @@ per-run  SSE   →  当前 Run 的完整事件（正文、工具卡、审批卡�
 `EventJournal`（`server/journal.ts`）：
 
 - 每条记录 `{ seq, runId, event }`，`seq` 从 1 单调递增；
-- 只接收控制事件（`isRunMetaEvent`：`run_state` / `approval_request` /
-  `approval_resolved` / `run_done`）；
+- 只接收控制事件（`isRunMetaEvent`：`run_state` / `run_usage` /
+  `approval_request` / `approval_resolved` / `run_done`）；
 - 有上限（默认 `MAX_JOURNAL_EVENTS = 2000`，控制事件很小）；超出后从头丢，
   并用 `firstSeq` 表示"最早的还在的序号"；
 - `since(cursor)` 返回 `{ items, gap }`，`gap` 在两种情况下为真：
@@ -146,7 +146,8 @@ per-run 游标与全局游标的编号空间互不相干。
 | 事件 | 动作 |
 | --- | --- |
 | `run_state` | 直接改 `state.runs` 里那条的 `status`（侧栏立刻变）；若当前会话没有活流，排队项开跑时顺手接上 per-run 流 |
-| `run_done` | 改 `status` / `elapsedMs` / `tokens`，`pendingApprovals` 归零，并**安排一次**状态刷新；`elapsedMs` 只算真正开跑后的执行时间（排队与等全局槽位不计）；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
+| `run_usage` | 把 `cache` 快照写到那条 Run 上（**绝对值覆盖**，重放幂等）；侧栏不展示，但切回该会话时状态行直接拿它填「缓存」 |
+| `run_done` | 改 `status` / `elapsedMs` / `tokens` / `cache`，`pendingApprovals` 归零，并**安排一次**状态刷新；`elapsedMs` 只算真正开跑后的执行时间（排队与等全局槽位不计）；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
 | `approval_request` / `approval_resolved` | 计数与 `oldestRunId` 以服务端为准，**安排一次**状态刷新 |
 | `stream_gap` | 立即安排状态刷新 |
 | Run 不在 `state.runs` 里 | 同上（可能来自另一个标签页或刚换的工作区） |
@@ -201,10 +202,11 @@ per-run 游标与全局游标的编号空间互不相干。
 ## 7. 测试
 
 - `journal.test.ts`：序号单调、容量上限与 `gap`、订阅/退订、`cursor > lastSeq` 的重启语义。
-- `app.test.ts`：`/api/events?cursor=0` 能补到 `run_state` / `approval_request` /
-  `run_done`，且**不包含** `message_update` / `tool_execution_*`；`runId` 正确；
-  连接在 `run_done` 之后仍然开着。
-- `state.test.ts`：`applyRunMetaEvent` 的四种结果（改状态 / 需要刷新 / Run 不存在）。
+- `app.test.ts`：`/api/events?cursor=0` 能补到 `run_state` / `run_usage` /
+  `approval_request` / `run_done`，且**不包含** `message_update` / `tool_execution_*`；
+  `runId` 正确；连接在 `run_done` 之后仍然开着。
+- `state.test.ts`：`applyRunMetaEvent` 的四种结果（改状态 / 改缓存快照 / 需要刷新 /
+  Run 不存在）；`run_usage` 按绝对值覆盖，重放不累加。
 - `controller.test.ts`：boot 即建全局流；后台 `run_state` 改侧栏状态；
   后台 `run_done` 与审批事件合并触发一次 `/api/state`；全局流终局失败写 `globalNote`；
   `stream_gap` 会用会话历史对齐时间线并从缺口续订（失败时保留缺口）；

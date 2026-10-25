@@ -18,6 +18,7 @@ import type { AgentMessage } from "@minipi/core/shared/protocol";
 import type {
   AppState as ServerSnapshot,
   ApprovalRequest,
+  CacheUsage,
   FileContent,
   RunDiff,
   RunPhase,
@@ -118,6 +119,14 @@ export type View = {
    * 累加会多数一遍，而序号本身就是权威值。
    */
   steps: number;
+  /**
+   * 累计缓存命中统计（状态栏的「缓存」指标）。
+   *
+   * 历史会话来自服务端 `sumUsage(当前上下文)`；正在跑的 Run 来自
+   * `run_usage` / `run_done` 的绝对值快照。`reported` 为假时界面显示「—」，
+   * 不能显示成 0%——那会把"提供方没给数据"读成"一次都没命中"。
+   */
+  cache: CacheUsage;
   /** 运行头里的耗时：开始时记墙钟，结束后用服务端给的 elapsedMs */
   startedAt: number | null;
   elapsedMs: number | null;
@@ -243,6 +252,15 @@ export type ClientState = {
   globalLost: boolean;
 };
 
+/**
+ * 还没有任何用量时的缓存统计。
+ *
+ * `reported: false` 是重点：状态栏据此显示「—」而不是 0%。
+ */
+export function emptyCacheUsage(): CacheUsage {
+  return { input: 0, read: 0, write: 0, reported: false };
+}
+
 export function emptyView(): View {
   return {
     sessionId: null,
@@ -255,6 +273,7 @@ export function emptyView(): View {
     tokens: 0,
     contextWindow: 0,
     steps: 0,
+    cache: emptyCacheUsage(),
     startedAt: null,
     elapsedMs: null,
     readOnly: false,
@@ -549,10 +568,16 @@ export function applyRunMetaEvent(
       // 侧栏状态立刻变；剩余字段（工作区等）这一条事件里没有，但也不必为此刷新
       run.status = event.status;
       return false;
+    case "run_usage":
+      // 侧栏不展示缓存，但要保持 runs 上的快照是最新的：
+      // 切回这个会话时 openSession 会直接拿它填状态行
+      run.cache = event.cache;
+      return false;
     case "run_done":
       run.status = event.status;
       run.elapsedMs = event.elapsedMs;
       run.tokens = event.tokens;
+      run.cache = event.cache;
       run.pendingApprovals = 0;
       return true;
     case "approval_request":
@@ -583,6 +608,8 @@ export function openSession(
     tokens?: number;
     /** 这段会话当前上下文里的模型回合数（同上） */
     steps?: number;
+    /** 这段会话当前上下文的累计缓存统计（同上） */
+    cache?: CacheUsage;
     /** 这段会话属于哪个工作区；缺省 = 活动根 */
     root?: string;
   } = {},
@@ -599,16 +626,20 @@ export function openSession(
   view.readOnly = options.readOnly ?? false;
   view.contextWindow = state.model.contextWindow;
   view.model = state.model.label;
-  // 历史用量与步数：切回一段旧会话时，顶部那两枚指标要说"这段历史占了
-  // 多大事"。不填的话它们只能是 0 和「—」，看着像这段会话是空的
+  // 历史用量、步数与缓存：切回一段旧会话时，顶部那几枚指标要说"这段历史
+  // 占了多大事、缓存命中如何"。不填的话它们只能是 0 和「—」，看着像这段
+  // 会话是空的
   view.tokens = options.tokens ?? 0;
   view.steps = options.steps ?? 0;
+  view.cache = options.cache ?? emptyCacheUsage();
   if (options.liveRun) {
     view.activeRunId = options.liveRun.runId;
     view.status = options.liveRun.status;
     view.model = options.liveRun.model;
     view.startedAt = options.liveRun.startedAt;
     view.tokens = options.liveRun.tokens;
+    // 活 Run 的 cache 已经包含会话历史（服务端开跑时用 sumUsage 起的算）
+    view.cache = options.liveRun.cache;
     view.title = options.liveRun.title;
   }
   const head = options.liveRun ?? options.run ?? null;
@@ -733,6 +764,15 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         return;
       }
       view.steps = event.turn;
+      return;
+    }
+
+    case "run_usage": {
+      if (view.activeRunId !== null && view.activeRunId !== runId) {
+        return;
+      }
+      // 绝对值快照：重放同一个事件也只是把同一个数再写一遍
+      view.cache = event.cache;
       return;
     }
 
@@ -984,6 +1024,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       if (event.tokens > 0) {
         view.tokens = event.tokens;
       }
+      view.cache = event.cache;
       if (view.activeRunId === runId) {
         view.activeRunId = null;
       }

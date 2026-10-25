@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { AgentMessage } from "@minipi/core/shared/protocol";
 import { AppController } from "./controller";
-import type { AppState, RunSummary, SessionDetail } from "../shared/types";
+import type { AppState, CacheUsage, RunSummary, SessionDetail } from "../shared/types";
 import type { ClientState } from "./state";
 
 /** 假的 EventSource：记下订阅，并能手动投递一帧（测试里模拟服务端推送） */
@@ -124,7 +124,7 @@ const jsonResponse = (body: unknown): Response =>
 function sessionDetail(
   sessionId: string,
   text: string,
-  usage: { tokens?: number; turns?: number } = {},
+  usage: { tokens?: number; turns?: number; cache?: CacheUsage } = {},
 ): SessionDetail {
   const messages: AgentMessage[] = [
     { role: "user", content: [{ type: "text", text }], timestamp: 1 },
@@ -136,6 +136,7 @@ function sessionDetail(
     compactedCount: 0,
     tokens: usage.tokens ?? 0,
     turns: usage.turns ?? 0,
+    cache: usage.cache ?? { input: 0, read: 0, write: 0, reported: false },
   };
 }
 
@@ -180,6 +181,7 @@ function runSummary(
     startedAt: 1,
     elapsedMs: null,
     tokens: 0,
+    cache: { input: 0, read: 0, write: 0, reported: false },
     contextWindow: 128000,
     pendingApprovals: 0,
     workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
@@ -724,6 +726,7 @@ describe("AppController", () => {
       startedAt: 1,
       elapsedMs: null,
       tokens: 0,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
@@ -763,6 +766,7 @@ describe("AppController", () => {
       startedAt: 1,
       elapsedMs: null,
       tokens: 0,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
@@ -862,6 +866,7 @@ describe("AppController", () => {
       startedAt: 1,
       elapsedMs: 10,
       tokens: 5,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: { root: "D:/wt/run_1", isolated: true, released: true, merged: false },
@@ -943,6 +948,7 @@ describe("AppController", () => {
       startedAt: 1,
       elapsedMs: 10,
       tokens: 5,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: { root: "D:/wt/run_1", isolated: true, released: false, merged: false },
@@ -993,6 +999,7 @@ describe("AppController", () => {
       startedAt: 1,
       elapsedMs: null,
       tokens: 0,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: { root: "D:/ws", isolated: false, released: false, merged: false },

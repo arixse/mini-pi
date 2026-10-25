@@ -17,6 +17,7 @@ import {
   applyRunMetaEvent,
   applySnapshot,
   attachQueuedRun,
+  emptyCacheUsage,
   emptyView,
   groupSessions,
   initialState,
@@ -280,7 +281,7 @@ describe("applyRunEvent：流式归约", () => {
         toolName: "read_file",
         args: {},
       },
-      { type: "run_done", status: "done", elapsedMs: 5, tokens: 10 },
+      { type: "run_done", status: "done", elapsedMs: 5, tokens: 10, cache: emptyCacheUsage() },
     ]);
     assert.equal(view.status, "done");
     assert.equal(view.activeRunId, null);
@@ -306,7 +307,7 @@ describe("applyRunEvent：流式归约", () => {
       { type: "message_start", message: partial },
       { type: "message_update", message: partial, delta: "写了一半" },
       { type: "stream_gap", firstSeq: 1, lastSeq: 9 },
-      { type: "run_done", status: "cancelled", elapsedMs: 3, tokens: 0 },
+      { type: "run_done", status: "cancelled", elapsedMs: 3, tokens: 0, cache: emptyCacheUsage() },
     ]);
     assert.equal(view.gap, true);
     const bubble = itemsOfKind(view, "assistant")[0] as Extract<TimelineItem, { kind: "assistant" }>;
@@ -335,7 +336,7 @@ describe("applyRunEvent：流式归约", () => {
   it("run_done 的失败原因留在时间线上，下一轮开始才清掉", () => {
     const view = emptyView();
     feed(view, "run_1", [
-      { type: "run_done", status: "failed", elapsedMs: 3, tokens: 0, error: "模型返回 500" },
+      { type: "run_done", status: "failed", elapsedMs: 3, tokens: 0, cache: emptyCacheUsage(), error: "模型返回 500" },
     ]);
     assert.equal(view.status, "failed");
     assert.equal(view.runError, "模型返回 500", "失败原因不能只存在于服务端日志里");
@@ -441,6 +442,7 @@ describe("乐观插入与快照", () => {
       startedAt: 1,
       elapsedMs: null,
       tokens: 5,
+      cache: emptyCacheUsage(),
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: runWorkspace({ root: "D:\\wt\\run_9", isolated: true }),
@@ -476,6 +478,7 @@ describe("乐观插入与快照", () => {
       startedAt: 1,
       elapsedMs: 9,
       tokens: 1,
+      cache: emptyCacheUsage(),
       contextWindow: 0,
       pendingApprovals: 0,
       workspace: runWorkspace({ root: "D:\\wt\\run_10", isolated: true, released: true }),
@@ -519,6 +522,7 @@ describe("乐观插入与快照", () => {
       startedAt: 1,
       elapsedMs: null,
       tokens: 999,
+      cache: emptyCacheUsage(),
       contextWindow: 128000,
       pendingApprovals: 0,
       workspace: runWorkspace(),
@@ -539,6 +543,7 @@ describe("乐观插入与快照", () => {
       startedAt: 20,
       elapsedMs: null,
       tokens: 0,
+      cache: emptyCacheUsage(),
       contextWindow: 128000,
       pendingApprovals: 0,
       prompt: "完整的那句排队提问",
@@ -602,6 +607,7 @@ describe("乐观插入与快照", () => {
         startedAt: 1,
         elapsedMs: null,
         tokens: 0,
+        cache: emptyCacheUsage(),
         contextWindow: 128000,
         pendingApprovals: 0,
         prompt: "排队的这句",
@@ -629,7 +635,7 @@ describe("乐观插入与快照", () => {
     if (cancelled.kind !== "user") {
       return;
     }
-    feed(state.view, "run_q", [{ type: "run_done", status: "cancelled", elapsedMs: 0, tokens: 0 }]);
+    feed(state.view, "run_q", [{ type: "run_done", status: "cancelled", elapsedMs: 0, tokens: 0, cache: emptyCacheUsage() }]);
     assert.strictEqual(cancelled.queued, true, "没执行就不伪装成实心");
   });
 
@@ -661,6 +667,7 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
     startedAt: 1,
     elapsedMs: null,
     tokens: 0,
+    cache: emptyCacheUsage(),
     contextWindow: 128000,
     pendingApprovals: 2,
     workspace: { root: "D:/ws", isolated: false, released: false, merged: false },
@@ -691,6 +698,7 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
       status: "failed",
       elapsedMs: 42,
       tokens: 99,
+      cache: { input: 120, read: 30, write: 10, reported: true },
       error: "模型返回 500",
     });
 
@@ -698,7 +706,30 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
     assert.strictEqual(state.runs[0]!.status, "failed");
     assert.strictEqual(state.runs[0]!.elapsedMs, 42);
     assert.strictEqual(state.runs[0]!.tokens, 99);
+    assert.deepStrictEqual(state.runs[0]!.cache, {
+      input: 120,
+      read: 30,
+      write: 10,
+      reported: true,
+    });
     assert.strictEqual(state.runs[0]!.pendingApprovals, 0);
+  });
+
+  /**
+   * 回归：`run_usage` 是绝对值快照。重放同一条事件不能把用量叠成两倍，
+   * 否则切回一个跑了一半的 Run 时命中率会突然变得莫名其妙。
+   */
+  it("run_usage 用绝对值覆盖缓存统计，重放多少次都一样", () => {
+    const state = withRun();
+    const event: ServerEvent = {
+      type: "run_usage",
+      cache: { input: 200, read: 150, write: 0, reported: true },
+    };
+
+    assert.strictEqual(applyRunMetaEvent(state, "run_bg", event), false, "不需要额外刷新");
+    assert.deepStrictEqual(state.runs[0]!.cache, event.cache);
+    applyRunMetaEvent(state, "run_bg", event);
+    assert.deepStrictEqual(state.runs[0]!.cache, event.cache, "重放不能累加");
   });
 
   it("审批事件只要求刷新：计数以服务端为准，不在前端自己加减", () => {
@@ -750,6 +781,7 @@ describe("侧栏：进行中的任务", () => {
       startedAt: 0,
       elapsedMs: null,
       tokens: 0,
+      cache: emptyCacheUsage(),
       contextWindow: 0,
       pendingApprovals: 0,
       workspace: runWorkspace(),
@@ -794,6 +826,7 @@ describe("groupSessions：会话与 Run 归并", () => {
     startedAt: 0,
     elapsedMs: 1,
     tokens: 0,
+    cache: emptyCacheUsage(),
     contextWindow: 0,
     pendingApprovals: 0,
     workspace: runWorkspace(),
@@ -853,6 +886,7 @@ describe("workspaceGroups：多工作区三层树", () => {
     startedAt: 0,
     elapsedMs: 1,
     tokens: 0,
+    cache: emptyCacheUsage(),
     contextWindow: 0,
     pendingApprovals: 0,
     workspace: runWorkspace(),
@@ -962,6 +996,43 @@ describe("步数：turn_start 的序号直接当权威值", () => {
     view.activeRunId = "run1";
     applyRunEvent(view, "run2", { type: "turn_start", turn: 7 });
     assert.equal(view.steps, 0);
+  });
+});
+
+describe("缓存：run_usage 的绝对值快照", () => {
+  it("每个 turn_end 后按快照更新，重放不会累加", () => {
+    const view = emptyView();
+    const first: ServerEvent = {
+      type: "run_usage",
+      cache: { input: 1000, read: 600, write: 0, reported: true },
+    };
+    const second: ServerEvent = {
+      type: "run_usage",
+      cache: { input: 2000, read: 1500, write: 100, reported: true },
+    };
+    feed(view, "run1", [{ type: "run_state", status: "running" }, first, second, first]);
+
+    // 最后一条是重放的旧快照：以它为准，而不是把三条加起来
+    assert.deepStrictEqual(view.cache, first.cache);
+  });
+
+  it("run_done 带上收尾时的缓存统计", () => {
+    const view = emptyView();
+    const cache = { input: 300, read: 90, write: 0, reported: true };
+    feed(view, "run1", [
+      { type: "run_done", status: "done", elapsedMs: 1, tokens: 10, cache },
+    ]);
+    assert.deepStrictEqual(view.cache, cache);
+  });
+
+  it("别的 Run 的缓存快照不污染当前时间线", () => {
+    const view = emptyView();
+    view.activeRunId = "run1";
+    applyRunEvent(view, "run2", {
+      type: "run_usage",
+      cache: { input: 10, read: 10, write: 0, reported: true },
+    });
+    assert.strictEqual(view.cache.reported, false, "仍是 emptyView 的默认值");
   });
 });
 

@@ -60,6 +60,32 @@ export function contextPercent(tokens: number, window: number): number {
 }
 
 /**
+ * 缓存命中率（状态栏的「缓存」指标）。
+ *
+ * 返回 `null` 表示**没有可信的数字**，界面要显示「—」：
+ * - 提供方没返回缓存字段（`reported` 为假）——这是"看不到"，不是"没命中"；
+ * - 还没有输入（分母为 0）——没有分母的百分比是假的。
+ *
+ * 命中率恒为 `read / input`：`input` 在内核里已归一为"含缓存的输入总量"，
+ * 所以 OpenAI 系与 Anthropic 系可以直接比较。个别网关会把命中量报成
+ * 输入之外，展示层夹到 0–100，避免出现 130% 这种读不懂的数。
+ */
+export function cacheHitPercent(
+  cache: { input: number; read: number; reported: boolean } | null | undefined,
+): number | null {
+  if (!cache || !cache.reported) {
+    return null;
+  }
+  if (!Number.isFinite(cache.input) || cache.input <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(cache.read) || cache.read < 0) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round((cache.read / cache.input) * 100)));
+}
+
+/**
  * 会话时间戳 → `2026-10-20 09:14`。
  *
  * 输入是文件名里那段 `2026-10-20T09-14-02`（分隔符被换成了 `-`，

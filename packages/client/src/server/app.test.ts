@@ -108,6 +108,20 @@ describe("App Server · 执行与事件流", () => {
 
     const done = events[events.length - 1] as Extract<ServerEvent, { type: "run_done" }>;
     assert.strictEqual(done.status, "done");
+    // 假模型没返回缓存字段：如实标成未上报，界面才会显示「—」而不是 0%
+    assert.deepStrictEqual(done.cache, {
+      input: 10,
+      read: 0,
+      write: 0,
+      reported: false,
+    });
+    // 每个 turn_end 之后一条绝对值快照，状态行不必等 run_done 才更新
+    const usageEvents = events.filter(
+      (event): event is Extract<ServerEvent, { type: "run_usage" }> =>
+        event.type === "run_usage",
+    );
+    assert.strictEqual(usageEvents.length, 1, "一问一答应产生一条 run_usage");
+    assert.deepStrictEqual(usageEvents[0]!.cache, done.cache);
 
     const text = events
       .filter((event): event is Extract<ServerEvent, { type: "message_update" }> => event.type === "message_update")
@@ -165,6 +179,51 @@ describe("App Server · 执行与事件流", () => {
       body: JSON.stringify({ prompt: "   " }),
     });
     assert.strictEqual(empty.status, 400);
+  });
+});
+
+describe("App Server · 缓存命中统计", () => {
+  it("提供方返回缓存字段时，run_usage / run_done / 会话回看都带上命中量", async () => {
+    const cached = {
+      ...textResponse("命中了不少"),
+      usage: {
+        input: 1_000,
+        output: 20,
+        totalTokens: 1_020,
+        cacheRead: 600,
+        cacheWrite: 100,
+      },
+    };
+    const server = await startTestServer({ responses: [cached] });
+    try {
+      const created = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "读一遍大文件",
+      });
+      const events = await server.stream(created.runId);
+
+      const usage = events.find(
+        (event): event is Extract<ServerEvent, { type: "run_usage" }> =>
+          event.type === "run_usage",
+      );
+      assert.ok(usage, "应在 turn_end 后推送一条 run_usage");
+      assert.deepStrictEqual(usage.cache, {
+        input: 1_000,
+        read: 600,
+        write: 100,
+        reported: true,
+      });
+
+      const done = events[events.length - 1] as Extract<ServerEvent, { type: "run_done" }>;
+      assert.deepStrictEqual(done.cache, usage.cache, "收尾快照与最后一条回合快照一致");
+
+      // 切回历史会话时，状态行的「缓存」来自 sumUsage(当前上下文)
+      const detail = await server.get<{ cache: unknown }>(
+        `/api/sessions/${created.sessionId}`,
+      );
+      assert.deepStrictEqual(detail.cache, usage.cache);
+    } finally {
+      await server.close();
+    }
   });
 });
 

@@ -32,6 +32,7 @@ import { SkillLoader } from "@minipi/core/agent/skillLoader";
 import { SessionManager } from "@minipi/core/agent/sessionManager";
 import { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
 import { createUserMessage } from "@minipi/core/agent/message";
+import { addUsage, sumUsage } from "@minipi/core/agent/usage";
 import type { AgentEvent, AgentMessage } from "@minipi/core/shared/protocol";
 import type { BeforeToolCall, ToolCallContext } from "@minipi/core/agent/loop";
 import type { ToolDecision } from "@minipi/core/agent/loop";
@@ -57,7 +58,7 @@ import { ApprovalBroker, newApprovalId } from "./broker";
 import { HttpError } from "./errors";
 import { isRunMetaEvent } from "./journal";
 import { previewToolArgs } from "../shared/preview";
-import { RunRecord } from "./runs";
+import { RunRecord, cacheUsageOf } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
 import {
   isTier,
@@ -642,6 +643,8 @@ export class WorkspaceHost {
       compactedCount: summary?.compactedCount ?? 0,
       tokens: context.store.estimateContextTokens(),
       turns: countTurns(context.messages),
+      // 与 tokens / turns 同一口径：只统计还在上下文里的回合
+      cache: cacheUsageOf(sumUsage(context.messages).usage),
     };
   }
 
@@ -982,6 +985,9 @@ export class WorkspaceHost {
     }
 
     const session = this.sessionContext(record.sessionId);
+    // 累计用量从会话历史起算：状态行的「缓存」在开跑前后不该跳变，
+    // 而且这里与 readSession 用的是同一个 sumUsage
+    record.usage = sumUsage(session.messages).usage;
     // 先分工地再置 running：隔离不了要让这次执行带着原因结束，
     // 而不是顶着一个"正在跑"的状态悄悄退回共用目录
     const workspace = this.allocateWorkspace(record);
@@ -1088,6 +1094,12 @@ export class WorkspaceHost {
       record.tokens = session.store.estimateContextTokens();
     }
     this.push(record, event);
+    if (event.type === "turn_end") {
+      // 回合结束才有新的 usage。推的是**绝对值快照**而不是增量：
+      // 前端重放缓冲时会再收到一遍，增量会被重复累加。
+      record.usage = addUsage(record.usage, event.message.usage);
+      this.push(record, { type: "run_usage", cache: cacheUsageOf(record.usage) });
+    }
   }
 
   private async finish(record: RunRecord, status: RunPhase, error?: string): Promise<void> {
@@ -1104,6 +1116,7 @@ export class WorkspaceHost {
       status,
       elapsedMs: record.elapsedMs ?? 0,
       tokens: record.tokens,
+      cache: cacheUsageOf(record.usage),
       ...(error ? { error } : {}),
     });
   }

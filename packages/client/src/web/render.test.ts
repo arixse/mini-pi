@@ -133,7 +133,7 @@ describe("前端组件树", () => {
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
   });
 
-  it("状态行属于主列且只有三枚指标：模型 / 上下文 / 步数", () => {
+  it("状态行属于主列且有四枚指标：模型 / 上下文 / 步数 / 缓存", () => {
     const store = new ClientStore();
     store.update((state) => {
       state.workspace = { root: "/tmp/ws", name: "ws" };
@@ -149,7 +149,49 @@ describe("前端组件树", () => {
     assert.match(html, />模型</);
     assert.match(html, />上下文</);
     assert.match(html, />步数</);
-    assert.doesNotMatch(html, />状态</, "设计稿只有三枚指标，不画第四个");
+    assert.match(html, />缓存</);
+    assert.doesNotMatch(html, />状态</, "设计稿只有四枚指标，不画第五个");
+  });
+
+  /**
+   * 回归：提供方没返回缓存字段时显示「—」，不能显示成 0%。
+   * 0% 会被读成"缓存一次都没命中"，而真相是"看不到"。
+   */
+  it("没有缓存数据时「缓存」显示 —，而不是 0%", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.view.cache = { input: 0, read: 0, write: 0, reported: false };
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Statusbar),
+      ),
+    );
+    const cache = /<span class="status-metric" title="[^"]*"><span class="k">缓存<\/span><span class="v">([^<]*)<\/span>/.exec(
+      html,
+    );
+    assert.ok(cache, `应渲染「缓存」指标：${html}`);
+    assert.strictEqual(cache[1], "—");
+  });
+
+  it("有缓存数据时「缓存」显示整数百分比", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.view.cache = { input: 1000, read: 680, write: 120, reported: true };
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Statusbar),
+      ),
+    );
+    assert.match(html, />缓存</);
+    assert.match(html, />68%</);
   });
 
   it("只读历史会话里挂着 live Run 时，唯一的停止键仍然在", () => {
@@ -274,6 +316,7 @@ describe("变更面板", () => {
       startedAt: 0,
       elapsedMs: 1000,
       tokens: 10,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128_000,
       pendingApprovals: 0,
       workspace: { root: "/tmp/wt", isolated: true, released: false, merged: false },
@@ -558,6 +601,7 @@ describe("时间线条目的 markup", () => {
       model: "m",
       elapsedMs: null,
       tokens: 0,
+      cache: { input: 0, read: 0, write: 0, reported: false },
       contextWindow: 128000,
       pendingApprovals: 0,
       root: "/tmp/ws",
