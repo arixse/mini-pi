@@ -148,6 +148,78 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     window: 128_000,
     note: "GLM-4 及 Flash 系列（128K）",
   },
+  // ---- 阿里百炼 Alibaba Bailian / Qwen ----
+  // 出处：百炼「文本生成」模型的上下文列（2026-10）。
+  { prefix: "qwen3.8", window: 1_000_000, note: "qwen3.8-max / 3.8-flash / 3.8-omni（1M）" },
+  {
+    prefix: "qwen3.7",
+    window: 1_000_000,
+    note: "qwen3.7-plus / 3.7-flash / 3.7-max（1M）",
+  },
+  { prefix: "qwen3.6", window: 1_000_000, note: "qwen3.6-plus / 3.6-flash（1M）" },
+  { prefix: "qwen3.5-plus", window: 1_000_000, note: "qwen3.5-plus（1M）" },
+  { prefix: "qwen3.5-flash", window: 1_000_000, note: "qwen3.5-flash（1M）" },
+  {
+    prefix: "qwen3.5",
+    window: 262_144,
+    note: "qwen3.5 开源型号 / omni（256K）",
+  },
+  { prefix: "qwen3-coder", window: 1_000_000, note: "qwen3-coder-flash（1M）" },
+  {
+    prefix: "qwen-plus-character",
+    window: 32_768,
+    note: "qwen-plus-character（32K，小于 128k 必须登记）",
+  },
+  { prefix: "qwen-plus", window: 1_000_000, note: "qwen-plus 及其快照（1M）" },
+  {
+    prefix: "qwen-flash-character",
+    window: 8_192,
+    note: "qwen-flash-character（8K，小于 128k 必须登记）",
+  },
+  { prefix: "qwen-flash", window: 1_000_000, note: "qwen-flash 及其快照（1M）" },
+  {
+    prefix: "qwen-max",
+    window: 32_768,
+    note: "qwen-max（32K，小于 128k 必须登记）",
+  },
+  {
+    prefix: "qwen-mt",
+    window: 16_384,
+    note: "qwen-mt-plus / flash / lite（16K，小于 128k 必须登记）",
+  },
+  { prefix: "qwen-long", window: 10_000_000, note: "qwen-long（10M）" },
+  // ---- 字节跳动火山方舟 Volcengine Ark / Doubao ----
+  // 出处：方舟「模型列表」的长度限制列（2026-10）。
+  {
+    prefix: "doubao-seed-evolving",
+    window: 1_000_000,
+    note: "Doubao Seed Evolving（1M，快速迭代模型）",
+  },
+  {
+    prefix: "doubao-seed-2-1-pro-260915",
+    window: 1_000_000,
+    note: "Doubao Seed 2.1 Pro 260915（1M）",
+  },
+  {
+    prefix: "doubao-seed-2-1-lite-260915",
+    window: 1_000_000,
+    note: "Doubao Seed 2.1 Lite 260915（1M）",
+  },
+  {
+    prefix: "doubao-seed-2-1",
+    window: 262_144,
+    note: "Doubao Seed 2.1 其它快照（turbo / 旧 pro，256K）",
+  },
+  {
+    prefix: "doubao-seed-2-0",
+    window: 262_144,
+    note: "Doubao Seed 2.0 系列（256K）",
+  },
+  {
+    prefix: "doubao-seed-character",
+    window: 131_072,
+    note: "Doubao Seed Character（128K）",
+  },
   // ---- Anthropic ----
   // 当前一代（官方 Models overview，2026-10）：Fable / Opus 5.5 / Sonnet 5.5 都是 1M，
   // Haiku 4.5 是 200K。

@@ -684,7 +684,7 @@ describe("App Server · 配置", () => {
       const providers = await server.get<
         Array<{ name: string; hasApiKey: boolean; defaultModels: string[] }>
       >("/api/providers");
-      assert.ok(providers.length >= 7, `内置 7 家供应商，实际 ${providers.length}`);
+      assert.ok(providers.length >= 9, `内置 9 家供应商，实际 ${providers.length}`);
       const serialized = JSON.stringify(providers);
       assert.ok(!serialized.includes("apiKey"), "响应里不该出现 apiKey 字段");
       assert.strictEqual(providers.every((provider) => provider.hasApiKey === false), true);

@@ -5,6 +5,8 @@ import { OpenAIProvider } from "./openai";
 import { MiMoProvider } from "./mimo";
 import { KimiProvider } from "./kimi";
 import { ZhipuProvider } from "./zhipu";
+import { BailianProvider } from "./bailian";
+import { VolcengineProvider } from "./volcengine";
 import { AnthropicProvider } from "./anthropic";
 import { CustomProvider } from "./custom";
 
@@ -18,7 +20,6 @@ export interface Provider {
   /** 获取基础URL */
   getBaseUrl(): string;
   
-  /** 获取模型列表 */
   /**
    * 获取模型列表
    * @param apiKey API Key
@@ -94,6 +95,8 @@ export class ModelProviderService {
     this.registerProvider(new MiMoProvider());
     this.registerProvider(new KimiProvider());
     this.registerProvider(new ZhipuProvider());
+    this.registerProvider(new BailianProvider());
+    this.registerProvider(new VolcengineProvider());
     this.registerProvider(new AnthropicProvider());
   }
   
@@ -307,5 +310,7 @@ export { OpenAIProvider } from "./openai";
 export { MiMoProvider } from "./mimo";
 export { KimiProvider } from "./kimi";
 export { ZhipuProvider } from "./zhipu";
+export { BailianProvider } from "./bailian";
+export { VolcengineProvider } from "./volcengine";
 export { AnthropicProvider } from "./anthropic";
 export { CustomProvider } from "./custom";

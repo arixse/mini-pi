@@ -12,6 +12,8 @@
 | MiMo（小米） | OpenAI | https://api.xiaomimimo.com/v1 | ✅ 已对接 |
 | Kimi（月之暗面） | OpenAI | https://api.moonshot.cn/v1 | ✅ 已对接 |
 | 智谱（Zhipu） | OpenAI | https://open.bigmodel.cn/api/paas/v4 | ✅ 已对接 |
+| 阿里百炼（Bailian） | OpenAI | https://dashscope.aliyuncs.com/compatible-mode/v1 | ✅ 已对接 |
+| 火山方舟（Volcengine Ark） | OpenAI | https://ark.cn-beijing.volces.com/api/v3 | ✅ 已对接 |
 | Anthropic | Anthropic | https://api.anthropic.com | ✅ 已对接 |
 
 ---
@@ -384,9 +386,148 @@ OpenAI
 
 ---
 
+## 8. 阿里百炼（Alibaba Cloud Model Studio / Bailian）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 控制台 | https://bailian.console.aliyun.com |
+| 文本生成（模型与上下文窗口） | https://help.aliyun.com/zh/model-studio/text-generation-model |
+| OpenAI 兼容接口 | https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope |
+| API Key 管理 | https://help.aliyun.com/zh/model-studio/get-api-key |
+| 模型列表接口 | `GET https://dashscope.aliyuncs.com/compatible-mode/v1/models` |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `qwen3.8-max` | 旗舰推理模型（1M 上下文），复杂分析与多步推演 |
+| `qwen3.7-plus` | 能力与成本均衡（1M 上下文），官方推荐用于 Agent / 编程 |
+| `qwen3.8-flash` | 轻量低成本（1M 上下文），效果接近旗舰 |
+| `qwen3.7-flash` | 上一代快速模型（1M 上下文） |
+| `qwen3-coder-flash` | 编码专用快速模型（1M 上下文） |
+
+> 默认列表只放当前推荐的文本 / 编码模型。图像、音视频、向量、翻译与角色扮演
+> 模型走各自专属接口或小窗口，不放进对话模型的默认列表。
+>
+> 旧版与长上下文型号仍可通过 `/models` 选择：`qwen3.6-plus` / `qwen3.6-flash`、
+> `qwen3.5-plus` / `qwen3.5-flash`（1M），`qwen3.5` 开源型号与 omni（256K），
+> `qwen-plus` / `qwen-flash`（1M），`qwen-long`（10M）；小窗口型号
+> `qwen-max`（32K）、`qwen-plus-character`（32K）、`qwen-mt-*`（16K）、
+> `qwen-flash-character`（8K）已在上下文推断表里单独登记。
+
+### 接入方式
+
+百炼同时提供 DashScope 原生协议与 OpenAI 兼容协议，这里**走 OpenAI 兼容端点**：
+
+```typescript
+// Base URL（华北2 · 北京公共域名）
+https://dashscope.aliyuncs.com/compatible-mode/v1
+
+// 模型列表
+https://dashscope.aliyuncs.com/compatible-mode/v1/models
+
+// SDK类型
+OpenAI
+```
+
+鉴权是标准的 `Authorization: Bearer <API Key>`。
+
+几条口径：
+
+- **API Key 与地域绑定**：默认地址取华北2（北京）的公共域名，保证所有用户
+  开箱可用。使用其它地域（新加坡 / 美国 / 中国香港 / 法兰克福）时，在 `/login`
+  之后用自定义 Base URL 覆盖，模型列表会跟着走同一网关。
+- **专属业务空间**：百炼为业务空间提供
+  `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
+  形式的地域域名，同样通过自定义 Base URL 覆盖即可。
+- **模型列表是全量目录**：`/models` 会返回账号可用的千问与三方模型（DeepSeek /
+  GLM / Kimi / MiniMax / MiMo 等），默认模型列表只列千问。
+
+### 配置示例
+
+```json
+{
+  "bailian": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
+
+---
+
+## 9. 火山方舟（Volcengine Ark）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| 方舟控制台 | https://console.volcengine.com/ark |
+| 模型列表（含上下文窗口） | https://www.volcengine.com/docs/82379/1330310 |
+| 兼容 OpenAI SDK | https://www.volcengine.com/docs/82379/1330626 |
+| 快速入门 / API Key | https://www.volcengine.com/docs/82379/1399008 |
+| 模型列表接口 | `GET https://ark.cn-beijing.volces.com/api/v3/models` |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `doubao-seed-evolving` | 快速迭代模型（1M 上下文），官方推荐优先试用 |
+| `doubao-seed-2-1-pro-260915` | 旗舰模型（1M 上下文），深度思考 / 工具调用 / 多模态理解 |
+| `doubao-seed-2-1-lite-260915` | 轻量模型（1M 上下文），成本更低 |
+| `doubao-seed-2-1-turbo-260628` | 高速模型（256K 上下文） |
+
+> 方舟的模型 ID 带日期后缀，官方按周迭代，因此默认列表只放当前文档里
+> 「推荐模型」的在售型号。旧快照（如 `doubao-seed-2-1-pro-260628`，256K）、
+> `doubao-seed-2-0` 系列（256K）与 `doubao-seed-character`（128K）
+> 仍可通过 `/models` 选择，上下文推断表也已登记。
+>
+> 图像（Seedream）、视频（Seedance）、3D 与向量模型走各自专属接口，
+> 不在对话模型的默认列表里。
+
+### 接入方式
+
+方舟提供 OpenAI 兼容的 Chat Completions 端点，这里**走该端点**：
+
+```typescript
+// Base URL（华北2 · 北京）
+https://ark.cn-beijing.volces.com/api/v3
+
+// 模型列表
+https://ark.cn-beijing.volces.com/api/v3/models
+
+// SDK类型
+OpenAI
+```
+
+鉴权是标准的 `Authorization: Bearer <API Key>`。
+
+几条口径：
+
+- **地域**：默认地址取华北2（北京）。其它地域或自建网关在 `/login` 之后用
+  自定义 Base URL 覆盖，模型列表会跟着走同一网关。
+- **模型 ID 与推理接入点**：请求的 `model` 字段既可以是模型 ID，也可以是
+  推理接入点 ID（`ep-...`）。`/models` 只列出模型 ID；只开通了接入点时，
+  在客户端设置里直接手填 `ep-...` 即可（模型名输入框支持自由填写）。
+- **上下文窗口**：2.1 的 `260915` 快照与 `doubao-seed-evolving` 是 1M，
+  `turbo` / 旧快照 / 2.0 系列是 256K，`doubao-seed-character` 是 128K。
+
+### 配置示例
+
+```json
+{
+  "volcengine": {
+    "apiKey": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  }
+}
+```
+
+---
+
 ## 自定义供应商（OpenAI 兼容网关）
 
-除了上面七家官方供应商，还可以在**客户端设置 → 模型 → 自定义供应商区**里
+除了上面九家官方供应商，还可以在**客户端设置 → 模型 → 自定义供应商区**里
 添加自建网关：填名称、Base URL 与 API Key 即可，协议固定按 OpenAI 兼容处理
 （模型列表 `GET {baseUrl}/models`，补全走 `openai` SDK）。典型的适用对象是
 one-api / new-api 之类的聚合网关，或自建的 vLLM、Ollama OpenAI 兼容层。
@@ -420,15 +561,25 @@ one-api / new-api 之类的聚合网关，或自建的 vLLM、Ollama OpenAI 兼�
 export interface Provider {
   /** 获取Provider名称 */
   getProviderName(): string;
-  
+
   /** 获取SDK类型（如Anthropic、OpenAI等） */
   getSdkType(): string;
-  
+
   /** 获取基础URL */
   getBaseUrl(): string;
-  
-  /** 获取模型列表 */
-  getModelList(apiKey: string): Promise<string[]>;
+
+  /**
+   * 获取模型列表
+   * @param apiKey API Key
+   * @param baseUrl 自定义 Base URL（用户可能配置代理或私有网关）；不传则用提供方默认值
+   */
+  getModelList(apiKey: string, baseUrl?: string): Promise<string[]>;
+
+  /** 模型列表接口地址（可选；默认 `baseUrl + "/models"`） */
+  getModelsUrl?(baseUrl: string): string;
+
+  /** 获取默认模型列表（可选，用于自动生成默认配置） */
+  getDefaultModels?(): string[];
 }
 ```
 
@@ -458,7 +609,7 @@ export interface Provider {
 
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
-| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、智谱、其他兼容服务商） |
+| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、智谱、阿里百炼、火山方舟、其他兼容服务商） |
 | Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic 官方、MiniMax-CN） |
 
 ---
@@ -480,6 +631,8 @@ export interface Provider {
 - **MiMo**: 访问 https://platform.xiaomimimo.com/console（API Keys 页面创建，按量付费为 `sk-` 前缀；Token Plan 为 `tp-` / `ttp-` 前缀，两者不通用）
 - **Kimi**: 访问 https://platform.kimi.com/console/api-keys
 - **智谱**: 访问 https://open.bigmodel.cn/usercenter/apikeys
+- **阿里百炼**: 访问 https://help.aliyun.com/zh/model-studio/get-api-key（API Key 与地域绑定）
+- **火山方舟**: 访问 https://console.volcengine.com/ark（API Key 管理页创建，地域需与 Base URL 一致）
 - **Anthropic**: 访问 https://console.anthropic.com/settings/keys
 
 ### Q: 连接超时怎么办？
@@ -495,4 +648,4 @@ export interface Provider {
 
 ---
 
-*最后更新: 2026-10-19*
+*最后更新: 2026-10-25*
