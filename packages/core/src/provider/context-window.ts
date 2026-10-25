@@ -246,7 +246,7 @@ const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
   {
     prefix: "claude-opus-5",
     window: 1_000_000,
-    note: "Claude Opus 5 / 4.8（1M）",
+    note: "Claude Opus 5（1M）",
   },
   {
     prefix: "claude-sonnet-5",
