@@ -33,6 +33,9 @@ export type ElectronWindowHandle = {
 export type ElectronWindowOptions = {
   width: number;
   height: number;
+  /** 窗口能被拖到的最小尺寸：再窄布局就进入手机断点，不再有可用空间 */
+  minWidth: number;
+  minHeight: number;
   title: string;
   /** 与 Web 客户端的底色一致，否则加载时会先闪一下白屏 */
   backgroundColor: string;

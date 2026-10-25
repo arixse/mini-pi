@@ -13,6 +13,12 @@
  * - 背景分层靠亮度（canvas → sidebar → raised → code），不靠 1px 描边
  *
  * 布局用 grid：输入区要与会话同宽（只占第 2 列），侧栏从第 1 列贯到底。
+ *
+ * 视觉稿的 232 / 760 是 1280 画布上的取值，不是所有屏幕上的固定值：
+ * 窗口从 880 到 4K 都要能用，因此这两条宽度在运行时随视口变化（clamp）。
+ * - 侧栏：264 → 320，视口越宽越宽，会话标题不必一上来就省略
+ * - 主列：760 → 1280，宽屏下代码与工具输出不再挤在一条 728 的窄带里
+ * 断点：1199 收窄间距，879 侧栏收成抽屉，559 按手机宽度重排（见文件末尾）。
  */
 
 @import "../../design/tokens.css";
@@ -27,8 +33,12 @@
   --r-bubble: 14px;
   --topbar-h: 44px;
   --statusbar-h: 36px;
-  --sidebar-w: 232px;
-  --main-w: 760px;
+  /* 侧栏与主列都随视口长：1280 下约 264 / 975 内容宽，1920 下约 320 / 1230。
+     视觉稿的 232 / 760 是 1280 画布基准，不是所有屏幕上的上限。 */
+  --sidebar-w: clamp(264px, 19vw, 320px);
+  --main-w: clamp(760px, 84vw, 1280px);
+  /* 主列左右留白：窄屏收窄、宽屏略放，避免内容贴边 */
+  --page-pad: clamp(12px, 1.6vw, 28px);
   color-scheme: dark light;
 }
 
@@ -84,6 +94,8 @@ svg.ic {
 
 .app {
   height: 100vh;
+  /* 移动端浏览器地址栏会吃掉 100vh：能算动态视口时用动态值 */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -236,13 +248,22 @@ svg.ic {
   height: var(--statusbar-h);
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 0 14px;
+  flex-wrap: nowrap;
+  gap: clamp(10px, 1.4vw, 20px);
+  padding: 0 clamp(10px, 1.2vw, 16px);
   border-bottom: 1px solid var(--Client-border-subtle);
   background: var(--Client-bg-canvas);
   color: var(--Client-text-tertiary);
   font-size: 11.5px;
   flex: none;
+  /* 窄屏四枚指标放不下时横向滚动，而不是换行把 36px 撑高 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.statusbar::-webkit-scrollbar {
+  display: none;
 }
 
 .status-metric {
@@ -250,6 +271,7 @@ svg.ic {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .status-metric .k {
@@ -499,9 +521,10 @@ svg.ic {
   white-space: nowrap;
 }
 
-/* 行里的主点击目标：铺满除行操作外的全部宽度 */
+/* 行里的主点击目标：铺满除行操作外的全部宽度。
+   行操作只在 hover 时出现，没必要常年砍掉标题的 20% 宽度 */
 .tree-main {
-  max-width:80%;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -691,7 +714,7 @@ svg.ic {
 .main-inner {
   max-width: var(--main-w);
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 var(--page-pad);
 }
 
 .run-heads {
@@ -1372,13 +1395,14 @@ svg.ic {
 .composer-inner {
   max-width: var(--main-w);
   margin: 0 auto;
-  padding: 0 16px;
+  padding: 0 var(--page-pad);
 }
 
 /* 附加行：下拉浮层的定位基准（浮层向上展开，不挡输入框） */
 .composer-attach {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
   position: relative;
@@ -1396,7 +1420,7 @@ svg.ic {
   color: var(--Client-text-secondary);
   cursor: pointer;
   font-family: inherit;
-  max-width: 280px;
+  max-width: min(280px, 100%);
 }
 
 .composer-select:hover {
@@ -1666,6 +1690,7 @@ svg.ic {
 .modal-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 11px 16px;
   border-bottom: 1px solid var(--Client-border-subtle);
@@ -1685,6 +1710,7 @@ svg.ic {
 .modal-foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 11px 16px;
   border-top: 1px solid var(--Client-border-subtle);
@@ -1755,6 +1781,7 @@ svg.ic {
 .provider-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   width: 100%;
   border: 1px solid var(--Client-border-subtle);
@@ -1889,6 +1916,30 @@ svg.ic {
 
 /* ---------------- 目录选择 ---------------- */
 
+/* 路径输入 + 上一级：窄屏换行，输入框独占一行也不横向溢出 */
+.picker-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.picker-path-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  border: 1px solid var(--Client-border-default);
+  background: var(--Client-bg-input);
+  border-radius: var(--r-input);
+  padding: 7px 10px;
+  color: var(--Client-text-primary);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.picker-path-row input:focus {
+  border-color: var(--Client-accent-solid);
+}
+
 .dir-list {
   display: flex;
   flex-direction: column;
@@ -1985,6 +2036,18 @@ svg.ic {
   color: var(--Client-text-tertiary);
 }
 
+/* 字段里并排的输入 + 动作：窄屏自动换行，不把按钮挤出面板 */
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.field-row input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 /* ---------------- diff 面板：主列内嵌（非断层模态）+ 增减色专用令牌 ---------------- */
 
 /* 画在主列的会话层上：无遮罩，侧栏 / 状态行 / 输入区都在场（设计稿第 3 页） */
@@ -2005,7 +2068,7 @@ svg.ic {
   max-width: var(--main-w);
   width: 100%;
   margin: 0 auto;
-  padding: 4px 16px 12px;
+  padding: 4px var(--page-pad) 12px;
   border: 1px solid var(--Client-border-default);
   border-radius: 12px;
   background: var(--Client-bg-canvas);
@@ -2348,10 +2411,42 @@ svg.ic {
   word-break: break-word;
 }
 
-/* ---------------- 响应式：1180 常驻 / 880 收窄 / 420 抽屉 ---------------- */
+/* ---------------- 响应式 ----------------
+ *
+ * 宽度本身由 :root 的 clamp 负责；媒体查询只处理"排不下"的部分：
+ * - 1023 以下：侧栏收窄一档，给主列留空间；
+ * - 879 以下：侧栏变抽屉，主列独占整行；
+ * - 559 以下：手机宽度，浮层全屏、设置导航改横向、控件纵向堆叠；
+ * - 触摸设备：hover 才出现的行操作改为常驻。
+ */
 
 .drawer-mask {
   display: none;
+}
+
+@media (max-width: 1199px) {
+  .main {
+    padding: 10px 0 14px;
+  }
+
+  .composer {
+    padding: 8px 0 10px;
+  }
+
+  .statusbar {
+    gap: 12px;
+  }
+
+  /* 中小屏把气泡放宽一档：主列变窄时 85% 会显得更局促 */
+  .row .stack {
+    max-width: 92%;
+  }
+}
+
+@media (max-width: 1023px) {
+  :root {
+    --sidebar-w: 240px;
+  }
 }
 
 @media (max-width: 879px) {
@@ -2367,7 +2462,7 @@ svg.ic {
     position: absolute;
     inset: 0 auto 0 0;
     z-index: 30;
-    width: min(300px, 84%);
+    width: min(320px, 86vw);
     transform: translateX(-100%);
     transition: transform 0.18s ease;
     box-shadow: 4px 0 24px -8px #000;
@@ -2390,16 +2485,23 @@ svg.ic {
     grid-column: 1;
   }
 
-  .main-inner,
-  .composer-inner {
-    padding: 0 12px;
+  .overlay {
+    padding: 10px;
+  }
+
+  .modal {
+    max-height: 92%;
+  }
+
+  .diff-card {
+    max-width: 100%;
   }
 }
 
 @media (max-width: 559px) {
   .topbar {
-    gap: 6px;
-    padding: 0 8px;
+    gap: 4px;
+    padding: 0 6px;
   }
 
   .brand-name,
@@ -2407,11 +2509,145 @@ svg.ic {
     display: none;
   }
 
+  .topbar .pill {
+    padding: 2px 6px;
+    font-size: 11px;
+  }
+
   .row .stack {
     max-width: 100%;
   }
 
+  /* 状态行放不下时横向滚动；进度槽先让位，别把四枚指标挤出屏幕 */
+  .statusbar {
+    gap: 10px;
+    padding: 0 10px;
+  }
+
+  .ctx-bar {
+    display: none;
+  }
+
+  /* 两个下拉在手机上各占一行，发送键靠右 */
+  .composer-select {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .composer-bottom {
+    gap: 8px;
+  }
+
+  .composer-bottom .btn-send {
+    margin-left: auto;
+  }
+
   .composer-hint .kbd {
     display: none;
+  }
+
+  /* 浮层全屏：手机上留 16px 的遮罩边等于白丢一圈可用空间 */
+  .overlay {
+    padding: 0;
+  }
+
+  .modal,
+  .modal-wide,
+  .modal-settings {
+    max-width: 100%;
+    max-height: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .modal-head,
+  .modal-body,
+  .modal-foot {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  /* 设置：一级分类从左侧竖排改成顶部横排 */
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--Client-border-subtle);
+    padding: 8px;
+  }
+
+  .settings-nav-item {
+    flex: none;
+  }
+
+  .settings-page {
+    padding: 12px;
+  }
+
+  /* 供应商行：名称与状态在第一行，接入地址落到第二行 */
+  .provider-row .p-url {
+    flex-basis: 100%;
+    order: 3;
+    white-space: normal;
+    word-break: break-all;
+  }
+
+  .provider-row .p-state {
+    margin-left: auto;
+  }
+
+  /* 变更 / 文件预览：贴边显示，头部动作按钮允许换行 */
+  .diff-card {
+    padding: 0 8px 8px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .diff-card .modal-head,
+  .diff-card .modal-body,
+  .diff-card .modal-foot {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .diff-body {
+    max-height: 50vh;
+  }
+
+  .dir-list {
+    max-height: 40vh;
+  }
+
+  .picker-path-row input {
+    flex-basis: 100%;
+  }
+}
+
+/* 触屏没有 hover：折叠箭头、行操作、复制按钮不能藏起来 */
+@media (hover: none) {
+  .tree-twist,
+  .row-acts {
+    opacity: 1;
+  }
+
+  .copy {
+    opacity: 0.85;
+  }
+}
+
+/* 很窄的手机上标签让位给数值，四枚指标仍然一行可读 */
+@media (max-width: 399px) {
+  .status-metric .k {
+    display: none;
+  }
+
+  .statusbar {
+    gap: 8px;
   }
 }

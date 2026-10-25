@@ -340,7 +340,7 @@ function ModelPage({ model }: { model: ClientState["model"] }): React.ReactEleme
                     />
                   </Field>
                   <Field label="默认模型">
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <div className="field-row">
                       {/*
                         * 可输入而不是纯 select：自定义网关常常拉不到模型列表，
                         * 用户仍然必须能填模型名（保存校验本来也允许"填写"）。

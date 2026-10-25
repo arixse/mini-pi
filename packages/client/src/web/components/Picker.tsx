@@ -115,7 +115,7 @@ function PickerDialog({ root }: { root: string }): React.ReactElement {
               })}
             </div>
           ) : null}
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="picker-path-row">
             <input
               placeholder="目录绝对路径"
               aria-label="目录路径"

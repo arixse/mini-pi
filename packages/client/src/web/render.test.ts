@@ -21,6 +21,7 @@ import { TimelineItemRow } from "./components/TimelineItems";
 import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
 import { FilePreview } from "./components/FilePreview";
+import { Picker } from "./components/Picker";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import type { ComposerHandle } from "./controller";
@@ -238,6 +239,23 @@ describe("前端组件树", () => {
     assert.match(html, /mini-pi/);
     // 侧栏只留一句提示，不摆一棵空树
     assert.match(html, /还没有工作区/);
+  });
+
+  it("目录路径行带可换行 class：窄屏不会把输入框与「上一级」挤成一条", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.ui.picker = true;
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Picker),
+      ),
+    );
+    assert.match(html, /class="picker-path-row"/);
+    assert.match(html, /aria-label="目录路径"/);
   });
 
   it("开新会话的入口挂在工作区节点上：一个工作区一个，空池没有", () => {

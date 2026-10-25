@@ -5,37 +5,47 @@
 
 ## 当前状态
 
-客户端状态栏已新增第 4 枚指标「缓存」，位置在「步数」之后，显示
-`cacheRead / input` 的整数百分比；提供方没返回缓存字段时显示 `—`。
+客户端版式改为响应式：侧栏与主列不再写死 232 / 760，改为随视口变化的
+`clamp()`，并按 1199 / 1023 / 879 / 559 四档重排；Electron 窗口补上最小尺寸。
 
-- 状态：已合入 `main`（分支 `feature/client-cache-hit-rate` 已合并）
-- 门禁：`pnpm check` 全绿（2133 tests / 2130 pass / 0 fail，覆盖率
-  97.60% / 90.87% / 93.13%）
-- 端到端验证：
-  - `app.test.ts` 起真 HTTP 服务 + 假模型，断言 `run_usage` / `run_done` /
-    `/api/sessions/:id` 三处都带回缓存统计
-  - 真浏览器冒烟（`pnpm build:web` + `serve` + 临时工作区）：状态栏四枚指标
-    顺序为 模型 / 上下文 / 步数 / 缓存；造一段带 `cacheRead` 的历史会话显示
-    `68%`（悬浮说明为「缓存命中 68% · 读 680 · 写 120 · 输入 1.0k」），
-    未上报缓存字段的历史会话显示 `—`（悬浮说明「提供方未返回缓存数据」）
+- 状态：分支 `feature/client-responsive-layout` 上完成，门禁与真浏览器冒烟
+  通过，合入 `main` 后即为当前版本
+- 门禁：`pnpm check` 全绿（2144 tests / 2141 pass / 0 fail / 3 skipped，
+  覆盖率 97.60% / 90.92% / 93.13%）
+- 端到端验证：`build:web` + `serve` + 同源 iframe 量宽页，测
+  360 / 414 / 559 / 768 / 879 / 1024 / 1280 / 1440 / 1920 / 2560
+  - 所有宽度页面无横向滚动；顶栏、状态栏自身也不溢出
+  - 侧栏：抽屉宽 310（360）/ 320（≥414）；常驻宽 240（879）/ 264（1024、
+    1280）/ 274（1440）/ 320（1920、2560）
+  - 主列内容宽：326（360）/ 380（414）/ 525（559）/ 725（768）/ 601（879，
+    侧栏常驻）/ 717（1024）/ 965（1280）/ 1110（1440）/ 1224（1920、2560）
+  - 879 以下汉堡出现、侧栏 `position: absolute`；`nav-open` 时
+    `transform` 归零（在关闭过渡的 iframe 里验证，见已知问题）
+  - 360 设置页：浮层 360×700 全屏、无圆角、`settings-shell` 单列、导航横排、
+    9 个供应商行换行且地址落到第二行、字段行 `wrap`、两个下拉各占一行、
+    发送键右对齐
 
 ## 已完成
 
-- `shared/types.ts`：新增 `CacheUsage`；`RunSummary` / `SessionDetail` /
-  `run_done` 带 `cache`；新增 `run_usage` 绝对值快照事件
-- `server/runs.ts`：`RunRecord.usage` 累计用量，`cacheUsageOf()` 折算，
-  `summary()` 输出 `cache`
-- `server/host.ts`：开跑时用 `sumUsage(会话历史)` 起算；`turn_end` 后累加并
-  推 `run_usage`；`run_done` 带 `cache`；`readSession` 用当前上下文折算
-- `server/journal.ts` + `web/api.ts`：`run_usage` 进入全局流白名单
-- `web/state.ts`：`View.cache`、`openSession` 选项、`applyRunEvent` /
-  `applyRunMetaEvent` 的 `run_usage` 与 `run_done` 归约
-- `web/controller.ts`：打开会话传 `detail.cache`，`syncViewRun` 同步 `run.cache`
-- `web/format.ts`：`cacheHitPercent()`（未上报 / 分母 0 → `null`，夹到 0–100）
-- `web/components/Statusbar.tsx`：第 4 枚指标 + 悬浮说明（未返回 / 无输入 / 命中明细）
-- 文档：`docs/client-ui-design.md`、`docs/client-visual-handoff.md`、
-  `docs/client-event-stream.md`、`docs/technical-solution.md`、
-  `packages/client/README.md`
+- `web/styles.css`：
+  - 宽度 token 改为 `clamp()`：侧栏 `264 → 320`、主列 `760 → 1280`、
+    留白 `12 → 28`；主列 / 输入区 / 变更面板共用 `--page-pad`
+  - 新增 1199（收间距、气泡 92%）、1023（侧栏 240）、879（抽屉 320 / 86vw）、
+    559（浮层全屏、设置单列横排、控件堆叠、diff 贴边）、`hover: none`
+    （行操作常驻）、399（状态行只留数值）各档规则
+  - 状态栏改横向滚动；侧栏标题不再被行操作挤掉 20%；输入区附加行 / 目录
+    路径行 / 字段行允许换行；`100dvh` 回退
+- `web/components/Picker.tsx`：路径输入行改用 `.picker-path-row`
+- `web/components/Settings.tsx`：默认模型行改用 `.field-row`
+- `electron/api.ts` + `electron/main.ts`：窗口最小尺寸 `420 × 480`
+- 测试：
+  - 新增 `web/styles.test.ts`：9 条版式契约（clamp 上下限、共用留白 token、
+    状态栏不换行、879 / 559 / 触摸设备规则）
+  - `web/render.test.ts`：目录路径行带可换行 class
+  - `electron/main.test.ts`：最小尺寸与默认尺寸的关系
+- 文档：`docs/client-ui-design.md` §2 / §7、`docs/client-visual-handoff.md` §2
+  写明 232 / 760 是 1280 画布基准，运行时为 clamp，并统一断点为 1199 /
+  1023 / 879 / 559
 
 ## 进行中
 
@@ -43,12 +53,16 @@
 
 ## 已知问题
 
-- 客户端「缓存」在**跑着的 Run** 上是"会话历史 + 本次执行"的累计值，
-  在**历史会话**上是"当前上下文"的累计值；压缩后两者会短暂不一致
-  （历史会话只统计还在上下文里的回合，与 `tokens` / `steps` 同口径）
-- Anthropic 尚未发送 `cache_control`，命中量会是真实的 0（不是"未返回"）
+- iframe 量宽页里 `requestAnimationFrame` 不推进（iframe 不参与合成），
+  抽屉的 0.18s 过渡停在起点；已用「关闭过渡后读计算值」确认规则本身生效，
+  但动画观感仍需真窗口确认
+- 触摸设备的行操作常驻、diff / 文件预览的手机样式目前只有 CSS 契约测试，
+  没有真机触摸验证
+- 主列在 4K 上封顶 1280 并居中（有意为之，避免超长行）；若以后要「全宽
+  时间线」，改 `--main-w` 上限即可，但需重新评估代码块可读性
 
 ## 下一步
 
-- 给 Anthropic 请求打 `cache_control`（原清单第 6 步）
-- 视需要把「缓存」明细（读/写/输入）放进运行头或会话详情
+- 合并 `feature/client-responsive-layout` 回 `main`
+- 视需要记住上次窗口尺寸（Electron 关闭时保存、启动时恢复）
+- 移动端浏览器若要正式支持，补 `env(safe-area-inset-bottom)` 与真机触摸回归

@@ -42,10 +42,17 @@ import {
 import { parseServeArgs, type ServeArgs } from "../server/serveArgs";
 import { fileWorkspaceMemory } from "../server/workspaceMemory";
 
-/** 与 Web 客户端的三栏布局匹配（窄了侧栏会挤成两行） */
+/**
+ * 与 Web 客户端的三栏布局匹配（窄了侧栏会挤成两行）。
+ *
+ * minWidth / minHeight 对应 styles.css 的手机断点：420 以下顶栏的
+ * 图标组与状态行已经放不下，480 以下输入区会占掉大半屏。
+ */
 export const WINDOW_OPTIONS: ElectronWindowOptions = {
   width: 1280,
   height: 880,
+  minWidth: 420,
+  minHeight: 480,
   title: "mini-pi",
   // 与 styles.css 的 `--bg` 同色：窗口先于页面出现，底色不一致会闪一下白屏
   backgroundColor: "#020617",

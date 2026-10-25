@@ -39,6 +39,8 @@ function stripComments(source: string): string {
 const WINDOW: ElectronWindowOptions = {
   width: 1280,
   height: 880,
+  minWidth: 420,
+  minHeight: 480,
   title: "mini-pi",
   backgroundColor: "#020617",
   show: false,

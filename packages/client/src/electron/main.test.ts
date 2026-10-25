@@ -198,6 +198,15 @@ function fixedWorkspace(root: string): () => Promise<{ kind: "ok"; root: string 
   return async () => ({ kind: "ok", root });
 }
 
+describe("WINDOW_OPTIONS", () => {
+  it("窗口有最小尺寸：拖不到布局失效的宽度", () => {
+    assert.ok(WINDOW_OPTIONS.minWidth >= 360, "最小宽度要容得下手机断点");
+    assert.ok(WINDOW_OPTIONS.minHeight >= 480, "最小高度要留得下时间线与输入区");
+    assert.ok(WINDOW_OPTIONS.minWidth < WINDOW_OPTIONS.width);
+    assert.ok(WINDOW_OPTIONS.minHeight < WINDOW_OPTIONS.height);
+  });
+});
+
 describe("extractElectronArgv", () => {
   it("有分隔符时取分隔符之后的部分", () => {
     assert.deepStrictEqual(
