@@ -9,6 +9,7 @@ import { startRepl, defaultReplEnvironment, type ReplEnvironment } from "./repl"
 import { makeReplOptions } from "./testRepl";
 import type { ReplOptions } from "./options";
 import * as readline from "node:readline";
+import { PassThrough } from "node:stream";
 import { mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -226,6 +227,64 @@ describe("startRepl（主循环装配）", () => {
     assert.strictEqual(options.usageTracker!.snapshot().requests, 1);
     assert.strictEqual(fakeRl.prompts.length, 2, "回合结束要还回提示");
     assert.match(logs.join("\n"), /↳/, "脚注要打出来");
+  });
+
+  it("大段粘贴经 REPL 后仍是一条完整消息，终端只显示摘要", async () => {
+    const source = new PassThrough() as PassThrough & {
+      isTTY: boolean;
+      isRaw: boolean;
+      setRawMode: (mode: boolean) => void;
+    };
+    source.isTTY = true;
+    source.isRaw = false;
+    source.setRawMode = (mode: boolean): void => {
+      source.isRaw = mode;
+    };
+
+    const writes: string[] = [];
+    const stdout = new EventEmitter() as unknown as NodeJS.WriteStream;
+    (stdout as unknown as { isTTY: boolean }).isTTY = true;
+    (stdout as unknown as { columns: number }).columns = 80;
+    (stdout as unknown as { rows: number }).rows = 24;
+    (stdout as unknown as { write: (chunk: string) => boolean }).write = (chunk: string) => {
+      writes.push(chunk);
+      return true;
+    };
+
+    let rl: readline.Interface | undefined;
+    const env: ReplEnvironment = {
+      createInterface: ((options: readline.ReadLineOptions) => {
+        rl = readline.createInterface(options);
+        return rl;
+      }) as unknown as ReplEnvironment["createInterface"],
+      stdin: source as unknown as { isTTY?: boolean },
+      stdout,
+      env: {},
+      exit: (code) => exits.push(code),
+    };
+
+    const model = scriptedModel([textMessage("ok")]);
+    const options = optionsWith({ model });
+    await startRepl(options, env);
+
+    const content = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+    source.write(`\u001b[200~${content}\u001b[201~`);
+    source.write("\r");
+
+    await waitFor(() => options.messages.length === 2, "粘贴应作为一个回合被处理");
+    const userText = (options.messages[0].content[0] as { text: string }).text;
+    assert.strictEqual(userText, content, "模型收到的必须是完整原文");
+
+    const terminal = writes.join("");
+    assert.match(terminal, /\[粘贴内容 #1 · 50 行/, "终端里只留摘要");
+    assert.ok(!terminal.includes("line 49"), "正文不应铺满终端");
+
+    source.write("/exit\r");
+    await waitFor(() => exits.length === 1, "退出流程应收尾");
+    assert.ok(terminal.includes("\u001b[?2004h"), "启动时应打开 bracketed paste");
+    assert.ok(writes.join("").includes("\u001b[?2004l"), "退出时应关闭 bracketed paste");
+    assert.strictEqual(source.listenerCount("data"), 0, "退出后要摘掉 stdin 监听");
+    rl?.close();
   });
 
   it("/exit 空闲时：立即退出", async () => {

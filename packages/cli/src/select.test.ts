@@ -14,6 +14,7 @@ import {
   MAX_VISIBLE_CHOICES,
 } from "./select";
 import { displayWidth } from "./width";
+import { BRACKETED_PASTE_START, BRACKETED_PASTE_END, PasteInput } from "./paste";
 
 /** 去除 ANSI 控制序列，便于断言文本内容 */
 function stripAnsi(str: string): string {
@@ -60,6 +61,39 @@ class FakeOutput {
   get text(): string {
     return this.chunks.join("");
   }
+}
+
+/** 用真实的 PasteInput 驱动选择器，验证 bracketed paste 不会被折叠 */
+function createPasteInput(): {
+  paste: PasteInput;
+  source: EventEmitter;
+  send: (data: string) => void;
+} {
+  const source = new EventEmitter() as EventEmitter & {
+    isTTY: boolean;
+    isRaw: boolean;
+    setRawMode: (mode: boolean) => unknown;
+    resume: () => unknown;
+    pause: () => unknown;
+  };
+  source.isTTY = true;
+  source.isRaw = false;
+  source.setRawMode = (mode: boolean) => {
+    source.isRaw = mode;
+    return source;
+  };
+  source.resume = () => source;
+  source.pause = () => source;
+  const paste = new PasteInput(source as unknown as NodeJS.ReadStream);
+  return {
+    paste,
+    source,
+    send: (data: string) => source.emit("data", Buffer.from(data, "utf8")),
+  };
+}
+
+function tick(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 describe("parseKey", () => {
@@ -426,6 +460,46 @@ describe("promptSelect", () => {
     input.send("\u001b[B"); // 第二个命中项
     input.send("\r");
     assert.strictEqual(await promise, 2);
+  });
+
+  it("bracketed paste 进入筛选框时保留原文，不折叠成占位符", async () => {
+    const { paste, send } = createPasteInput();
+    const output = new FakeOutput();
+    // 超长关键字：若被折叠成占位符，选项匹配不上，回车会变成空操作
+    const query = "x".repeat(300);
+    let settled = false;
+    const promise = promptSelect(
+      "选择模型",
+      [query],
+      undefined,
+      { input: paste as unknown as NodeJS.ReadStream, output: output as any, columns: 2_000 },
+      { filterable: true },
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    send(`${BRACKETED_PASTE_START}${query}\n${BRACKETED_PASTE_END}`);
+    await tick();
+    if (!settled) {
+      // 没有匹配上时用 Esc 收尾，避免用例挂死（同时暴露折叠导致的失败）
+      send("\u001b");
+    }
+
+    assert.strictEqual(await promise, 0);
+    const text = stripAnsi(output.text);
+    assert.ok(text.includes(`筛选: ${query} (1/1)`), "筛选框要拿到完整原文");
+    assert.ok(!text.includes("粘贴内容"), "选择器里不能出现占位符");
+
+    // 选择器退出后要恢复折叠：紧随其后的大段粘贴仍应变成摘要
+    let forwarded = "";
+    paste.on("data", (chunk: Buffer | string) => {
+      forwarded += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    });
+    send(`${BRACKETED_PASTE_START}${"y".repeat(500)}${BRACKETED_PASTE_END}`);
+    await tick();
+    assert.match(forwarded, /\[粘贴内容 #1/);
+    paste.dispose();
   });
 
   it("Backspace 应逐个删除筛选字符并重建命中集", async () => {

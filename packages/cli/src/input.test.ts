@@ -35,6 +35,32 @@ describe("releasePendingQuestion（Ctrl+C 放掉挂起的提问）", () => {
   });
 });
 
+describe("question（一次提问）", () => {
+  it("按传入的 expand 把占位符换回原文", async () => {
+    const rl = {
+      question(_prompt: string, callback: (answer: string) => void) {
+        callback("[粘贴内容 #1]");
+      },
+    } as unknown as Parameters<typeof question>[0];
+
+    const answer = await question(rl, "approve? ", (line) =>
+      line.replace("[粘贴内容 #1]", "full text"),
+    );
+
+    assert.strictEqual(answer, "full text");
+  });
+
+  it("不传 expand 时答案原样返回（保持旧行为）", async () => {
+    const rl = {
+      question(_prompt: string, callback: (answer: string) => void) {
+        callback("y");
+      },
+    } as unknown as Parameters<typeof question>[0];
+
+    assert.strictEqual(await question(rl, "approve? "), "y");
+  });
+});
+
 describe("createInputScheduler（回合串行化）", () => {
   const tick = (ms = 0): Promise<void> =>
     new Promise((resolve) => setTimeout(resolve, ms));

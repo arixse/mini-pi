@@ -1,6 +1,6 @@
 ---
 name: cli-output-presentation
-description: Mini Pi 命令行呈现的正确性规则——按终端宽度截断、截断必须显式标注、失败/超时状态必须可区分、/last 保证可审计，以及卡片与状态行的渲染收口方式
+description: Mini Pi 命令行呈现与输入的正确性规则——按终端宽度截断、截断必须显式标注、失败/超时状态必须可区分、/last 保证可审计、大段粘贴先折叠再交给 readline，以及卡片与状态行的渲染收口方式
 ---
 
 # 命令行输出的呈现正确性
@@ -48,6 +48,28 @@ lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled
   无匹配时回车要忽略，不能选中一个不存在的项。
 - 测试写法：`rows: 10` + 100 项断言首屏行数 ≤ 10；`width: 20` 遍历所有行
   断言 `displayWidth(line) <= 20`；再断言过滤后返回的是原下标。
+
+### 2.2 大段粘贴：先折叠，再交给 readline
+
+**readline 不是为粘贴设计的**：它每收到一个字符就重画整行，10 万字单行粘贴
+实测 120s 都画不完；多行粘贴里的每个换行还会各触发一次 `line`，100 行内容
+变成 100 个回合。输入层必须自己拦下来：
+
+- 开终端的 bracketed paste（`ESC[?2004h` / `ESC[?2004l`），把
+  `ESC[200~ ... ESC[201~` 之间的内容整段收下，**不要逐字符转发**。
+- 多行或超长（约 200 字）的粘贴折叠成 `[粘贴内容 #N · 12 行 · 1.2 KB]`，
+  提交时换回原文；终端只承担几十列的重画成本。
+- 粘贴末尾的换行要剥掉：复制时带上的换行不该替用户按下回车。
+- 标记可能跨数据块（`ESC[2` + `00~...`），要保留最长前缀后缀等待下一块；
+  同时用 `StringDecoder` 解码 Buffer，避免中文/emoji 被块边界切坏。
+- **选择器与隐藏输入必须豁免**：筛选框要原始关键字，API Key 要逐字拿到；
+  进入时 `suspendCollapse()`，只剥标记、保留原文与换行，结束时恢复。
+- 没有 bracketed paste 时用兜底启发式：一段数据达到几十字符或含内部换行
+  就攒一个短窗口再折叠；普通按键立即转发，不能给打字加延迟。
+
+**回归钉子**：用真实 `readline.createInterface` 喂 10 万字 bracketed paste，
+断言只产生一条 `line`、行里是摘要、`expand()` 等于原文。没有折叠时这条
+用例会挂到超时——这比断言"函数返回了 token"更能守住真实行为。
 
 ## 三、截断必须显式标注，绝不偷偷丢内容
 
@@ -154,9 +176,10 @@ lines.push(`${icon} ${paint(primaryPlain)}${" ".repeat(layout.pad)}${rightStyled
 ```bash
 pnpm typecheck
 pnpm test
-npx tsx --test src/cli/render.test.ts
-npx tsx --test src/cli/status.test.ts
-npx tsx --test src/cli/toolEvents.test.ts
+npx tsx --test packages/cli/src/render.test.ts
+npx tsx --test packages/cli/src/status.test.ts
+npx tsx --test packages/cli/src/toolEvents.test.ts
+npx tsx --test packages/cli/src/paste.test.ts
 ```
 
 验证「测试能抓住回归」的最短路径：把修好的那一处临时改回旧写法

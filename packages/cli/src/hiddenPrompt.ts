@@ -10,6 +10,7 @@
  */
 
 import * as readline from "node:readline";
+import { suspendPasteCollapse } from "./paste";
 
 /** 隐藏输入的一类按键；抽成纯函数是为了能脱离终端断言语义 */
 export type HiddenKey =
@@ -122,6 +123,8 @@ export function questionHidden(
 
   // 暂停 readline，避免其同时消费按键（否则按键会照常回显）
   rl?.pause();
+  // API Key 必须逐字拿到：粘贴不能折叠成占位符
+  const resumePaste = suspendPasteCollapse(input);
 
   return new Promise<string | null>((resolve) => {
     const suspendedKeypress =
@@ -158,6 +161,8 @@ export function questionHidden(
       }
       // 提交/取消后光标都该换行，否则后续输出会接在掩码后面
       output.write("\n");
+      // 先恢复折叠，再交还 readline
+      resumePaste();
       rl?.resume();
       resolve(value);
     }
