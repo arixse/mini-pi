@@ -233,6 +233,47 @@ describe("handleLogin / handleModel 交互", () => {
     assert.ok(text().includes("无匹配项"));
   });
 
+  it("handleLogin: 服务商列表可按名称筛选，并选中筛出来的那一家", async () => {
+    providerService.registerProvider(new MockProvider("zzz-gateway"));
+    const total = providerService.getRegisteredProviders().length;
+
+    const { rl, send, text } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleLogin(providerService, rl as any);
+      send("zzz-gateway"); // 直接敲名字
+      send("\r"); // 只剩一项，回车即选中
+      send("key-filtered\r");
+      await p;
+    });
+
+    assert.match(logs.join("\n"), /已保存 zzz-gateway 的 API Key/);
+    const config = await providerService.getProviderConfig("zzz-gateway");
+    assert.strictEqual(config.apiKey, "key-filtered", "保存的必须是筛选后选中的服务商");
+
+    const rendered = text();
+    assert.ok(rendered.includes(`共 ${total} 个`), "先告诉用户服务商总量");
+    assert.ok(rendered.includes(`筛选: zzz-gateway (1/${total})`), "筛选行要显示命中/总数");
+    // 筛选前那一次渲染本来就列出了全部服务商，只看筛中之后的那段输出
+    const afterFilter = rendered.slice(rendered.lastIndexOf(`筛选: zzz-gateway`));
+    assert.ok(!afterFilter.includes("minimax-cn"), "未命中的服务商不该继续刷在终端里");
+  });
+
+  it("handleLogin: 筛选无结果时回车被忽略，Esc 仍能取消", async () => {
+    const { rl, send, text } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleLogin(providerService, rl as any);
+      send("no-such-provider");
+      send("\r"); // 无匹配项：回车不该进入 API Key 输入
+      send("\u001b"); // 再按 Esc 才退出
+      await p;
+    });
+
+    assert.match(logs.join("\n"), /已取消登录/);
+    assert.ok(text().includes("无匹配项"));
+    const config = await providerService.getProviderConfig("minimax-cn");
+    assert.strictEqual(config.apiKey, undefined);
+  });
+
   it("选择列表应展示所有服务商（方向键交互）", async () => {
     const { rl, send, text } = createReplInput();
     await captureLog(async () => {

@@ -29,10 +29,14 @@ export async function handleLogin(
   }
 
   console.log("");
+  // 服务商一多，靠方向键数行不如直接敲名字：筛选能力与 /model 的模型列表一致，
+  // 按键提示由 promptSelect 的 filterable hint 给出，这里不再把提示写进标题
   const index = await promptSelect(
-    "📋 请选择模型服务商 (↑/↓ 选择，Enter 确认，Esc 退出)",
+    `📋 请选择模型服务商 (共 ${providers.length} 个)`,
     providers,
     rl,
+    {},
+    { filterable: true },
   );
 
   if (index === null) {
