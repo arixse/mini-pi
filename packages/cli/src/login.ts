@@ -108,9 +108,11 @@ export async function handleModel(
 
   console.log("");
   const index = await promptSelect(
-    "📋 请选择模型服务商 (↑/↓ 选择，Enter 确认，Esc 退出)",
+    `📋 请选择模型服务商 (共 ${providers.length} 个)`,
     providers,
     rl,
+    {},
+    { filterable: true },
   );
 
   if (index === null) {
