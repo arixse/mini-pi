@@ -5,43 +5,45 @@
 
 ## 当前状态
 
-CLI 里复制大段内容不再卡死、刷屏或拆成多个回合。stdin 与 readline 之间加了
-一层粘贴缓冲（`packages/cli/src/paste.ts`）：终端开启 bracketed paste，
-`ESC[200~ ... ESC[201~` 之间的内容整段收下，多行或单行超过 200 字的粘贴
-折叠成 `[粘贴内容 #N · 12 行 · 1.2 KB]`，回车时换回原文并作为**一条**消息提交。
-终端里只留几十列摘要，10 万字单行粘贴也不会触发 readline 的逐字重画；粘贴
-末尾的换行不会替用户按下回车。
+选择火山方舟后不再一按回车就落到已下线的历史快照上。`/model` 拉到的
+`GET /models` 会把历史型号一起返回，且顺序不代表可用性；现在「当前推荐
+型号」固定排在接口返回的列表前面（`prioritizeModelIds`），历史型号保留在
+后面给确实有权限的账号；光标默认停在当前正在用的模型上。列表里找不到的
+型号（包括只开通推理接入点时的 `ep-...`）可以在筛选框输入后按 `Ctrl+E`
+采用，单独回车不会把错字写进配置。调用若仍返回方舟的 404，终端会补一句
+可执行的提示（型号已下线 / 未开通 / 改用 `ep-...`）。
 
-- 状态：分支 `feature/cli-paste-display` 上完成，`pnpm check` 全绿
-  （2205 tests / 2202 pass / 0 fail / 3 skipped，覆盖率 97.63% / 91.00% / 93.17%）
-- 端到端验证：`repl.test.ts` 用真实 readline 喂 10 万字单行与 100 行
-  bracketed paste，确认只产生一条 `line`、模型收到完整原文、终端只有摘要；
-  `select.test.ts` / `hiddenPrompt.test.ts` 用真实 `PasteInput` 确认筛选框与
-  API Key 不会被折叠；`paste.test.ts` 钉住标记跨数据块、末尾换行不提交、
-  无标记兜底攒批、占位符上限与退出恢复。
+- 状态：分支 `fix/volcengine-model-selection` 上完成，`pnpm check` 全绿
+  （2227 tests / 2224 pass / 0 fail / 3 skipped）
+- 单元测试：推荐型号排序与去重、方舟列表合并、404 提示文案、选择器的
+  `initialIndex` 与 `Ctrl+E`（有命中 / 空输入 / 无命中 / 回车不采用）
+- 集成测试：`login-model.test.ts` 覆盖手填写回、光标停在当前模型、
+  无命中回车不写配置
+- 端到端验证：`login-model.test.ts` 启动本地 HTTP 服务模拟方舟 `/models`
+  （历史快照排在最前），经由真实 `VolcengineProvider` + `ModelProviderService`
+  + `handleModel` 只按一次回车，断言写回的是 `volcengine/doubao-seed-evolving`
+  且历史型号仍在列表里
 
 ## 已完成
 
-- `packages/cli/src/paste.ts`：`PasteInput` 输入流与 `createPasteBridge`；
-  解析 bracketed paste、跨块标记、UTF-8 解码、占位符生成/展开、64 个占位符
-  上限；无 bracketed paste 时按"一次到达的数据量 / 内部换行"攒批 25ms 兜底；
-  `suspendCollapse()` 供选择器/隐藏输入临时关闭折叠
-- `packages/cli/src/repl.ts`：在 `createInterface` 前套上粘贴缓冲；启动打开
-  bracketed paste、退出关闭（含 `process.exit` 兜底恢复）；`line` 事件先
-  `expand()` 再分派/排队；审批提问也接住占位符展开
-- `packages/cli/src/input.ts`：`question()` 增加可选的 `expand` 参数
-- `packages/cli/src/select.ts`、`hiddenPrompt.ts`：进入时暂停折叠、结束时恢复
-- 测试：
-  - `paste.test.ts`：摘要格式、折叠阈值、标记前缀、跨块、末尾换行、兜底攒批、
-    暂停/恢复、占位符上限、dispose、输入流结束，以及真实 readline 的
-    10 万字/100 行回归用例
-  - `repl.test.ts`：bracketed paste 经完整 REPL 后仍是一条消息，终端只有摘要，
-    启动/退出正确开关终端模式
-  - `select.test.ts`：300 字关键字粘贴进筛选框不折叠，退出后恢复折叠
-  - `hiddenPrompt.test.ts`：400 字 API Key 粘贴原样收下，不回显、不折叠
-  - `input.test.ts`：`question()` 的展开参数与默认恒等行为
-- 文档：`docs/cli-interaction.md` 补充粘贴流程，`DECISIONS.md` 新增决策条目，
-  `.agents/skills/cli-output-presentation/SKILL.md` 补充粘贴层经验
+- `packages/core/src/provider/openai-compat.ts`：新增 `prioritizeModelIds`，
+  推荐型号按给定顺序在前，接口独有的型号按原顺序在后，去重、去空白
+- `packages/core/src/provider/volcengine.ts`：`getModelList` 合并
+  `getDefaultModels()` 与接口结果；接口失败仍原样抛出，不拿默认列表掩盖鉴权/网络错误
+- `packages/core/src/agent/model/errors.ts`：新增 `modelAccessHint`，识别
+  方舟的型号/接入点不可用文案（英文与中文）
+- `packages/core/src/agent/model/response.ts`：失败消息追加 `💡` 处理建议，
+  `errorMessage` 保留原始错误
+- `packages/cli/src/select.ts`：新增 `initialIndex`（光标停在当前模型）、
+  `onCustomInput`（无命中时 `Ctrl+E` 采用输入）、无匹配与按键提示文案；
+  `parseKey` 识别 `Ctrl+E`
+- `packages/cli/src/login.ts`：`handleModel` 计算当前模型下标、接收手填
+  模型 ID 并写回；去掉了二次 `question()` 提问和伪选项
+- 测试：`openai-compat.test.ts`、`volcengine.test.ts`、`response.test.ts`、
+  `select.test.ts`、`login-model.test.ts`
+- 文档：`docs/cli-commands.md` §5.4、`docs/providers.md` §9、`README.md`
+  同步更新为「推荐型号优先 + 光标保持 + `Ctrl+E` 手填 + 404 提示」；
+  `DECISIONS.md` 记录本轮取舍
 
 ## 进行中
 
@@ -49,25 +51,23 @@ CLI 里复制大段内容不再卡死、刷屏或拆成多个回合。stdin 与 
 
 ## 已知问题
 
-- bracketed paste 依赖终端支持；不支持的终端走 25ms 攒批兜底。若粘贴数据块
-  之间停顿超过 25ms，可能拆成多个占位符（仍是一条输入，正文完整）。
-- 占位符在 readline 历史里显示为摘要而非原文；按回车仍会展开。会话内只保留
-  最近 64 个占位符，更早的占位符会按字面提交（避免超长会话无限占内存）。
-- iframe 量宽页里 `requestAnimationFrame` 不推进（iframe 不参与合成），
-  抽屉的 0.18s 过渡停在起点；已用「关闭过渡后读计算值」确认规则本身生效，
-  但动画观感仍需真窗口确认
-- 触摸设备的行操作常驻、diff / 文件预览的手机样式目前只有 CSS 契约测试，
-  没有真机触摸验证
-- 主列在 4K 上封顶 1280 并居中（有意为之，避免超长行）；若以后要「全宽
-  时间线」，改 `--main-w` 上限即可，但需重新评估代码块可读性
+- 方舟 `/models` 无法区分「已下线」与「账号未开通」，只能在排序上降低
+  误选概率；接口加字段之前不做本地黑名单（官方型号迭代很快，写死会再次过期）
+- 只开通推理接入点的账号拿不到 `ep-...` 自动补全，必须手填；是否从方舟
+  管控面 API 拉接入点列表留待后续评估
+- `Ctrl+E` 是终端行编辑里的常用键；选择器内只在「筛选无命中且有输入」时
+  生效，有命中时忽略，避免误按改配置
 
 ## 下一步
 
-- 真机冒烟：Windows Terminal / conhost / PowerShell 各粘一次 10 万字单行、
-  100 行代码、含 emoji/CJK 的块，确认占位符、光标、Ctrl+C、`/model` 筛选与
-  `/login` Key 输入都正常
-- 观察 25ms 兜底窗口在旧终端上的手感；若仍偶发拆成多个占位符，再评估调大
-  到 40ms 或改为按 Enter/静默双条件收尾
-- 在真实终端里对 `/model` 冒烟一次：拉一个模型很多的供应商，确认窗口高度、
-  上下折叠提示、宽度截断与筛选手感（Windows Terminal / PowerShell 各一次）
-- 移动端浏览器若要正式支持，补 `env(safe-area-inset-bottom)` 与真机触摸回归
+- 在真实终端里对 `/model` 冒烟一次：选火山方舟，确认首项是推荐型号、
+  光标在当前模型、`Ctrl+E` 手填 `ep-...` 后能正常写回
+- 观察方舟 `/models` 返回结构若增加「开通状态」字段，再评估用接口过滤
+  掉不可用型号（而不是只排序）
+
+## 上一轮（已完成）：CLI 大段粘贴折叠
+
+终端开启 bracketed paste 后，多行或超过 200 字的粘贴折叠成
+`[粘贴内容 #N · 12 行 · 1.2 KB]`，回车时换回原文并作为**一条**消息提交；
+选择器与隐藏输入临时关闭折叠，保证筛选关键字与 API Key 逐字收下。
+实现见 `packages/cli/src/paste.ts`，细节与回归用例见提交历史。

@@ -21,6 +21,25 @@ export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * 模型/接入点不可用（404）的错误特征。
+ *
+ * 火山方舟把三种情况都报成 404：型号已下线、账号没开通、账号只允许用
+ * 推理接入点（`ep-...`）调用。原始文案只说"不存在或无权限"，用户不知道
+ * 该去控制台开通、改用接入点，还是干脆选错了型号——这层补一句可执行的
+ * 下一步。只认这些明确的语义，普通 404（路径写错）不套用。
+ */
+const MODEL_ACCESS_ERROR_PATTERN =
+  /does not exist or you do not have access|has not activated the model|ModelIDAccessDisabled|模型[^\n]{0,40}(?:不存在|未开通|无权访问)|(?:未开通|无权访问)[^\n]{0,40}模型/i;
+
+/** 给"模型不可用"的失败补一句处理建议；其它错误返回 null */
+export function modelAccessHint(error: unknown): string | null {
+  if (!MODEL_ACCESS_ERROR_PATTERN.test(describeError(error))) {
+    return null;
+  }
+  return "模型不存在、未开通或当前账号无权限：请确认模型 ID 正确，并在服务商控制台开通该模型；火山方舟也可改用推理接入点 ID（ep-...）后重试。";
+}
+
 /** 从错误自身或它的 cause 链里取字段 */
 function findInErrorChain<T>(
   error: unknown,

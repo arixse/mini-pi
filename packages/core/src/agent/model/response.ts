@@ -1,6 +1,6 @@
 import { AssistantMessage } from "../../shared/protocol";
 import { createTextContent } from "../message";
-import { describeError, isAbortError } from "./errors";
+import { describeError, isAbortError, modelAccessHint } from "./errors";
 
 /**
  * 把"调用失败"转成统一的 AssistantMessage。
@@ -27,12 +27,15 @@ export function createErrorResponse(
     };
   }
 
+  const detail = describeError(error);
+  const hint = modelAccessHint(error);
+
   return {
     role: "assistant",
-    content: [createTextContent(`${label}失败：${describeError(error)}`)],
+    content: [createTextContent(hint ? `${label}失败：${detail}\n💡 ${hint}` : `${label}失败：${detail}`)],
     stopReason: "error",
     usage: { input: 0, output: 0, totalTokens: 0 },
-    errorMessage: describeError(error),
+    errorMessage: detail,
     timestamp: Date.now(),
   };
 }

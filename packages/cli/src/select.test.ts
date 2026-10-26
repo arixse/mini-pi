@@ -121,6 +121,7 @@ describe("parseKey", () => {
     assert.strictEqual(parseKey("\u007f"), "backspace");
     assert.strictEqual(parseKey("\u0008"), "backspace");
     assert.strictEqual(parseKey("\u0015"), "clear");
+    assert.strictEqual(parseKey("\u0005"), "custom"); // Ctrl+E
   });
 
   it("其他按键返回 other", () => {
@@ -346,6 +347,37 @@ describe("promptSelect", () => {
     assert.strictEqual(input.rawModeCalls.length, 0);
   });
 
+  it("initialIndex 把光标停在当前已选模型上", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const promise = promptSelect(
+      "选择",
+      ["a", "b", "c", "d"],
+      undefined,
+      { input: input as any, output: output as any },
+      { initialIndex: 3 },
+    );
+
+    input.send("\r"); // 直接回车应保留当前模型，而不是回到第一项
+    assert.strictEqual(await promise, 3);
+    assert.ok(output.text.includes("❯ d"));
+  });
+
+  it("initialIndex 越界时回落到第一项", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const promise = promptSelect(
+      "选择",
+      ["a", "b"],
+      undefined,
+      { input: input as any, output: output as any },
+      { initialIndex: 99 },
+    );
+
+    input.send("\r");
+    assert.strictEqual(await promise, 0);
+  });
+
   it("按向下键后回车应返回索引 1", async () => {
     const input = new FakeInput();
     const output = new FakeOutput();
@@ -537,6 +569,22 @@ describe("promptSelect", () => {
     assert.strictEqual(await promise, 0);
   });
 
+  it("Ctrl+U 清空筛选后回到 initialIndex，而不是第一项", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const promise = promptSelect(
+      "选择模型",
+      ["a", "b", "c"],
+      undefined,
+      { input: input as any, output: output as any, columns: 80 },
+      { filterable: true, initialIndex: 2 },
+    );
+    input.send("zzz"); // 无命中，光标停在第一条（这里没有匹配）
+    input.send("\u0015"); // 清空筛选
+    input.send("\r");
+    assert.strictEqual(await promise, 2, "清空筛选不能把用户已选模型冲掉");
+  });
+
   it("筛选无结果时回车被忽略，Esc 仍可取消", async () => {
     const input = new FakeInput();
     const output = new FakeOutput();
@@ -552,6 +600,108 @@ describe("promptSelect", () => {
     input.send("\u001b");
     assert.strictEqual(await promise, null);
     assert.ok(stripAnsi(output.text).includes("无匹配项"));
+  });
+
+  it("筛选无命中时 Ctrl+E 把输入内容交回调用方", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    let custom: string | undefined;
+    const promise = promptSelect(
+      "选择模型",
+      ["alpha", "beta"],
+      undefined,
+      { input: input as any, output: output as any, columns: 80 },
+      {
+        filterable: true,
+        onCustomInput: (value) => {
+          custom = value;
+        },
+      },
+    );
+    input.send("ep-20261025"); // 列表里没有这个接入点
+    input.send("\u0005"); // Ctrl+E
+
+    assert.strictEqual(
+      await promise,
+      2,
+      "手填时返回 choices.length，调用方才能与真实下标区分",
+    );
+    assert.strictEqual(custom, "ep-20261025");
+
+    const text = stripAnsi(output.text);
+    assert.ok(text.includes("Ctrl+E 手填"), "按键提示要写明手填入口");
+    assert.ok(text.includes("Ctrl+E 使用输入内容"));
+  });
+
+  it("有命中项时 Ctrl+E 不会把手填当成结果", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    let custom: string | undefined;
+    const promise = promptSelect(
+      "选择模型",
+      ["alpha", "beta"],
+      undefined,
+      { input: input as any, output: output as any, columns: 80 },
+      {
+        filterable: true,
+        onCustomInput: (value) => {
+          custom = value;
+        },
+      },
+    );
+    input.send("al"); // 命中 alpha
+    input.send("\u0005"); // 有命中：忽略
+    input.send("\r");
+
+    assert.strictEqual(await promise, 0);
+    assert.strictEqual(custom, undefined);
+  });
+
+  it("空输入时 Ctrl+E 不触发手填", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    let called = 0;
+    const promise = promptSelect(
+      "选择模型",
+      ["alpha", "beta"],
+      undefined,
+      { input: input as any, output: output as any, columns: 80 },
+      {
+        filterable: true,
+        onCustomInput: () => {
+          called += 1;
+        },
+      },
+    );
+    input.send("\u0005"); // 没有输入内容
+    input.send("\r");
+
+    assert.strictEqual(await promise, 0);
+    assert.strictEqual(called, 0);
+  });
+
+  it("无命中时即使允许手填，单独回车也不采用输入内容", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    let custom: string | undefined;
+    const promise = promptSelect(
+      "选择模型",
+      ["alpha", "beta"],
+      undefined,
+      { input: input as any, output: output as any, columns: 80 },
+      {
+        filterable: true,
+        onCustomInput: (value) => {
+          custom = value;
+        },
+      },
+    );
+    input.send("zzz"); // 没有命中
+    input.send("\r"); // 回车只忽略，不写配置
+    input.send("\u001b");
+
+    assert.strictEqual(await promise, null);
+    assert.strictEqual(custom, undefined);
   });
 
   it("非筛选模式下普通字符不应改变选择（保持旧行为）", async () => {

@@ -1,5 +1,5 @@
 import { Provider, buildModelsUrl } from "./index";
-import { fetchOpenAiModelIds } from "./openai-compat";
+import { fetchOpenAiModelIds, prioritizeModelIds } from "./openai-compat";
 
 /**
  * 字节跳动火山引擎方舟（Volcengine Ark）提供商。
@@ -39,13 +39,21 @@ export class VolcengineProvider implements Provider {
   }
 
   /**
-   * 获取方舟模型列表
-   * 根据 curl --request GET \
-   * --url https://ark.cn-beijing.volces.com/api/v3/models \
-   * --header 'Authorization: Bearer <token>' 动态获取模型列表
+   * 获取方舟模型列表。
+   *
+   * `GET /models` 会把历史快照一起列出来，且返回顺序不代表可用性。默认列表
+   * 是当前文档里的推荐型号，必须排在前面：`promptSelect` 默认选中第一项，
+   * 否则用户一路回车就会选到早已下线的旧型号（调用直接 404）。
+   *
+   * 历史型号不删：账号仍能调用时用户还得选得到。接口失败仍然原样抛出，
+   * 不能拿默认列表把"密钥不对"伪装成"这家只有 4 个模型"。
    */
   async getModelList(apiKey: string, baseUrl?: string): Promise<string[]> {
-    return fetchOpenAiModelIds(this.getModelsUrl(baseUrl ?? this.baseUrl), apiKey);
+    const fetched = await fetchOpenAiModelIds(
+      this.getModelsUrl(baseUrl ?? this.baseUrl),
+      apiKey,
+    );
+    return prioritizeModelIds(this.getDefaultModels(), fetched);
   }
 
   /**

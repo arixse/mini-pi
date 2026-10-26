@@ -2,6 +2,8 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleLogin, handleModel } from "./login";
@@ -272,6 +274,145 @@ describe("handleLogin / handleModel 交互", () => {
     assert.ok(text().includes("无匹配项"));
     const config = await providerService.getProviderConfig("minimax-cn");
     assert.strictEqual(config.apiKey, undefined);
+  });
+
+  it("handleModel: 筛选无命中时按 Ctrl+E 手填模型 ID / 推理接入点", async () => {
+    providerService.registerProvider(new MockProvider("test-provider"));
+    await providerService.saveProviderConfig("test-provider", { apiKey: "k" });
+
+    const { rl, send, text } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      send("test-provider");
+      send("\r"); // 选中服务商
+      send("ep-20261025"); // 列表里没有的接入点
+      send("\u0005"); // Ctrl+E：采用输入内容
+      await p;
+    });
+
+    assert.strictEqual(
+      await settingsStore.getDefaultModel(),
+      "test-provider/ep-20261025",
+      "手填的接入点必须原样写回，不能被列表索引带偏",
+    );
+    assert.match(logs.join("\n"), /使用手填模型 ID: ep-20261025/);
+    assert.match(logs.join("\n"), /已设置默认模型: test-provider\/ep-20261025/);
+    assert.ok(text().includes("Ctrl+E 手填"), "按键提示要写明手填入口");
+  });
+
+  it("handleModel: 筛选无命中时直接回车不写配置，Ctrl+E 才采用", async () => {
+    providerService.registerProvider(new MockProvider("test-provider"));
+    await providerService.saveProviderConfig("test-provider", { apiKey: "k" });
+    await settingsStore.setDefaultModel("test-provider/model1");
+
+    const { rl, send } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      send("test-provider");
+      send("\r");
+      send("ep-typo");
+      send("\r"); // 没有命中项，回车必须被忽略（不能把错字写进配置）
+      send("\u001b"); // Esc 取消
+      await p;
+    });
+
+    assert.strictEqual(
+      await settingsStore.getDefaultModel(),
+      "test-provider/model1",
+      "取消不能把已有配置改成筛选词",
+    );
+    assert.match(logs.join("\n"), /已取消操作/);
+  });
+
+  it("handleModel: 有命中项时 Ctrl+E 不会把手填当成结果", async () => {
+    providerService.registerProvider(new MockProvider("test-provider"));
+    await providerService.saveProviderConfig("test-provider", { apiKey: "k" });
+
+    const { rl, send } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      send("test-provider");
+      send("\r");
+      send("model"); // model1 / model2 都命中
+      send("\u0005"); // Ctrl+E 应被忽略
+      send("\u001b"); // Esc 取消，证明 Ctrl+E 没有提前结束选择
+      await p;
+    });
+
+    assert.strictEqual(await settingsStore.getDefaultModel(), undefined);
+    assert.match(logs.join("\n"), /已取消操作/);
+  });
+
+  it("handleModel: 打开列表时光标停在当前模型上，直接回车不会换模型", async () => {
+    providerService.registerProvider(new MockProvider("test-provider"));
+    await providerService.saveProviderConfig("test-provider", { apiKey: "k" });
+    await settingsStore.setDefaultModel("test-provider/model2");
+
+    const { rl, send, text } = createReplInput();
+    await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      send("test-provider");
+      send("\r"); // 选中服务商
+      send("\r"); // 模型列表：光标应已在 model2 上
+      await p;
+    });
+
+    assert.strictEqual(await settingsStore.getDefaultModel(), "test-provider/model2");
+    assert.ok(text().includes("❯ model2"), "默认光标必须落在当前模型上");
+  });
+
+  it("handleModel: 真实方舟供应商下，接口里的历史快照不会成为默认选中项", async () => {
+    // 端到端：真实 VolcengineProvider 请求本地 /models（顺序模拟真实接口，
+    // 已下线型号排在前面），选择器只按一次回车，最终写回的必须是推荐型号。
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith("/models")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            data: [
+              { id: "doubao-lite-128k-240428" },
+              { id: "doubao-seed-2-1-turbo-260628" },
+            ],
+          }),
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const port = (server.address() as AddressInfo).port;
+      await providerService.saveProviderConfig("volcengine", {
+        apiKey: "test-key",
+        baseUrl: `http://127.0.0.1:${port}`,
+      });
+
+      const { rl, send, text } = createReplInput();
+      const logs = await captureLog(async () => {
+        const p = handleModel(providerService, settingsStore, rl as any);
+        send("volcengine"); // 筛选出方舟
+        send("\r"); // 选中供应商
+        send("\r"); // 模型列表：直接回车采用默认光标
+        await p;
+      });
+
+      assert.strictEqual(
+        await settingsStore.getDefaultModel(),
+        "volcengine/doubao-seed-evolving",
+        "默认选中项必须是当前推荐型号，而不是接口排在最前的历史快照",
+      );
+      assert.match(logs.join("\n"), /已设置默认模型: volcengine\/doubao-seed-evolving/);
+
+      const rendered = text();
+      assert.ok(rendered.includes("❯ doubao-seed-evolving"), "光标应停在推荐型号上");
+      assert.ok(
+        rendered.includes("doubao-lite-128k-240428"),
+        "历史型号仍要保留给有权调用的账号",
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("选择列表应展示所有服务商（方向键交互）", async () => {

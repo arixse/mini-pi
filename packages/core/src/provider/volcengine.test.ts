@@ -101,7 +101,13 @@ describe("VolcengineProvider", () => {
         "https://gateway.example.com/ark",
       );
 
-      assert.deepStrictEqual(models, ["ep-20261025"]);
+      assert.deepStrictEqual(models, [
+        "doubao-seed-evolving",
+        "doubao-seed-2-1-pro-260915",
+        "doubao-seed-2-1-lite-260915",
+        "doubao-seed-2-1-turbo-260628",
+        "ep-20261025",
+      ]);
       assert.deepStrictEqual(requested, ["https://gateway.example.com/ark/models"]);
     });
   });
@@ -137,7 +143,41 @@ describe("VolcengineProvider", () => {
       };
 
       const models = await provider.getModelList("test-api-key");
-      assert.deepStrictEqual(models, ["doubao-seed-evolving", "doubao-seed-2-1-pro-260915"]);
+      assert.deepStrictEqual(models, [
+        "doubao-seed-evolving",
+        "doubao-seed-2-1-pro-260915",
+        "doubao-seed-2-1-lite-260915",
+        "doubao-seed-2-1-turbo-260628",
+      ]);
+    });
+
+    it("接口顺序把历史快照排在前面时，推荐型号仍必须排在最前", async () => {
+      // 真实 /models 的行为：历史型号和当前型号混在一起，顺序不代表可用性。
+      // 用户默认选中第一项，若把 doubao-lite-128k（已下线）排在前面就会 404。
+      const mockModels = [
+        { id: "doubao-lite-128k-240428" },
+        { id: "doubao-seed-2-1-turbo-260628" },
+        { id: "doubao-seed-2-1-pro-260915" },
+        { id: "doubao-seed-character-260628" },
+      ];
+      global.fetch = async () =>
+        new Response(JSON.stringify({ data: mockModels }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+
+      const models = await provider.getModelList("test-api-key");
+
+      assert.deepStrictEqual(models, [
+        "doubao-seed-evolving",
+        "doubao-seed-2-1-pro-260915",
+        "doubao-seed-2-1-lite-260915",
+        "doubao-seed-2-1-turbo-260628",
+        "doubao-lite-128k-240428",
+        "doubao-seed-character-260628",
+      ]);
+      assert.strictEqual(models[0], "doubao-seed-evolving", "默认选中项必须是当前推荐型号");
+      assert.ok(models.includes("doubao-lite-128k-240428"), "历史型号仍保留给有权调用的账号");
     });
 
     it("should handle API error response", async () => {
@@ -160,7 +200,7 @@ describe("VolcengineProvider", () => {
         });
 
       const models = await provider.getModelList("test-api-key");
-      assert.deepStrictEqual(models, []);
+      assert.deepStrictEqual(models, provider.getDefaultModels());
     });
 
     it("should handle response without data array", async () => {
@@ -171,7 +211,7 @@ describe("VolcengineProvider", () => {
         });
 
       const models = await provider.getModelList("test-api-key");
-      assert.deepStrictEqual(models, []);
+      assert.deepStrictEqual(models, provider.getDefaultModels());
     });
 
     it("should handle network error", async () => {

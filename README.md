@@ -29,7 +29,7 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 
 ```bash
 > /login     # 方向键选供应商 → 输入 API Key（输入不回显）
-> /model     # 选供应商 → 选模型（可输入关键字筛选），立即生效
+> /model     # 选供应商 → 选模型（可筛选；火山方舟可输入 ep-... 后按 Ctrl+E 手填），立即生效
 ```
 
 内置 9 家供应商：DeepSeek、MiniMax-CN、OpenAI、MiMo、Kimi、智谱、阿里百炼、火山方舟、Anthropic。
