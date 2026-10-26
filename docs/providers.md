@@ -493,6 +493,7 @@ OpenAI
 | 兼容 OpenAI SDK | https://www.volcengine.com/docs/82379/1330626 |
 | 快速入门 / API Key | https://www.volcengine.com/docs/82379/1399008 |
 | 模型列表接口 | `GET https://ark.cn-beijing.volces.com/api/v3/models` |
+| 模型下线公告 | https://ark.volcengine.com/region:cn-beijing/docs/model-deprecation-notice |
 
 ### 当前支持的模型
 
@@ -504,17 +505,22 @@ OpenAI
 | `doubao-seed-2-1-turbo-260628` | 高速模型（256K 上下文） |
 
 > 方舟的模型 ID 带日期后缀，官方按周迭代，因此默认列表只放当前文档里
-> 「推荐模型」的在售型号。`GET /models` 返回的历史快照不一定还能调用
-> （已下线的型号调用会 404），所以合并列表时**推荐型号固定排在最前**，
-> 历史型号按接口顺序排在后面；默认光标也停在当前正在用的模型上，
-> 避免一路回车选到第一项的历史快照。
+> 「推荐模型」的在售型号。`GET /models` 会把历史快照一起返回，且响应里
+> 没有「是否已下线」字段；Mini Pi 按官方「模型下线公告」维护已下线清单
+> （`packages/core/src/provider/volcengine-retired.ts`），**已到 EOS 的型号
+> 直接过滤掉**，不会再出现在可选列表里。合并列表时推荐型号仍固定排在最前，
+> 默认光标停在当前正在用的模型上。
 >
-> 旧快照（如 `doubao-seed-2-1-pro-260628`，256K）、`doubao-seed-2-0`
-> 系列（256K）与 `doubao-seed-character`（128K）仍可通过 `/models` 选择，
-> 上下文推断表也已登记。
+> 清单只抄官方公告里的模型 ID，不做「日期早于某天就算下线」的推断，避免
+> 误删仍在售的旧型号；下线是单向的，条目只增不删。只到 EOM、尚未到 EOS 的
+> 型号仍会显示（存量接入点还能调用），到 EOS 当天自动隐藏。
+>
+> 旧快照（如 `doubao-seed-2-1-pro-260628`，256K）、未到 EOS 的
+> `doubao-seed-2-0` 系列（256K）与 `doubao-seed-character`（128K）仍可通过
+> `/models` 选择，上下文推断表也已登记。
 >
 > 图像（Seedream）、视频（Seedance）、3D 与向量模型走各自专属接口，
-> 不在对话模型的默认列表里。
+> 不在对话模型的默认列表里；它们若出现在 `/models` 且已下线，同样会被过滤。
 
 ### 接入方式
 
@@ -541,9 +547,9 @@ OpenAI
   推理接入点 ID（`ep-...`）。`/models` 只列出模型 ID；只开通了接入点时，
   在客户端设置里直接手填 `ep-...`，或在 CLI 的 `/model` 模型列表的筛选框
   输入 `ep-...` 后按 `Ctrl+E` 采用。
-- **404 的三个常见原因**：型号已下线、账号未开通该模型、账号不允许用模型 ID
-  调用。CLI 会把这类 404 翻译成可执行的处理建议；确认后仍无法调用时，
-  改用控制台里的推理接入点 ID。
+- **404 的三个常见原因**：型号已下线（公告过的型号已从列表过滤，手填仍可能
+  撞上）、账号未开通该模型、账号不允许用模型 ID 调用。CLI 会把这类 404
+  翻译成可执行的处理建议；确认后仍无法调用时，改用控制台里的推理接入点 ID。
 - **上下文窗口**：2.1 的 `260915` 快照与 `doubao-seed-evolving` 是 1M，
   `turbo` / 旧快照 / 2.0 系列是 256K，`doubao-seed-character` 是 128K。
 
