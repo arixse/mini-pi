@@ -31,7 +31,7 @@ export function commandName(usage: string): string {
 export const COMMANDS: readonly CommandSpec[] = [
   { usage: "/new", description: "创建新的会话" },
   { usage: "/login", description: "登录模型服务商（方向键选择服务商，输入 apiKey 不回显）" },
-  { usage: "/model", description: "选择模型供应商和模型" },
+  { usage: "/model", description: "选择模型供应商和模型（模型列表可按名称筛选）" },
   { usage: "/reload", description: "重载配置文件" },
   { usage: "/skills", description: "列出所有可用的 skills" },
   { usage: "/load <name>", description: "加载指定 skill 的完整内容" },

@@ -139,9 +139,11 @@ export async function handleModel(
     }
 
     const mIdx = await promptSelect(
-      `📋 请选择 ${selectedProvider} 的模型 (↑/↓ 选择，Enter 确认，Esc 退出)`,
+      `📋 请选择 ${selectedProvider} 的模型 (共 ${models.length} 个)`,
       models,
       rl,
+      {},
+      { filterable: true },
     );
 
     if (mIdx === null) {
