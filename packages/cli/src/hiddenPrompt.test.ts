@@ -7,6 +7,7 @@ import {
   splitHiddenTokens,
   type HiddenPromptOptions,
 } from "./hiddenPrompt";
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, PasteInput } from "./paste";
 
 /** 收集写入内容；用 Writable 而不是 PassThrough，保证断言时 data 已经落地 */
 class Collector extends Writable {
@@ -190,5 +191,34 @@ describe("questionHidden（不回显的输入）", () => {
     const value = await pending;
 
     assert.strictEqual(value, null, "管道提前关闭不能把半截 Key 当成答案");
+  });
+
+  it("bracketed paste 的 Key 原样收下，不会被折叠成占位符", async () => {
+    const source = new PassThrough() as unknown as PassThrough & {
+      isTTY: boolean;
+      isRaw: boolean;
+      setRawMode: (mode: boolean) => void;
+    };
+    source.isTTY = true;
+    source.isRaw = false;
+    source.setRawMode = (mode: boolean): void => {
+      source.isRaw = mode;
+    };
+    const paste = new PasteInput(source as unknown as NodeJS.ReadStream);
+    const output = new Collector();
+    // 超过折叠阈值：没有暂停折叠的话会返回 "[粘贴内容 #1 ...]"
+    const key = `sk-${"a".repeat(400)}`;
+
+    const pending = questionHidden(undefined, "Key: ", {
+      input: paste as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mask: "",
+    });
+    source.write(`${BRACKETED_PASTE_START}${key}\n${BRACKETED_PASTE_END}`);
+
+    assert.strictEqual(await pending, key);
+    assert.ok(!output.text.includes(key), "Key 不能出现在输出里");
+    assert.strictEqual(source.isRaw, false, "结束后要恢复原 raw 状态");
+    paste.dispose();
   });
 });

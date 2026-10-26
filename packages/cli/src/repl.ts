@@ -26,6 +26,11 @@ import {
 import { SlashCommandContext, handleSlashCommand } from "./dispatch";
 import { ExitCoordinator } from "./exit";
 import { createInputScheduler, question, releasePendingQuestion } from "./input";
+import {
+  DISABLE_BRACKETED_PASTE,
+  ENABLE_BRACKETED_PASTE,
+  createPasteBridge,
+} from "./paste";
 import { RenderContext, createRenderContext, followTerminalWidth } from "./render";
 import { createStatusLine } from "./status";
 import { createAgentEventHandler } from "./toolEvents";
@@ -64,6 +69,36 @@ export function defaultReplEnvironment(): ReplEnvironment {
   };
 }
 
+/**
+ * 进程退出时仍要执行的终端恢复动作。
+ *
+ * `/exit` 走得到 `onExit`，但未捕获异常、别处的 `process.exit()` 都走不到；
+ * 而 bracketed paste 是终端的全局模式，留着不放会让用户回到 shell 后
+ * 粘贴内容莫名多出 `ESC[200~` 标记。这里只装一个 `exit` 监听，收尾时统一跑。
+ */
+const terminalRestores = new Set<() => void>();
+let terminalRestoreHooked = false;
+
+function registerTerminalRestore(restore: () => void): () => void {
+  terminalRestores.add(restore);
+  if (!terminalRestoreHooked) {
+    terminalRestoreHooked = true;
+    process.once("exit", () => {
+      for (const run of terminalRestores) {
+        try {
+          run();
+        } catch {
+          // 退出阶段尽力而为，单个恢复失败不能阻止其它清理
+        }
+      }
+      terminalRestores.clear();
+    });
+  }
+  return () => {
+    terminalRestores.delete(restore);
+  };
+}
+
 export async function startRepl(
   options: ReplOptions,
   env: ReplEnvironment = defaultReplEnvironment(),
@@ -72,8 +107,23 @@ export async function startRepl(
   const usageTracker: UsageTracker = options.usageTracker ?? createUsageTracker();
   options.usageTracker = usageTracker;
 
+  // 粘贴缓冲必须垫在 readline 前面：大段内容一旦进了 readline 的逐字重画，
+  // 10 万字单行能卡住两分钟；多行粘贴还会被拆成每行一个回合。
+  const paste = createPasteBridge(env.stdin);
+  // bracketed paste 是终端模式，开在 stdout 上；非 TTY（管道、测试替身）不动它
+  const bracketedPasteEnabled =
+    paste.interactive && Boolean(env.stdout.isTTY) && typeof env.stdout.write === "function";
+  const unregisterTerminalRestore = bracketedPasteEnabled
+    ? registerTerminalRestore(() => {
+        env.stdout.write(DISABLE_BRACKETED_PASTE);
+      })
+    : () => {};
+  if (bracketedPasteEnabled) {
+    env.stdout.write(ENABLE_BRACKETED_PASTE);
+  }
+
   const rl = env.createInterface({
-    input: env.stdin as NodeJS.ReadableStream,
+    input: paste.input,
     output: env.stdout,
     prompt: chalk.cyan("> "),
   });
@@ -114,7 +164,7 @@ export async function startRepl(
         }
         return "no";
       }
-      const answer = await question(rl, chalk.yellow(promptText));
+      const answer = await question(rl, chalk.yellow(promptText), paste.expand);
       return parseApprovalAnswer(answer);
     },
     // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
@@ -208,6 +258,12 @@ export async function startRepl(
       status.stop();
       // 退出前摘掉 resize 监听：否则监听器持有 stdout，进程收尾不清爽
       unfollowWidth();
+      // 先还终端模式，再拆输入桥；顺序反了的话最后一段粘贴会落进空缓冲
+      if (bracketedPasteEnabled) {
+        env.stdout.write(DISABLE_BRACKETED_PASTE);
+      }
+      unregisterTerminalRestore();
+      paste.dispose();
       console.log(chalk.yellow("\n👋 再见！\n"));
       env.exit(code);
     },
@@ -324,7 +380,10 @@ export async function startRepl(
       logger.error("❌ 错误:", error instanceof Error ? error.message : error),
   });
 
-  rl.on("line", (line) => {
+  rl.on("line", (rawLine) => {
+    // 占位符在这里换回原文：斜杠命令判定、排队与落盘都拿完整内容，
+    // 而终端里留下的只是那一行简短摘要。
+    const line = paste.expand(rawLine);
     const trimmed = line.trim();
 
     if (!trimmed) {

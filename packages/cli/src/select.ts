@@ -1,5 +1,6 @@
 import * as readline from "node:readline";
 import chalk from "chalk";
+import { suspendPasteCollapse } from "./paste";
 import { terminalWidth, truncateToWidth, DEFAULT_TERMINAL_WIDTH } from "./width";
 
 /**
@@ -320,6 +321,8 @@ export async function promptSelect(
 
   // 暂停 readline，避免其同时消费按键、破坏选择界面
   rl?.pause();
+  // 筛选框要的是原始字符：粘贴不能折叠成占位符
+  const resumePaste = suspendPasteCollapse(input);
 
   return new Promise<number | null>((resolve) => {
     // 暂存并摘除 readline 注册的 keypress 监听，避免其干扰
@@ -377,6 +380,8 @@ export async function promptSelect(
       if (result === null) {
         output.write("\n");
       }
+      // 先恢复折叠，再交还 readline：紧跟着到达的粘贴仍应走占位符
+      resumePaste();
       // 恢复 readline，让其继续接管输入
       rl?.resume();
       resolve(result);

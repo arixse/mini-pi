@@ -69,6 +69,11 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 非交互场景（脚本 / CI）用 `mini-pi exec "<提问>"`，`--json` 时 stdout 只输出事件流，
 细节见 [CLI 交互文档](docs/cli-interaction.md) §2.4。
 
+交互输入可以直接粘贴大段内容：多行或超长内容会折叠成
+`[粘贴内容 #N · 12 行 · 1.2 KB]`，回车时按原文整段提交，不会逐行拆成多个回合，
+也不会把正文铺满终端。`/login` 的 API Key 与 `/model` 的筛选框仍按原样接收字符。
+细节见 [cli-interaction.md](docs/cli-interaction.md) §4。
+
 ## 安全模型
 
 写文件与执行命令属于危险动作，CLI 默认**逐次询问**，确认时可选

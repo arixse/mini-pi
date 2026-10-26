@@ -4,11 +4,20 @@
 
 import * as readline from "node:readline";
 
-/** 用 readline 提一次问；答案原样返回（是否信任由调用方判定） */
-export function question(rl: readline.Interface, prompt: string): Promise<string> {
+/**
+ * 用 readline 提一次问；答案按需展开后返回（是否信任由调用方判定）。
+ *
+ * `expand` 让审批这类 readline 提问也能接住粘贴占位符：用户若把一大段
+ * 内容粘到确认提示里，答案至少是原文而不是 `[粘贴内容 #1 ...]`。
+ */
+export function question(
+  rl: readline.Interface,
+  prompt: string,
+  expand: (answer: string) => string = (answer) => answer,
+): Promise<string> {
   return new Promise((resolve) => {
     rl.question(prompt, (answer) => {
-      resolve(answer);
+      resolve(expand(answer));
     });
   });
 }
