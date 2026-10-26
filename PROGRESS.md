@@ -5,39 +5,33 @@
 
 ## 当前状态
 
-历史会话可以接着发消息了：侧栏点开任何一段会话都直接能续写，发送请求带着
-那段会话的 `sessionId`（跨根连同 `root`），服务端把消息接回该会话并设为
-当前会话。前端删掉了 `View.readOnly` 与 `readonly` 输入区模式——当前会话与
-历史会话同一套发送逻辑。这是对 `client-ui-design.md` 第 15 条的反转
-（2026-10-25 用户要求"必须要续写"），决策记录见 `DECISIONS.md`。
+`/model` 的模型列表在模型很多时不再刷屏或花屏，并支持按名称筛选：列表默认
+只渲染选中项附近、最多 12 项（按终端行数推导），上下标注还有多少项，每行
+按终端宽度截断；直接键入关键字（忽略大小写、空格分词、全部命中）即可筛选，
+`Backspace` / `Ctrl+U` / `↑↓` / `Enter` / `Esc` 各有明确语义。筛选只在模型
+列表开启，`/login` 等服务商列表保持原按键行为。
 
-- 状态：分支 `feature/client-session-continue` 上完成，`pnpm check` 全绿，
-  已合入 `main`
-- 门禁：`pnpm check` 全绿（2146 tests / 2143 pass / 0 fail / 3 skipped，
-  覆盖率 97.62% / 90.92% / 93.13%）
-- 端到端验证：控制器层回归用例钉住"在打开的历史会话里发送，请求体带着
-  `sessionId` 与 `root`"；渲染层钉住"历史会话的发送键是发送、不是新任务"。
-  真浏览器冒烟待按需补（窄屏 / 跨根续写各点一次）
+- 状态：分支 `feature/model-select-filter` 上完成，`pnpm check` 全绿
+  （2175 tests / 2172 pass / 0 fail / 3 skipped，覆盖率 97.63% / 91.01% / 93.16%）
+- 端到端验证：`login-model.test.ts` 用 60 个模型的 provider 走完整交互，
+  键入 `model-57` 后写回 `many/model-57`；筛选无结果时回车不写配置。
+  `select.test.ts` 钉住"返回原列表下标"、窗口行数、宽度截断与 CSI 解析
 
 ## 已完成
 
-- `web/state.ts`：删 `View.readOnly` 字段、`emptyView()` 初值、
-  `openSession()` 的 `readOnly` 选项；`ComposerMode` 去掉 `readonly`，
-  `modeOf` 不再有只读分支
-- `web/controller.ts`：`openSession` 不再按"是不是当前会话"判定只读
-  （`target` 局部变量随之移除）；`continueSession` 注释改为"任何会话都是接着写"
-- `web/components/Composer.tsx`：删只读分支（发送键恒为发送/停止、提示行
-  与 `submit` 的 `newTask` 分支移除）；`web/components/Timeline.tsx`：删
-  "只读浏览"提示条；`web/actions.ts`、`server/host.ts` 注释同步
+- `packages/cli/src/select.ts`：`promptSelect` 新增 `filterable` /
+  `maxVisible` / `width` 选项；新增纯函数 `filterChoices`、`selectWindow`；
+  `renderSelect` 支持可见窗口、筛选行与宽度截断；`splitKeySequences` 按
+  CSI 终止字节整体保留（bracketed paste / PageUp 不再变成字符输入）
+- `packages/cli/src/login.ts`：模型选择启用筛选，提示里显示模型总数
+- `packages/cli/src/commands.ts`、`README.md`、`docs/cli-commands.md`：
+  同步 `/model` 的筛选与长列表行为
 - 测试：
-  - `web/controller.test.ts`：新增"历史会话里续写带着 sessionId 与根"
-  - `web/state.test.ts`：新增"打开历史会话输入区仍是就绪态"；原
-    "openSession 挂上未结束的 Run 并标只读"改为不标只读
-  - `web/render.test.ts`：两个只读用例改为"历史会话发送键就是发送"
-    +"live Run 停止键仍在"
-  - `web/store.test.ts`：删"只读优先于一切"
-- 文档：`DECISIONS.md`（新增决策条目）、`client-ui-design.md` §1 对照表与
-  第 15 条、`technical-solution.md`、`packages/client/README.md`
+  - `packages/cli/src/select.test.ts`：筛选语义、原下标返回、Backspace /
+    Ctrl+U、无匹配回车、窗口上下界、按行数推导窗口、每行宽度 ≤ 终端宽度
+  - `packages/cli/src/login-model.test.ts`：60 个模型按名称筛选后写回正确
+    模型、无匹配不写配置、长列表不把未命中项刷到终端
+- 文档：`DECISIONS.md` 新增决策条目，`PROGRESS.md` 更新进度
 
 ## 进行中
 
@@ -55,7 +49,7 @@
 
 ## 下一步
 
-- 真浏览器冒烟一次续写：点开一段历史会话直接发消息，确认时间线追加、
-  侧栏"当前"标记跟上、跨根续写落在正确的根
-- 视需要记住上次窗口尺寸（Electron 关闭时保存、启动时恢复）
+- 在真实终端里对 `/model` 冒烟一次：拉一个模型很多的供应商，确认窗口高度、
+  上下折叠提示、宽度截断与筛选手感（Windows Terminal / PowerShell 各一次）
+- 视需要给筛选加 `PageUp/PageDown` 翻页；当前筛选 + 方向键已覆盖主要场景
 - 移动端浏览器若要正式支持，补 `env(safe-area-inset-bottom)` 与真机触摸回归

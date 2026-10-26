@@ -32,6 +32,23 @@ class MockProvider implements Provider {
   }
 }
 
+/** 模型数量很多的服务商：用来验证筛选与长列表窗口 */
+class ManyModelsProvider implements Provider {
+  constructor(private name = "many") {}
+  getProviderName(): string {
+    return this.name;
+  }
+  getSdkType(): string {
+    return "OpenAI";
+  }
+  getBaseUrl(): string {
+    return "https://test.api.com";
+  }
+  async getModelList(): Promise<string[]> {
+    return Array.from({ length: 60 }, (_, i) => `model-${String(i + 1).padStart(2, "0")}`);
+  }
+}
+
 /** 捕获 console.log 输出 */
 function captureLog(fn: () => Promise<void> | void): Promise<string[]> {
   const logs: string[] = [];
@@ -160,6 +177,60 @@ describe("handleLogin / handleModel 交互", () => {
 
     const defaultModel = await settingsStore.getDefaultModel();
     assert.strictEqual(defaultModel, "test-provider/model1");
+  });
+
+  it("handleModel: 模型很多时可按名称筛选，并选中原列表里的模型", async () => {
+    providerService.registerProvider(new ManyModelsProvider("many"));
+    await providerService.saveProviderConfig("many", { apiKey: "k" });
+    const providerIndex = providerService.getRegisteredProviders().indexOf("many");
+    assert.ok(providerIndex >= 0, "many 应已注册");
+
+    const { rl, send, text } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      for (let i = 0; i < providerIndex; i += 1) {
+        send("\u001b[B");
+      }
+      send("\r"); // 选中 many
+      send("model-57"); // 按名称筛选
+      send("\r");
+      await p;
+    });
+
+    // 选中项必须是原模型列表里的 model-57，而不是过滤后的第 1 项
+    assert.strictEqual(await settingsStore.getDefaultModel(), "many/model-57");
+    assert.match(logs.join("\n"), /已设置默认模型: many\/model-57/);
+
+    const rendered = text();
+    assert.ok(rendered.includes("共 60 个"), "先告诉用户模型总量");
+    assert.ok(rendered.includes("筛选: model-57 (1/60)"), "筛选行要显示命中/总数");
+    assert.ok(
+      !rendered.includes("model-60"),
+      "长列表不应把未命中的模型也刷到终端里",
+    );
+  });
+
+  it("handleModel: 筛选无结果时回车不写配置，Esc 仍可退出", async () => {
+    providerService.registerProvider(new ManyModelsProvider("many"));
+    await providerService.saveProviderConfig("many", { apiKey: "k" });
+    const providerIndex = providerService.getRegisteredProviders().indexOf("many");
+
+    const { rl, send, text } = createReplInput();
+    const logs = await captureLog(async () => {
+      const p = handleModel(providerService, settingsStore, rl as any);
+      for (let i = 0; i < providerIndex; i += 1) {
+        send("\u001b[B");
+      }
+      send("\r"); // 选中 many
+      send("no-such-model");
+      send("\r"); // 无匹配项：回车必须被忽略
+      send("\u001b"); // 再按 Esc 才退出
+      await p;
+    });
+
+    assert.strictEqual(await settingsStore.getDefaultModel(), undefined);
+    assert.match(logs.join("\n"), /已取消操作/);
+    assert.ok(text().includes("无匹配项"));
   });
 
   it("选择列表应展示所有服务商（方向键交互）", async () => {
