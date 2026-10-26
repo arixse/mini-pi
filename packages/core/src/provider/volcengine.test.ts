@@ -2,6 +2,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { VolcengineProvider } from "./volcengine";
 import { inferContextWindow } from "./context-window";
+import { isVolcengineModelRetired } from "./volcengine-retired";
 
 describe("VolcengineProvider", () => {
   let provider: VolcengineProvider;
@@ -67,6 +68,18 @@ describe("VolcengineProvider", () => {
       ]);
       for (const model of provider.getDefaultModels()) {
         assert.strictEqual(inferContextWindow(model), windows.get(model), `${model} 的窗口推断不对`);
+      }
+    });
+
+    it("推荐型号不能落在已下线清单里", () => {
+      // 以清单最后一次核对的时间为基准，避免这条测试随真实时钟在 EOS 当天突然变红；
+      // 真到那天，需要先把推荐型号换掉再更新这里的时间。
+      const snapshot = new Date("2026-10-26T00:00:00+08:00");
+      for (const model of provider.getDefaultModels()) {
+        assert.ok(
+          !isVolcengineModelRetired(model, snapshot),
+          `推荐型号 ${model} 已出现在下线公告里，需要更换默认列表`,
+        );
       }
     });
   });
@@ -151,7 +164,7 @@ describe("VolcengineProvider", () => {
       ]);
     });
 
-    it("接口顺序把历史快照排在前面时，推荐型号仍必须排在最前", async () => {
+    it("接口顺序把历史快照排在前面时，已下线型号被过滤、推荐型号排在最前", async () => {
       // 真实 /models 的行为：历史型号和当前型号混在一起，顺序不代表可用性。
       // 用户默认选中第一项，若把 doubao-lite-128k（已下线）排在前面就会 404。
       const mockModels = [
@@ -173,11 +186,38 @@ describe("VolcengineProvider", () => {
         "doubao-seed-2-1-pro-260915",
         "doubao-seed-2-1-lite-260915",
         "doubao-seed-2-1-turbo-260628",
-        "doubao-lite-128k-240428",
         "doubao-seed-character-260628",
       ]);
       assert.strictEqual(models[0], "doubao-seed-evolving", "默认选中项必须是当前推荐型号");
-      assert.ok(models.includes("doubao-lite-128k-240428"), "历史型号仍保留给有权调用的账号");
+      assert.ok(
+        !models.includes("doubao-lite-128k-240428"),
+        "已下线型号不能出现在可选列表里，否则用户选了也只会 404",
+      );
+      assert.ok(
+        models.includes("doubao-seed-character-260628"),
+        "不在下线清单里的旧快照仍要保留，接口无法区分账号是否开通",
+      );
+    });
+
+    it("已下线的型号即使出现在接口里也不返回，接入点与未知型号不受影响", async () => {
+      const mockModels = [
+        { id: "deepseek-v3-1-250821" }, // 2026-03-31 已下线
+        { id: "ep-20261025" }, // 推理接入点：不在官方模型目录里
+        { id: "my-private-deployment" }, // 自建/私有型号：不能误删
+        { id: "doubao-seed-2-1-lite-260915" }, // 在售
+      ];
+      global.fetch = async () =>
+        new Response(JSON.stringify({ data: mockModels }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+
+      const models = await provider.getModelList("test-api-key");
+
+      assert.ok(!models.includes("deepseek-v3-1-250821"), "已下线型号必须被过滤");
+      assert.ok(models.includes("ep-20261025"), "推理接入点要原样保留");
+      assert.ok(models.includes("my-private-deployment"), "未知型号不能误删");
+      assert.ok(models.includes("doubao-seed-2-1-lite-260915"), "在售型号要保留");
     });
 
     it("should handle API error response", async () => {

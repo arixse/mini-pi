@@ -361,9 +361,10 @@ describe("handleLogin / handleModel 交互", () => {
     assert.ok(text().includes("❯ model2"), "默认光标必须落在当前模型上");
   });
 
-  it("handleModel: 真实方舟供应商下，接口里的历史快照不会成为默认选中项", async () => {
+  it("handleModel: 真实方舟供应商下，已下线型号不再出现在列表里", async () => {
     // 端到端：真实 VolcengineProvider 请求本地 /models（顺序模拟真实接口，
-    // 已下线型号排在前面），选择器只按一次回车，最终写回的必须是推荐型号。
+    // 已下线型号排在前面），选择器只按一次回车，最终写回的必须是推荐型号，
+    // 且已下线型号不会再出现在渲染结果里。
     const server = createServer((req, res) => {
       if (req.url?.endsWith("/models")) {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -407,8 +408,8 @@ describe("handleLogin / handleModel 交互", () => {
       const rendered = text();
       assert.ok(rendered.includes("❯ doubao-seed-evolving"), "光标应停在推荐型号上");
       assert.ok(
-        rendered.includes("doubao-lite-128k-240428"),
-        "历史型号仍要保留给有权调用的账号",
+        !rendered.includes("doubao-lite-128k-240428"),
+        "已下线型号不能继续出现在可选列表里，否则用户选了仍然会 404",
       );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

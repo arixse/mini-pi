@@ -1,5 +1,6 @@
 import { Provider, buildModelsUrl } from "./index";
 import { fetchOpenAiModelIds, prioritizeModelIds } from "./openai-compat";
+import { filterRetiredVolcengineModels } from "./volcengine-retired";
 
 /**
  * 字节跳动火山引擎方舟（Volcengine Ark）提供商。
@@ -13,8 +14,9 @@ import { fetchOpenAiModelIds, prioritizeModelIds } from "./openai-compat";
  * 之后用自定义 Base URL 覆盖即可。
  *
  * 方舟的模型 ID 带日期后缀（如 `doubao-seed-2-1-pro-260915`），官方按周迭代，
- * 因此默认列表只放当前文档里"推荐模型"的在售型号；旧快照仍可通过 `/models`
- * 拉取后手动选择。
+ * 因此默认列表只放当前文档里"推荐模型"的在售型号；接口返回的历史快照里
+ * **已下线的型号**按官方公告清单过滤掉（见 `volcengine-retired.ts`），
+ * 不会再出现在选择列表里。
  */
 export class VolcengineProvider implements Provider {
   private baseUrl: string = "https://ark.cn-beijing.volces.com/api/v3";
@@ -45,15 +47,20 @@ export class VolcengineProvider implements Provider {
    * 是当前文档里的推荐型号，必须排在前面：`promptSelect` 默认选中第一项，
    * 否则用户一路回车就会选到早已下线的旧型号（调用直接 404）。
    *
-   * 历史型号不删：账号仍能调用时用户还得选得到。接口失败仍然原样抛出，
-   * 不能拿默认列表把"密钥不对"伪装成"这家只有 4 个模型"。
+   * 已下线的型号按官方公告清单**过滤掉**——它们只会把用户带进 404，不该
+   * 出现在可选列表里。仍然在售、但账号没开通的型号保留：接口不提供开通状态，
+   * 不能把「没权限」当成「已下线」藏起来，否则用户连自己有权限的旧型号也
+   * 找不到。接口失败仍然原样抛出，不能拿默认列表把"密钥不对"伪装成
+   * "这家只有 4 个模型"。
    */
   async getModelList(apiKey: string, baseUrl?: string): Promise<string[]> {
     const fetched = await fetchOpenAiModelIds(
       this.getModelsUrl(baseUrl ?? this.baseUrl),
       apiKey,
     );
-    return prioritizeModelIds(this.getDefaultModels(), fetched);
+    return filterRetiredVolcengineModels(
+      prioritizeModelIds(this.getDefaultModels(), fetched),
+    );
   }
 
   /**
