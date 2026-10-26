@@ -45,3 +45,30 @@ export async function fetchOpenAiModelIds(modelsUrl: string, apiKey: string): Pr
     throw error;
   }
 }
+
+/**
+ * 把"当前推荐"的模型排在接口返回列表的前面。
+ *
+ * 火山方舟的 `GET /models` 会把历史快照一起返回，顺序也不代表可用性；
+ * 用户按回车默认选中的是第一项，于是很容易选到一个已经下线、调用必然
+ * 404 的旧型号。推荐型号固定排在最前，历史型号保留在后面（账号确实
+ * 还能用时仍然选得到），两边都按原顺序去重。
+ */
+export function prioritizeModelIds(preferred: string[], fetched: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const candidate of [...preferred, ...fetched]) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const id = candidate.trim();
+    if (id === "" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    result.push(id);
+  }
+
+  return result;
+}

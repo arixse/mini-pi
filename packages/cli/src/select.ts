@@ -13,6 +13,7 @@ export type SelectKey =
   | "escape"
   | "backspace"
   | "clear"
+  | "custom"
   | "other";
 
 /** 隐藏光标 / 显示光标（ANSI 控制序列） */
@@ -51,6 +52,8 @@ export function parseKey(data: string): SelectKey {
       return "backspace";
     case "\u0015": // Ctrl+U
       return "clear";
+    case "\u0005": // Ctrl+E
+      return "custom";
     default:
       return "other";
   }
@@ -184,6 +187,8 @@ export interface SelectRenderOptions {
   total?: number;
   /** 底部按键提示 */
   hint?: string;
+  /** 无匹配时提示可按 Ctrl+E 采用输入内容（筛选 + 手填模型的场景） */
+  customInput?: boolean;
 }
 
 /**
@@ -208,7 +213,16 @@ export function renderSelect(
   }
 
   if (choices.length === 0) {
-    lines.push(chalk.yellow(truncateToWidth("  (无匹配项，按 Backspace 修改或 Esc 退出)", width)));
+    lines.push(
+      chalk.yellow(
+        truncateToWidth(
+          options.customInput
+            ? "  (无匹配项，按 Ctrl+E 使用输入内容，Backspace 修改，Esc 退出)"
+            : "  (无匹配项，按 Backspace 修改或 Esc 退出)",
+          width,
+        ),
+      ),
+    );
     if (options.hint) {
       lines.push(chalk.dim(truncateToWidth(options.hint, width)));
     }
@@ -260,6 +274,23 @@ export interface SelectOptions {
   maxVisible?: number;
   /** 覆盖终端列宽（测试用） */
   width?: number;
+  /**
+   * 初始选中项在原列表里的下标（默认 0）。
+   *
+   * `/model` 用它把光标停在"当前正在用的模型"上：换模型时要在一长串里
+   * 重新数到原来的位置，或者一路回车回到第一项（可能是历史快照），
+   * 都是很容易选错的口子。
+   */
+  initialIndex?: number;
+  /**
+   * 筛选无命中时按 Ctrl+E 把输入内容交回调用方。
+   *
+   * 模型列表不一定包含账号能用的型号（火山方舟只开通推理接入点时，
+   * `/models` 不会列出 `ep-...`）。单独设一个显式按键而不是"回车即采用"，
+   * 是为了不把"输错关键字"变成"把错字写进配置"。
+   * 调用方会收到 `choices.length` 作为返回值，并从回调里取输入内容。
+   */
+  onCustomInput?: (value: string) => void;
 }
 
 /** 判断一个按键 token 是否是可以进入筛选框的普通字符 */
@@ -316,7 +347,9 @@ export async function promptSelect(
     Math.min(MAX_VISIBLE_CHOICES, Math.max(1, rows - 6));
   const filterable = options.filterable === true;
   const hint = filterable
-    ? "↑/↓ 选择 · 输入关键字筛选 · Backspace 删除 · Esc 退出"
+    ? options.onCustomInput
+      ? "↑/↓ 选择 · 输入关键字筛选 · Ctrl+E 手填 · Backspace 删除 · Esc 退出"
+      : "↑/↓ 选择 · 输入关键字筛选 · Backspace 删除 · Esc 退出"
     : undefined;
 
   // 暂停 readline，避免其同时消费按键、破坏选择界面
@@ -340,7 +373,9 @@ export async function promptSelect(
 
     let query = "";
     let matches = filterable ? filterChoices(choices, query) : choices.map((_, i) => i);
-    let selected = 0;
+    const preferred = Math.trunc(options.initialIndex ?? 0);
+    const initialSelected = preferred > 0 && preferred < choices.length ? preferred : 0;
+    let selected = initialSelected;
     let lineCount = 0;
 
     const render = (first: boolean): void => {
@@ -358,6 +393,7 @@ export async function promptSelect(
           query: filterable ? query : undefined,
           total: choices.length,
           hint,
+          customInput: Boolean(options.onCustomInput),
         },
       );
       output.write(text + "\n");
@@ -387,11 +423,11 @@ export async function promptSelect(
       resolve(result);
     }
 
-    /** 筛选词变化后重建匹配集，并把选中项拉回第一条 */
+    /** 筛选词变化后重建匹配集；清空筛选时回到初始光标位置 */
     function applyQuery(next: string): void {
       query = next;
       matches = filterChoices(choices, query);
-      selected = 0;
+      selected = next.trim() === "" ? initialSelected : 0;
       render(false);
     }
 
@@ -407,6 +443,20 @@ export async function promptSelect(
           // 筛选后没有任何结果时回车不该"选中"一个不存在的项
           if (matches.length > 0) {
             finish(matches[selected]);
+            return;
+          }
+        } else if (key === "custom") {
+          // Ctrl+E：无命中时把输入内容原样交给调用方（手填模型 ID）。
+          // 有命中时不生效，避免误按把筛选词写进配置。
+          const custom = query.trim();
+          if (
+            filterable &&
+            options.onCustomInput &&
+            matches.length === 0 &&
+            custom !== ""
+          ) {
+            options.onCustomInput(custom);
+            finish(choices.length);
             return;
           }
         } else if (key === "escape") {

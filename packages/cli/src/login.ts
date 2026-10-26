@@ -125,6 +125,9 @@ export async function handleModel(
   // 获取该服务商的配置
   const config = await providerService.getProviderConfig(selectedProvider);
 
+  // 当前模型可能就排在列表里：把它作为初始光标位置，换模型时不用从头数
+  const current = settingsStore ? await settingsStore.parseDefaultModel() : undefined;
+
   if (!config.apiKey) {
     console.log(chalk.red(`❌ 请先使用 /login 命令配置 ${selectedProvider} 的 API Key`));
     return undefined;
@@ -144,12 +147,24 @@ export async function handleModel(
       return undefined;
     }
 
+    // 列表里的型号不一定全都能调用（历史快照可能已下线），也不一定包含
+    // 账号只开通的推理接入点：筛选无命中时按 Ctrl+E，把输入内容当成手填模型 ID。
+    const currentIndex =
+      current?.providerName === selectedProvider ? models.indexOf(current.modelName) : -1;
+    let customModel: string | undefined;
+
     const mIdx = await promptSelect(
       `📋 请选择 ${selectedProvider} 的模型 (共 ${models.length} 个)`,
       models,
       rl,
       {},
-      { filterable: true },
+      {
+        filterable: true,
+        initialIndex: currentIndex,
+        onCustomInput: (value) => {
+          customModel = value;
+        },
+      },
     );
 
     if (mIdx === null) {
@@ -157,7 +172,14 @@ export async function handleModel(
       return undefined;
     }
 
-    const selectedModel = models[mIdx];
+    const selectedModel = customModel ?? models[mIdx];
+    if (!selectedModel) {
+      console.log(chalk.dim("\n已取消操作\n"));
+      return undefined;
+    }
+    if (customModel) {
+      console.log(chalk.yellow(`\n✏️ 使用手填模型 ID: ${customModel}`));
+    }
     const defaultModel = `${selectedProvider}/${selectedModel}`;
 
     // 保存到 settings.json
