@@ -402,6 +402,8 @@ export async function promptSelect(
 
     function finish(result: number | null): void {
       input.removeListener("data", onData);
+      input.removeListener("end", onEnd);
+      input.removeListener("close", onEnd);
       for (const listener of suspendedKeypress) {
         input.on("keypress", listener as (...args: unknown[]) => void);
       }
@@ -476,8 +478,20 @@ export async function promptSelect(
       }
     }
 
+    /**
+     * 输入流提前结束（终端关闭、管道读完、父进程关掉 stdin）。
+     *
+     * 不监听的话 promise 永远不 settle：raw 模式与隐藏光标都不会恢复，
+     * 调用方（登录 / 选模型）也再也回不到 REPL。语义按"取消"处理。
+     */
+    function onEnd(): void {
+      finish(null);
+    }
+
     output.write(HIDE_CURSOR);
     render(true);
     input.on("data", onData);
+    input.once("end", onEnd);
+    input.once("close", onEnd);
   });
 }

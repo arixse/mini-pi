@@ -107,6 +107,14 @@ export type ReplOptions = {
   /** 会话级子 Agent 用量查询，供 `/status` 展示（避免委派成本隐形） */
   subAgentStats?: () => { delegations: number; usage: Usage };
   /**
+   * 清零子 Agent 累计用量。
+   *
+   * 与 {@link UsageTracker.reset} 同一时机：`/clear`、`/new`、`/switch`。
+   * 统计口径是"当前会话"，不重置的话 `/status` 会把上一个会话的委派成本
+   * 算到新会话头上。仅在 REPL 自己维护累计值时提供。
+   */
+  resetSubAgentStats?: () => void;
+  /**
    * 会话初始的子 Agent 开关状态；**缺省关闭**。
    *
    * 委派会额外烧 token 且成本难预估，默认让人 opt-in：

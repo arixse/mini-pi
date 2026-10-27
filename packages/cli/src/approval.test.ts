@@ -305,6 +305,36 @@ describe("tool approval", () => {
     assert.strictEqual((await approve(call("bash", { command: "echo 2" }))).action, "block");
   });
 
+  /**
+   * `a` 的承诺是"在当前档位下别再问"。REPL 按 a 会把档位切到 full-access，
+   * 用户再用 /trust 切回 workspace-write 就是要恢复逐次确认——只记布尔的话
+   * 旧授权会穿透新档位，界面提示"需逐次确认"而实际静默放行。
+   */
+  it("按过 a 又切回 workspace-write：必须重新逐次确认", async () => {
+    let mode: ApprovalMode = "workspace-write";
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => mode,
+      confirm: async () => {
+        asked += 1;
+        return "always";
+      },
+      onSessionAllow: () => {
+        mode = "full-access";
+      },
+    });
+
+    assert.strictEqual((await approve(call("bash", { command: "echo 1" }))).action, "allow");
+    assert.strictEqual(asked, 1, "第一次要问");
+    // 仍在 full-access：a 的承诺继续兑现
+    assert.strictEqual((await approve(call("bash", { command: "echo 2" }))).action, "allow");
+    assert.strictEqual(asked, 1, "同一档位下不该再问");
+
+    mode = "workspace-write";
+    assert.strictEqual((await approve(call("bash", { command: "echo 3" }))).action, "allow");
+    assert.strictEqual(asked, 2, "切回逐次确认后必须重新问一次");
+  });
+
   it("mode 缺省时由 isTrusted 推导（旧布尔入口的兼容层）", async () => {
     let asked = 0;
     const trusted = createToolApproval({
