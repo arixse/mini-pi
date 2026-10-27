@@ -90,6 +90,22 @@ async function summarizeEntries(
       signal,
     });
 
+    // 先看结束原因，再看内容：模型失败时依然会返回一条 assistant 消息
+    // （`stopReason:"error"`，正文可能是错误说明，甚至可能是正常的一段话），
+    // 把它当摘要写进会话文件，等于用一句错误描述替换掉真实历史，而且已经落盘。
+    if (response.stopReason === "error") {
+      throw new Error(
+        `摘要模型调用失败：${response.errorMessage ?? "未知错误"}`,
+      );
+    }
+    if (response.stopReason === "length") {
+      // 截断的摘要只覆盖了历史开头，写进会话会丢掉后半段的真实信息
+      throw new Error("摘要模型输出被截断（stopReason=length），已放弃本次压缩");
+    }
+    if (response.stopReason === "aborted") {
+      throw new Error("摘要模型调用已取消");
+    }
+
     // 提取模型回复的文本
     const summaryParts: string[] = [];
     for (const block of response.content) {
@@ -98,8 +114,9 @@ async function summarizeEntries(
       }
     }
 
-    if (summaryParts.length > 0) {
-      return summaryParts.join("\n");
+    const summary = summaryParts.join("\n").trim();
+    if (summary !== "") {
+      return summary;
     }
 
     // 空回复与失败同等对待：回退到简单摘要会把真实历史换成统计数字
@@ -292,15 +309,43 @@ export class JsonlSessionStore {
    * "损坏"包括**结构不合法**（未知 type、缺必填字段）：这类行也是合法 JSON，
    * 只校验 `type` 是字符串就放行，会在后面访问 `entry.id` 时抛 TypeError，
    * 而构造函数抛错等于 CLI 直接起不来。
+   *
+   * 文件末尾的残行要**连同文件一起收拾**：只跳过不截断的话，那半行仍留在磁盘上，
+   * 下一次 `appendFile` 会紧贴它继续写，两条残缺 JSON 拼成一行——
+   * 于是刚写下的那条**完整**消息也跟着解析失败，用户看到的是"新消息凭空消失"。
+   * 因此完整行补一个换行，半行从文件里截掉（数据已经写坏，留不住）。
    */
   private loadOrCreate(): void {
     if (!existsSync(this.filePath)) {
       this.writeHeader();
       return;
     }
-    const lines = readFileSync(this.filePath, "utf8")
-      .split("\n")
-      .filter(Boolean);
+
+    const raw = readFileSync(this.filePath, "utf8");
+    const rawLines = raw.split("\n");
+    while (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+      rawLines.pop();
+    }
+
+    if (rawLines.length > 0 && !raw.endsWith("\n")) {
+      const lastLine = rawLines[rawLines.length - 1];
+      if (this.isCompleteEntryLine(lastLine)) {
+        // 内容完整、只是少了换行：补上，避免下一条消息与它粘成一行
+        writeFileAtomicSync(this.filePath, `${raw}\n`);
+      } else {
+        rawLines.pop();
+        writeFileAtomicSync(
+          this.filePath,
+          rawLines.length > 0 ? `${rawLines.join("\n")}\n` : "",
+        );
+        this.loadWarnings.push({
+          line: rawLines.length + 1,
+          reason: "文件末尾是写了一半的消息行，已从会话文件中截断（该条消息无法恢复）",
+        });
+      }
+    }
+
+    const lines = rawLines.filter((line) => line !== "");
 
     lines.forEach((line, index) => {
       const entry = this.parseEntry(line, index + 1);
@@ -323,6 +368,16 @@ export class JsonlSessionStore {
       // 留着只会让之后每次加载都重复报同一条警告。
       const firstLineBroken = this.loadWarnings.some((warning) => warning.line === 1);
       this.repairHeader(lines, firstLineBroken);
+    }
+  }
+
+  /** 单行是否是完整可用的会话条目（不产生加载警告，供残行判定使用） */
+  private isCompleteEntryLine(line: string): boolean {
+    try {
+      const value: unknown = JSON.parse(line);
+      return !("reason" in validateSessionEntry(value));
+    } catch {
+      return false;
     }
   }
 
