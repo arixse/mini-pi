@@ -183,6 +183,8 @@ export async function startRepl(
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
     // 让审批提示能区分"新建"与"覆盖已存在的文件"
     fileExists: (relativePath) => workspaceFileExists(options.workspaceRoot, relativePath),
+    // 取消后排队中的确认直接按拒绝收尾，不再逐个弹提示
+    isCancelled: () => activeRun?.signal.aborted === true,
   });
 
   const beforeToolCall = options.beforeToolCall ?? approval;

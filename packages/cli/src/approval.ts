@@ -148,6 +148,14 @@ export type ApprovalPolicy = {
   onSessionAllow?: () => void;
   /** 决策回调，便于日志与测试 */
   onDecision?: (call: ToolCallContent, allowed: boolean, reason: ApprovalReason) => void;
+  /**
+   * 本轮是否已被取消。
+   *
+   * 确认是串行的：一批工具里有多个需要确认的调用时，后来的会排队。
+   * 用户按 Ctrl+C 放掉当前提问之后，排队中的那些不该再弹一次——否则
+   * "已请求取消"之后还要连续回车好几次。取消状态下直接按拒绝处理。
+   */
+  isCancelled?: () => boolean;
 };
 
 /**
@@ -226,6 +234,33 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
   const resolveMode = (): ApprovalMode =>
     policy.mode ? policy.mode() : approvalModeFromTrusted(policy.isTrusted?.() === true);
 
+  /**
+   * 确认必须串行。
+   *
+   * readline 的 `question()` 不可重入：两个并发的 `question()` 只会有一个
+   * 回调被调用，另一个永远挂起。`task` 允许并发（多个只读委派），子 Agent
+   * 也会并行跑主循环，于是"同一批里两个需要确认的调用"会同时进入这里，
+   * 把整轮卡死——用户敲多少次回车都唤不醒第二个。
+   *
+   * 用一条 promise 链排队：后一个确认等前一个答完再展示。执行仍然可以并发，
+   * 受影响的只是"问人"这一步。
+   */
+  let confirmQueue: Promise<unknown> = Promise.resolve();
+  const confirmSerially = (promptText: string): Promise<ApprovalAnswer> => {
+    const answer = confirmQueue.then(() => {
+      if (policy.isCancelled?.()) {
+        return "no" as ApprovalAnswer;
+      }
+      return policy.confirm(promptText);
+    });
+    // 队列本身必须吞掉失败，否则一次抛错会让后续确认永远不再执行
+    confirmQueue = answer.then(
+      () => undefined,
+      () => undefined,
+    );
+    return answer;
+  };
+
   return async (call: ToolCallContent, context?: ToolCallContext): Promise<ToolDecision> => {
     // 档位裁决在最前面：它决定这次调用是免确认、要问人、还是根本不许做，
     // 而这三件事都没有例外——顺序反了的话，只读档位会退化成"照问"。
@@ -253,7 +288,7 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
 
     let answer: ApprovalAnswer = "no";
     try {
-      answer = await policy.confirm(
+      answer = await confirmSerially(
         buildApprovalQuestion(call, policy.fileExists, context, {
           ascii: policy.ascii,
         }),
