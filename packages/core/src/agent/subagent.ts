@@ -665,6 +665,31 @@ export function compactSubAgentMessages(
   return [merged, ...messages.slice(start)];
 }
 
+/** 子 Agent 的一轮上下文推进结果 */
+export type SubAgentContextStep = {
+  /** 下一轮的上下文基准：压缩过就用裁剪结果，否则是原样累加 */
+  context: AgentMessage[];
+  /** 本轮真的裁剪过时给出替换用的上下文；未裁剪为 undefined */
+  compacted: AgentMessage[] | undefined;
+};
+
+/**
+ * 把本轮增量并入子 Agent 的上下文基准，超出预算时用裁剪结果替换它。
+ *
+ * 关键在"替换"而不是"只在返回值里裁剪"：如果调用方自己仍保存全量历史，
+ * 下一轮会拿全量历史重新裁一遍，`liveContext` 也会随委派时长无限增长。
+ * 压缩结果必须成为下一轮的基准，裁剪才算真正生效。
+ */
+export function advanceSubAgentContext(
+  liveContext: readonly AgentMessage[],
+  turnMessages: readonly AgentMessage[],
+  budgetTokens: number,
+): SubAgentContextStep {
+  const merged = [...liveContext, ...turnMessages];
+  const compacted = compactSubAgentMessages(merged, budgetTokens);
+  return { context: compacted ?? merged, compacted };
+}
+
 export type RunSubAgentInput = {
   agentId: string;
   identity: AgentIdentity;
@@ -819,8 +844,11 @@ export async function runSubAgent(
        * 而失败信息回到父 Agent 只剩一句"委派失败"，之前读到的全白费。
        */
       onTurnEnd: async (turnMessages) => {
-        liveContext = [...liveContext, ...turnMessages];
-        return compactSubAgentMessages(liveContext, budgetTokens);
+        const step = advanceSubAgentContext(liveContext, turnMessages, budgetTokens);
+        // 压缩结果必须是下一轮的基准：否则 liveContext 会一直保留全量历史，
+        // 每轮都对着同一段历史重复裁剪，内存随委派时长无限增长
+        liveContext = step.context;
+        return step.compacted;
       },
     });
   } finally {

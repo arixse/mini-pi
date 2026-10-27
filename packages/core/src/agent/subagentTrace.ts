@@ -57,17 +57,31 @@ export function createSubAgentTraceWriter(input: {
   const base = input.sessionFilePath.replace(/\.jsonl$/, "");
   const tracePath = `${base}.sub-${input.agentId}.jsonl`;
 
-  const append = async (record: TraceRecord): Promise<void> => {
-    try {
-      await mkdir(dirname(tracePath), { recursive: true });
-      await appendFile(tracePath, `${JSON.stringify(record)}\n`, "utf8");
-    } catch (error) {
-      logger.warn(
-        `子 Agent trace 写入失败（已忽略，不影响委派本身）：${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+  /**
+   * 写入串行化。
+   *
+   * 事件是 fire-and-forget 发进来的（`void trace.writeEvent(...)`），
+   * 多个 `appendFile` 同时打开同一个文件时**顺序不保证**：trace 里会出现
+   * "工具结果排在工具调用前面"这种误导性顺序。`close` 也必须等队列清空，
+   * 否则委派一结束就返回路径，最后几条事件还没落盘。
+   */
+  let queue: Promise<void> = Promise.resolve();
+
+  const append = (record: TraceRecord): Promise<void> => {
+    const current = queue.then(async () => {
+      try {
+        await mkdir(dirname(tracePath), { recursive: true });
+        await appendFile(tracePath, `${JSON.stringify(record)}\n`, "utf8");
+      } catch (error) {
+        logger.warn(
+          `子 Agent trace 写入失败（已忽略，不影响委派本身）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    });
+    queue = current;
+    return current;
   };
 
   return {
@@ -77,6 +91,10 @@ export function createSubAgentTraceWriter(input: {
     writeEvent: async (event: unknown): Promise<void> => {
       await append({ type: "event", event });
     },
-    close: async (): Promise<string | null> => tracePath,
+    close: async (): Promise<string | null> => {
+      // 收尾前把排队中的记录全部写完：返回路径意味着"文件已经可用"
+      await queue;
+      return tracePath;
+    },
   };
 }

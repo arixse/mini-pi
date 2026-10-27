@@ -24,7 +24,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 
 /** 记忆文件名；与 auth.json / settings.json 并列放在 `~/.mini-pi/` 下 */
 export const WORKSPACE_MEMORY_FILE = "client-workspace.json";
@@ -107,7 +108,38 @@ export async function readRememberedWorkspace(
 }
 
 /**
- * 把"写盘"收成一处：临时文件带 pid（两个进程同时记时不会互相踩），
+ * 同一文件的读改写队列。
+ *
+ * `rememberWorkspace` / `forgetWorkspace` 都是"读整份 → 改 → 写整份"。
+ * 两个操作并发时（界面上快速切换工作区、关闭一个的同时打开另一个），
+ * 各自读到的是同一份旧快照，后写的会把前者的改动整个覆盖掉——
+ * 表现为"刚打开的工作区下次启动不见了"，而且没有任何报错。
+ *
+ * 只锁进程内：跨进程（桌面壳与浏览器形态同时跑）仍可能互相覆盖，
+ * 属于已知限制；原子 rename 至少保证文件不会半截。
+ */
+const memoryQueues = new Map<string, Promise<void>>();
+
+/** 把一次完整的读改写排到该文件队列的末尾，并返回它自己的结果 */
+function serializeMemoryTask<T>(filePath: string, task: () => Promise<T>): Promise<T> {
+  const key = resolve(filePath);
+  const previous = memoryQueues.get(key) ?? Promise.resolve();
+  const current = previous.then(task);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  memoryQueues.set(key, tail);
+  void tail.then(() => {
+    if (memoryQueues.get(key) === tail) {
+      memoryQueues.delete(key);
+    }
+  });
+  return current;
+}
+
+/**
+ * 把"写盘"收成一处：临时文件带 pid + 随机后缀（同进程并发也不会撞名），
  * rename 落盘，失败清掉临时文件。
  */
 async function writeMemoryFile(data: RememberedWorkspaces, filePath: string): Promise<void> {
@@ -115,7 +147,9 @@ async function writeMemoryFile(data: RememberedWorkspaces, filePath: string): Pr
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${Date.now().toString(36)}.${randomBytes(4).toString(
+    "hex",
+  )}.tmp`;
   try {
     await writeFile(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     await rename(tmpPath, filePath);
@@ -136,12 +170,14 @@ export async function rememberWorkspace(
   path: string,
   filePath: string = workspaceMemoryPath(),
 ): Promise<void> {
-  const previous = await readRememberedWorkspaces(filePath);
-  const roots = previous ? [...previous.roots] : [];
-  if (!roots.includes(path)) {
-    roots.push(path);
-  }
-  await writeMemoryFile({ roots, active: path }, filePath);
+  return serializeMemoryTask(filePath, async () => {
+    const previous = await readRememberedWorkspaces(filePath);
+    const roots = previous ? [...previous.roots] : [];
+    if (!roots.includes(path)) {
+      roots.push(path);
+    }
+    await writeMemoryFile({ roots, active: path }, filePath);
+  });
 }
 
 /**
@@ -154,17 +190,19 @@ export async function forgetWorkspace(
   path: string,
   filePath: string = workspaceMemoryPath(),
 ): Promise<void> {
-  const previous = await readRememberedWorkspaces(filePath);
-  if (!previous) {
-    return;
-  }
-  const roots = previous.roots.filter((root) => root !== path);
-  if (roots.length === 0) {
-    await writeMemoryFile({ roots: [], active: null }, filePath);
-    return;
-  }
-  const active = previous.active === path ? (roots[0] ?? null) : previous.active;
-  await writeMemoryFile({ roots, active }, filePath);
+  return serializeMemoryTask(filePath, async () => {
+    const previous = await readRememberedWorkspaces(filePath);
+    if (!previous) {
+      return;
+    }
+    const roots = previous.roots.filter((root) => root !== path);
+    if (roots.length === 0) {
+      await writeMemoryFile({ roots: [], active: null }, filePath);
+      return;
+    }
+    const active = previous.active === path ? (roots[0] ?? null) : previous.active;
+    await writeMemoryFile({ roots, active }, filePath);
+  });
 }
 
 /**

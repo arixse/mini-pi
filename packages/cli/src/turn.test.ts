@@ -9,6 +9,8 @@ import { visibleToolRegistry } from "@minipi/core/run";
 import { SUBAGENT_TOOL_NAME } from "@minipi/core/agent/subagent";
 import { ToolRegistry } from "@minipi/core/agent/tools/registry";
 import { createTextContent } from "@minipi/core/agent/message";
+import type { LlmModel } from "@minipi/core/agent/model";
+import type { AssistantMessage, ToolCallContent } from "@minipi/core/shared/protocol";
 import { createFakeStatus, createMockModel, makeReplOptions } from "./testRepl";
 import { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
 import { createUsageTracker } from "@minipi/core/agent/usage";
@@ -331,6 +333,86 @@ describe("runAgentTurn（回合编排）", () => {
     assert.ok(
       fake.states.some((state) => state.kind === "compacting"),
       "压缩可能静默数秒，必须先给可见状态",
+    );
+  });
+
+  /**
+   * 压缩要写一条 compaction 条目；磁盘满 / 文件不可写时它会抛错。
+   * 此时本轮消息**已经落盘**，钩子再抛错就会被循环当成"整批没写成功"，
+   * 下一轮把同一批消息重投一遍——会话文件里出现两份 assistant 与 toolResult。
+   */
+  it("压缩失败不应让已落盘的消息在下一轮被重投（不重）", async () => {
+    const { store, options, deps } = makeDeps();
+
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "echo",
+      description: "echo",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [createTextContent("tool result")] };
+      },
+    });
+    options.toolRegistry = registry;
+
+    // 压缩始终"需要"；第一次（回合开始）放弃，第二次（onTurnEnd）模拟
+    // "摘要成功但写压缩条目失败"。
+    store.needsCompaction = () => true;
+    let compactions = 0;
+    store.compactIfNedded = async () => {
+      compactions += 1;
+      if (compactions === 2) {
+        throw new Error("disk full");
+      }
+      return undefined;
+    };
+
+    const toolCall: ToolCallContent = {
+      type: "toolCall",
+      id: "c1",
+      name: "echo",
+      arguments: {},
+    };
+    const responses: AssistantMessage[] = [
+      {
+        role: "assistant",
+        content: [toolCall],
+        stopReason: "toolUse",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [createTextContent("done")],
+        stopReason: "stop",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        timestamp: Date.now(),
+      },
+    ];
+    const model: LlmModel = {
+      async complete() {
+        return responses.shift()!;
+      },
+    };
+
+    const memory = createMemorySink();
+    configureLogger({ sink: memory.sink, level: "warn" });
+    const captured = capture();
+    try {
+      await runAgentTurn("开始", { ...deps, model });
+    } finally {
+      captured.restore();
+      resetLogger();
+    }
+
+    const messages = store.getEntries().filter((entry) => entry.type === "message");
+    // 1 条 user + 工具调用 assistant + toolResult + 最终 assistant
+    assert.strictEqual(messages.length, 4, "压缩失败不能让同一批消息被写两遍");
+    assert.ok(
+      memory.entries.some(
+        (entry) => entry.level === "warn" && String(entry.message).includes("压缩失败"),
+      ),
+      "压缩失败必须留日志，不能静默",
     );
   });
 

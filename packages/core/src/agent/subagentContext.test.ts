@@ -5,6 +5,7 @@ import { createTextContent } from "./message";
 import { estimateTokens } from "./sessionStore";
 import {
   DEFAULT_SUBAGENT_CONTEXT_TOKENS,
+  advanceSubAgentContext,
   compactSubAgentMessages,
 } from "./subagent";
 
@@ -135,5 +136,31 @@ describe("compactSubAgentMessages", () => {
 
   it("默认预算足够宽松，不会一上来就裁", () => {
     assert.ok(DEFAULT_SUBAGENT_CONTEXT_TOKENS >= 16_000);
+  });
+});
+
+describe("advanceSubAgentContext", () => {
+  it("裁剪结果成为下一轮基准，liveContext 不会无限增长", () => {
+    // 每轮 2 条消息（toolCall + toolResult）；如果不把裁剪结果写回基准，
+    // 20 轮后 liveContext 会是 41 条，且每轮都对同一段历史重复裁剪。
+    let live = [user("找出 payment.ts 里的并发问题")];
+    for (let i = 1; i <= 20; i += 1) {
+      live = advanceSubAgentContext(live, readTurn(i, "y".repeat(500)), 1_000).context;
+    }
+
+    assert.ok(live.length <= 9, `liveContext 应保持有界，实际 ${live.length} 条`);
+    assert.strictEqual(live[0].role, "user");
+    const headText = (live[0].content[0] as { text: string }).text;
+    assert.ok(headText.includes("上下文已裁剪"), "摘要必须进入下一轮基准");
+    assert.ok(headText.includes("payment.ts"), "goal 仍然保留");
+  });
+
+  it("未超预算时原样累加，不丢任何消息", () => {
+    const goal = user("goal");
+    const step = advanceSubAgentContext([goal], readTurn(1, "x"), 100_000);
+
+    assert.strictEqual(step.compacted, undefined);
+    assert.strictEqual(step.context.length, 3);
+    assert.deepStrictEqual(step.context[0], goal);
   });
 });

@@ -102,6 +102,41 @@ describe("private-json-file", () => {
       assert.ok(!content.includes("old"), "不应残留旧内容");
     });
 
+    it("并发写入同一路径时，最后一次调用稳定胜出且临时文件不撞名", async () => {
+      // 同一进程里的两次保存（例如同时改模型与上下文窗口）会落到同一个
+      // `${file}.${pid}.tmp`：一个 rename 走在另一个 writeFile 中间时，
+      // 落盘的是彼此的半截内容，JSON 直接解析失败。
+      const payloads = Array.from({ length: 20 }, (_, index) => ({
+        seq: index,
+        blob: "x".repeat(1_000),
+      }));
+
+      await Promise.all(
+        payloads.map((payload) => writePrivateJsonFileAtomic(filePath, payload, 4242)),
+      );
+
+      assert.deepStrictEqual(
+        JSON.parse(readFileSync(filePath, "utf-8")),
+        payloads[payloads.length - 1],
+        "排队后最后一次调用必须胜出",
+      );
+      assert.deepStrictEqual(
+        readdirSync(testDir).filter((name) => name.endsWith(".tmp")),
+        [],
+        "并发写入也不能留下临时文件",
+      );
+    });
+
+    it("一次写入失败不会阻塞后续写入", async () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+
+      await assert.rejects(() => writePrivateJsonFileAtomic(filePath, circular, 4242));
+
+      await writePrivateJsonFileAtomic(filePath, { after: true }, 4242);
+      assert.deepStrictEqual(JSON.parse(readFileSync(filePath, "utf-8")), { after: true });
+    });
+
     it("序列化失败时抛错，且原有文件保持不变、临时文件被清理", async () => {
       writeFileSync(filePath, JSON.stringify({ keep: true }), "utf-8");
 

@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   WORKSPACE_MEMORY_FILE,
   fileWorkspaceMemory,
@@ -51,6 +51,51 @@ describe("readRememberedWorkspaces", () => {
       assert.ok(remembered);
       assert.deepStrictEqual(remembered.roots, ["D:\\projects\\mini-pi", "D:\\other"]);
       assert.strictEqual(remembered.active, "D:\\other");
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("并发 remember 不会互相覆盖列表（读改写必须串行）", async () => {
+    const memory = tempMemory();
+    try {
+      // 三个调用几乎同时读到"没有文件"，各自写出只含自己的列表——
+      // 后写者会把前两者整个覆盖，"刚打开的工作区下次启动不见了"。
+      await Promise.all([
+        rememberWorkspace("D:\\projects", memory.file),
+        rememberWorkspace("D:\\other", memory.file),
+        rememberWorkspace("D:\\third", memory.file),
+      ]);
+
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\projects", "D:\\other", "D:\\third"]);
+      assert.strictEqual(remembered.active, "D:\\third");
+      assert.deepStrictEqual(
+        readdirSync(dirname(memory.file)).filter((name) => name.endsWith(".tmp")),
+        [],
+        "并发写入不能留下临时文件",
+      );
+    } finally {
+      memory.cleanup();
+    }
+  });
+
+  it("并发的 remember 与 forget 串行执行，不产生残影", async () => {
+    const memory = tempMemory();
+    try {
+      await rememberWorkspace("D:\\a", memory.file);
+      await rememberWorkspace("D:\\b", memory.file);
+
+      await Promise.all([
+        rememberWorkspace("D:\\c", memory.file),
+        forgetWorkspace("D:\\a", memory.file),
+      ]);
+
+      const remembered = await readRememberedWorkspaces(memory.file);
+      assert.ok(remembered);
+      assert.deepStrictEqual(remembered.roots, ["D:\\b", "D:\\c"]);
+      assert.strictEqual(remembered.active, "D:\\c");
     } finally {
       memory.cleanup();
     }
