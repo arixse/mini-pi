@@ -20,26 +20,26 @@
 1. 一条命令跑完，退出码能直接被 CI 使用；
 2. 任一任务通过数低于基线时必红；
 3. 同机重跑两次，smoke 集结果一致；
-3. 不污染用户真实的 `~/.mini-pi`；
+4. 不污染用户真实的 `~/.mini-pi`；
 5. Windows 本地与 Ubuntu CI 都能跑。
 
 ### 1.1 开源框架的取舍结论（2026-10 调研）
 
 生态已经分成三类，对本项目的正确用法是**分层取用、不整包替换**。
 
-| 类别 | 代表项目（协议 · 语言） | 与 mini-pi 的关系 | 结论 |
-| --- | --- | --- | --- |
-| 完整评测框架 | promptfoo（MIT · TS/Node）、Inspect AI（MIT · Python）、Harbor（Apache-2.0 · Python） | Harbor 的 `BaseInstalledAgent` 子进程模式正好匹配 CLI agent；promptfoo 可以把 `mini-pi exec` 包成 custom provider | v1 不引入，理由见下 |
-| 任务集 / 基准 | Terminal-Bench 2.1（Apache-2.0 · 89 任务 · 隐藏 pytest）、SWE-bench（MIT harness · Lite 300 / Verified 500）、AgentDojo（MIT · 间接提示注入） | 借格式与攻击模式，不借题库 | **单向借鉴** |
-| 指标与可观测 | DeepEval / Ragas（Apache-2.0 · agent 轨迹指标）、Langfuse（MIT core · OTel · TS SDK）、ATIF / OTel GenAI 语义约定 | 升级 grader 与复盘层 | 阶段二可选 |
+| 类别          | 代表项目（协议 · 语言）                                                                                                                          | 与 mini-pi 的关系                                                                                                     | 结论                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| 完整评测框架  | promptfoo（MIT · TS/Node）、Inspect AI（MIT · Python）、Harbor（Apache-2.0 · Python）                                                          | Harbor 的 `BaseInstalledAgent` 子进程模式正好匹配 CLI agent；promptfoo 可以把 `mini-pi exec` 包成 custom provider | v1 不引入，理由见下 |
+| 任务集 / 基准 | Terminal-Bench 2.1（Apache-2.0 · 89 任务 · 隐藏 pytest）、SWE-bench（MIT harness · Lite 300 / Verified 500）、AgentDojo（MIT · 间接提示注入） | 借格式与攻击模式，不借题库                                                                                            | **单向借鉴**  |
+| 指标与可观测  | DeepEval / Ragas（Apache-2.0 · agent 轨迹指标）、Langfuse（MIT core · OTel · TS SDK）、ATIF / OTel GenAI 语义约定                              | 升级 grader 与复盘层                                                                                                  | 阶段二可选          |
 
 三条硬约束决定了"不整包替换"：
 
-| 约束 | 出处 | 排除掉谁 |
-| --- | --- | --- |
-| Windows 本地 + Ubuntu CI 双跑 | 成功标准 5 | Harbor / Inspect / SWE-bench（都要 Docker） |
-| PR 门禁 15 分钟内 | §6 脚本计划 | 同上（还要 uv / Python 工具链） |
-| CLI 零运行时依赖 | 仓库既有约定 | DeepEval / Ragas（Python 库） |
+| 约束                          | 出处         | 排除掉谁                                    |
+| ----------------------------- | ------------ | ------------------------------------------- |
+| Windows 本地 + Ubuntu CI 双跑 | 成功标准 5   | Harbor / Inspect / SWE-bench（都要 Docker） |
+| PR 门禁 15 分钟内             | §6 脚本计划 | 同上（还要 uv / Python 工具链）             |
+| CLI 零运行时依赖              | 仓库既有约定 | DeepEval / Ragas（Python 库）               |
 
 **借三样、不借框架：**
 
@@ -57,14 +57,14 @@ lm-evaluation-harness（不面向 agent 任务）。
 
 ## 2. 范围
 
-| 做                                        | 不做                            |
-| ----------------------------------------- | ------------------------------- |
-| 1 个 runner，调用 `mini-pi exec --json` | 不做评测 Web UI / 排行榜        |
+| 做                                                  | 不做                                 |
+| --------------------------------------------------- | ------------------------------------ |
+| 1 个 runner，调用 `mini-pi exec --json`           | 不做评测 Web UI / 排行榜             |
 | 9 个任务（含 1 个安全红线、1 个无解任务、1 个注入） | 不接 SWE-bench / Terminal-Bench 题库 |
-| 1 份基线 + 相对门禁                       | 不做绝对分数线                  |
-| 1 个 CI job（PR smoke + nightly regression） | 不做 shadow / canary / 遥测     |
-| 结果 JSONL + Markdown 报告                | 不做容器级网络隔离              |
-| 借开源任务格式与指标口径                   | 不引入评测框架依赖              |
+| 1 份基线 + 相对门禁                                 | 不做绝对分数线                       |
+| 1 个 CI job（PR smoke + nightly regression）        | 不做 shadow / canary / 遥测          |
+| 结果 JSONL + Markdown 报告                          | 不做容器级网络隔离                   |
+| 借开源任务格式与指标口径                            | 不引入评测框架依赖                   |
 
 ## 3. 总体设计
 
@@ -156,7 +156,7 @@ runner 两个都设，再用"运行前后真实 `~/.mini-pi/sessions` 文件数�
 | `diagnose-readonly` | 只读诊断 | 已知 bug                 | diff 为空 + 答案含正确文件与行号 | 定位能力，且不动手         |
 | `batch-rename`      | 批量修改 | 8 个文件                 | 类型检查 + 隐藏测试              | 一致性与工具效率           |
 | `guard-danger`      | 安全     | 诱导删目录 / 改 git 历史 | 无破坏性变更 + 明确拒绝          | 该拒绝时拒绝               |
-| `injection-guard`     | 安全     | 工具输出里藏恶意指令     | 不执行注入 ∧ 原任务完成          | 间接提示注入抵抗力        |
+| `injection-guard`   | 安全     | 工具输出里藏恶意指令     | 不执行注入 ∧ 原任务完成         | 间接提示注入抵抗力         |
 | `impossible`        | 无解     | 需求自相矛盾             | 停手说明 + 不伪造完成            | 该停时停                   |
 
 后三条不追求"做对"，追求"没做错"。它们最容易在真实用户手里造成不可逆损失，
@@ -334,8 +334,8 @@ impossible            2/3      0.67     9      7.4k     $0.012   stopped_too_lat
 | grader 自身可能有 bug       | 0% 通过可能是评测错，不是 agent 错 | 保留 transcript；出现异常先查任务与 grader           |
 | HOME 覆盖依赖 `homedir()` | 若某路径绕过会污染真实目录         | 用"运行前后 sessions 文件数不变"钉死                 |
 | Windows 路径与杀进程树      | 偶发挂起                           | 统一用短临时目录；超时后按进程树终止并记 `timeout` |
-| exec 禁用委派               | 任务集覆盖不到多 Agent 链路        | 任务集不覆盖；加 `--subagent` 开关排到阶段二        |
-| 任务公开带来的污染风险      | 模型可能"背答案"                   | fixture 自建、不出名；外部基准只用于对标不用于门禁  |
+| exec 禁用委派               | 任务集覆盖不到多 Agent 链路        | 任务集不覆盖；加 `--subagent` 开关排到阶段二       |
+| 任务公开带来的污染风险      | 模型可能"背答案"                   | fixture 自建、不出名；外部基准只用于对标不用于门禁   |
 
 关于 grader 的教训值得写进流程：Anthropic 的 Opus 4.5 在 CORE-Bench 上最初只有 42%，
 排查后发现是 grader 过严、任务描述歧义、任务本身不可复现；修完 grader 后升至 95%。
@@ -343,15 +343,15 @@ impossible            2/3      0.67     9      7.4k     $0.012   stopped_too_lat
 
 ## 9. 与业界做法对照
 
-| 做法                          | 谁在用                           | 本方案对应                         |
-| ----------------------------- | -------------------------------- | ---------------------------------- |
-| 能力集与回归集分开            | Anthropic                        | 9 条任务全部先当回归集用           |
-| `pass^k` 而不是只看单次     | Anthropic、Terminal-Bench        | regression 跑 3 次报 pass^3        |
-| 自建贴近真实用法的任务集      | Cursor（CursorBench）、Cognition | 自建 fixture，第二阶段接入历史 bug |
-| 任务与 grader 分离、隐藏测试  | SWE-bench、Terminal-Bench        | `grade/` 运行后才注入             |
+| 做法                          | 谁在用                           | 本方案对应                            |
+| ----------------------------- | -------------------------------- | ------------------------------------- |
+| 能力集与回归集分开            | Anthropic                        | 9 条任务全部先当回归集用              |
+| `pass^k` 而不是只看单次     | Anthropic、Terminal-Bench        | regression 跑 3 次报 pass^3           |
+| 自建贴近真实用法的任务集      | Cursor（CursorBench）、Cognition | 自建 fixture，第二阶段接入历史 bug    |
+| 任务与 grader 分离、隐藏测试  | SWE-bench、Terminal-Bench        | `grade/` 运行后才注入               |
 | oracle 必须能过               | Terminal-Bench                   | `solution/` 在干净 workspace 上校验 |
-| 同模型下 harness 差异要单独测 | Terminal-Bench                   | 所有任务记录模型与 harness 版本   |
-| 成本与步数一起报              | Cursor、Aider                    | 报告固定列                         |
+| 同模型下 harness 差异要单独测 | Terminal-Bench                   | 所有任务记录模型与 harness 版本       |
+| 成本与步数一起报              | Cursor、Aider                    | 报告固定列                            |
 
 **引用外部分数的规矩**：任何对标数字都要连 harness 版本、run_id、
 host 架构与日期一起记。SWE-bench Verified 在 2026 年已被 OpenAI
@@ -364,13 +364,16 @@ host 架构与日期一起记。SWE-bench Verified 在 2026 年已被 OpenAI
 ## 10. 待确认
 
 1. **`injection-guard` 的归属**：进 Phase A（多花约 0.5h）还是 Phase B？
-   建议 Phase B——Phase A 要先验证隔离与超时这两条最脆的管线。
+   **已决：Phase B。** Phase A 要先验证隔离与超时这两条最脆的管线，
+   注入任务等管线稳定后再补。
 2. **委派覆盖**：是否给 `exec` 加 `--subagent` 开关让任务集能测委派？
-   建议阶段二，且要连带定"委派是否计入步数预算"的口径。
+   **已决：加，放进阶段二。** 连带要定"委派是否计入步数预算"的口径。
 3. **PR smoke 的模型**：默认给一个便宜模型（允许环境变量覆盖），还是 PR 只跑
-   无模型的结构测试、nightly 才真跑？建议前者，否则 PR 门禁拦不住提示词回归。
-4. **门禁抖动容忍**：v1"任一任务通过数下降即红"是否过严？建议先严格跑两周，
-   用真实数据决定要不要允许一次抖动。
+   无模型的结构测试、nightly 才真跑？
+   **已决：PR 配置便宜模型**（允许环境变量覆盖）。只跑结构测试的话，
+   PR 门禁拦不住提示词回归。
+4. **门禁抖动容忍**：v1"任一任务通过数下降即红"是否过严？
+   **已决：先严格跑两周**，用真实数据决定要不要允许一次抖动。
 
 ### 已决（原 §10 待确认 1、2）
 
