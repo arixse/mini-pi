@@ -5,39 +5,51 @@
 
 ## 当前状态
 
-选择火山方舟后，模型列表里**不会再出现官方已下线的型号**。`GET /models`
-会把历史快照一起返回，且响应里没有「是否已下线」字段；`VolcengineProvider.getModelList`
-在「推荐型号置顶 + 去重」之后，再按官方「模型下线公告」清单过滤已到 EOS
-的型号（精确 ID 匹配，未知型号与 `ep-...` 保留）。只到 EOM、尚未到 EOS 的
-公告型号仍会显示（存量接入点还能调用）；账号仍在用的已下线型号可在筛选框
-手填后按 `Ctrl+E` 采用。404 提示、光标停在当前模型等上一轮改动保持不变。
+审计发现的 **8 个高危问题（H1–H8）已全部修复**，落在分支
+`fix/high-severity-audit`，按 5 个逻辑提交组织。每组改动都带回归测试，
+`pnpm check` 全绿（最近一次覆盖率 all files 97.62 / 91.02 / 93.25）。
 
-- 状态：分支 `fix/volcengine-retired-models` 上完成，`pnpm check` 全绿
-  （2246 tests / 2243 pass / 0 fail / 3 skipped；新增模块覆盖率 100%）
-- 单元测试：已知 / 未知型号识别、大小写与 `/` `.` 分隔符归一化、EOS 当天
-  零点边界、尚未 EOS 不提前隐藏、重复型号取最早 EOS、精确匹配不误删前缀、
-  清单本身（日期合法、ID 无空白、同批不重复）
-- 集成测试：方舟合并列表过滤已下线型号，保留在售 / 未知 / `ep-...`；
-  推荐型号仍排在最前；接口失败仍抛错
-- 端到端验证：`login-model.test.ts` 启动本地 HTTP 服务模拟方舟 `/models`
-  （已下线型号排在最前），经由真实 `VolcengineProvider` +
-  `ModelProviderService` + `handleModel` 只按一次回车，断言写回
-  `volcengine/doubao-seed-evolving`，且终端渲染里不再出现
-  `doubao-lite-128k-240428`
+- 状态：分支上完成，尚未合入 / 推送 `main`（`main` 本地领先 `origin/main` 11 个提交）
+- 单元测试：审批串行化、路径与凭据守卫、压缩 stopReason、残行截断、
+  Anthropic 同角色合并、空回复、HTTP 来源校验、runId 随机后缀
+- 集成测试：`app.test.ts` 真起服务验证缺 Host / `Origin: null` /
+  端口不一致一律 403；`serveArgs` 拒绝非回环 `--host`
+- 端到端验证：`pnpm check` 全绿；缺 Host 用 HTTP/1.0 原始 socket 验证
+  应用层确实拒绝（HTTP/1.1 由 Node 自己回 400，到不了应用层）
 
 ## 已完成
 
-- `packages/core/src/provider/volcengine-retired.ts`：新增官方下线清单
-  （2024 第一批 ~ 2026 第十批，共 12 批，含提前下线型号）；提供
-  `normalizeVolcengineModelId`、`getVolcengineRetirement`、
-  `isVolcengineModelRetired`、`filterRetiredVolcengineModels`
-- `packages/core/src/provider/volcengine.ts`：`getModelList` 在合并默认列表
-  与接口结果后过滤已下线型号；接口失败仍原样抛出
-- 测试：`volcengine-retired.test.ts`、`volcengine.test.ts`、
-  `login-model.test.ts`
-- 文档：`docs/providers.md` §9（下线清单来源与维护口径、EOS 口径）、
-  `docs/cli-commands.md` §5.4（列表过滤 + 手填兜底）、`README.md`；
-  `DECISIONS.md` 记录本轮取舍
+- **H1 审批串行化**（`packages/cli/src/approval.ts`、`repl.ts`）：
+  readline 的 `question()` 不可重入，并发工具审批会让第二个确认永远等不到回调。
+  用 promise 链把 `policy.confirm` 串起来（执行本身仍并发），新增 `isCancelled`，
+  Ctrl+C 后排队中的确认直接按拒绝收尾。
+- **H2 bash 守卫**（`packages/core/src/agent/tools/workspace.ts`、`risk.ts`）：
+  补 Windows 盘符相对（`C:secret.txt`，跨盘才逃逸）与盘根相对（`\Windows\x`）；
+  HOME 变量名单扩到 `HOME/USERPROFILE/HOMEPATH/HOMEDRIVE/APPDATA/LOCALAPPDATA/TEMP/TMP/TMPDIR`，
+  认 `${HOME}` 与 `$env:X`；凭据扫描改用词法切分（`.e"nv"` 不再漏），
+  通配符形式（`del .env*`）按剥掉通配符后的名字判定；风险评估补
+  `rd /s`、`del /s /q`、`Remove-Item -Recurse`、`format X:`、`diskpart` /
+  `bcdedit` / `vssadmin`、`reg delete`。
+- **H3 路径与凭据**（同文件）：`resolveInsideWorkspace` 拒绝 Windows ADS
+  （`.npmrc::$DATA`），`assertNotCredentialFile` 解析真实路径后再判一次，
+  symlink 别名不再免检。
+- **H4 压缩摘要**（`sessionStore.ts`）：`summarizeEntries` 先看 `stopReason`
+  再看正文，`error` / `length` / `aborted` 一律放弃本次压缩；空白正文同样按失败处理。
+  失败原因仍写进 `lastCompactionError` 供 `/status` 展示。
+- **H5 会话残行**（同文件）：加载时收拾文件末尾残行——完整行补换行，
+  写了一半的行从文件里截掉并记警告，避免下一次 append 与残行粘成一行吞掉新消息。
+- **H6 Anthropic 消息序列**（`model/anthropic.ts`）：`convertMessages` 末尾
+  合并相邻同角色消息，user 消息里把 `tool_result` 排在最前。修复并行工具调用
+  产生连续 user 被接口 400 的问题。
+- **H7 空回复**（`loop.ts`）：`completeAssistantMessage` 拦截空 `content`
+  （`aborted` 除外），转成带可读原因的错误消息并补发 delta，不再静默入上下文 / 落盘。
+- **H8 HTTP 安全**（`client/src/server/http.ts`、`serveArgs.ts`、`app.ts`）：
+  Host 必须存在且为回环；`Origin: null`、Origin 与 Host 端口不一致一律 403；
+  `--host` 只接受 `127.0.0.0/8` / `localhost` / `::1`，解析阶段与
+  `AppServer.start` 双重拦截；`newRunId` 追加 4 字节随机后缀，runId 不可枚举。
+- 文档：`docs/technical-solution.md`（安全模型、路径/凭据守卫）、
+  `docs/session-management.md`（残行处理）、`packages/client/README.md` 与
+  `README.md`（安全表格）同步。
 
 ## 进行中
 
@@ -45,30 +57,35 @@
 
 ## 已知问题
 
-- 下线清单需要跟着官方公告手动追加；官方若发布新批次，列表不会自动更新
-- `/models` 不提供「账号是否开通」字段：未开通的型号仍会显示，选中后可能
-  404，只能靠 404 提示兜底（账号只允许 `ep-...` 时同样要手填）
-- 只按 EOS 隐藏：EOM 后、EOS 前仍显示，因为存量接入点还能调用；如果希望
-  连"停止新购"的型号也隐藏，需要另加一个开关，避免误伤正在使用的账号
-- EOS 判断依赖本机时钟（按 UTC+8 零点），系统时间严重偏差时会提前或延后
-  隐藏
+- 路径与命令守卫都是**尽力而为的静态检查**：`node -e "..."`、变量拼接、
+  编码变换拦不住，最终防线仍是执行前的用户审批
+- Windows 上创建文件 symlink 需要开发者模式或管理员权限，symlink 用例在
+  这类机器上跳过，Linux CI 会真正执行
+- 盘符相对路径只在「该盘存在且与工作区不同盘」时判为逃逸；单盘机器无法构造
+  跨盘用例，测试会自动跳过
+- `--host` 收紧后不再支持局域网直连；跨机访问需要 SSH 隧道
+- 审计里的 14 个中危与工程卫生问题本轮未处理
 
 ## 下一步
 
-- 官方发布新一批下线公告时：追加到 `volcengine-retired.ts`，补一条断言，
-  更新 `docs/providers.md`
-- 若方舟 `/models` 未来返回开通状态 / 下线标记，优先改用服务端字段，
-  本地清单退化为兜底
-- 在真实终端里对 `/model` 冒烟一次：确认列表里看不到已下线型号、
-  `Ctrl+E` 手填 `ep-...` 后能正常写回
+- 合并 `fix/high-severity-audit` 到 `main` 前再跑一次 `pnpm check`，
+  并确认没有与 `main` 新提交的冲突面
+- 按优先级处理审计报告里的中危项（建议先看并发落盘、SSE 游标与工具输出截断）
+- 在真实终端冒烟一次并发审批（同一轮两个 `write_file`）与 Ctrl+C 取消排队确认
+- 在 Linux CI 上确认 symlink 别名用例真正执行且通过
 
-## 上一轮（已完成）：火山方舟模型推荐排序与手填
+## 上一轮（已完成）：火山方舟模型列表过滤已下线型号
 
-`GET /models` 的历史快照混在列表里且顺序不代表可用性，原来一按回车就落到
-已下线的 `doubao-lite-128k-240428`。上一轮把推荐型号固定排在最前
-（`prioritizeModelIds`）、`/model` 光标停在当前模型（`initialIndex`）、
-筛选无命中时 `Ctrl+E` 手填模型 ID / `ep-...`，并给方舟 404 追加可执行提示。
-本轮在此基础上把已下线型号从列表里彻底移除。细节见 `DECISIONS.md`。
+选择方舟后不会再出现官方已下线的型号：`VolcengineProvider.getModelList`
+在推荐排序与去重之后，按官方 EOS 清单过滤，仅到 EOM 的型号保留。
+本地清单见 `packages/core/src/provider/volcengine-retired.ts`，
+细节与取舍见 `DECISIONS.md`。
+
+## 更早（已完成）：火山方舟推荐排序与 Ctrl+E 手填
+
+把推荐型号固定排在最前（`prioritizeModelIds`）、`/model` 光标停在当前模型
+（`initialIndex`）、筛选无命中时 `Ctrl+E` 手填模型 ID / `ep-...`，并给方舟
+404 追加可执行提示。
 
 ## 更早（已完成）：CLI 大段粘贴折叠
 
