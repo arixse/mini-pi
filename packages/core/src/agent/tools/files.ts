@@ -6,7 +6,17 @@
  */
 
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, relative, sep } from "node:path";
 import { createTextContent } from "../message";
 import { numberArg, stringArg } from "./args";
@@ -112,16 +122,13 @@ async function readLineWindow(
   limit: number,
 ): Promise<LineWindow> {
   const lines: string[] = [];
-  let totalLines = 0;
   let usedChars = 0;
   let cutByChars = false;
   const startIndex = offset - 1;
   /** 窗口已满：后续只需数行，不再切子串 */
   let saturated = false;
 
-  const acceptLine = (raw: string): void => {
-    const index = totalLines;
-    totalLines += 1;
+  const acceptLine = (index: number, raw: string): void => {
     if (saturated || index < startIndex) {
       return;
     }
@@ -148,13 +155,32 @@ async function readLineWindow(
     highWaterMark: 64 * 1024,
   });
   let pending = "";
+  let lineIndex = 0;
+  /**
+   * 全文行数只按"换行符个数 + 末尾是否有未换行的内容"算。
+   *
+   * 旧实现把计数塞在 `acceptLine` 里，与"窗口是否已饱和"共用一套分支：
+   * 窗口饱和后同一块里剩余的行既不会被切出来计数，后面的块又只数换行，
+   * 跨块的残行于是被漏数或重复计数——3000 行的文件可能报成别的数字，
+   * 最后一页的分页提示随之失真。这里让计数与饱和状态彻底解耦：
+   * 每个块只做一次 `indexOf` 扫描，跨块与末尾残行都只有一套口径。
+   */
+  let totalLines = 0;
+  let sawContent = false;
+  let endsWithNewline = true;
+
   try {
     for await (const chunk of stream) {
+      if (chunk.length > 0) {
+        sawContent = true;
+        endsWithNewline = chunk.endsWith("\n");
+      }
+      for (let nl = chunk.indexOf("\n"); nl !== -1; nl = chunk.indexOf("\n", nl + 1)) {
+        totalLines += 1;
+      }
+
       // 窗口满了就只数换行，连字符串拼接都省掉
       if (saturated) {
-        for (let nl = chunk.indexOf("\n"); nl !== -1; nl = chunk.indexOf("\n", nl + 1)) {
-          totalLines += 1;
-        }
         continue;
       }
 
@@ -165,7 +191,8 @@ async function readLineWindow(
         if (nl === -1) {
           break;
         }
-        acceptLine(pending.slice(start, nl));
+        acceptLine(lineIndex, pending.slice(start, nl));
+        lineIndex += 1;
         start = nl + 1;
       }
       pending = pending.slice(start);
@@ -176,9 +203,10 @@ async function readLineWindow(
 
   // 末尾没有换行的最后一行
   if (pending.length > 0) {
-    acceptLine(pending);
-  } else if (totalLines > 0 && !saturated) {
-    // 文件以换行结尾：split("\n") 的语义是"末尾换行不算额外一行"，无需处理
+    acceptLine(lineIndex, pending);
+  }
+  if (sawContent && !endsWithNewline) {
+    totalLines += 1;
   }
 
   return { lines, totalLines, cutByChars };
@@ -195,10 +223,36 @@ async function readLineWindow(
  * 失败时尽力清掉，不留垃圾。
  */
 async function writeFileAtomic(filePath: string, content: string): Promise<void> {
-  const temporary = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  /**
+   * 目标可能是符号链接：必须写到链接指向的真实文件，而不是把链接本身
+   * 换成一个普通文件。
+   *
+   * `rename(temp, linkPath)` 不跟随链接，它会**替换链接这个目录项**。
+   * 用户看到 "edited successfully"，被链接的原文件却一个字没变，
+   * 其他指向同一文件的链接也还读着旧内容——这是静默的数据错位。
+   * 同时保留原文件权限：临时文件默认按 umask 建、没有执行位，
+   * rename 之后 `scripts/*.sh` 会变成 "Permission denied"。
+   */
+  let target = filePath;
+  let mode: number | undefined;
   try {
-    await writeFile(temporary, content, "utf8");
-    await rename(temporary, filePath);
+    const info = await stat(filePath);
+    mode = info.mode & 0o777;
+    target = await realpath(filePath);
+  } catch {
+    // 新文件：沿用默认权限
+  }
+
+  const temporary = `${target}.${process.pid}.${Date.now().toString(36)}.${Math.random()
+    .toString(36)
+    .slice(2, 8)}.tmp`;
+  try {
+    await writeFile(temporary, content, mode === undefined ? "utf8" : { encoding: "utf8", mode });
+    if (mode !== undefined) {
+      // writeFile 的 mode 会被 umask 削掉，显式 chmod 才是"原样保留"
+      await chmod(temporary, mode);
+    }
+    await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {
       /* 清理失败不掩盖原始错误 */

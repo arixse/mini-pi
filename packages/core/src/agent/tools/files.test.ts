@@ -1,6 +1,15 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { MAX_READ_BYTES, MAX_READ_CHARS, MAX_READ_LINES } from "./files";
 import { createToolRegistry } from "./registry";
@@ -93,6 +102,59 @@ describe("文件类工具（read_file / write_file / edit_file）", () => {
         [],
         "原子写的临时文件必须被 rename 走，不能留在工作区里",
       );
+    });
+
+    /**
+     * 目标是符号链接时，`rename(temp, link)` 会把链接本身替换成普通文件，
+     * 而用户被告知"编辑成功"，链接指向的原文件却一个字没变。
+     */
+    it("编辑符号链接改动真实目标，且链接本身保持不变", async (t) => {
+      const real = join(testDir, "real.txt");
+      const link = join(testDir, "link.txt");
+      writeFileSync(real, "before", "utf8");
+      try {
+        symlinkSync("real.txt", link);
+      } catch {
+        // Windows 默认不允许普通用户创建符号链接（EPERM），Linux CI 会真正执行
+        t.skip("当前环境无法创建符号链接");
+        return;
+      }
+      const registry = createToolRegistry(testDir);
+
+      await registry.execute("edit_file", {
+        path: "link.txt",
+        oldText: "before",
+        newText: "after",
+      });
+
+      assert.strictEqual(readFileSync(real, "utf8"), "after", "真实目标必须被改写");
+      assert.strictEqual(readFileSync(link, "utf8"), "after", "通过链接也要读到新内容");
+      assert.ok(lstatSync(link).isSymbolicLink(), "链接本身不能被替换成普通文件");
+      assert.deepStrictEqual(
+        readdirSync(testDir).filter((name) => name.endsWith(".tmp")),
+        [],
+        "临时文件不能残留",
+      );
+    });
+
+    it("覆盖已有文件时保留原权限位（可执行脚本仍是可执行的）", async (t) => {
+      if (process.platform === "win32") {
+        // Windows 没有 POSIX 权限位，chmod 只影响只读属性
+        t.skip("Windows 不保留 POSIX 权限位");
+        return;
+      }
+      const script = join(testDir, "run.sh");
+      writeFileSync(script, "#!/bin/sh\necho 1\n", { mode: 0o755 });
+      chmodSync(script, 0o755);
+      const registry = createToolRegistry(testDir);
+
+      await registry.execute("write_file", {
+        path: "run.sh",
+        content: "#!/bin/sh\necho 2\n",
+      });
+
+      assert.strictEqual(readFileSync(script, "utf8"), "#!/bin/sh\necho 2\n");
+      assert.strictEqual(statSync(script).mode & 0o777, 0o755, "rename 不能丢掉执行位");
     });
 
     it("should create parent directories", async () => {
@@ -335,6 +397,43 @@ describe("文件类工具（read_file / write_file / edit_file）", () => {
       assert.strictEqual(details.truncated, true);
       assert.ok(result.content[0].text.startsWith("row-1500\nrow-1501"));
       assert.ok(result.content[0].text.includes("文件共 3000 行"));
+    });
+
+    it("跨 64KB 块的残行也要算准总行数", async () => {
+      // 每行约 38 字节 × 3000 行 ≈ 114KB：64KB 的块边界正好落在某一行中间，
+      // 而窗口在前 10 行就饱和。旧实现把"逐块数换行"和"窗口内切行"两套
+      // 计数耦合在一起，饱和之后剩余块里的行会被漏数/重复计数，
+      // 分页提示因此失真（最后一页还谎称"可以继续翻页"）。
+      const rows = Array.from(
+        { length: 3_000 },
+        (_, i) => `row-${String(i + 1).padStart(4, "0")}-${"x".repeat(28)}`,
+      );
+      const registry = createToolRegistry(testDir);
+
+      // 末尾无换行：靠"最后一行没有换行符"补一行
+      writeFileSync(join(testDir, "chunked.txt"), rows.join("\n"), "utf8");
+      const noTrailing = await registry.execute("read_file", {
+        path: "chunked.txt",
+        offset: 2_991,
+        limit: 10,
+      });
+      const noTrailingDetails = noTrailing.details as Record<string, unknown>;
+
+      assert.strictEqual(noTrailingDetails.totalLines, 3_000);
+      assert.strictEqual(noTrailingDetails.returnedTo, 3_000);
+      assert.strictEqual(noTrailingDetails.truncated, false, "最后一页不应再提示可翻页");
+
+      // 末尾有换行：换行数即行数，不能因为跨块再 +1
+      writeFileSync(join(testDir, "chunked-nl.txt"), `${rows.join("\n")}\n`, "utf8");
+      const trailing = await registry.execute("read_file", {
+        path: "chunked-nl.txt",
+        offset: 2_991,
+        limit: 10,
+      });
+      const trailingDetails = trailing.details as Record<string, unknown>;
+
+      assert.strictEqual(trailingDetails.totalLines, 3_000);
+      assert.strictEqual(trailingDetails.truncated, false);
     });
 
     it("应接受字符串形式的 offset/limit（模型常这么传）", async () => {

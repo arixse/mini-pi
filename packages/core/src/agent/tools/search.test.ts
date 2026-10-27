@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   MAX_GLOB_RESULTS,
   MAX_GREP_MATCHES,
+  MAX_GREP_TEST_CHARS,
   MAX_LIST_DEPTH,
   MAX_LIST_ENTRIES,
 } from "./search";
@@ -259,6 +260,47 @@ describe("检索类工具（list_files / glob / grep）", () => {
       assert.strictEqual(details.count, MAX_GREP_MATCHES);
       assert.strictEqual(details.truncated, true);
       assert.ok(result.content[0].text.includes("已截断"));
+    });
+
+    /**
+     * `(a+)+` 这类嵌套量词在恶意/误写输入上会灾难性回溯，同步占住事件循环，
+     * 连 abort 都送不进来。直接拒绝并给出改写建议，比跑几分钟再超时好。
+     */
+    it("拒绝嵌套量词，但不误伤普通分组量词", async () => {
+      writeFileSync(join(testDir, "a.txt"), "abab\n", "utf8");
+      const registry = createToolRegistry(testDir);
+
+      await assert.rejects(
+        () => registry.execute("grep", { pattern: "(a+)+" }),
+        { message: /nested quantifiers/ },
+      );
+      await assert.rejects(
+        () => registry.execute("grep", { pattern: "(\\w+\\s*)*" }),
+        { message: /nested quantifiers/ },
+      );
+
+      const normal = await registry.execute("grep", { pattern: "(ab)+" });
+      assert.strictEqual((normal.details as Record<string, unknown>).count, 1);
+    });
+
+    /**
+     * 压成一行的文件（minified bundle、锁文件）动辄几十万字符。截断参与匹配的
+     * 前缀是有意的取舍，但必须在结果里说出来，不能让模型以为整行都搜过了。
+     */
+    it("超长行只匹配前 4096 字符，并明确提示后半段未搜", async () => {
+      const long = `${"x".repeat(MAX_GREP_TEST_CHARS + 200)}target`;
+      writeFileSync(join(testDir, "minified.js"), `${long}\n`, "utf8");
+      writeFileSync(join(testDir, "short.js"), "target\n", "utf8");
+      const registry = createToolRegistry(testDir);
+
+      const result = await registry.execute("grep", { pattern: "target" });
+      const details = result.details as Record<string, unknown>;
+      const text = result.content[0].text;
+
+      assert.strictEqual(details.count, 1, "后半段未参与匹配，不能算命中");
+      assert.ok(text.includes("short.js:1: target"));
+      assert.ok(text.includes(`超过 ${MAX_GREP_TEST_CHARS} 字符`), "必须说明超长行被截断");
+      assert.ok(text.includes("只搜索了每行前"), "必须说明只搜了前段");
     });
 
     it("无匹配时给出明确提示", async () => {

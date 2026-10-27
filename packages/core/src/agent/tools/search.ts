@@ -42,6 +42,35 @@ const MAX_SEARCH_DEPTH = 12;
 const MAX_GREP_FILE_BYTES = 1_000_000;
 /** grep 单行展示长度 */
 const MAX_GREP_LINE_CHARS = 200;
+/**
+ * 单行参与正则匹配的最大字符数。
+ *
+ * 压成一行的大文件（minified bundle、锁文件、base64）动辄几十万字符，
+ * 而 `regexp.test()` 是同步的：一旦回溯爆炸，事件循环被占住，连 abort 都
+ * 送不进来。截断参与匹配的前缀能把这部分风险压到有界，同时在结果里
+ * 明确告知"有些行只搜了前半段"。
+ */
+export const MAX_GREP_TEST_CHARS = 4_096;
+
+/**
+ * 嵌套量词（`(a+)+`、`(\w+\s*)*`）是灾难性回溯最常见的形状。
+ *
+ * 这不是完整的正则安全检查器，只挡最经典的一类：对它们直接报错，
+ * 让模型换一种写法，比在用户机器上跑几分钟甚至卡死进程要好。
+ * 叠加单行长度上限，非嵌套但仍有回溯的写法也被限制在有界输入上。
+ */
+const NESTED_QUANTIFIER = /\((?:[^()]|\([^()]*\))*[+*](?:[^()]|\([^()]*\))*\)\s*(?:\+|\*|\{\d+,\d*\})/;
+
+/** @throws 正则包含嵌套量词时抛出可读错误 */
+export function assertSafeRegexSource(source: string): void {
+  if (NESTED_QUANTIFIER.test(source)) {
+    throw new Error(
+      "Refusing to run a regular expression with nested quantifiers " +
+        "(for example `(a+)+`): it can backtrack catastrophically and freeze the process. " +
+        "请改写成不含嵌套量词的等价写法，或拆成多次更精确的搜索。",
+    );
+  }
+}
 
 /**
  * 工作区忽略规则：内置依赖/产物目录 + 根目录 .gitignore。
@@ -247,6 +276,7 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
 
       let regexp: RegExp;
       try {
+        assertSafeRegexSource(source);
         regexp = new RegExp(source, args.ignoreCase === true ? "i" : "");
       } catch (error) {
         throw new Error(
@@ -268,6 +298,7 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
       const matches: Array<{ path: string; line: number; text: string }> = [];
       const searchedFiles = new Set<string>();
       let truncated = false;
+      let cappedLines = 0;
 
       const result = await walkEntries(
         root,
@@ -293,6 +324,10 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
 
           const lines = content.split("\n");
           for (let index = 0; index < lines.length; index += 1) {
+            // 逐行让出取消：正则本身是同步的，但至少两行之间能响应 Ctrl+C
+            if (signal?.aborted) {
+              return;
+            }
             if (matches.length >= MAX_GREP_MATCHES) {
               truncated = true;
               break;
@@ -300,7 +335,12 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
             const line = lines[index].endsWith("\r")
               ? lines[index].slice(0, -1)
               : lines[index];
-            if (!regexp.test(line)) {
+            const tested =
+              line.length > MAX_GREP_TEST_CHARS ? line.slice(0, MAX_GREP_TEST_CHARS) : line;
+            if (tested.length < line.length) {
+              cappedLines += 1;
+            }
+            if (!regexp.test(tested)) {
               continue;
             }
             matches.push({
@@ -324,6 +364,12 @@ export function grepTool(workspaceRoot: string): RegisteredTool {
       if (cut) {
         notices.push(
           `...[已截断：匹配过多，仅返回前 ${MAX_GREP_MATCHES} 处。请用更精确的正则或叠加 include]`,
+        );
+      }
+      if (cappedLines > 0) {
+        notices.push(
+          `...[有 ${cappedLines} 行超过 ${MAX_GREP_TEST_CHARS} 字符，只搜索了每行前 ${MAX_GREP_TEST_CHARS} 字符；` +
+            `长行里的后半段可能未命中]`,
         );
       }
       pushSkipNotices(notices, result);
