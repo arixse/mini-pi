@@ -35,6 +35,26 @@ describe("parseServeArgs", () => {
     assert.strictEqual(parsed.args.cwdGiven, true);
   });
 
+  /**
+   * 这个服务没有鉴权：`--host 0.0.0.0` 等于把工作区（读文件、跑命令、点审批）
+   * 交给同一网段的任何人。解析阶段就要拒绝，并给出可照做的替代方案。
+   */
+  it("--host 只接受回环地址", () => {
+    for (const host of ["127.0.0.1", "127.0.0.2", "localhost", "::1"]) {
+      const parsed = parseServeArgs(["--host", host]);
+      assert.strictEqual(parsed.kind, "serve", `${host} 应被接受`);
+    }
+
+    for (const host of ["0.0.0.0", "192.168.1.10", "example.com"]) {
+      const parsed = parseServeArgs(["--host", host]);
+      assert.strictEqual(parsed.kind, "error", `${host} 应被拒绝`);
+      if (parsed.kind === "error") {
+        assert.match(parsed.message, /回环|127\.0\.0\.1/);
+        assert.match(parsed.message, /SSH/, "要给用户一条可照做的替代方案");
+      }
+    }
+  });
+
   it("--port / --host / --isolate / --concurrency 各就各位", () => {
     const parsed = parseServeArgs([
       "--port",

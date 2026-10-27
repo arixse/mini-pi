@@ -24,7 +24,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { createServer, type Server } from "node:http";
 import { HttpError, requireString } from "./errors";
 import { WorkspaceHost, errorMessage, listDirectory, type WorkspaceHostOptions } from "./host";
-import { errorHandler, localGuard, noStore } from "./http";
+import { assertLoopbackHost, errorHandler, localGuard, noStore } from "./http";
 import { EventJournal } from "./journal";
 import { openSse } from "./sse";
 import { isTier, type AppState, type ApprovalAnswer, type ServerEvent, type Tier, type WorkspaceStateView } from "../shared/types";
@@ -317,6 +317,8 @@ export class AppServer {
     await this.activeHost()?.start();
     const port = this.options.port ?? DEFAULT_PORT;
     const host = this.options.host ?? "127.0.0.1";
+    // 没有鉴权的服务只能监听回环：绑定 0.0.0.0 等于把工作区公开给整个网络
+    assertLoopbackHost(host);
     // 不用 `app.listen`：Express 5 把监听回调也当成 error 监听器注册，
     // Windows 上端口冲突时回调会先拿到 EADDRINUSE 被调用一次。这里直接
     // 建 http.Server，错误只走 error 事件，不会出现"先 resolve 再报错"。
@@ -328,8 +330,10 @@ export class AppServer {
     this.server = server;
     const address = server.address();
     const actual = typeof address === "object" && address ? address.port : port;
+    // IPv6 字面量必须加方括号，否则 `http://::1:4788` 不是合法 URL
+    const urlHost = host.includes(":") ? `[${host}]` : host;
     return {
-      url: `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${actual}`,
+      url: `http://${urlHost}:${actual}`,
       port: actual,
       server: this,
     };

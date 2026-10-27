@@ -1976,6 +1976,42 @@ describe("App Server · 安全边界", () => {
     }
   });
 
+  /**
+   * 头校验的三个缺口：缺 Host、`Origin: null`、以及"都是本机但端口不同"。
+   * 浏览器一定会带 Host；缺它只可能是脚本构造的请求，没有 Host 也就没有
+   * 可比对的来源。`Origin: null` 来自沙箱 iframe / file:// 页面。
+   * 端口不同的本机来源意味着**另一个本地服务**——攻击者常常就在本机。
+   */
+  it("缺少 Host、Origin: null、端口不一致的 Origin 都是 403", async () => {
+    const server = await startTestServer();
+    try {
+      assert.strictEqual(
+        await statusWithoutHost(server.url),
+        403,
+        "HTTP/1.0 不带 Host 时，应用层必须自己拒绝",
+      );
+
+      const nullOrigin = await rawGet(server.url, { Origin: "null" });
+      assert.strictEqual(nullOrigin, 403, "Origin: null 必须拒绝");
+
+      const port = new URL(server.url).port;
+      const wrongPort = await rawGet(server.url, {
+        Origin: `http://127.0.0.1:${Number(port) + 1}`,
+      });
+      assert.strictEqual(wrongPort, 403, "同一 hostname、不同端口是跨源");
+
+      const sameOrigin = await rawGet(server.url, { Origin: server.url });
+      assert.strictEqual(sameOrigin, 200, "端口一致的同源请求要放行");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("驱动不了 --host：非回环地址起服务直接失败", async () => {
+    const { assertLoopbackHost } = await import("./http");
+    assert.throws(() => assertLoopbackHost("0.0.0.0"), /只允许监听回环地址/);
+  });
+
   it("未知接口 404，非 JSON 请求体 400", async () => {
     const server = await startTestServer();
     try {
@@ -2207,6 +2243,44 @@ async function statusWithHost(baseUrl: string, host: string): Promise<number> {
     req.on("error", reject);
     req.end();
   });
+}
+
+/**
+ * 不带 Host 头发一次请求，返回状态码。
+ *
+ * 用 HTTP/1.0 而不是 1.1：HTTP/1.1 缺 Host 会被 Node 自己以 400 拒掉，
+ * 根本到不了应用层；而 HTTP/1.0 允许不带 Host，正好用来验证
+ * `assertLocalRequest` 这道**应用层**校验没有缺口。
+ */
+async function statusWithoutHost(baseUrl: string): Promise<number> {
+  const { connect } = await import("node:net");
+  const url = new URL(baseUrl);
+  return new Promise<number>((resolve, reject) => {
+    const socket = connect({ host: url.hostname, port: Number(url.port) }, () => {
+      socket.write("GET /api/state HTTP/1.0\r\n\r\n");
+    });
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      data += chunk;
+    });
+    socket.on("error", reject);
+    socket.on("end", () => {
+      const match = /^HTTP\/1\.[01] (\d{3})/.exec(data);
+      if (match) {
+        resolve(Number(match[1]));
+      } else {
+        reject(new Error(`无法解析响应：${data.slice(0, 80)}`));
+      }
+    });
+  });
+}
+
+/** 带自定义头发一次 GET，返回状态码（Host 由 fetch 按 URL 补上） */
+async function rawGet(baseUrl: string, headers: Record<string, string>): Promise<number> {
+  const response = await fetch(`${baseUrl}/api/state`, { headers });
+  await response.text();
+  return response.status;
 }
 
 /** 没有可用模型的宿主：复用测试脚架，但把解析结果换成 null */
