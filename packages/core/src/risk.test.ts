@@ -44,6 +44,37 @@ describe("命令风险识别", () => {
 
   it("有副作用但可控的命令降一档提示", () => {
     assert.strictEqual(assessBashRisk("rm build.log").level, "elevated");
+    assert.strictEqual(assessBashRisk("del build.log").level, "elevated");
+    assert.strictEqual(assessBashRisk("rd build").level, "elevated");
+  });
+
+  /**
+   * Windows 的递归删除与磁盘操作此前一条都没识别：`rd /s /q` 在审批卡上
+   * 和 `ls` 同级，用户看不到任何"不可恢复"的提示。PowerShell 同理。
+   */
+  it("Windows 删除 / 磁盘操作属于高危", () => {
+    for (const command of [
+      "rd /s /q build",
+      "rmdir /s build",
+      "del /f /s /q build",
+      "del /q build\\*",
+      "Remove-Item -Recurse -Force build",
+      "format D:",
+      "diskpart",
+      "bcdedit /delete {current}",
+      "vssadmin delete shadows /all",
+      "reg delete HKLM\\Software\\X /f",
+    ]) {
+      assert.strictEqual(assessBashRisk(command).level, "high", `${command} 应判为高危`);
+    }
+  });
+
+  it("形近的普通命令不该被 Windows 规则误伤", () => {
+    // `npm run format` 不是格式化磁盘；`del` 出现在单词里也不算删除
+    assert.strictEqual(assessBashRisk("npm run format").level, "none");
+    assert.strictEqual(assessBashRisk("prettier --write .").level, "none");
+    assert.strictEqual(assessBashRisk("grep del src/app.ts").level, "none");
+    assert.strictEqual(assessBashRisk("echo record").level, "none");
   });
 
   it("高危时不叠加降级理由，避免真正致命的那条被淹没", () => {

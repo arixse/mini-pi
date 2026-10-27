@@ -45,6 +45,24 @@ const HIGH_RISK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bgit\s+clean\b[^\n]*?-[a-z]*f\b/i, "删除未跟踪文件（git clean -f），不可恢复"],
   [/\bgit\s+push\b[^\n]*?(?:--force|--force-with-lease|-f\b)/, "强制推送，会覆盖远端历史"],
   [/--force\b/, "强制覆盖（--force）"],
+  // Windows / PowerShell 的删除与磁盘操作：与 rm -rf 同级，之前完全没识别。
+  // `del` / `rd` / `Remove-Item` 要求出现在命令位置（行首、`&&` 之后、`cmd /c` 之后），
+  // 否则 `grep del README.md` 这类普通命令会被误判成删除。
+  [
+    /(?:^|[|&;]\s*|cmd(?:\.exe)?\s+\/c\s+)\s*(?:rd|rmdir)\b[^\n]*?\s\/s\b/i,
+    "递归删除目录（rd /s），删除后不可恢复",
+  ],
+  [
+    /(?:^|[|&;]\s*|cmd(?:\.exe)?\s+\/c\s+)\s*del\b[^\n]*?\/[a-z]*[sq][a-z]*\b/i,
+    "强制/递归删除文件（del /s /q），删除后不可恢复",
+  ],
+  [
+    /(?:^|[|&;]\s*|cmd(?:\.exe)?\s+\/c\s+)\s*Remove-Item\b[^\n]*?-(?:Recurse|Force)\b/i,
+    "递归/强制删除（Remove-Item -Recurse / -Force），删除后不可恢复",
+  ],
+  [/\bformat\b\s+[a-z]:/i, "格式化磁盘（format X:），数据不可恢复"],
+  [/\b(?:diskpart|bcdedit|vssadmin)\b/i, "系统级磁盘 / 引导操作，可能使系统无法启动"],
+  [/\breg\s+delete\b/i, "删除注册表项"],
   [/>\s*\/dev\/(?:sd|nvme|disk|da)/i, "直接写入磁盘设备"],
   [/\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:ba|z|fi|k)?sh\b/i, "下载即执行（管道到 shell）"],
   [/\b(?:shutdown|reboot)\b/, "关机 / 重启"],
@@ -54,6 +72,10 @@ const HIGH_RISK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 /** 有副作用但通常可控 */
 const ELEVATED_RISK_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\brm\b/, "删除文件"],
+  [
+    /(?:^|[|&;]\s*|cmd(?:\.exe)?\s+\/c\s+)\s*(?:del|rd|rmdir|Remove-Item)\b/i,
+    "删除文件",
+  ],
   [/\bmv\b/, "移动 / 重命名文件"],
   [/\bgit\s+push\b/, "推送提交到远端"],
   [/\bnpm\s+(?:install|i)\b|\bpnpm\s+add\b|\byarn\s+add\b/, "安装依赖包"],
