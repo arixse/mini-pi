@@ -197,6 +197,28 @@ async function completeAssistantMessage(
     }
   }
 
+  /**
+   * 空回复必须显式报错。
+   *
+   * 上游偶发返回空流（网络抖动、兼容网关兜底、`max_tokens` 被配得极小），
+   * 消息层为了不打断流式会把 `stopReason` 记成 `stop`、`content` 留空。
+   * 若原样返回，这条空消息会进上下文、写进会话文件，而用户看到的是
+   * "敲了回车什么都没发生"；再追问时历史里还多了一条无内容的 assistant。
+   * 这里把它变成一条可读的错误回复，走正常的失败展示路径。
+   *
+   * `aborted` 除外：用户主动取消时没有正文是预期行为，REPL 会单独提示。
+   */
+  if (message.content.length === 0 && message.stopReason !== "aborted") {
+    const reason = "模型返回了空回复（没有任何文本或工具调用）";
+    Object.assign(message, {
+      content: [createTextContent(reason)],
+      stopReason: "error" as const,
+      errorMessage: message.errorMessage ?? reason,
+    });
+    // 正文本来是空的，补发这一句不会重复显示
+    emit({ type: "message_update", message, delta: reason });
+  }
+
   emit({ type: "message_end", message });
   return message;
 }

@@ -52,6 +52,50 @@ export function buildAnthropicRequest(params: {
   };
 }
 
+/**
+ * 把 content 统一成 block 数组（字符串是 text block 的简写）。
+ */
+function toContentBlocks(
+  content: Anthropic.MessageParam["content"],
+): Anthropic.ContentBlockParam[] {
+  return typeof content === "string" ? [{ type: "text", text: content }] : [...content];
+}
+
+/**
+ * 合并相邻的同角色消息。
+ *
+ * Anthropic 的 `messages` 必须是 user / assistant 交替的序列，连续两条同角色
+ * 消息会被接口直接拒绝（400）。而内核的上下文里连续 user 是常态：
+ * - 一次并行工具调用会返回多条 toolResult，每条都转成一条 user；
+ * - toolResult 之后紧接着用户插话（中断、补充要求）。
+ *
+ * 合并时把 `tool_result` 排到 user 消息最前面：这是 Anthropic 对
+ * tool_result 的位置要求，放在文本之后同样会被拒。
+ */
+function mergeAdjacentMessages(
+  messages: Anthropic.MessageParam[],
+): Anthropic.MessageParam[] {
+  const merged: Anthropic.MessageParam[] = [];
+
+  for (const message of messages) {
+    const last = merged[merged.length - 1];
+    if (!last || last.role !== message.role) {
+      merged.push(message);
+      continue;
+    }
+
+    const blocks = [
+      ...toContentBlocks(last.content),
+      ...toContentBlocks(message.content),
+    ];
+    const toolResults = blocks.filter((block) => block.type === "tool_result");
+    const rest = blocks.filter((block) => block.type !== "tool_result");
+    last.content = [...toolResults, ...rest];
+  }
+
+  return merged;
+}
+
 export class AnthropicModel implements LlmModel {
   private client: Anthropic;
   private model: string;
@@ -213,9 +257,13 @@ export class AnthropicModel implements LlmModel {
         });
       }
     }
+    // Anthropic 要求 user / assistant 严格交替，同一角色连续出现直接 400。
+    // 旧实现把每个 toolResult 各转一条 user：并行工具调用（同一轮返回多个
+    // tool_result）就会连着出现多条 user；toolResult 后面紧跟用户插话也一样。
+    // 因此这里不是"顺手优化"，而是协议要求。
     return {
       system,
-      messages: convertedMessages,
+      messages: mergeAdjacentMessages(convertedMessages),
     };
   }
 

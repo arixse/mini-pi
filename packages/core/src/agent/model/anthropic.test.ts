@@ -196,6 +196,103 @@ describe("anthropic（消息转换与取消）", () => {
     assert.strictEqual(assistant.content[1].id, "call_1");
   });
 
+  /**
+   * Anthropic 只接受严格交替的 user / assistant。一次并行工具调用会带回
+   * 多条 toolResult，旧实现给每条各转一条 user，请求直接被 400——
+   * 而这条路径只有"同时调多个工具"才会走到，本地顺序调用测不出来。
+   */
+  it("并行的多个 toolResult 必须合并成一条 user 消息", () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    const convert = (
+      model as unknown as {
+        convertMessages(
+          system: string,
+          messages: AgentMessage[],
+        ): {
+          messages: Array<{
+            role: string;
+            content: Array<{ type: string; tool_use_id?: string }>;
+          }>;
+        };
+      }
+    ).convertMessages.bind(model);
+
+    const messages = convert("s", [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a" } },
+          { type: "toolCall", id: "call_2", name: "read_file", arguments: { path: "b" } },
+        ],
+        stopReason: "toolUse",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        timestamp: 0,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read_file",
+        content: [createTextContent("A")],
+        isError: false,
+        timestamp: 0,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "read_file",
+        content: [createTextContent("B")],
+        isError: false,
+        timestamp: 0,
+      },
+    ]).messages;
+
+    assert.deepStrictEqual(
+      messages.map((message) => message.role),
+      ["assistant", "user"],
+      "连续的两个 toolResult 必须落进同一条 user 消息",
+    );
+    assert.deepStrictEqual(
+      messages[1].content.map((block) => block.tool_use_id),
+      ["call_1", "call_2"],
+    );
+  });
+
+  it("toolResult 之后的用户插话同样合并，且 tool_result 排在前面", () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    const convert = (
+      model as unknown as {
+        convertMessages(
+          system: string,
+          messages: AgentMessage[],
+        ): {
+          messages: Array<{
+            role: string;
+            content: Array<{ type: string; text?: string; tool_use_id?: string }>;
+          }>;
+        };
+      }
+    ).convertMessages.bind(model);
+
+    const messages = convert("s", [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "bash",
+        content: [createTextContent("done")],
+        isError: false,
+        timestamp: 0,
+      },
+      { role: "user", content: [createTextContent("接着做下一件事")], timestamp: 0 },
+    ]).messages;
+
+    assert.strictEqual(messages.length, 1);
+    assert.strictEqual(messages[0].role, "user");
+    assert.deepStrictEqual(
+      messages[0].content.map((block) => block.type),
+      ["tool_result", "text"],
+    );
+  });
+
   it("should report aborted for the Anthropic model too", async () => {
     const model = createAnthropicModel({ apiKey: "test-key" });
     const controller = new AbortController();
