@@ -38,6 +38,12 @@
 - 文档：`docs/providers.md` §9（下线清单来源与维护口径、EOS 口径）、
   `docs/cli-commands.md` §5.4（列表过滤 + 手填兜底）、`README.md`；
   `DECISIONS.md` 记录本轮取舍
+- **Agent 评测方案定稿**（`docs/eval-plan.md`，2026-10-28，**仅文档，代码未改**）：
+  调研开源评测框架后定为"分层取用、不整包替换"——只借 Terminal-Bench/Harbor 的
+  任务目录形状与 ATIF 轨迹字段、AgentDojo 的注入攻击模式，v1 不引入
+  promptfoo / Inspect AI / Harbor；隔离方式由"覆盖环境变量"改为给 `exec` 加
+  `--model` / `--home`；任务集 8 → 9（新增 `injection-guard`）；
+  实施阶段拆成 Step 1~6，每步带文件级清单与可测验收
 
 ## 进行中
 
@@ -55,6 +61,7 @@
 
 ## 下一步
 
+- 按 `docs/eval-plan.md` §5 开分支 `feature/eval-harness`，先做 Step 1（给 `exec` 加 `--model` / `--home`）
 - 官方发布新一批下线公告时：追加到 `volcengine-retired.ts`，补一条断言，
   更新 `docs/providers.md`
 - 若方舟 `/models` 未来返回开通状态 / 下线标记，优先改用服务端字段，
