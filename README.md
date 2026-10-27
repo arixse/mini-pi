@@ -221,7 +221,7 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [CLI 交互体验设计稿](docs/cli-ux-design.md)     | 设计稿：目标与原则、分档进度、测试策略（现行格式以 cli-interaction.md 为准） |
 | [产品设计文档](docs/product-design.md)          | 产品愿景与用户目标                                                           |
 | [发布到 npm](docs/publishing.md)                | 标签触发的发布流程、包内容、踩过的坑                                         |
-| [Agent 评测方案](docs/eval-plan.md)             | 草案：回归门、任务集、基线与 CI 接线（未实施，待评审）                       |
+| [Agent 评测方案](docs/eval-plan.md)             | 已定稿未实施：回归门、9 条任务集、相对基线与 CI 接线，含开源框架取舍结论     |
 | [Electron 客户端方案](docs/electron-client-plan.md) | 客户端化的分层、里程碑与依赖口径（M0 ~ M6 已全部落地）   |
 | [客户端 UI 设计稿](docs/client-ui-design.md)     | 设计稿：界面分区、组件状态、26 条已定决策（视觉基准为 Ardot 画布，交接见下一行）         |
 | [客户端视觉稿交接](docs/client-visual-handoff.md) | 视觉交互稿定稿说明：物料清单、十屏验收要点、内核缺口、开发指令模板                      |
