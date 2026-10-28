@@ -67,6 +67,83 @@ describe("tool approval", () => {
     assert.ok(questions[0].includes("rm -rf build"));
   });
 
+  /**
+   * readline 的 question() 不可重入：两个并发提问只有一个会拿到回答。
+   * 一批工具里若有两个需要确认的调用，后一个会永远挂起；这里断言确认被排队。
+   */
+  it("并发审批串行提问，不会让后一个确认永远挂起", async () => {
+    const asked: string[] = [];
+    let firstAsked!: () => void;
+    const firstAskedPromise = new Promise<void>((resolve) => {
+      firstAsked = resolve;
+    });
+    let resolveFirst!: (answer: "yes" | "no" | "always") => void;
+
+    const approve = createToolApproval({
+      isTrusted: () => false,
+      confirm: (promptText) => {
+        asked.push(promptText.includes("bash") ? "bash" : "write");
+        if (asked.length === 1) {
+          firstAsked();
+          return new Promise((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve("yes");
+      },
+    });
+
+    const bash = approve(call("bash", { command: "rm -rf build" }));
+    const write = approve(call("write_file", { path: "a.txt", content: "x" }));
+
+    await firstAskedPromise;
+    assert.deepStrictEqual(asked, ["bash"], "第二个确认必须排在第一个之后");
+
+    resolveFirst("yes");
+    const [bashDecision, writeDecision] = await Promise.all([bash, write]);
+
+    assert.strictEqual(bashDecision.action, "allow");
+    assert.strictEqual(writeDecision.action, "allow");
+    assert.deepStrictEqual(asked, ["bash", "write"]);
+  });
+
+  it("取消后排队中的确认直接拒绝，不再弹提示", async () => {
+    let cancelled = false;
+    let asked = 0;
+    let firstAsked!: () => void;
+    const firstAskedPromise = new Promise<void>((resolve) => {
+      firstAsked = resolve;
+    });
+    let resolveFirst!: (answer: "yes" | "no" | "always") => void;
+
+    const approve = createToolApproval({
+      isTrusted: () => false,
+      isCancelled: () => cancelled,
+      confirm: () => {
+        asked += 1;
+        if (asked === 1) {
+          firstAsked();
+          return new Promise((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        throw new Error("取消后不应再提问");
+      },
+    });
+
+    const first = approve(call("bash", { command: "rm -rf build" }));
+    const second = approve(call("write_file", { path: "a.txt", content: "x" }));
+
+    await firstAskedPromise;
+    cancelled = true;
+    resolveFirst("yes");
+
+    const [firstDecision, secondDecision] = await Promise.all([first, second]);
+    assert.strictEqual(firstDecision.action, "allow", "已经答过的那次仍然有效");
+    assert.strictEqual(secondDecision.action, "block", "排队中的确认应按拒绝收尾");
+    assert.strictEqual(asked, 1);
+  });
+
   it("should block when the user declines", async () => {
     const approve = createToolApproval({
       isTrusted: () => false,

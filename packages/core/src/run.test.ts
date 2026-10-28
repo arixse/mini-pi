@@ -229,4 +229,20 @@ describe("newRunId", () => {
     const ids = new Set([newRunId(), newRunId(), newRunId()]);
     assert.strictEqual(ids.size, 3);
   });
+
+  /**
+   * 时间戳 + 自增序号可以被枚举：本机其它进程只要按 `run_<毫秒>_<序号>` 试几轮
+   * 就能读到别人的 `/api/runs/<id>/events`。随机后缀把成本变成撞 2^32 次。
+   */
+  it("带随机后缀，不能按时间戳与序号猜出来", () => {
+    const first = newRunId();
+    const second = newRunId();
+
+    for (const id of [first, second]) {
+      assert.match(id, /^run_[a-z0-9]+_[a-z0-9]+_[0-9a-f]{8}$/);
+    }
+
+    const suffix = (id: string): string => id.split("_").pop() ?? "";
+    assert.notStrictEqual(suffix(first), suffix(second), "后缀必须随机，不能只是序号");
+  });
 });

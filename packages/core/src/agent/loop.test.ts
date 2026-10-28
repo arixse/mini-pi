@@ -219,6 +219,62 @@ describe("loop", () => {
       assert.strictEqual((result.newMessages[0] as AssistantMessage).stopReason, "aborted");
     });
 
+    /**
+     * 空流（网络抖动、兼容网关兜底、max_tokens 极小）在消息层是
+     * `stopReason:"stop"` + 空 content。旧实现原样入上下文并落盘，
+     * 用户看到的是"敲了回车什么都没发生"，会话里还多一条空 assistant。
+     */
+    it("空回复要转成可读的错误消息，而不是静默入上下文", async () => {
+      const response = createAssistantMessage([], "stop");
+      const model = createMockModel([response]);
+      const toolRegistry = createMockToolRegistry();
+
+      const result = await runAgentLoop({
+        systemPrompt: "You are a helpful assistant",
+        messages: [{ role: "user", content: [createTextContent("Hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry,
+      });
+
+      const message = result.newMessages[0] as AssistantMessage;
+      assert.strictEqual(message.stopReason, "error", "空回复必须被标成失败");
+      assert.ok(message.content.length > 0, "不能把空消息写进历史");
+      assert.match(message.errorMessage ?? "", /空回复/);
+      assert.match(
+        (message.content[0] as { text: string }).text,
+        /空回复/,
+        "终端要能显示发生了什么",
+      );
+
+      // 事件流里也要有一句可打印的文本，否则界面仍是"什么都没发生"
+      const updates = result.events.filter(
+        (event): event is Extract<AgentEvent, { type: "message_update" }> =>
+          event.type === "message_update",
+      );
+      assert.ok(updates.some((event) => event.delta.includes("空回复")));
+    });
+
+    it("用户取消导致的空回复保持 aborted，不改成错误", async () => {
+      const response = createAssistantMessage([], "aborted");
+      const model = createMockModel([response]);
+      const toolRegistry = createMockToolRegistry();
+
+      const result = await runAgentLoop({
+        systemPrompt: "You are a helpful assistant",
+        messages: [{ role: "user", content: [createTextContent("Hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry,
+      });
+
+      assert.strictEqual(
+        (result.newMessages[0] as AssistantMessage).stopReason,
+        "aborted",
+        "取消是预期行为，不能报成错误",
+      );
+    });
+
     it("should respect custom maxTurns limit", async () => {
       const toolCall: ToolCallContent = {
         type: "toolCall",

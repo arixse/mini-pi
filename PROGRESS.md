@@ -5,45 +5,66 @@
 
 ## 当前状态
 
-选择火山方舟后，模型列表里**不会再出现官方已下线的型号**。`GET /models`
-会把历史快照一起返回，且响应里没有「是否已下线」字段；`VolcengineProvider.getModelList`
-在「推荐型号置顶 + 去重」之后，再按官方「模型下线公告」清单过滤已到 EOS
-的型号（精确 ID 匹配，未知型号与 `ep-...` 保留）。只到 EOM、尚未到 EOS 的
-公告型号仍会显示（存量接入点还能调用）；账号仍在用的已下线型号可在筛选框
-手填后按 `Ctrl+E` 采用。404 提示、光标停在当前模型等上一轮改动保持不变。
+**高危（H1–H8）与中危（A–E）审计修复已合入 `main`**：前者在
+`fix/high-severity-audit`（5 个提交），后者叠在其上
+（`fix/medium-severity-audit`，5 个提交 + 文档）。每组都带回归测试。
+合并后 `pnpm check` 全绿：tests 2312 / pass 2304 / fail 0 / skipped 8，
+覆盖率 all files 97.60 / 91.05 / 93.25。
 
-- 状态：分支 `fix/volcengine-retired-models` 上完成，`pnpm check` 全绿
-  （2246 tests / 2243 pass / 0 fail / 3 skipped；新增模块覆盖率 100%）
-- 单元测试：已知 / 未知型号识别、大小写与 `/` `.` 分隔符归一化、EOS 当天
-  零点边界、尚未 EOS 不提前隐藏、重复型号取最早 EOS、精确匹配不误删前缀、
-  清单本身（日期合法、ID 无空白、同批不重复）
-- 集成测试：方舟合并列表过滤已下线型号，保留在售 / 未知 / `ep-...`；
-  推荐型号仍排在最前；接口失败仍抛错
-- 端到端验证：`login-model.test.ts` 启动本地 HTTP 服务模拟方舟 `/models`
-  （已下线型号排在最前），经由真实 `VolcengineProvider` +
-  `ModelProviderService` + `handleModel` 只按一次回车，断言写回
-  `volcengine/doubao-seed-evolving`，且终端渲染里不再出现
-  `doubao-lite-128k-240428`
+- 验证层级：单元测试 → 集成测试（起真实服务器）→ 端到端（`pnpm check`）
+- 原审计报告正文已不可检索，中危清单由重新审计重建（只取中危，
+  低危与工程卫生未动）
+- `docs/eval-plan.md` 已定稿（2026-10-28，仅文档，代码未改）；
+  下一步从 Step 1 开始
+- 火山方舟模型列表过滤已下线型号也在 `main` 上
 
-## 已完成
+## 已完成：中危审计 A–E
 
-- `packages/core/src/provider/volcengine-retired.ts`：新增官方下线清单
-  （2024 第一批 ~ 2026 第十批，共 12 批，含提前下线型号）；提供
-  `normalizeVolcengineModelId`、`getVolcengineRetirement`、
-  `isVolcengineModelRetired`、`filterRetiredVolcengineModels`
-- `packages/core/src/provider/volcengine.ts`：`getModelList` 在合并默认列表
-  与接口结果后过滤已下线型号；接口失败仍原样抛出
-- 测试：`volcengine-retired.test.ts`、`volcengine.test.ts`、
-  `login-model.test.ts`
-- 文档：`docs/providers.md` §9（下线清单来源与维护口径、EOS 口径）、
-  `docs/cli-commands.md` §5.4（列表过滤 + 手填兜底）、`README.md`；
-  `DECISIONS.md` 记录本轮取舍
-- **Agent 评测方案定稿**（`docs/eval-plan.md`，2026-10-28，**仅文档，代码未改**）：
-  调研开源评测框架后定为"分层取用、不整包替换"——只借 Terminal-Bench/Harbor 的
-  任务目录形状与 ATIF 轨迹字段、AgentDojo 的注入攻击模式，v1 不引入
-  promptfoo / Inspect AI / Harbor；隔离方式由"覆盖环境变量"改为给 `exec` 加
-  `--model` / `--home`；任务集 8 → 9（新增 `injection-guard`）；
-  实施阶段拆成 Step 1~6，每步带文件级清单与可测验收
+- **A CLI 授权与退出码**（`packages/cli/src`）：`a` 的会话级授权绑定当时的
+  档位，`/trust` 切回后重新逐次确认；`exec` 以最后一次模型结果判定成败
+  （模型失败 → 退出码 1、原因走 stderr、`exec_done.status=error`）；
+  输入流提前结束按取消收尾；`/clear` `/new` `/switch` 清零子 Agent 用量。
+- **B 工具层**（`packages/core/src/agent/tools`）：`read_file` 行数统计按块
+  去重；`write_file` / `edit_file` 解析真实路径并按原 mode 原子写（symlink
+  不再被替换成普通文件）；`bash` 超时/取消后留 1.5s 宽限期再强制结算；
+  `grep` 拒绝嵌套量词、超长行只匹配前 4096 字符、逐行响应取消。
+- **C 持久化并发**（`private-json-file` / `workspaceMemory` / `turn` /
+  `subagentTrace` / `subagentContext`）：同一路径写入排队；workspaceMemory
+  读改写整体串行；压缩失败不再触发整批重投；trace 收尾等队列清空；
+  子 Agent 压缩结果回写成下一轮基准。
+- **D 事件流与服务端记录**（`packages/client/src`）：`readFile` 只读 256KB
+  前缀；`finish` 同步认领终态，cancel 与 finish 竞争只发一次 `run_done`；
+  Run 记录按终态裁剪（保留未合并/未丢弃的隔离 Run），`state()` 不再 slice；
+  SSE 游标按 `stream_gap.lastSeq` 回退（仅当它小于当前游标），`recoverGap`
+  校验 epoch / 会话 / Run。
+- **E provider 与取消**（`provider/modelsRequest.ts`、`agent/loop.ts`）：
+  模型列表请求统一 15 秒超时；模型抛 `AbortError` 按 `aborted` 收尾并留空
+  正文，空 assistant 占位不落盘；真正的模型错误照常落盘。
+- 文档：`docs/technical-solution.md`、`docs/cli-ux-design.md`、
+  `docs/client-event-stream.md`、`packages/client/README.md` 同步了取消落盘、
+  模型列表超时、游标回退与 Run 记录上限。
+
+## 已完成：高危审计 H1–H8
+
+审批串行化、bash 守卫与凭据保护、路径与凭据、压缩摘要 stopReason、会话
+残行、Anthropic 同角色合并、空回复、HTTP 来源校验与 runId 不可枚举；
+实现细节与取舍见 `DECISIONS.md` 的高危审计章节。
+
+## 已完成：火山方舟模型列表过滤
+
+`VolcengineProvider.getModelList` 在推荐排序与去重之后，按官方 EOS 清单
+过滤已下线型号（精确 ID 匹配，未知型号与 `ep-...` 保留）。`EOM` 后、
+`EOS` 前仍显示，账号仍在用的型号可手填后 `Ctrl+E` 采用。
+清单在 `packages/core/src/provider/volcengine-retired.ts`，
+维护口径见 `docs/providers.md` §9。
+
+## 已完成：Agent 评测方案定稿
+
+`docs/eval-plan.md`：调研开源评测框架后定为"分层取用、不整包替换"——只借
+Terminal-Bench/Harbor 的任务目录形状与 ATIF 轨迹字段、AgentDojo 的注入攻击
+模式，v1 不引入 promptfoo / Inspect AI / Harbor；隔离方式由"覆盖环境变量"
+改为给 `exec` 加 `--model` / `--home`；任务集 8 → 9（新增
+`injection-guard`）；实施拆成 Step 1~6，每步带文件级清单与可测验收。
 
 ## 进行中
 
@@ -51,31 +72,33 @@
 
 ## 已知问题
 
-- 下线清单需要跟着官方公告手动追加；官方若发布新批次，列表不会自动更新
-- `/models` 不提供「账号是否开通」字段：未开通的型号仍会显示，选中后可能
-  404，只能靠 404 提示兜底（账号只允许 `ep-...` 时同样要手填）
-- 只按 EOS 隐藏：EOM 后、EOS 前仍显示，因为存量接入点还能调用；如果希望
-  连"停止新购"的型号也隐藏，需要另加一个开关，避免误伤正在使用的账号
-- EOS 判断依赖本机时钟（按 UTC+8 零点），系统时间严重偏差时会提前或延后
-  隐藏
+- 路径与命令守卫仍是尽力而为的静态检查，最终防线是执行前审批。
+- Windows 创建文件 symlink 需要开发者模式/管理员权限，相关用例按平台跳过。
+- 同一会话 `.jsonl` **没有跨进程写锁**：审计修复只保证同进程并发安全；
+  两个进程同时写同一会话仍可能互相覆盖。
+- 裁剪后旧 Run 的 `/api/runs/:id` 返回 404（界面上早已点不到）。
+- `readFile` 的二进制判定只看前 256KB 前缀。
+- `state()` 在存在未合并隔离 Run 时可能多于 50 条（刻意保留）。
+- 低危与工程卫生项未处理。
+- 方舟下线清单需跟着官方公告手动追加；`/models` 不提供开通/下线字段，
+  未开通型号选中后可能 404，只能靠提示与手填兜底。
+- EOS 判断依赖本机时钟（按 UTC+8 零点），系统时间严重偏差会提前/延后隐藏。
 
 ## 下一步
 
-- 按 `docs/eval-plan.md` §5 开分支 `feature/eval-harness`，先做 Step 1（给 `exec` 加 `--model` / `--home`）
-- 官方发布新一批下线公告时：追加到 `volcengine-retired.ts`，补一条断言，
+- 按 `docs/eval-plan.md` §5 开分支 `feature/eval-harness`，先做 Step 1
+  （给 `exec` 加 `--model` / `--home`）
+- 真实终端冒烟：并发审批、Ctrl+C 取消排队任务、SSE 断线重连
+- Linux CI 上确认 symlink / 权限位 / POSIX 孙进程用例真正执行
+- 评估低危与工程卫生项，以及跨进程会话文件写锁的可行性
+- 官方发布新一批下线公告时：追加到 `volcengine-retired.ts`，补断言，
   更新 `docs/providers.md`
-- 若方舟 `/models` 未来返回开通状态 / 下线标记，优先改用服务端字段，
-  本地清单退化为兜底
-- 在真实终端里对 `/model` 冒烟一次：确认列表里看不到已下线型号、
-  `Ctrl+E` 手填 `ep-...` 后能正常写回
 
-## 上一轮（已完成）：火山方舟模型推荐排序与手填
+## 更早（已完成）：火山方舟推荐排序与 Ctrl+E 手填
 
-`GET /models` 的历史快照混在列表里且顺序不代表可用性，原来一按回车就落到
-已下线的 `doubao-lite-128k-240428`。上一轮把推荐型号固定排在最前
-（`prioritizeModelIds`）、`/model` 光标停在当前模型（`initialIndex`）、
-筛选无命中时 `Ctrl+E` 手填模型 ID / `ep-...`，并给方舟 404 追加可执行提示。
-本轮在此基础上把已下线型号从列表里彻底移除。细节见 `DECISIONS.md`。
+把推荐型号固定排在最前（`prioritizeModelIds`）、`/model` 光标停在当前模型
+（`initialIndex`）、筛选无命中时 `Ctrl+E` 手填模型 ID / `ep-...`，并给方舟
+404 追加可执行提示。
 
 ## 更早（已完成）：CLI 大段粘贴折叠
 

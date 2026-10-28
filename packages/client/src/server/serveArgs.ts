@@ -6,6 +6,8 @@
  * 一次 `--prot 5000` 的拼写错误要是被吞掉，用户会以为端口没生效。
  */
 
+import { assertLoopbackHost } from "./http";
+
 export type ServeArgs = {
   cwd: string;
   /**
@@ -38,7 +40,10 @@ export const SERVE_USAGE = `用法：<client> serve [选项]
                     添加。desktop 没有默认值，首次启动时询问，之后记住
                     上次选择的目录
   --port <端口>     监听端口，默认 4788；0 表示由系统分配
-  --host <地址>     监听地址，默认 127.0.0.1（这个服务没有鉴权，别绑到 0.0.0.0）
+  --host <地址>     监听地址，默认 127.0.0.1；只接受回环地址
+                    （127.0.0.1 / localhost / ::1）。这个服务没有鉴权，
+                    绑到其他地址等于把工作区交给整个网络，会被拒绝启动；
+                    跨机访问请用 SSH 隧道
   --isolate         每个任务一个隔离的 git worktree，并行不互相踩
   --concurrency <n> 同时执行的任务上限，默认 1（与 CLI"回合结束后执行"同口径）
   -h, --help        显示本帮助
@@ -93,6 +98,17 @@ export function parseServeArgs(
       continue;
     }
     return { kind: "error", message: `无法识别的参数：${token}` };
+  }
+
+  // --host 是唯一能把"本地工具"暴露到网络上的开关：解析阶段就拦住，
+  // 用户看到的是一句说明，而不是启动到一半才发现服务已经能被工位旁边的人连上
+  try {
+    assertLoopbackHost(host);
+  } catch (error) {
+    return {
+      kind: "error",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 
   return { kind: "serve", args: { cwd, cwdGiven, port, host, isolate, concurrency } };

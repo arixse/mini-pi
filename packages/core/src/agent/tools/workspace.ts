@@ -31,6 +31,7 @@ export function resolveInsideWorkspace(workspaceRoot: string, input: string): st
   const root = resolve(workspaceRoot);
   const target = resolve(root, input);
 
+  assertNoAlternateDataStream(target, input);
   assertInsideRoot(root, target, input);
   assertInsideRoot(realpathSync(root), realpathAllowMissing(target), input);
 
@@ -40,6 +41,28 @@ export function resolveInsideWorkspace(workspaceRoot: string, input: string): st
 function assertInsideRoot(root: string, target: string, input: string): void {
   if (!isRealPathInside(root, target)) {
     throw new Error(`Path escapes workspace:${input}`);
+  }
+}
+
+/**
+ * 拒绝 Windows 备用数据流（ADS）：`.npmrc::$DATA`、`.env:stream`。
+ *
+ * ADS 是 NTFS 给同一文件挂的附加命名流，`read_file(".npmrc::$DATA")` 读到的
+ * 正是 `.npmrc` 的内容，而 basename 变成 `.npmrc::$DATA`——凭据名单一个都匹配不上，
+ * 于是"默认禁止读写凭据"在这条路径上完全失效。文件是否存在都不影响判断：
+ * ADS 语法本身在这里就不该出现。
+ */
+function assertNoAlternateDataStream(target: string, input: string): void {
+  if (process.platform !== "win32") {
+    // POSIX 文件系统里 `:` 是合法文件名字符，`a:b` 是普通文件，不能误伤
+    return;
+  }
+  // 盘符自带的冒号先摘掉，剩下的冒号只可能是流名分隔符
+  const withoutDrive = target.replace(/^[A-Za-z]:/, "");
+  if (withoutDrive.includes(":")) {
+    throw new Error(
+      `Path uses a Windows alternate data stream（ADS 可绕过凭据文件名单）:${input}`,
+    );
   }
 }
 
@@ -162,29 +185,71 @@ export function isCredentialFile(filePath: string): boolean {
   return CREDENTIAL_FILE_PATTERNS.some((pattern) => pattern.test(name));
 }
 
-/** @throws 命中凭据文件时抛出可读错误 */
+/**
+ * @throws 命中凭据文件时抛出可读错误
+ *
+ * 除了看**词法**文件名，还会解析真实路径再判一次：
+ * `read_file("notes.txt")` 里的 `notes.txt` 可能是指向 `.env` 的符号链接，
+ * 词法上看完全无害，实际读到的却是凭据。只判 basename 等于把 symlink 当成免检通道。
+ */
 export function assertNotCredentialFile(filePath: string, workspaceRoot: string): void {
-  if (!isCredentialFile(filePath)) {
+  const realPath = realpathOrNull(filePath);
+  const hit = isCredentialFile(filePath)
+    ? filePath
+    : realPath !== null && isCredentialFile(realPath)
+      ? realPath
+      : null;
+
+  if (hit === null) {
     return;
   }
+
+  const viaLink =
+    hit === filePath
+      ? ""
+      : `（经由符号链接 ${relative(workspaceRoot, filePath) || filePath} 指向）`;
   throw new Error(
-    `Refusing to access credential file: ${relative(workspaceRoot, filePath)}. ` +
+    `Refusing to access credential file: ${relative(workspaceRoot, hit) || hit}${viaLink}. ` +
       `凭据类文件（${CREDENTIAL_EXAMPLES}）默认禁止读写；如确需处理，请先向用户说明并取得同意。`,
   );
 }
 
-/** 命令里"片段"的分隔符：shell 元字符与引号 */
-const COMMAND_FRAGMENT_SPLIT = /[\s"'`;|&<>()$]+/;
 /** 片段内部再按这些字符切开：`--file=.env`、`config/.env` 都要能命中 */
 const FRAGMENT_INNER_SPLIT = /[=:\\/]+/;
+/** 片段两端的通配符：`del .env*`、`rm *.pem` 动的仍是凭据文件 */
+const EDGE_GLOB = /^[*?]+|[*?]+$/g;
+
+/**
+ * 片段是否指向凭据文件；命中时返回用于报错的名字。
+ *
+ * 先按原名判定，再剥掉两端的通配符重判：`del .env*`、`rm *.pem`
+ * 在 shell 展开后删除的正是凭据文件，而 `.env*` 这个名字本身
+ * 不匹配任何一条凭据规则——不剥通配符就等于给删除留了后门。
+ */
+function credentialHit(piece: string): string | null {
+  if (piece === "") {
+    return null;
+  }
+  if (isCredentialFile(piece)) {
+    return piece;
+  }
+  const stripped = piece.replace(EDGE_GLOB, "");
+  if (stripped !== "" && stripped !== piece && isCredentialFile(stripped)) {
+    return stripped;
+  }
+  return null;
+}
 
 /**
  * 找出命令里提到的凭据类文件。
  *
- * 做法上刻意"宁可多报"：把命令按 shell 元字符切成片段，片段再按
- * `= : \ /` 切开，逐段用 {@link isCredentialFile} 判定。
- * 这样 `cat .env`、`cat ./config/.env`、`--file=.env`、`grep x .env`
- * 都能命中，而 `dotenv`、`foo.env` 这类同形名字不会误伤
+ * 做法上刻意"宁可多报"：先用 {@link tokenizeCommand} 按 shell 词法切词
+ * （去引号、按需反转义），再按 `= : \ /` 切开逐段判定。
+ * 用词法切分而不是直接按字符切，是因为 `.e"nv"`、`.e'nv'` 这类拼接
+ * 在 shell 里都等于 `.env`——按引号切会把它拆成 `.e` 与 `nv` 两段，正好漏掉。
+ *
+ * 这样 `cat .env`、`cat ./config/.env`、`--file=.env`、`grep x .env`、
+ * `.e"nv"`、`del .env*` 都能命中，而 `dotenv`、`foo.env` 这类同形名字不会误伤
  * （模板文件 .env.example 由 isCredentialFile 排除）。
  *
  * 静态检查拦不住 `node -e "..."` 之类的构造，这里只是第一道闸，
@@ -193,13 +258,12 @@ const FRAGMENT_INNER_SPLIT = /[=:\\/]+/;
 export function findCredentialMentions(command: string): string[] {
   const hits = new Set<string>();
 
-  for (const fragment of command.split(COMMAND_FRAGMENT_SPLIT)) {
-    if (fragment === "") {
-      continue;
-    }
-    for (const piece of fragment.split(FRAGMENT_INNER_SPLIT)) {
-      if (piece !== "" && isCredentialFile(piece)) {
-        hits.add(piece);
+  // 词法切分负责去引号/反转义；再按元字符切一次拿到候选片段
+  for (const token of tokenizeCommand(command)) {
+    for (const piece of token.split(FRAGMENT_INNER_SPLIT)) {
+      const hit = credentialHit(piece);
+      if (hit !== null) {
+        hits.add(hit);
       }
     }
   }
@@ -207,8 +271,23 @@ export function findCredentialMentions(command: string): string[] {
   return [...hits];
 }
 
-/** `$HOME` / `%USERPROFILE%` 这类指向工作区之外的引用 */
-const HOME_REFERENCE_PATTERN = /\$HOME\b|%USERPROFILE%|%HOMEPATH%|\$env:USERPROFILE/i;
+/**
+ * 指向工作区之外的「家目录 / 系统目录」变量。
+ *
+ * 只列与"用户主目录"同义的变量：它们的值一定在工作区之外，
+ * 而 `%PATH%` 这类可能只是拼在输出里的变量不在此列（误伤面太大）。
+ * `$HOME` / `${HOME}` / `$env:HOME`（PowerShell）/ `%APPDATA%`（cmd）都是同一类写法。
+ */
+const HOME_ENV_VARS =
+  "HOME|USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA|TEMP|TMP|TMPDIR";
+const HOME_REFERENCE_PATTERN = new RegExp(
+  [
+    `\\$\\{?(?:${HOME_ENV_VARS})\\}?`, // $HOME / ${HOME} / $APPDATA（PowerShell 也认）
+    `\\$env:(?:${HOME_ENV_VARS})`, // PowerShell：$env:APPDATA
+    `%(?:${HOME_ENV_VARS})%`, // cmd：%APPDATA%
+  ].join("|"),
+  "i",
+);
 
 /** 类 URL 片段（`https://x`、`s3://b`）先剔除，避免把 `//` 误判为 POSIX 根路径 */
 const URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"']*/g;
@@ -234,6 +313,36 @@ const TRAVERSAL_IN_TOKEN = /(?:^|[^A-Za-z0-9._-])\.\.(?:[^A-Za-z0-9._-]|$)/;
 
 /** Windows 上形如 `/b`、`/s` 的开关，豁免 POSIX 绝对路径判定（dir /b、findstr /s） */
 const WINDOWS_SWITCH_LIKE = /^\/[A-Za-z]{1,3}$/;
+
+/**
+ * Windows 盘符相对路径：`C:secret.txt`（相对「C 盘的当前目录」）。
+ *
+ * 它不是以 `C:\` 开头的绝对路径，所以绝对路径正则漏掉了它；但在 cmd 里
+ * `C:secret.txt` 会真的打开 C 盘上的文件。这里只在 Windows 上启用，
+ * 并额外要求该盘确实存在——不存在的盘读不到任何东西，放行不会造成逃逸。
+ */
+const WINDOWS_DRIVE_RELATIVE =
+  /(?:^|[\s=:;|&<>("'`])([a-zA-Z]:(?![/\\])[^\s"']*)/g;
+
+/**
+ * Windows 当前盘根相对路径：`\Windows\win.ini`。
+ *
+ * 同样不是 `\\server\share` 那种 UNC，绝对路径正则也漏掉了它；
+ * 但它相对的是当前盘根，读写都落在工作区之外。
+ *
+ * 首段要求至少两个字符：`\d`、`\n` 这类正则转义不该被当成路径
+ * （`grep -P "\d+"` 里的 `\d+` 也不会命中，因为 `+` 不在名字字符集内）。
+ */
+const WINDOWS_ROOT_RELATIVE = /^\\[A-Za-z0-9_.$-]{2,}(?:\\[^"'`]*)?$/;
+
+/** @returns 该盘符在当前机器上是否真实存在 */
+function isExistingWindowsDrive(letter: string): boolean {
+  try {
+    return existsSync(`${letter.toUpperCase()}:\\`);
+  } catch {
+    return false;
+  }
+}
 
 /** 未被引号包裹时，反斜杠后面出现这些字符才视为转义（否则按字面保留，兼容 Windows 路径） */
 const UNQUOTED_ESCAPABLE = new Set([
@@ -350,13 +459,30 @@ export function extractPathCandidates(command: string): string[] {
   }
 
   // 2) 逐个 token：~ 开头、或含 .. 路径段
-  for (const token of tokenizeCommand(command)) {
+  const tokens = tokenizeCommand(command);
+  for (const token of tokens) {
     if (token.startsWith("~")) {
+      candidates.add(token);
+      continue;
+    }
+    if (process.platform === "win32" && WINDOWS_ROOT_RELATIVE.test(token)) {
+      // 当前盘根相对路径（\Windows\win.ini）：UNC 的 `\\server\share` 不在其中
       candidates.add(token);
       continue;
     }
     if (TRAVERSAL_IN_TOKEN.test(token)) {
       candidates.add(token);
+    }
+  }
+
+  // 3) Windows 盘符相对路径（C:secret.txt）：按整条命令扫，
+  //    这样写在字符串内部拼接出来的形态也逃不掉
+  if (process.platform === "win32") {
+    for (const match of scanned.matchAll(WINDOWS_DRIVE_RELATIVE)) {
+      const value = match[1];
+      if (isExistingWindowsDrive(value[0])) {
+        candidates.add(value);
+      }
     }
   }
 

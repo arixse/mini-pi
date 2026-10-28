@@ -51,6 +51,15 @@ function assertMessageSequenceValid(messages: AgentMessage[]): void {
   );
 }
 
+/**
+ * 取一条消息的可见文本：断言"哪几条消息留下来了"时只关心正文。
+ */
+function textOf(message: AgentMessage): string {
+  return message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("");
+}
+
 describe("sessionStore", () => {
   // 临时工作区放在系统临时目录并带 pid + 随机后缀：
   // 旧实现建在仓库根（.test-session-store），既污染工作区又可能被安全策略拦截删除。
@@ -1153,6 +1162,189 @@ describe("JsonlSessionStore", () => {
 
       assert.strictEqual(text.includes("已省略"), false);
       assert.ok(text.length > 0, "摘要输入不能是空串");
+    });
+  });
+
+  describe("摘要模型的失败结束原因（stopReason）", () => {
+    /** 写入足够触发压缩的历史 */
+    async function seed(store: JsonlSessionStore): Promise<void> {
+      for (let i = 0; i < 4; i += 1) {
+        await store.appendMessage({
+          role: "user",
+          content: [createTextContent(`历史 ${i} ${"x".repeat(200)}`)],
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    /**
+     * 模型失败时同样会返回一条 assistant 消息（`stopReason:"error"`），
+     * 正文往往是错误描述甚至一段正常的话。旧实现只看 content 非空就
+     * 当成摘要写盘，等于用"请求失败"替换掉真实历史，还清空了失败原因。
+     */
+    it("stopReason=error 时即使有正文也不得当成摘要", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      const before = store.buildContext().length;
+      store.setModel({
+        async complete() {
+          return {
+            role: "assistant",
+            content: [createTextContent("请求失败：rate limited, please retry")],
+            stopReason: "error",
+            errorMessage: "429 Too Many Requests",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      const compaction = await store.compactIfNedded(10, 1);
+
+      assert.strictEqual(compaction, undefined, "失败的回复不能变成压缩条目");
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+      );
+      assert.strictEqual(store.buildContext().length, before, "上下文应保持原样");
+      assert.match(store.getLastCompactionError() ?? "", /429 Too Many Requests/);
+    });
+
+    it("stopReason=length 的截断摘要同样丢弃", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      store.setModel({
+        async complete() {
+          return {
+            role: "assistant",
+            content: [createTextContent("用户要求实现一个排")],
+            stopReason: "length",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      assert.strictEqual(await store.compactIfNedded(10, 1), undefined);
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+      );
+      assert.match(store.getLastCompactionError() ?? "", /截断/);
+    });
+
+    it("stopReason=aborted 时不写入", async () => {
+      const store = new JsonlSessionStore(sessionFile, testDir);
+      await seed(store);
+
+      store.setModel({
+        async complete() {
+          return {
+            role: "assistant",
+            content: [createTextContent("半个摘要")],
+            stopReason: "aborted",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        },
+      });
+
+      assert.strictEqual(await store.compactIfNedded(10, 1), undefined);
+      assert.strictEqual(
+        store.getEntries().some((entry) => entry.type === "compaction"),
+        false,
+      );
+    });
+  });
+
+  describe("会话文件末尾的残行（半行 JSON）", () => {
+    const headerLine = (): string =>
+      JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "mini-pi-session",
+        timestamp: new Date().toISOString(),
+        cwd: testDir,
+      });
+
+    const messageLine = (index: number, text: string, parentId: string | null): string =>
+      JSON.stringify({
+        type: "message",
+        id: `entry_${index}`,
+        parentId,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [createTextContent(text)], timestamp: index },
+      });
+
+    /**
+     * 旧实现只"跳过"坏行、不截断文件：那半行仍留在磁盘上，下一次 append
+     * 紧贴它继续写，两条残缺 JSON 拼成一行——刚写下的完整消息也跟着解析失败，
+     * 用户看到的是"新消息凭空消失"。
+     */
+    it("写了一半的末行会被截断，后续消息不会被它吞掉", async () => {
+      writeFileSync(
+        sessionFile,
+        [
+          headerLine(),
+          messageLine(1, "一", null),
+          '{"type":"message","id":"entry_2",',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.buildContext().length, 1, "完整的那条要保住");
+      assert.ok(
+        store.getLoadWarnings().some((warning) => warning.reason.includes("截断")),
+        `应说明末行已被截断：${JSON.stringify(store.getLoadWarnings())}`,
+      );
+      assert.ok(
+        readFileSync(sessionFile, "utf8").endsWith("\n"),
+        "截断后文件必须以换行结尾，否则下一条消息会粘上半行",
+      );
+
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("二")],
+        timestamp: 2,
+      });
+
+      const reopened = new JsonlSessionStore(sessionFile, testDir);
+      assert.deepStrictEqual(reopened.getLoadWarnings(), [], "修好之后不该再有坏行");
+      assert.deepStrictEqual(
+        reopened.buildContext().map((message) => textOf(message)),
+        ["一", "二"],
+        "新消息必须独立成行，不能被残行吞掉",
+      );
+    });
+
+    it("末行内容完整、只是缺换行时补换行而不是丢弃", async () => {
+      writeFileSync(
+        sessionFile,
+        [headerLine(), messageLine(1, "一", null)].join("\n"),
+        "utf8",
+      );
+
+      const store = new JsonlSessionStore(sessionFile, testDir);
+
+      assert.strictEqual(store.buildContext().length, 1, "完整消息不能因为少了换行被扔掉");
+      assert.deepStrictEqual(store.getLoadWarnings(), []);
+      assert.ok(readFileSync(sessionFile, "utf8").endsWith("\n"));
+
+      await store.appendMessage({
+        role: "user",
+        content: [createTextContent("二")],
+        timestamp: 2,
+      });
+
+      const reopened = new JsonlSessionStore(sessionFile, testDir);
+      assert.deepStrictEqual(
+        reopened.buildContext().map((message) => textOf(message)),
+        ["一", "二"],
+      );
     });
   });
 

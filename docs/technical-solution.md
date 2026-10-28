@@ -116,7 +116,10 @@ CLI 内置工具（`packages/core/src/agent/tools/`；除 `load_skill` 外全部
 - 路径统一走**词法 + 真实路径**两层校验（symlink/junction 逃逸会被拒绝），
   检索类工具遍历时还会逐个解析链接、跳过指向工作区外的条目（入口校验只覆盖起点）；
   凭据类文件（`.env*`、私钥、`*.pem` / `*.key`、`.npmrc`、`credentials`）默认禁止读写，
-  检索类工具遍历时同样跳过；
+  校验同时看**词法名与真实路径**（`notes.txt` 指向 `.env` 的软链接一样会被拒），
+  Windows 的 ADS 写法（`.npmrc::$DATA`）直接拒绝，检索类工具遍历时同样跳过；
+  bash 守卫另有 Windows 形态（盘符相对 `C:x`、盘根相对 `\Windows\x`、`%APPDATA%` /
+  `$env:APPDATA` 等），并按词法切词识别 `.e"nv"`、`del .env*` 这类变形；
 - **只读与并发是两个维度**：`READ_ONLY_TOOL_NAMES` 只表达"不修改 + 免确认"这唯一事实，
   可用性安全性（能不能和别的调用同时跑）由 `RegisteredTool.concurrent` /
   `ToolRegistry.canRunConcurrently(call)` 单独表达。两者混用过一次，就会出现"能并发却要确认"或"免确认却不该并发"。
@@ -365,8 +368,11 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
   于是它们能在 node 里直接测（连组件树的可挂载性都用 `react-dom/server`
   验了一遍）；`.tsx` 因此被排除在覆盖率统计之外。markdown 是例外——
   解析与渲染整体交给库，安全性改由渲染输出的断言来守。
-- **安全模型**：只监听 `127.0.0.1`，校验 `Host` / `Origin` 挡 DNS rebinding，
-  无令牌门禁（前提写进 client README，绑 `0.0.0.0` 前必须先造出新的前提）。
+- **安全模型**：只监听回环地址（`127.0.0.0/8` / `localhost` / `::1`；
+  `--host 0.0.0.0` 在参数解析阶段就被拒绝），`Host` 必须存在且为回环，
+  `Origin` 存在时必须与 `Host` 完全一致（含端口，`Origin: null` 直接拒绝），
+  以此挡 DNS rebinding 与"本机另一个端口的服务"。无令牌门禁（前提写进 client README；
+  真要跨机访问请走 SSH 隧道，而不是放开监听）。runId 末尾带随机数，不能按时间戳枚举。
 - **审批在网页与终端是同一个裁决**：风险等级与摘要由内核算好
   （`core/risk.ts` / `describeToolCallLines`），三档裁决与 CLI 的 `y` / `N` / `a` 同义；
   挂起不设超时，Run 被取消时挂起审批自动作废。

@@ -17,6 +17,7 @@
  * 事件流由订阅者各自去画。
  */
 
+import { randomBytes } from "node:crypto";
 import { AgentEvent, AgentMessage, Usage } from "./shared/protocol";
 import { BeforeToolCall, runAgentLoop } from "./agent/loop";
 import type { LlmModel } from "./agent/model";
@@ -119,10 +120,17 @@ export function visibleToolRegistry(
 
 let runSeq = 0;
 
-/** 生成 runId：可读且够唯一，日志里能一眼看出是第几个 */
+/**
+ * 生成 runId：可读、进程内唯一，并且**不可猜**。
+ *
+ * 时间戳 + 自增序号能被直接枚举：本机其它进程（或被 Origin 校验放过的
+ * 恶意页面）只要按 `run_<毫秒 base36>_<序号>` 试几轮，就能读到别人的
+ * `/api/runs/<id>/events`。末尾带上 4 字节随机数，枚举成本从"试几次"
+ * 变成"撞 2^32 次"。前缀与时间戳仍然保留，日志里照样一眼看出先后。
+ */
 export function newRunId(prefix = "run"): string {
   runSeq += 1;
-  return `${prefix}_${Date.now().toString(36)}_${runSeq.toString(36)}`;
+  return `${prefix}_${Date.now().toString(36)}_${runSeq.toString(36)}_${randomBytes(4).toString("hex")}`;
 }
 
 export class Run {

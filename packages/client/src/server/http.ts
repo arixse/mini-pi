@@ -22,27 +22,48 @@ import { HttpError } from "./errors";
 /**
  * 只接受本机来源。
  *
- * 判断两项：
- * - `Host` 必须是 localhost / 127.0.0.1 / [::1]（含端口）——DNS rebinding
- *   的攻击者无法伪造这一项，因为它来自攻击者自己的域名；
- * - `Origin` 若存在也必须同属本机（浏览器跨站请求一定带 Origin）。
+ * 判断三项：
+ * - `Host` **必须存在**且是 localhost / 127.0.0.0/8 / [::1]（含端口）——
+ *   DNS rebinding 的攻击者无法伪造这一项，因为它来自攻击者自己的域名。
+ *   HTTP/1.1 本来就要求带 Host：浏览器一定带，缺了它只可能是脚本构造的请求，
+ *   而没有 Host 也就没有"域名是不是本机"的可比对象，只能拒绝；
+ * - `Origin` 若存在也必须同属本机，且**端口与 Host 一致**。只比 hostname 不够：
+ *   `Origin: http://127.0.0.1:9999` 是另一个本地服务（攻击者常常就在本机跑一个），
+ *   端口不同就是跨源，不该放行；
+ * - `Origin: null`（沙箱 iframe、file:// 页面）没有可核对的来源，同样拒绝。
  */
 export function assertLocalRequest(req: IncomingMessage): void {
   const host = req.headers.host;
-  if (host && !isLocalHost(host)) {
+  if (!host) {
+    throw new HttpError(403, "请求缺少 Host 头，只接受本机浏览器的同源请求");
+  }
+  if (!isLocalHost(host)) {
     throw new HttpError(403, `只接受本机访问，收到 Host: ${host}`);
   }
+
   const origin = req.headers.origin;
-  if (origin && origin !== "null") {
-    let hostname: string;
-    try {
-      hostname = new URL(origin).hostname;
-    } catch {
-      throw new HttpError(403, `无法识别的 Origin: ${origin}`);
-    }
-    if (!isLocalHostname(hostname)) {
-      throw new HttpError(403, `只接受本机来源，收到 Origin: ${origin}`);
-    }
+  if (origin === undefined) {
+    // 同源导航 / 服务端调用可以不带 Origin（浏览器只在跨源时才发）
+    return;
+  }
+  if (origin === "null") {
+    throw new HttpError(403, "不接受 Origin: null（沙箱页面 / 本地文件）");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw new HttpError(403, `无法识别的 Origin: ${origin}`);
+  }
+  if (parsed.protocol !== "http:") {
+    throw new HttpError(403, `只接受 http 来源，收到 Origin: ${origin}`);
+  }
+  if (
+    !isLocalHostname(parsed.hostname) ||
+    parsed.host.toLowerCase() !== host.toLowerCase()
+  ) {
+    throw new HttpError(403, `只接受与 Host 一致的本机来源，收到 Origin: ${origin}`);
   }
 }
 
@@ -72,9 +93,28 @@ function isLocalHost(host: string): boolean {
   return isLocalHostname(hostname);
 }
 
+/** 回环网段：127.0.0.0/8、IPv6 的 ::1，以及 localhost 这个名字 */
+const LOOPBACK_IPV4 = /^127(?:\.\d{1,3}){3}$/;
+
 function isLocalHostname(hostname: string): boolean {
   const name = hostname.toLowerCase();
-  return name === "localhost" || name === "127.0.0.1" || name === "::1" || name === "0.0.0.0";
+  return name === "localhost" || name === "::1" || LOOPBACK_IPV4.test(name);
+}
+
+/**
+ * 只允许监听回环地址。
+ *
+ * 这个服务**没有鉴权**：能连上就能读工作区、跑命令、点审批。
+ * `--host 0.0.0.0` 等于把整台机器的工作区交给同一网段的所有人，
+ * 因此这里不是"建议"，是拒绝启动。确实要跨机访问的场景请走 SSH 隧道。
+ */
+export function assertLoopbackHost(host: string): void {
+  if (!isLocalHostname(host)) {
+    throw new Error(
+      `只允许监听回环地址（127.0.0.1 / localhost / ::1），收到：${host}。` +
+        `本服务没有鉴权，绑到其他地址等于把工作区交给整个网络；跨机访问请用 SSH 隧道。`,
+    );
+  }
 }
 
 /**
