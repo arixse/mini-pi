@@ -8,9 +8,13 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   EXEC_USAGE,
   ExecStreams,
+  execHomePaths,
   finalText,
   headlessApproval,
   parseExecArgs,
@@ -92,6 +96,38 @@ describe("parseExecArgs", () => {
 
   it("--cwd 缺值时报错", () => {
     assert.strictEqual(parseExecArgs(["--cwd"]).kind, "error");
+  });
+
+  it("--model / --home 能识别（评测隔离参数）", () => {
+    const parsed = parseExecArgs([
+      "--model",
+      "deepseek/deepseek-chat",
+      "--home",
+      "/tmp/mini-pi-eval-home",
+      "提问",
+    ]);
+    assert.strictEqual(parsed.kind, "exec");
+    assert.ok(parsed.kind === "exec" && parsed.args.model === "deepseek/deepseek-chat");
+    assert.ok(parsed.kind === "exec" && parsed.args.home === "/tmp/mini-pi-eval-home");
+  });
+
+  it("--model 必须是 供应商/模型名，只给模型名当场报错", () => {
+    const parsed = parseExecArgs(["--model", "gpt-4o", "提问"]);
+    assert.strictEqual(parsed.kind, "error");
+    assert.ok(parsed.kind === "error" && /供应商\/模型名/.test(parsed.message));
+    // 空供应商与空模型名同样不接受
+    assert.strictEqual(parseExecArgs(["--model", "/gpt-4o", "提问"]).kind, "error");
+    assert.strictEqual(parseExecArgs(["--model", "openai/", "提问"]).kind, "error");
+  });
+
+  it("execHomePaths：配置、凭据、会话、全局规则都落在 --home 下", () => {
+    const paths = execHomePaths("/tmp/home");
+    assert.deepStrictEqual(paths, {
+      settingsPath: join("/tmp/home", ".mini-pi", "settings.json"),
+      authPath: join("/tmp/home", ".mini-pi", "auth.json"),
+      sessionsDir: join("/tmp/home", ".mini-pi", "sessions"),
+      globalAgentsPath: join("/tmp/home", ".mini-pi", "AGENTS.md"),
+    });
   });
 
   it("-h / --help 走帮助", () => {
@@ -263,6 +299,48 @@ describe("runExec", () => {
     const code = await runExec([], io, deps(null, new ToolRegistry()));
     assert.strictEqual(code, 2);
     assert.match(io.err.join(""), /缺少提问/);
+  });
+
+  it("--model / --home 缺值时退出码 2（与 --cwd 缺值同一条错误路径）", async () => {
+    for (const flag of ["--model", "--home"]) {
+      const io = streams();
+      const code = await runExec([flag], io, deps(null, new ToolRegistry()));
+      assert.strictEqual(code, 2, `${flag} 缺值应以参数错误退出`);
+      assert.match(io.err.join(""), new RegExp(`${flag} 需要一个值`));
+    }
+  });
+
+  it("解析出的 --model / --home 原样交给 resolveModel，会话目录也指向 --home", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mini-pi-exec-home-"));
+    const seen: Array<{ model?: string; home?: string }> = [];
+    try {
+      const io = streams();
+      const model = mockModel([assistant([createTextContent("好的")])]);
+      const code = await runExec(
+        ["--model", "deepseek/deepseek-chat", "--home", home, "提问"],
+        io,
+        {
+          resolveModel: async (request) => {
+            seen.push(request);
+            return { model };
+          },
+          buildRegistry: () => new ToolRegistry(),
+          platform: { cwd: () => process.cwd() },
+        },
+      );
+
+      assert.strictEqual(code, 0);
+      assert.deepStrictEqual(seen, [
+        { model: "deepseek/deepseek-chat", home },
+      ]);
+      // 会话目录必须跟着 --home：否则评测会写真实用户的 ~/.mini-pi/sessions
+      assert.ok(
+        existsSync(join(home, ".mini-pi", "sessions")),
+        "SessionManager 应把会话目录建在 --home 下",
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

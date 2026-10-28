@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   applyModelChange,
   applyModelReload,
+  createModelFromOverride,
   createModelFromSettings,
   createSessionCallbacks,
   main,
@@ -218,6 +219,46 @@ describe("createModelFromSettings", () => {
     assert.strictEqual(result.model, null);
     assert.strictEqual(result.providerName, null);
     assert.strictEqual(result.modelName, null);
+  });
+
+  it("createModelFromOverride：按指定模型建，绕过 settings.json 的默认模型", async () => {
+    // 默认模型指向 openai，但评测要跑 deepseek：两个供应商都有凭据，
+    // 结果必须取 override，否则 --model 等于没生效
+    await settingsStore.setDefaultModel("openai/gpt-4");
+    await providerService.saveProviderConfig("openai", { apiKey: "openai-key" });
+    await providerService.saveProviderConfig("deepseek", { apiKey: "deepseek-key" });
+
+    const result = await createModelFromOverride(
+      providerService,
+      settingsStore,
+      "deepseek/deepseek-chat",
+    );
+
+    assert.ok(result.model);
+    assert.strictEqual(result.providerName, "deepseek");
+    assert.strictEqual(result.modelName, "deepseek-chat");
+  });
+
+  it("createModelFromOverride：供应商没凭据时返回 null，不偷偷落回默认模型", async () => {
+    await settingsStore.setDefaultModel("openai/gpt-4");
+    await providerService.saveProviderConfig("openai", { apiKey: "openai-key" });
+
+    const result = await createModelFromOverride(
+      providerService,
+      settingsStore,
+      "deepseek/deepseek-chat",
+    );
+
+    assert.strictEqual(result.model, null, "指定的供应商没配置就不能换人代跑");
+    assert.strictEqual(result.providerName, "deepseek");
+    assert.strictEqual(result.modelName, "deepseek-chat");
+  });
+
+  it("createModelFromOverride：格式不对时返回 null（解析层已拦，函数自身也不抛）", async () => {
+    for (const spec of ["gpt-4o", "/gpt-4o", "openai/"]) {
+      const result = await createModelFromOverride(providerService, settingsStore, spec);
+      assert.strictEqual(result.model, null, `${spec} 不该建出模型`);
+    }
   });
 });
 

@@ -20,6 +20,7 @@
  *   （日志与错误一律走 stderr）。
  */
 
+import { join } from "node:path";
 import { AgentEvent, AgentMessage, AssistantMessage } from "@minipi/core/shared/protocol";
 import { Run, RunResult } from "@minipi/core/run";
 import { createToolRegistry } from "@minipi/core/agent/tools/registry";
@@ -41,6 +42,8 @@ export const EXEC_USAGE = `用法：mini-pi exec <提问> [选项]
   --json            stdout 只输出 JSONL 事件流（一行一个事件，末行为 exec_done）
   --cwd <目录>      指定工作区，默认是当前目录
   --approval <档位> 审批档位：read-only（默认，写与执行一律拒绝）/ full-access（全部放行）
+  --model <供应商/模型> 覆盖 settings.json 的默认模型（评测与脚本用）
+  --home <目录>     配置、凭据与会话的根目录，默认是用户 home（评测隔离用）
   -h, --help        显示本帮助
 `;
 
@@ -49,7 +52,32 @@ export type ExecArgs = {
   json: boolean;
   cwd: string;
   approval: ApprovalMode;
+  /** 显式指定模型（格式 `供应商/模型名`），绕过 settings.json 的默认模型 */
+  model?: string;
+  /** 显式指定 home 根目录；配置、凭据、会话都从它下面取 */
+  home?: string;
 };
+
+/**
+ * `--home` 对应的四条路径。
+ *
+ * 集中在一处是为了让"隔离到底改了哪些目录"能被测试钉住：漏一条就等于
+ * 评测跑进了真实用户目录。skill 目录不在这里——它由 `homedir()` 决定，
+ * runner 会同时覆盖 HOME/USERPROFILE 作为第二道保险。
+ */
+export function execHomePaths(home: string): {
+  settingsPath: string;
+  authPath: string;
+  sessionsDir: string;
+  globalAgentsPath: string;
+} {
+  return {
+    settingsPath: join(home, ".mini-pi", "settings.json"),
+    authPath: join(home, ".mini-pi", "auth.json"),
+    sessionsDir: join(home, ".mini-pi", "sessions"),
+    globalAgentsPath: join(home, ".mini-pi", "AGENTS.md"),
+  };
+}
 
 export type ExecParseResult =
   | { kind: "exec"; args: ExecArgs }
@@ -71,6 +99,8 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
   let cwd = process.cwd();
   // 默认 read-only：headless 的 fail closed 起点
   let approval: ApprovalMode = "read-only";
+  let model: string | undefined;
+  let home: string | undefined;
   const words: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -78,7 +108,12 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
     if (token === "--json") {
       continue;
     }
-    if (token === "--cwd" || token === "--approval") {
+    if (
+      token === "--cwd" ||
+      token === "--approval" ||
+      token === "--model" ||
+      token === "--home"
+    ) {
       const next = argv[index + 1];
       if (!next) {
         return { kind: "error", message: `${token} 需要一个值` };
@@ -86,6 +121,26 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
       index += 1;
       if (token === "--cwd") {
         cwd = next;
+        continue;
+      }
+      if (token === "--model") {
+        // 当场校验格式：把 "gpt-4o" 当成供应商名去查 auth.json，报出来的
+        // "没有可用模型"会指向完全错误的方向
+        const slash = next.indexOf("/");
+        if (slash <= 0 || slash === next.length - 1) {
+          return {
+            kind: "error",
+            message: `无法识别的模型：${next}（格式为 供应商/模型名）`,
+          };
+        }
+        model = next;
+        continue;
+      }
+      if (token === "--home") {
+        if (!next.trim()) {
+          return { kind: "error", message: "--home 需要一个目录" };
+        }
+        home = next;
         continue;
       }
       const mode = parseApprovalMode(next);
@@ -113,7 +168,7 @@ export function parseExecArgs(argv: readonly string[]): ExecParseResult {
   if (!prompt) {
     return { kind: "error", message: "缺少提问" };
   }
-  return { kind: "exec", args: { prompt, json, cwd, approval } };
+  return { kind: "exec", args: { prompt, json, cwd, approval, model, home } };
 }
 
 /**
@@ -150,8 +205,13 @@ export type ExecDeps = {
   /**
    * 取模型。由调用方注入而不是在这里读 settings：
    * 一是 exec 不该知道"默认模型存在哪个文件里"，二是可测。
+   *
+   * 参数是解析后的 `--model` / `--home`：模型解析要跟着这两个开关走，
+   * 否则 `--home` 只隔离了会话、凭据仍读真实 home，隔离就是半截的。
    */
-  resolveModel: () => Promise<{ model: LlmModel | null }>;
+  resolveModel: (request: { model?: string; home?: string }) => Promise<{
+    model: LlmModel | null;
+  }>;
   /** 造工具注册表；缺省用真实注册表（含 skill 加载） */
   buildRegistry?: (workspaceRoot: string) => ToolRegistry;
   platform?: { cwd: () => string };
@@ -222,10 +282,11 @@ export async function runExec(
     return 2;
   }
 
-  const { prompt, json, cwd, approval } = parsed.args;
+  const { prompt, json, cwd, approval, model: modelOverride, home } = parsed.args;
   const workspaceRoot = cwd || deps.platform?.cwd() || process.cwd();
+  const homePaths = home ? execHomePaths(home) : null;
 
-  const { model } = await deps.resolveModel();
+  const { model } = await deps.resolveModel({ model: modelOverride, home });
   if (!model) {
     streams.stderr.write(
       "mini-pi exec: 没有可用模型，请先运行 mini-pi 并用 /login 与 /model 配置\n",
@@ -234,7 +295,16 @@ export async function runExec(
   }
 
   const skillLoader = new SkillLoader(workspaceRoot);
-  const sessionManager = new SessionManager(workspaceRoot, { skillLoader });
+  const sessionManager = new SessionManager(workspaceRoot, {
+    skillLoader,
+    // --home 生效时会话必须跟着走：否则评测会读写真实用户的会话历史
+    ...(homePaths
+      ? {
+          sessionsDir: homePaths.sessionsDir,
+          globalAgentsPath: homePaths.globalAgentsPath,
+        }
+      : {}),
+  });
   const registry =
     deps.buildRegistry?.(workspaceRoot) ??
     createToolRegistry(workspaceRoot, { skillLoader });
