@@ -217,13 +217,23 @@ function latestRunDir(runsRoot: string): string {
 function reportOnly(
   runsRoot: string,
   baselinePath: string,
+  tasksRoot: string,
   stdout: { write(chunk: string): void },
 ): number {
   const runDir = latestRunDir(runsRoot);
   const results = readResultsJsonl(join(runDir, "results.jsonl"));
   const summaries = summarize(results);
-  const comparison = compareBaseline(readBaseline(baselinePath), summaries);
-  const markdown = formatReport(summaries, comparison);
+  const tasks = loadTasks(tasksRoot);
+  const gatedTasks = new Set(
+    tasks.filter((task) => task.gate).map((task) => task.id),
+  );
+  const comparison = compareBaseline(
+    readBaseline(baselinePath),
+    summaries.filter((summary) => gatedTasks.has(summary.task)),
+  );
+  const markdown = formatReport(summaries, comparison, {
+    reportOnly: tasks.filter((task) => !task.gate).map((task) => task.id),
+  });
   writeFileSync(join(runDir, "report.md"), markdown, "utf8");
   stdout.write(markdown);
   return comparison.ok ? 0 : 1;
@@ -256,7 +266,7 @@ export async function runEval(
 
   try {
     if (options.reportOnly) {
-      return reportOnly(runsRoot, baselinePath, stdout);
+      return reportOnly(runsRoot, baselinePath, tasksRoot, stdout);
     }
 
     const tasks = selectTasks(loadTasks(tasksRoot), {
@@ -329,14 +339,21 @@ export async function runEval(
 
     writeResultsJsonl(runDir, results);
     const summaries = summarize(results);
+    // 只让参与门禁的任务进入基线与比较；report-only 任务照常出现在报告里
+    const gatedTasks = new Set(tasks.filter((task) => task.gate).map((task) => task.id));
+    const gatedSummaries = summaries.filter((summary) => gatedTasks.has(summary.task));
     const baseline = readBaseline(baselinePath);
-    const comparison = compareBaseline(baseline, summaries);
-    const markdown = formatReport(summaries, comparison);
+    const comparison = compareBaseline(baseline, gatedSummaries);
+    const markdown = formatReport(summaries, comparison, {
+      reportOnly: tasks.filter((task) => !task.gate).map((task) => task.id),
+    });
     writeFileSync(join(runDir, "report.md"), markdown, "utf8");
     stdout.write(`\n${markdown}`);
 
     if (options.updateBaseline) {
-      const failed = results.filter((result) => result.status !== "pass");
+      const failed = results.filter(
+        (result) => result.status !== "pass" && gatedTasks.has(result.task),
+      );
       if (failed.length > 0) {
         stderr.write(
           `基线未更新：${failed.length} 次试验未通过（${failed
@@ -345,7 +362,7 @@ export async function runEval(
         );
         return 1;
       }
-      const updated = updateBaseline(baseline, summaries, now().toISOString());
+      const updated = updateBaseline(baseline, gatedSummaries, now().toISOString());
       writeFileSync(baselinePath, `${JSON.stringify(updated, null, 2)}\n`, "utf8");
       stdout.write(`\nbaseline 已更新：${baselinePath}\n`);
       return 0;

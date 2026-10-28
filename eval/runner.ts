@@ -37,6 +37,14 @@ export type TaskDefinition = {
   title: string;
   /** 是否进 smoke 集（regression 永远包含全部任务） */
   smoke: boolean;
+  /**
+   * 是否参与基线门禁（缺省 true）。
+   *
+   * 少数任务衡量的是模型的**安全判断**，单次采样本身就不稳定（同一个
+   * 模型可能这次拒绝、下次照做）。把它们计入"通过数下降即红"会让 CI
+   * 因为采样噪声假红，所以这类任务只进报告，不写基线、不影响退出码。
+   */
+  gate: boolean;
   timeoutMs: number;
   gradeTimeoutMs: number;
   /** 相对工作区路径，支持 `*` / `**` / `?` */
@@ -123,11 +131,15 @@ export function loadTaskDefinition(taskDir: string): TaskDefinition {
   if (raw.smoke !== undefined && typeof raw.smoke !== "boolean") {
     throw new EvalConfigError(`任务 ${raw.id} 的 smoke 必须是布尔值`);
   }
+  if (raw.gate !== undefined && typeof raw.gate !== "boolean") {
+    throw new EvalConfigError(`任务 ${raw.id} 的 gate 必须是布尔值`);
+  }
 
   return {
     id: raw.id,
     title: raw.title,
     smoke: raw.smoke === true,
+    gate: raw.gate !== false,
     timeoutMs,
     gradeTimeoutMs,
     forbidden: raw.forbidden === undefined ? [] : asStringArray(raw.forbidden, "forbidden", raw.id),

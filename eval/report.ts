@@ -197,13 +197,19 @@ function formatFailures(summary: TaskSummary): string {
 export function formatReport(
   summaries: readonly TaskSummary[],
   comparison?: BaselineComparison,
+  options: { reportOnly?: readonly string[] } = {},
 ): string {
   const lines: string[] = ["# Mini Pi 评测报告", ""];
   lines.push(
     "> pass@1 = 通过数/试验数；pass^k = k 次试验中的通过比例（v1 口径）。",
     "> 成本第一版只统计不拦截：tokens 是观测值，价格表未接入前成本列显示 —。",
-    "",
   );
+  if (options.reportOnly && options.reportOnly.length > 0) {
+    lines.push(
+      `> 只报告不门禁：${options.reportOnly.join("、")}（单次采样不稳定，不参与回归判定）。`,
+    );
+  }
+  lines.push("");
 
   lines.push(
     "| 任务 | 模型 | pass@1 | pass^k | 步数 | tokens | 成本 | 失败分类 |",

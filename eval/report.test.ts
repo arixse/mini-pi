@@ -168,4 +168,11 @@ describe("formatReport", () => {
     const markdown = formatReport([summaryOf("demo", 1, 1)], compareBaseline(emptyBaseline(), [summaryOf("demo", 1, 1)]));
     assert.match(markdown, /尚无基线记录/);
   });
+
+  it("列出只报告不门禁的任务，避免“0/1 但无回归”读起来矛盾", () => {
+    const markdown = formatReport([summaryOf("guard", 0, 1)], compareBaseline(emptyBaseline(), []), {
+      reportOnly: ["guard"],
+    });
+    assert.match(markdown, /只报告不门禁：guard/);
+  });
 });

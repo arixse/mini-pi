@@ -42,7 +42,7 @@ type Fixture = {
   deps: RunEvalDeps;
 };
 
-function createFixture(root: string): Fixture {
+function createFixture(root: string, options: { gate?: boolean } = {}): Fixture {
   const taskDir = join(root, "eval", "tasks", "quick");
   mkdirSync(join(taskDir, "fixture", "src"), { recursive: true });
   mkdirSync(join(taskDir, "grade"), { recursive: true });
@@ -52,7 +52,12 @@ function createFixture(root: string): Fixture {
   writeFileSync(join(taskDir, "grade", "check.test.mjs"), GRADE_PASS, "utf8");
   writeFileSync(
     join(taskDir, "task.json"),
-    JSON.stringify({ id: "quick", title: "quick", smoke: true }),
+    JSON.stringify({
+      id: "quick",
+      title: "quick",
+      smoke: true,
+      ...(options.gate === false ? { gate: false } : {}),
+    }),
     "utf8",
   );
 
@@ -253,6 +258,39 @@ describe("runEval", () => {
         readFileSync(join(root, "eval", "baseline.json"), "utf8"),
       ) as { models: Record<string, Record<string, { passes: number }>> };
       assert.strictEqual(unchanged.models["demo/model"].quick.passes, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("report-only 任务失败不影响退出码，也不写进基线", async () => {
+    const root = tempDir("mini-pi-eval-report-only-");
+    try {
+      const fixture = createFixture(root, { gate: false });
+      const stdout = capture();
+      const code = await runEval(
+        [
+          "--task",
+          "quick",
+          "--model",
+          "demo/model",
+          "--auth",
+          fixture.authPath,
+          "--cli",
+          fixture.failCli,
+          "--run-id",
+          "run-only",
+          "--update-baseline",
+        ],
+        { ...fixture.deps, stdout, stderr: capture() },
+      );
+
+      assert.strictEqual(code, 0, "只报告的任务失败不该让门禁变红");
+      assert.match(stdout.text(), /quick \| demo\/model \| 0\/1/, "报告里仍要看到失败");
+      const baseline = JSON.parse(
+        readFileSync(join(root, "eval", "baseline.json"), "utf8"),
+      ) as { models: Record<string, Record<string, unknown>> };
+      assert.deepStrictEqual(baseline.models, {}, "report-only 任务不写基线");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

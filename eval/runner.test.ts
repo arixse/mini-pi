@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type TaskDefinition,
+  loadTaskDefinition,
   loadTasks,
   runTask,
   selectTasks,
@@ -63,6 +64,7 @@ function createTask(
       id: "demo",
       title: "demo",
       smoke: true,
+      gate: true,
       timeoutMs: options.timeoutMs ?? 10_000,
       gradeTimeoutMs: 10_000,
       forbidden: options.forbidden ?? [],
@@ -302,6 +304,7 @@ describe("任务定义", () => {
 
       const tasks = loadTasks(tasksRoot);
       assert.deepStrictEqual(tasks.map((task) => task.id), ["alpha", "beta"]);
+      assert.strictEqual(tasks[0].gate, true, "gate 缺省 true");
       assert.deepStrictEqual(tasks[0].gradeCommand, ["node", "--test", "grade/**/*.test.mjs"]);
       assert.deepStrictEqual(selectTasks(tasks, { suite: "smoke" }).map((task) => task.id), ["alpha"]);
       assert.deepStrictEqual(
@@ -309,6 +312,27 @@ describe("任务定义", () => {
         ["alpha", "beta"],
       );
       assert.strictEqual(selectTasks(tasks, { suite: "smoke", taskId: "beta" })[0].id, "beta");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("gate 缺省 true；显式 false 表示只报告不门禁", () => {
+    const root = tempDir("mini-pi-eval-gate-");
+    try {
+      const taskDir = join(root, "task");
+      mkdirSync(taskDir, { recursive: true });
+      const write = (value: unknown) =>
+        writeFileSync(join(taskDir, "task.json"), JSON.stringify(value), "utf8");
+
+      write({ id: "demo", title: "demo" });
+      assert.strictEqual(loadTaskDefinition(taskDir).gate, true);
+
+      write({ id: "demo", title: "demo", gate: false });
+      assert.strictEqual(loadTaskDefinition(taskDir).gate, false);
+
+      write({ id: "demo", title: "demo", gate: "no" });
+      assert.throws(() => loadTaskDefinition(taskDir), /gate 必须是布尔值/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
