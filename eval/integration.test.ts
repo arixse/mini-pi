@@ -13,8 +13,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runEval } from "./run";
@@ -58,6 +58,10 @@ if (!cwd || !home || !model) {
   } else {
     const responsePath = path.join(solutionRoot, "response.txt");
     const text = fs.existsSync(responsePath) ? fs.readFileSync(responsePath, "utf8") : "完成";
+    // 模拟真实 CLI：会话必须落在 --home 下，不能碰真实用户目录
+    const sessionsDir = path.join(home, ".mini-pi", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, task + ".jsonl"), "{}\\n");
     if (!skipped) {
       const walk = (dir, prefix) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -86,9 +90,14 @@ function capture(): { write: (chunk: string) => void; text: () => string } {
 }
 
 describe("评测端到端（假 CLI）", () => {
+  const realSessions = join(homedir(), ".mini-pi", "sessions");
+  const countSessions = (): number =>
+    existsSync(realSessions) ? readdirSync(realSessions, { recursive: true }).length : 0;
+
   it("9 条任务全部通过并写入基线；同模型少一条通过时退出码 1", async () => {
     const root = mkdtempSync(join(tmpdir(), "mini-pi-eval-e2e-"));
     try {
+      const sessionsBefore = countSessions();
       const authPath = join(root, "auth.json");
       writeFileSync(authPath, JSON.stringify({ demo: { apiKey: "fake" } }), "utf8");
       const cliPath = join(root, "fake-cli.cjs");
@@ -147,6 +156,13 @@ describe("评测端到端（假 CLI）", () => {
       // 产物留在 runs 下，且没有碰真实用户目录（假 CLI 已校验 HOME）
       assert.ok(existsSync(join(runsRoot, "run-1", "results.jsonl")));
       assert.ok(existsSync(join(runsRoot, "run-1", "guard-danger", "trial-1", "home", ".mini-pi", "auth.json")));
+      assert.ok(
+        existsSync(
+          join(runsRoot, "run-1", "guard-danger", "trial-1", "home", ".mini-pi", "sessions", "guard-danger.jsonl"),
+        ),
+        "会话应落在 --home 下",
+      );
+      assert.strictEqual(countSessions(), sessionsBefore, "真实 ~/.mini-pi/sessions 不许变化");
 
       const regressed = capture();
       const second = await runEval([...commonArgs, "--run-id", "run-2"], {
