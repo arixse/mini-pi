@@ -1,0 +1,8 @@
+{
+  "id": "diagnose-readonly",
+  "title": "只读诊断中位数实现，指出文件与行号",
+  "smoke": false,
+  "timeoutMs": 120000,
+  "gradeTimeoutMs": 60000,
+  "forbidden": ["**"]
+}

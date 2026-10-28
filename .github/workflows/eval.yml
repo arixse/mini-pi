@@ -1,0 +1,88 @@
+name: Eval
+
+# 评测要花真 token，所以不跟着每次 push 跑：
+# - workflow_dispatch：手动选 smoke / regression；
+# - schedule：每晚跑一次 regression（3 次/任务），用来发现"慢慢变差"；
+# - pull_request：只有打了 `eval` 标签才跑 smoke——由人决定这次改动值不值得测。
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 评测集
+        type: choice
+        options: [smoke, regression]
+        default: smoke
+  schedule:
+    # 02:00 CST（18:00 UTC）
+    - cron: "0 18 * * *"
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'eval')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # 仓库变量：被测模型（格式 供应商/模型名）。
+      # 必须与 eval/baseline.json 里的模型键一致，门禁才有比较对象。
+      MINI_PI_EVAL_MODEL: ${{ vars.MINI_PI_EVAL_MODEL }}
+      # 仓库 secret：auth.json 的完整内容（只写进临时 home，不落仓库）。
+      MINI_PI_AUTH_JSON: ${{ secrets.MINI_PI_AUTH_JSON }}
+      EVAL_SUITE: ${{ github.event.inputs.suite || (github.event_name == 'schedule' && 'regression' || 'smoke') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # prepare 会顺带 build:cli，评测 spawn 的就是这个产物
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # 缺密钥时不失败：fork / 新仓库还没配 secret 是常态，
+      # 让 workflow 红着会掩盖真正的回归。notice 让"跳过"仍然可见。
+      - name: 缺少密钥
+        if: env.MINI_PI_AUTH_JSON == '' || env.MINI_PI_EVAL_MODEL == ''
+        run: |
+          echo "::notice title=评测跳过::未配置 MINI_PI_AUTH_JSON 或 MINI_PI_EVAL_MODEL，本次不跑评测。"
+
+      - name: 写入隔离凭据
+        if: env.MINI_PI_AUTH_JSON != '' && env.MINI_PI_EVAL_MODEL != ''
+        run: |
+          mkdir -p "$HOME/.mini-pi"
+          printf '%s' "$MINI_PI_AUTH_JSON" > "$HOME/.mini-pi/auth.json"
+          chmod 600 "$HOME/.mini-pi/auth.json"
+
+      - name: 跑评测（${{ env.EVAL_SUITE }}）
+        if: env.MINI_PI_AUTH_JSON != '' && env.MINI_PI_EVAL_MODEL != ''
+        run: pnpm eval --suite "$EVAL_SUITE"
+
+      - name: 报告写入 Job Summary
+        if: always() && env.MINI_PI_AUTH_JSON != '' && env.MINI_PI_EVAL_MODEL != ''
+        run: |
+          latest=$(ls -td eval/.runs/*/ 2>/dev/null | head -n1 || true)
+          if [ -n "$latest" ] && [ -f "${latest}report.md" ]; then
+            cat "${latest}report.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # 失败时 transcript / grade.log 才是排查入口，必须留档
+      - name: 上传评测产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ env.EVAL_SUITE }}-${{ github.run_id }}
+          path: eval/.runs
+          retention-days: 14
+          if-no-files-found: ignore

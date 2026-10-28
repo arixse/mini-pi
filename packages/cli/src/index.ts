@@ -13,13 +13,14 @@ import {
   createSubAgentTool,
 } from "@minipi/core/agent/subagentTool";
 import { startRepl } from "./repl";
-import { runExec } from "./exec";
+import { runExec, execHomePaths } from "./exec";
 import { composeLoadedSkillSections } from "./skills";
 import { buildSystemPrompt } from "@minipi/core/prompt";
 import { detectProjectStack, formatProjectStack } from "@minipi/core/projectStack";
 import {
   ContextWindowSource,
   ModelProviderService,
+  ProviderStore,
   ResolvedContextWindow,
   SettingsStore,
   resolveContextWindow,
@@ -199,6 +200,44 @@ export async function createModelFromSettings(
 }
 
 /**
+ * 用显式的 `供应商/模型名` 建模型，绕过 settings.json 的默认模型。
+ *
+ * 评测要固定"被测模型"：不同任务并发跑不同模型时，共用一份 settings.json
+ * 的 defaultModel 会互相踩；而 `--model` 让每个进程自己说了算。
+ * 凭据仍从 `ProviderStore`（`--home` 指向的 auth.json）读，供应商没配
+ * apiKey 时返回 null，由调用方按"没有可用模型"处理。
+ */
+export async function createModelFromOverride(
+  providerService: ModelProviderService,
+  settingsStore: SettingsStore,
+  spec: string,
+): Promise<{ model: LlmModel | null; providerName: string | null; modelName: string | null }> {
+  const slash = spec.indexOf("/");
+  if (slash <= 0 || slash === spec.length - 1) {
+    return { model: null, providerName: null, modelName: null };
+  }
+  const providerName = spec.slice(0, slash);
+  const modelName = spec.slice(slash + 1);
+
+  // 与 createModelFromSettings 同一个理由：客户端存的自定义供应商要在
+  // 内存里注册回来，否则第一跳就抛 "Provider not found"
+  await providerService.loadCustomProviders();
+  const maxTokens = await settingsStore.getMaxTokens();
+  const providerConfig = await providerService.getProviderConfig(providerName);
+  if (!providerConfig.apiKey) {
+    return { model: null, providerName, modelName };
+  }
+  const model = await createModelFromProvider({
+    apiKey: providerConfig.apiKey,
+    baseUrl: providerConfig.baseUrl,
+    model: modelName,
+    sdkType: providerConfig.sdkType,
+    maxTokens,
+  });
+  return { model, providerName, modelName };
+}
+
+/**
  * 尝试从已有 provider 配置中自动创建默认配置
  * 遍历已注册的 provider，找到第一个有 apiKey 的，使用其配置创建默认设置
  */
@@ -273,10 +312,15 @@ export async function main(argv: string[] = process.argv.slice(2)) {
       stdout: process.stdout,
       stderr: process.stderr,
     }, {
-      resolveModel: async () => {
-        const service = new ModelProviderService();
-        const settings = new SettingsStore();
-        const { model } = await createModelFromSettings(service, settings);
+      resolveModel: async ({ model: modelOverride, home }) => {
+        const homePaths = home ? execHomePaths(home) : null;
+        const service = new ModelProviderService(
+          homePaths ? new ProviderStore(homePaths.authPath) : undefined,
+        );
+        const settings = new SettingsStore(homePaths?.settingsPath);
+        const { model } = modelOverride
+          ? await createModelFromOverride(service, settings, modelOverride)
+          : await createModelFromSettings(service, settings);
         return { model };
       },
     });

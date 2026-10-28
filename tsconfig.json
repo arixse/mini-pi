@@ -5,5 +5,5 @@
       "@minipi/core/*": ["./packages/core/src/*"]
     }
   },
-  "include": ["tests", "scripts"]
+  "include": ["tests", "scripts", "eval"]
 }
