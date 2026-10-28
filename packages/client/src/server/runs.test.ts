@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { RunRecord, cacheUsageOf } from "./runs";
+import { RunRecord, cacheUsageOf, prunableRun } from "./runs";
 
 function record(now: number): RunRecord {
   return new RunRecord({
@@ -87,5 +87,35 @@ describe("RunRecord · 缓存统计", () => {
       cacheUsageOf({ input: 100, output: 1, totalTokens: 101 }),
       { input: 100, read: 0, write: 0, reported: false },
     );
+  });
+});
+
+/**
+ * 记录裁剪的边界：删错的两种后果都是"用户找不到自己的东西"——
+ * 删了还在跑的控制不了任务，删了未合并的隔离 Run 则让 worktree 变孤儿。
+ */
+describe("prunableRun", () => {
+  const base = {
+    endedAt: 1_000,
+    isolated: false,
+    workspaceReleased: false,
+    workspaceMerged: false,
+  };
+
+  it("还在跑 / 排队的记录不能裁", () => {
+    assert.strictEqual(prunableRun({ ...base, endedAt: null }), false);
+  });
+
+  it("已收尾的普通记录可以裁", () => {
+    assert.strictEqual(prunableRun(base), true);
+  });
+
+  it("隔离改动还没合并也没丢弃时必须保留", () => {
+    assert.strictEqual(prunableRun({ ...base, isolated: true }), false);
+  });
+
+  it("隔离改动已合并或已丢弃后可以裁", () => {
+    assert.strictEqual(prunableRun({ ...base, isolated: true, workspaceMerged: true }), true);
+    assert.strictEqual(prunableRun({ ...base, isolated: true, workspaceReleased: true }), true);
   });
 });

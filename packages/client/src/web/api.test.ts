@@ -17,6 +17,7 @@ import {
   REQUEST_TIMEOUT_MS,
   api,
   reconnectDelay,
+  subscribeEvents,
   subscribeRun,
 } from "./api";
 
@@ -189,7 +190,7 @@ describe("事件流游标", () => {
     close(): void {}
   }
 
-  it("游标只进不退：stream_gap 那帧带的是旧游标，不能把断点退回去", async () => {
+  it("普通帧的 id 只进不退，缺口帧的 lastSeq 过旧时才回退游标", async () => {
     const originalEventSource = (globalThis as { EventSource?: unknown }).EventSource;
     (globalThis as { EventSource?: unknown }).EventSource = FakeSource;
     // connect 的重连退避用 `window.setTimeout`：node 里补一个最小的 window
@@ -200,10 +201,12 @@ describe("事件流游标", () => {
     };
     const originalFetch = globalThis.fetch;
     try {
+      const cursors: number[] = [];
       const handle = subscribeRun("run_1", 0, {
         onEvent: () => undefined,
         onStatus: () => undefined,
         onError: () => undefined,
+        onCursor: (seq) => cursors.push(seq),
       });
       const source = FakeSource.last!;
       assert.ok(source.url.endsWith("cursor=0"));
@@ -211,18 +214,58 @@ describe("事件流游标", () => {
       source.emit("run_state", { type: "run_state", status: "running" }, 10);
       assert.equal(handle.cursor(), 10);
 
-      // 服务端的缺口帧用**请求时的游标**当 id：盲目赋值会让下一次重连重放
-      source.emit("stream_gap", { type: "stream_gap", lastSeq: 4 }, 4);
-      assert.equal(handle.cursor(), 10, "游标只能前进");
+      // 普通帧带旧 id 时不能把断点退回去
+      source.emit("run_state", { type: "run_state", status: "running" }, 8);
+      assert.equal(handle.cursor(), 10, "普通帧不能回退游标");
 
-      // 断线重连沿用同一个游标，而不是回到 0 重放整段
-      source.onerror?.();
-      assert.equal(FakeSource.last?.url, source.url, "退避期间还没重连");
+      // 缺口帧自己的 id 是"请求时的游标"，不能因为 id 就前进/后退；
+      // 但它报告的 lastSeq 比当前游标小，说明游标来自旧服务/旧日志，
+      // 必须回退，否则每次重连都还是缺口、永远补不到事件
+      source.emit("stream_gap", { type: "stream_gap", firstSeq: 1, lastSeq: 4 }, 10);
+      assert.equal(handle.cursor(), 4, "游标来自旧日志时要回退到服务端末尾");
+      assert.deepEqual(cursors, [10, 4]);
+
+      // 缓冲挤占时 lastSeq 更大：保持当前游标，重连才能补齐还留着的部分
+      source.emit("stream_gap", { type: "stream_gap", firstSeq: 30, lastSeq: 40 }, 4);
+      assert.equal(handle.cursor(), 4, "正常的缓冲缺口不该回退游标");
+
       handle.close();
     } finally {
       (globalThis as { EventSource?: unknown }).EventSource = originalEventSource;
       (globalThis as { window?: unknown }).window = originalWindow;
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("应用级流的缺口包在 event 里，同样能识别并回退游标", async () => {
+    const originalEventSource = (globalThis as { EventSource?: unknown }).EventSource;
+    (globalThis as { EventSource?: unknown }).EventSource = FakeSource;
+    const originalWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    };
+    try {
+      const handle = subscribeEvents(0, {
+        onEvent: () => undefined,
+        onStatus: () => undefined,
+        onError: () => undefined,
+      });
+      const source = FakeSource.last!;
+
+      source.emit("run_state", { runId: "run_9", event: { type: "run_state", status: "running" } }, 12);
+      assert.equal(handle.cursor(), 12);
+
+      source.emit(
+        "stream_gap",
+        { runId: "", event: { type: "stream_gap", firstSeq: 1, lastSeq: 3 } },
+        12,
+      );
+      assert.equal(handle.cursor(), 3, "全局流重启后不能让旧游标卡死重连");
+      handle.close();
+    } finally {
+      (globalThis as { EventSource?: unknown }).EventSource = originalEventSource;
+      (globalThis as { window?: unknown }).window = originalWindow;
     }
   });
 });

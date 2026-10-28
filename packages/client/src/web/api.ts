@@ -360,6 +360,34 @@ export function subscribeEvents(cursor: number, handlers: GlobalStreamHandlers):
 }
 
 /**
+ * 从一帧载荷里取 `stream_gap.lastSeq`。
+ *
+ * per-run 流的载荷就是事件本身，应用级流多包一层 `{ runId, event }`；
+ * 两种形状都要认，否则全局流永远修不好游标。不是缺口帧时返回 null。
+ */
+function gapLastSeq(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const typed = payload as { type?: unknown; lastSeq?: unknown; event?: unknown };
+  if (typed.type === "stream_gap") {
+    return typeof typed.lastSeq === "number" && Number.isFinite(typed.lastSeq)
+      ? typed.lastSeq
+      : null;
+  }
+  const inner = typed.event;
+  if (inner && typeof inner === "object") {
+    const nested = inner as { type?: unknown; lastSeq?: unknown };
+    if (nested.type === "stream_gap") {
+      return typeof nested.lastSeq === "number" && Number.isFinite(nested.lastSeq)
+        ? nested.lastSeq
+        : null;
+    }
+  }
+  return null;
+}
+
+/**
  * 两条流共用的连接/重连/游标逻辑。
  *
  * `stopOn` 返回真时主动收掉连接（per-run 流在 `run_done` 之后收）；
@@ -431,6 +459,20 @@ function connect(
           payload = JSON.parse(message.data) as unknown;
         } catch {
           return;
+        }
+        /**
+         * 服务端重启 / 换了新日志时，客户端手里的游标可能比服务端当前的
+         * `lastSeq` 还大：此后每次重连都被判成"缺口"，却一条事件也补不到，
+         * 界面就永远停在断流状态。
+         *
+         * 只有 `lastSeq < current` 才回退——这是"游标来自旧服务"的唯一证据；
+         * 正常的缓冲挤占恰好相反（`lastSeq` 更大），继续用当前游标重连
+         * 才能把还留着的部分补齐。
+         */
+        const gapEnd = gapLastSeq(payload);
+        if (gapEnd !== null && gapEnd < current) {
+          current = gapEnd;
+          handlers.onCursor?.(current);
         }
         handlers.onPayload(payload);
         if (stopOn?.(payload)) {

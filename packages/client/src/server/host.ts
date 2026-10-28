@@ -15,7 +15,7 @@
  */
 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
 import { createModelFromProvider, type LlmModel } from "@minipi/core/agent/model";
 import { createToolRegistry, READ_ONLY_TOOLS } from "@minipi/core/agent/tools/registry";
 import type { ToolRegistry } from "@minipi/core/agent/tools/registry";
@@ -58,7 +58,7 @@ import { ApprovalBroker, newApprovalId } from "./broker";
 import { HttpError } from "./errors";
 import { isRunMetaEvent } from "./journal";
 import { previewToolArgs } from "../shared/preview";
-import { RunRecord, cacheUsageOf } from "./runs";
+import { RunRecord, cacheUsageOf, prunableRun } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
 import {
   isTier,
@@ -148,7 +148,10 @@ type SessionContext = {
   messages: AgentMessage[];
 };
 
-/** 侧栏最多显示多少个 Run：再多的历史属于会话列表，不属于"进行中" */
+/**
+ * 常驻 Run 记录的上限：超出的终态记录会被 {@link WorkspaceHost.pruneRecords}
+ * 丢掉。再多的历史属于会话列表，不属于"进行中"。
+ */
 const MAX_RUNS = 50;
 
 export class WorkspaceHost {
@@ -258,8 +261,10 @@ export class WorkspaceHost {
   /** 本宿主（一个工作区）的状态；AppServer 把池里每份聚合成 /api/state */
   async state(): Promise<HostState> {
     const sessions = this.sessionSummaries();
+    // 记录已在 finish 时由 pruneRecords 收口（最多 MAX_RUNS 条），这里不再
+    // slice：尚未合并的旧隔离 Run 会被重新计数的窗口挤掉，用户就找不到
+    // 合并/丢弃入口了。超出上限的部分恰好都是"必须可见"的那些。
     const runs = [...this.records.values()]
-      .slice(-MAX_RUNS)
       .reverse()
       .map((record) =>
         record.summary(this.contextWindow, this.broker.countFor(record.runId)),
@@ -679,10 +684,41 @@ export class WorkspaceHost {
     if (!stats.isFile()) {
       throw new HttpError(400, `不是一个文件：${input}`);
     }
-    const buffer = readFileSync(target);
+    /**
+     * 只读前缀，而不是 `readFileSync` 整读再截断。
+     *
+     * 这个接口由一次点击触发，工作区里却可能有几百 MB 的日志或构建产物：
+     * 整读会把它们一次性搬进内存再序列化，浏览器和服务进程都可能被拖死。
+     * 读多少由 `MAX_FILE_PREVIEW_BYTES` 决定，二进制判定也只针对这段前缀
+     * （真正的二进制文件 NUL 总在开头，不会藏在 256KB 之后）。
+     */
+    const length = Math.min(stats.size, MAX_FILE_PREVIEW_BYTES);
+    let buffer = Buffer.alloc(length);
+    if (length > 0) {
+      let fd: number | undefined;
+      try {
+        fd = openSync(target, "r");
+        let offset = 0;
+        while (offset < length) {
+          const read = readSync(fd, buffer, offset, length - offset, offset);
+          if (read <= 0) {
+            break;
+          }
+          offset += read;
+        }
+        if (offset < length) {
+          // 读的过程中文件被截断：只按实际读到的内容呈现
+          buffer = buffer.subarray(0, offset);
+        }
+      } finally {
+        if (fd !== undefined) {
+          closeSync(fd);
+        }
+      }
+    }
     const binary = buffer.includes(0);
-    const truncated = buffer.length > MAX_FILE_PREVIEW_BYTES;
-    const shown = binary ? "" : buffer.subarray(0, MAX_FILE_PREVIEW_BYTES).toString("utf8");
+    const truncated = stats.size > MAX_FILE_PREVIEW_BYTES;
+    const shown = binary ? "" : buffer.toString("utf8");
     return {
       path: isAbsolute(input) ? relative(base, target) : input,
       content: shown,
@@ -874,7 +910,14 @@ export class WorkspaceHost {
     }
     record.cancel();
     if (record.status === "queued") {
-      // 还没轮到它：没有 Run 可取消，直接把状态收掉，execute 会看到并跳过
+      /**
+       * 还没轮到它：没有 Run 可取消，直接把状态收掉。
+       *
+       * `finish` 会**同步**认领终态，因此随后的队列推进一定能看到
+       * `status === "cancelled"` 而跳过这条执行。旧实现要等一个
+       * `setImmediate` 才置状态，排队中的 Run 会在这段空窗里被真正跑起来，
+       * 最后推两条 `run_done`（一条 cancelled、一条 done）。
+       */
       void this.finish(record, "cancelled");
     }
   }
@@ -1106,14 +1149,26 @@ export class WorkspaceHost {
   }
 
   private async finish(record: RunRecord, status: RunPhase, error?: string): Promise<void> {
+    /**
+     * 幂等：只有第一次收尾作数。
+     *
+     * 取消与执行本身都可能走到这里（排队取消 + 队列随后推进、执行失败 +
+     * 取消），不设防就会推两条 `run_done`，前端按最后一条算状态，可能把
+     * 一次取消显示成完成。终态必须在**任何 await 之前**认领，否则
+     * `execute` 会在空窗里看到 `queued` 并把已取消的 Run 跑起来。
+     */
+    if (record.endedAt !== null) {
+      return;
+    }
+    record.status = status;
+    record.error = error ?? null;
+    record.endedAt = this.now();
+
     // 先作废未裁决的审批，并让它们的 continuation 先跑完：
     // 否则前端会先收到 run_done、再收到一张"已失效"的卡，顺序反了会闪一下
     this.broker.cancelRun(record.runId);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    record.status = status;
-    record.error = error ?? null;
-    record.endedAt = this.now();
     this.push(record, {
       type: "run_done",
       status,
@@ -1122,6 +1177,38 @@ export class WorkspaceHost {
       cache: cacheUsageOf(record.usage),
       ...(error ? { error } : {}),
     });
+    this.pruneRecords();
+  }
+
+  /**
+   * 限制常驻的 Run 记录数量。
+   *
+   * 每次收尾后把超出 {@link MAX_RUNS} 的**终态**记录丢给 GC：记录本身、
+   * 每条 Run 的事件缓冲、以及内核 Run 攥着的完整消息都不会自己缩小，
+   * 一个下午几百次提问就能让服务进程一直涨。
+   *
+   * 「隔离改动还没合并/丢弃」的 Run 必须保留——删掉它们等于把用户还没
+   * 审阅的产物从界面上抹掉（worktree 还在磁盘上，但再也找不到入口）。
+   */
+  private pruneRecords(): void {
+    if (this.records.size <= MAX_RUNS) {
+      return;
+    }
+    let excess = this.records.size - MAX_RUNS;
+    // Map 保持插入顺序：从最旧的开始删
+    for (const [runId, record] of this.records) {
+      if (excess <= 0) {
+        break;
+      }
+      if (!prunableRun(record)) {
+        continue;
+      }
+      this.records.delete(runId);
+      // 内核 Run 自己还攥着完整消息与工具结果，同样要交出去：
+      // `forget` 的注释写着"终态之后调用"，但之前没有任何地方调用它
+      this.runManager.forget(runId);
+      excess -= 1;
+    }
   }
 
   private push(record: RunRecord, event: ServerEvent): void {
