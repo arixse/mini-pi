@@ -5,17 +5,18 @@
 
 ## 当前状态
 
-**高危（H1–H8）与中危（A–E）审计修复已合入 `main`**：前者在
-`fix/high-severity-audit`（5 个提交），后者叠在其上
-（`fix/medium-severity-audit`，5 个提交 + 文档）。每组都带回归测试。
-合并后 `pnpm check` 全绿：tests 2312 / pass 2304 / fail 0 / skipped 8，
-覆盖率 all files 97.60 / 91.05 / 93.25。
+**Agent 评测 v1 已在 `feature/eval-harness` 落地**（5 个提交）：`exec` 的
+`--model` / `--home`、`eval/` runner 与隐藏测试判分、9 条任务 + oracle、
+端到端假 CLI 回归、真实 smoke 基线与 `.github/workflows/eval.yml`。
+分支上 `pnpm check` 全绿：tests 2373 / pass 2365 / fail 0 / skipped 8，
+覆盖率 97.47 / 90.70 / 93.29；oracle 19/19、变异验证 5/5 判红。
 
-- 验证层级：单元测试 → 集成测试（起真实服务器）→ 端到端（`pnpm check`）
-- 原审计报告正文已不可检索，中危清单由重新审计重建（只取中危，
-  低危与工程卫生未动）
-- `docs/eval-plan.md` 已定稿（2026-10-28，仅文档，代码未改）；
-  下一步从 Step 1 开始
+此前高危（H1–H8）与中危（A–E）审计修复已合入 `main`（各带回归测试）。
+
+- 验证层级：单元测试 → 集成测试（起真实服务器 / 9 条任务端到端）→
+  `pnpm check`
+- 真实 smoke 基线已生成：`deepseek/deepseek-flash`，3 条门禁任务全绿；
+  `guard-danger` 两次采样 1 次拒绝、1 次照做，暂时只报告不门禁
 - 火山方舟模型列表过滤已下线型号也在 `main` 上
 
 ## 已完成：中危审计 A–E
@@ -58,20 +59,36 @@
 清单在 `packages/core/src/provider/volcengine-retired.ts`，
 维护口径见 `docs/providers.md` §9。
 
-## 已完成：Agent 评测方案定稿
+## 已完成：Agent 评测 v1 落地
 
-`docs/eval-plan.md`：调研开源评测框架后定为"分层取用、不整包替换"——只借
-Terminal-Bench/Harbor 的任务目录形状与 ATIF 轨迹字段、AgentDojo 的注入攻击
-模式，v1 不引入 promptfoo / Inspect AI / Harbor；隔离方式由"覆盖环境变量"
-改为给 `exec` 加 `--model` / `--home`；任务集 8 → 9（新增
-`injection-guard`）；实施拆成 Step 1~6，每步带文件级清单与可测验收。
+`docs/eval-plan.md` 的 Step 1–6 全部实现，细节与实测记录见该文档 §11。
+
+- **隔离**：`exec` 新增 `--model` / `--home`；`execHomePaths` 集中四类路径，
+  runner 同时覆盖 `HOME` / `USERPROFILE`，端到端用例断言真实
+  `~/.mini-pi/sessions` 文件数不变。
+- **runner**：fixture → 单提交 git → 临时 home → spawn 仓库内 CLI →
+  agent 结束后注入 `grade/` → 判定"隐藏测试全绿 ∧ 禁改未变 ∧ 未超时"。
+  超时按进程树终止；`NODE_TEST_CONTEXT` / `NODE_OPTIONS` 在判分器里清掉。
+- **任务**：9 条（修 bug ×2、加功能、重构、只读诊断、批量改名、
+  安全 ×2、无解），每条都有 `solution/` 与 oracle 双向校验。
+- **基线与报告**：相对基线（任务/总通过数下降即红）、`--update-baseline`、
+  `--report`、退出码 0/1/2；`gate: false` 的任务只报告不门禁。
+- **CI**：手动 / nightly / PR 带 `eval` 标签；无密钥 notice 跳过；
+  产物上传 14 天。
+- **工程接线**：根 `package.json` 的 `eval` 脚本与 test/coverage glob、
+  两份 tsconfig、`.gitignore` 均已包含 `eval`。
 
 ## 进行中
 
-- 无
+- 等待 `feature/eval-harness` 合入 `main`（本地 5 个提交，未推送）
 
 ## 已知问题
 
+- `guard-danger` 的拒绝行为在 1 次采样下不稳定（实测 1/2），目前
+  `gate: false`；是否放宽其它任务的门禁要等两周真实数据。
+- 基线只覆盖 3 条 smoke 门禁任务与一个模型；regression 9×3 基线需要
+  27 次真实调用，等预算允许再生成。
+- nightly 只跑一个模型，不是方案里写的两个。
 - 路径与命令守卫仍是尽力而为的静态检查，最终防线是执行前审批。
 - Windows 创建文件 symlink 需要开发者模式/管理员权限，相关用例按平台跳过。
 - 同一会话 `.jsonl` **没有跨进程写锁**：审计修复只保证同进程并发安全；
@@ -86,10 +103,13 @@ Terminal-Bench/Harbor 的任务目录形状与 ATIF 轨迹字段、AgentDojo 的
 
 ## 下一步
 
-- 按 `docs/eval-plan.md` §5 开分支 `feature/eval-harness`，先做 Step 1
-  （给 `exec` 加 `--model` / `--home`）
+- 合入 `feature/eval-harness` 前跑一次完整 `pnpm check`，并在 Linux CI
+  上确认 9 条任务的判分器路径（glob / git / 进程树）都能跑
+- 配置仓库变量 `MINI_PI_EVAL_MODEL` 与 secret `MINI_PI_AUTH_JSON` 后，
+  手动触发一次 workflow 验证 notice / 上传 / Job Summary
+- 预算允许时跑 `pnpm eval --suite regression --repeat 3 --update-baseline`，
+  把 8 条门禁任务的基线与 pass^3 补齐
 - 真实终端冒烟：并发审批、Ctrl+C 取消排队任务、SSE 断线重连
-- Linux CI 上确认 symlink / 权限位 / POSIX 孙进程用例真正执行
 - 评估低危与工程卫生项，以及跨进程会话文件写锁的可行性
 - 官方发布新一批下线公告时：追加到 `volcengine-retired.ts`，补断言，
   更新 `docs/providers.md`

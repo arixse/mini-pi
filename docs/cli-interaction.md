@@ -53,12 +53,19 @@ mini-pi exec "读一下这个仓库的结构"     # 跑完一次执行就退出�
 mini-pi exec "..." --json               # stdout 只有 JSONL：一行一个事件，末行 exec_done
 mini-pi exec "..." --cwd /path/to/dir   # 指定工作区
 mini-pi exec "..." --approval full-access # 显式放行写操作与命令（CI 里由人背书）
+mini-pi exec "..." --model deepseek/deepseek-flash  # 覆盖 settings.json 的默认模型
+mini-pi exec "..." --home /tmp/eval-home            # 配置、凭据、会话都从该目录取
 ```
 
 - **审批默认 fail closed**：没有终端可以问人，所以默认 `read-only`——除只读工具外
   一律拒绝。需要写文件或执行命令时显式传 `--approval full-access`（CI 里由人背书）；
   `workspace-write` 因为依赖逐次确认，在 headless 下直接报参数错误。
   交互式 CLI 则默认走 `workspace-write` 的逐次确认。
+- `--model` 的格式是 `供应商/模型名`，只给模型名会当场报参数错误；它绕过
+  `settings.json` 的默认模型，但凭据仍从 `auth.json` 读。
+- `--home` 把 `settings.json`、`auth.json`、`sessions/` 与全局 `AGENTS.md`
+  一起挪到指定目录，是评测/CI 的隔离入口；它**不**改全局 skill 目录
+  （`~/.agents/skills` 仍由 `homedir()` 决定，runner 会同时覆盖 `HOME`/`USERPROFILE`）。
 - `--json` 时 stdout 不会出现任何人类可读的输出（日志与错误一律走 stderr），
   因此可以直接被管道消费；末行 `exec_done` 带上 `status` 与正文，
   脚本只看这一行就知道成败。
