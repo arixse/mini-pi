@@ -229,8 +229,13 @@ export function buildApprovalQuestion(
 export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
   const autoApproved = policy.autoApproved ?? AUTO_APPROVED_TOOLS;
   // 用户选了 `a` 之后的会话级状态：即使调用方没接 onSessionAllow，
-  // 也必须先兑现"本会话不再问"的承诺，否则下一次照问不误
+  // 也必须先兑现"本会话不再问"的承诺，否则下一次照问不误。
+  //
+  // 但要记住**授权时的档位**：`a` 说的是"在这个档位下别再问"，不是
+  // "永久免检"。用户随后 `/trust` 切回 workspace-write，就是在明确要求
+  // 恢复逐次确认；只存一个布尔会让旧授权穿透新意图，界面提示与实际行为相反。
   let sessionAllowed = false;
+  let sessionAllowedMode: ApprovalMode | null = null;
   const resolveMode = (): ApprovalMode =>
     policy.mode ? policy.mode() : approvalModeFromTrusted(policy.isTrusted?.() === true);
 
@@ -281,7 +286,7 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
       return { action: "block", reason: verdict.reason };
     }
 
-    if (sessionAllowed) {
+    if (sessionAllowed && sessionAllowedMode === resolveMode()) {
       policy.onDecision?.(call, true, "always");
       return { action: "allow", reason: "用户已选择本会话不再逐一确认" };
     }
@@ -305,8 +310,11 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
 
     if (answer === "always") {
       sessionAllowed = true;
-      // 通知调用方把 `/status` 里的信任状态同步过来，并给用户一次明确回执
+      // 通知调用方把 `/status` 里的信任状态同步过来，并给用户一次明确回执。
+      // 先回调再记档位：REPL 会把档位切到 full-access，记切换后的值，
+      // 否则下一次调用立刻因为"档位不匹配"又追问一遍。
       policy.onSessionAllow?.();
+      sessionAllowedMode = resolveMode();
       policy.onDecision?.(call, true, "always");
       return { action: "allow", reason: "用户已选择本会话不再逐一确认" };
     }

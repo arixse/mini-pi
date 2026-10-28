@@ -204,6 +204,44 @@ describe("runExec", () => {
     assert.strictEqual(calls(), 0, "被拦下的工具不该真的被执行");
   });
 
+  /**
+   * 模型 401 / 网络失败 / 空回复都会被循环写成 `stopReason:"error"` 的
+   * assistant 消息，而 Run 本身是 done。旧实现据此返回 0、错误还进了 stdout，
+   * CI 里 `mini-pi exec` 挂了也看不出来。
+   */
+  it("模型调用失败时退出码 1，错误走 stderr 而不是 stdout", async () => {
+    const io = streams();
+    const model: LlmModel = {
+      async complete() {
+        throw new Error("401 Unauthorized");
+      },
+    };
+
+    const code = await runExec(["提问"], io, deps(model, new ToolRegistry()));
+
+    assert.strictEqual(code, 1);
+    assert.strictEqual(io.out.join(""), "", "stdout 只应有答案");
+    assert.match(io.err.join(""), /401 Unauthorized/);
+  });
+
+  it("--json 时模型失败的 exec_done.status 记 error，并带原因", async () => {
+    const io = streams();
+    const model: LlmModel = {
+      async complete() {
+        throw new Error("network down");
+      },
+    };
+
+    const code = await runExec(["--json", "提问"], io, deps(model, new ToolRegistry()));
+    assert.strictEqual(code, 1);
+
+    const lines = io.out.join("").split("\n").filter((line) => line.trim() !== "");
+    const last = JSON.parse(lines[lines.length - 1]);
+    assert.strictEqual(last.type, "exec_done");
+    assert.strictEqual(last.status, "error");
+    assert.match(last.error, /network down/);
+  });
+
   it("没有可用模型时退出码非 0 并说明原因（不静默失败）", async () => {
     const io = streams();
     const code = await runExec(["提问"], io, deps(null, new ToolRegistry()));

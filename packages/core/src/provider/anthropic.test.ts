@@ -106,10 +106,12 @@ describe("AnthropicProvider", () => {
 
     it("应带上 x-api-key 与 anthropic-version 头（官方鉴权不是 Bearer）", async () => {
       let capturedHeaders: Headers | undefined;
+      let capturedSignal: AbortSignal | undefined;
       global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
         const target = url instanceof Request ? url.url : String(url);
         if (target === "https://api.anthropic.com/v1/models") {
           capturedHeaders = new Headers(options?.headers);
+          capturedSignal = options?.signal ?? undefined;
           return new Response(JSON.stringify({ data: [] }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -126,6 +128,8 @@ describe("AnthropicProvider", () => {
         null,
         "官方端点不接受 Bearer 鉴权",
       );
+      // 没有超时的话，供应商挂住连接就会让设置界面一直转圈
+      assert.ok(capturedSignal instanceof AbortSignal, "模型列表请求必须带取消信号");
     });
 
     it("should handle API error response", async () => {

@@ -1,5 +1,6 @@
 import { Provider, buildModelsUrl } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 
 /**
  * 智谱（Zhipu / 开放平台 BigModel）提供商。
@@ -57,6 +58,7 @@ export class ZhipuProvider implements Provider {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {

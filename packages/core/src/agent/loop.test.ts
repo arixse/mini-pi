@@ -609,6 +609,126 @@ describe("loop", () => {
         "带 toolCall 的 assistant 消息必须同时落一条结果",
       );
     });
+
+    /**
+     * 回归：模型实现抛 AbortError 时，旧代码把异常文案
+     * （"This operation was aborted"）当成模型回复写进 content 并按 `error`
+     * 收尾——用户取消一次，历史里就多一句"模型被中止了"，`exec` 还会报
+     * 模型调用失败。取消不是故障，必须是 `aborted` + 空正文。
+     */
+    it("模型抛取消错误时按 aborted 收尾，不写错误正文也不进历史", async () => {
+      const controller = new AbortController();
+      const batches: AgentMessage[][] = [];
+      const model: LlmModel = {
+        async complete() {
+          controller.abort();
+          const error = new Error("This operation was aborted");
+          error.name = "AbortError";
+          throw error;
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        signal: controller.signal,
+        onTurnEnd: async (turnMessages) => {
+          batches.push(turnMessages);
+          return undefined;
+        },
+      });
+
+      const message = result.newMessages[0] as AssistantMessage;
+      assert.strictEqual(message.stopReason, "aborted", "取消是预期行为，不能报成故障");
+      assert.deepStrictEqual(message.content, [], "异常文案不能冒充模型回复");
+      assert.strictEqual(message.errorMessage, "aborted");
+      assert.deepStrictEqual(batches, [], "取消占位不该写进会话历史");
+      assert.ok(
+        !result.events.some(
+          (event) => event.type === "message_update" && /abort/i.test(event.delta),
+        ),
+        "终端不该打印原始的取消错误",
+      );
+    });
+
+    /**
+     * 打包后的 SDK 可能改名，也可能先抛错、信号还没置位；
+     * 只要错误本身是取消，就必须按取消处理。
+     */
+    it("信号未置位但抛的是 AbortError，也按取消处理", async () => {
+      const model: LlmModel = {
+        async complete() {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+      });
+
+      assert.strictEqual((result.newMessages[0] as AssistantMessage).stopReason, "aborted");
+    });
+
+    it("模型自己报 aborted 且没有工具调用时，只当界面占位，不落盘", async () => {
+      const batches: AgentMessage[][] = [];
+      const model = createMockModel([
+        createAssistantMessage([createTextContent("模型调用已取消")], "aborted"),
+      ]);
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onTurnEnd: async (turnMessages) => {
+          batches.push(turnMessages);
+          return undefined;
+        },
+      });
+
+      assert.strictEqual(
+        (result.newMessages[0] as AssistantMessage).stopReason,
+        "aborted",
+        "事件里仍要有这条消息供界面收尾",
+      );
+      assert.deepStrictEqual(batches, [], "取消占位不该成为下一轮的上下文");
+    });
+
+    it("真正的模型故障仍然照常落盘，过滤不能顺手吞掉故障", async () => {
+      const batches: AgentMessage[][] = [];
+      const model: LlmModel = {
+        async complete() {
+          throw new Error("boom");
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: 0 }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onTurnEnd: async (turnMessages) => {
+          batches.push(turnMessages);
+          return undefined;
+        },
+      });
+
+      assert.strictEqual(batches.length, 1);
+      const message = batches[0]![0] as AssistantMessage;
+      assert.strictEqual(message.stopReason, "error");
+      assert.match((message.content[0] as { text: string }).text, /boom/);
+    });
   });
 
   describe("每轮回调（落盘 / 压缩）", () => {

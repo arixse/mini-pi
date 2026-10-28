@@ -159,9 +159,22 @@ export async function runAgentTurn(
       beforeToolCall,
       onEvent: deps.onAgentEvent,
       onTurnEnd: async (turnMessages) => {
+        // 落盘必须成功才推进游标：写失败时循环会把这批消息连同下一轮一起重投
         await appendAgentMessages(options, turnMessages);
         syncedMessages += turnMessages.length;
-        return await compactContext(options, status, signal);
+        /**
+         * 压缩失败不能连累已经落盘的消息。
+         *
+         * 钩子一抛错，循环会认为"这批没写成功"并在下一轮重投；而这里其实
+         * 已经写进会话文件了，结果是同一批消息出现两份。压缩只是省上下文，
+         * 失败就保留原上下文，下一轮回调再试。
+         */
+        try {
+          return await compactContext(options, status, signal);
+        } catch (error) {
+          logger.warn("上下文压缩失败（本轮消息已落盘，后续回合会重试）：", error);
+          return undefined;
+        }
       },
     });
 

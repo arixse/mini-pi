@@ -201,6 +201,47 @@ describe("bash 工具（执行、输出上限、超时与终止）", () => {
       }
     });
 
+    /**
+     * POSIX 上 kill 只打 shell：孙进程（jest worker、`pnpm dev`、`tsc --watch`）
+     * 继承 stdout 后会继续占着管道，而 exec 的回调只在 `close` 时触发，
+     * 于是超时形同虚设、整个回合卡死。宽限期必须在 close 之前强行结算。
+     */
+    it(
+      "孙进程占住 stdout 时，超时仍能在宽限期后返回",
+      { skip: process.platform === "win32" ? "Windows 由 taskkill /T 结束整棵树" : false },
+      async () => {
+        const dir = join(
+          tmpdir(),
+          `mini-pi-grandchild-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        );
+        mkdirSync(dir, { recursive: true });
+
+        try {
+          const registry = createToolRegistry(dir);
+          const started = Date.now();
+          // 两个 sleep 都继承 stdout：shell 被杀后 close 要等到 4s 才来，
+          // 宽限期（1.5s）必须在此之前结算，否则这里会一直等到 4s。
+          const result = await registry.execute("bash", {
+            command: "sleep 4 & sleep 4",
+            timeoutMs: 1_000,
+          });
+          const elapsed = Date.now() - started;
+          const details = result.details as Record<string, unknown>;
+
+          assert.strictEqual(details.timedOut, true);
+          assert.strictEqual(details.exitCode, 124);
+          assert.ok(result.content[0].text.includes("命令超时"));
+          assert.ok(elapsed < 3_800, `超时后应尽快返回，实际等待了 ${elapsed}ms`);
+        } finally {
+          try {
+            rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+          } catch {
+            // 孤儿进程可能短暂持有该目录
+          }
+        }
+      },
+    );
+
     it("正常命令不受超时影响且带 timeoutMs", async () => {
       const registry = createToolRegistry(testDir);
 

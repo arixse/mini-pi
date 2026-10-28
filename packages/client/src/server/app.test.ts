@@ -10,7 +10,15 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
@@ -161,12 +169,67 @@ describe("App Server · 执行与事件流", () => {
     assert.deepStrictEqual(none, [], "游标已到末尾时不该再重复下发");
   });
 
-  it("取消排队中的任务：状态变 cancelled，且之后不会偷偷跑起来", async () => {
-    const created = await server.post<{ runId: string }>("/api/runs", { prompt: "排队那个" });
-    await server.post(`/api/runs/${created.runId}/cancel`);
-    const events = await server.stream(created.runId);
-    const done = events[events.length - 1] as Extract<ServerEvent, { type: "run_done" }>;
-    assert.ok(["cancelled", "done"].includes(done.status));
+  /**
+   * 排队中的 Run 没有内核实例，取消只能靠状态收尾。
+   *
+   * 旧实现要等一个 `setImmediate` 才置 `cancelled`，而队列推进恰好可能在
+   * 这个空窗里看到 `queued` 并真的跑起来：用户点了"停止"，模型照样被调用，
+   * 最后还会推两条 `run_done`（cancelled + done）。这里把第一步的执行卡在
+   * 模型回话前，确保取消打到的是真正的 queued 分支。
+   */
+  it("取消排队中的任务：只收一次 run_done，且之后不会偷偷跑起来", async () => {
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const server = await startTestServer({
+      modelBefore: async (index) => {
+        if (index === 0) {
+          await gate;
+        }
+      },
+    });
+    try {
+      const first = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "先跑一条",
+      });
+      await waitFor(() => server.model.calls.length === 1);
+
+      const second = await server.post<{ runId: string }>("/api/runs", {
+        prompt: "排队那个",
+        sessionId: first.sessionId,
+      });
+      assert.strictEqual(
+        (await server.get<RunSummary>(`/api/runs/${second.runId}`)).status,
+        "queued",
+        "第一条还没跑完，第二条必须真的处于排队状态",
+      );
+
+      await server.post(`/api/runs/${second.runId}/cancel`);
+      const events = await server.stream(second.runId);
+      const done = events.filter(
+        (event): event is Extract<ServerEvent, { type: "run_done" }> =>
+          event.type === "run_done",
+      );
+      assert.strictEqual(done.length, 1, "取消只该收尾一次");
+      assert.strictEqual(done[0].status, "cancelled");
+      assert.ok(
+        !events.some((event) => event.type === "run_state" && event.status === "running"),
+        "取消后不能真的把 Run 跑起来",
+      );
+
+      // 放行第一条，让队列继续推进：第二条必须仍被跳过
+      releaseFirst();
+      await server.stream(first.runId);
+      assert.strictEqual(
+        (await server.get<RunSummary>(`/api/runs/${second.runId}`)).status,
+        "cancelled",
+      );
+      assert.strictEqual(server.model.calls.length, 1, "被取消的排队任务不该调用模型");
+    } finally {
+      releaseFirst();
+      await server.close();
+    }
   });
 
   it("未知 Run 与空提问都是明确错误，不是 500", async () => {
@@ -2165,6 +2228,34 @@ describe("App Server · 文件预览", () => {
     }
   });
 
+  /**
+   * 旧实现是 `readFileSync` 整读再截断：一个 600MB 的构建日志会被整个搬进
+   * 内存，还会直接撞上 V8 的字符串上限（约 512MB）而返回 500。只读前缀后，
+   * 这个请求应当照常给出边界信息。用 `truncate` 造稀疏文件，不真占 600MB 磁盘。
+   */
+  it("超大文件只读前缀：600MB 也不会整读进内存", async () => {
+    const server = await startTestServer();
+    try {
+      const size = 600 * 1024 * 1024;
+      const huge = join(server.workspace, "huge.log");
+      // truncate 要求文件已存在；先建空文件再拉长成稀疏文件
+      writeFileSync(huge, "");
+      truncateSync(huge, size);
+      const file = await server.get<{
+        content: string;
+        size: number;
+        truncated: boolean;
+        binary: boolean;
+      }>(fileUrl("huge.log"));
+      assert.strictEqual(file.truncated, true);
+      assert.strictEqual(file.size, size);
+      assert.strictEqual(file.content.length, 0, "稀疏文件的 NUL 前缀按二进制处理");
+      assert.strictEqual(file.binary, true);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("缺 path 400；未知 runId / 未打开的 root 404", async () => {
     const server = await startTestServer({ workspaceFiles: { "note.txt": "x" } });
     try {
@@ -2632,6 +2723,50 @@ describe("bootAppServer", () => {
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Run 记录的常驻上限。
+ *
+ * `state()` 一直只展示最近 50 条，但 `records` 与每条 Run 自己的事件缓冲
+ * 之前从不回收：跑一下午就能让服务进程一直涨。裁掉旧记录后，`/api/runs/:id`
+ * 对它们返回 404 是预期行为（界面上也早就点不到）。
+ */
+describe("App Server · Run 记录上限", () => {
+  it("超过 50 条时裁掉最旧的终态记录", async () => {
+    const server = await startTestServer();
+    try {
+      const first = await server.post<{ runId: string; sessionId: string }>("/api/runs", {
+        prompt: "第 1 条",
+      });
+      const runIds = [first.runId];
+      for (let index = 2; index <= 51; index += 1) {
+        const created = await server.post<{ runId: string }>("/api/runs", {
+          prompt: `第 ${index} 条`,
+          sessionId: first.sessionId,
+        });
+        runIds.push(created.runId);
+      }
+      await server.stream(runIds[runIds.length - 1]!);
+
+      assert.strictEqual(
+        (await server.raw(`/api/runs/${runIds[0]}`)).status,
+        404,
+        "最旧的记录应被裁掉，内存不能只增不减",
+      );
+      assert.strictEqual(
+        (await server.raw(`/api/runs/${runIds[runIds.length - 1]}`)).status,
+        200,
+        "最新的记录必须还在",
+      );
+
+      const state = await server.get<AppState>("/api/state");
+      assert.strictEqual(state.runs.length, 50);
+      assert.ok(!state.runs.some((run) => run.runId === runIds[0]));
+    } finally {
+      await server.close();
     }
   });
 });

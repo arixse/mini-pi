@@ -244,6 +244,32 @@ describe("session context wiring", () => {
     assert.strictEqual(tracker.snapshot().requests, 0, "切会话后应重新计数");
   });
 
+  /**
+   * 子 Agent 用量与主会话用量同寿命：/clear、/new、/switch 都要归零。
+   * 不重置的话 /status 会把上一个会话的委派成本算到新会话头上。
+   */
+  it("切会话与 /clear 应把子 Agent 累计用量清零", async () => {
+    const store = new JsonlSessionStore(sessionFile, testDir);
+    let resets = 0;
+    const options = createOptions({
+      sessionStore: store,
+      resetSubAgentStats: () => {
+        resets += 1;
+      },
+    });
+
+    await clearSession(options);
+    assert.strictEqual(resets, 1, "/clear 应清零");
+
+    options.onSwitchSession = () => new JsonlSessionStore(sessionFile, testDir);
+    assert.strictEqual(switchSession(options, "1"), true);
+    assert.strictEqual(resets, 2, "/switch 应清零");
+
+    options.onNewSession = () => new JsonlSessionStore(sessionFile, testDir);
+    assert.strictEqual(startNewSession(options), true);
+    assert.strictEqual(resets, 3, "/new 应清零");
+  });
+
   it("formatSessionList 应标记当前会话并给出大小", () => {
     const lines = formatSessionList(
       [

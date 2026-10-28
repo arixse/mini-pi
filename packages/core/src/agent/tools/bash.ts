@@ -29,6 +29,13 @@ export const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 export const MAX_BASH_TIMEOUT_MS = 600_000;
 /** bash 允许的最小超时：1 秒 */
 export const MIN_BASH_TIMEOUT_MS = 1_000;
+/**
+ * 杀掉进程树后等 close 的宽限期。
+ *
+ * 孙进程可能继承 stdout 并拒绝退出，`close` 就永远不来；超过这个时间
+ * 直接按超时/取消结算，宁可留下一个孤儿进程也不能把整个回合卡死。
+ */
+const KILL_GRACE_MS = 1_500;
 
 /** 把 timeoutMs 参数夹取到合法区间，缺省用默认值 */
 export function resolveBashTimeout(value: unknown): number {
@@ -199,6 +206,56 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
        */
       const runCommand = (): Promise<{ stdout: string; stderr: string }> =>
         new Promise((resolve, reject) => {
+          let settled = false;
+          let graceTimer: NodeJS.Timeout | null = null;
+
+          const settle = (action: () => void): void => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            if (timer) {
+              clearTimeout(timer);
+              timer = null;
+            }
+            if (graceTimer) {
+              clearTimeout(graceTimer);
+              graceTimer = null;
+            }
+            signal?.removeEventListener("abort", onAbort);
+            action();
+          };
+
+          /**
+           * 结束整棵树之后再等一小会儿强制收尾。
+           *
+           * `exec` 的回调只在子进程 `close` 时触发，而 close 要等所有继承了
+           * stdout/stderr 的进程都退出。POSIX 上 kill 只打 shell：孙进程
+           * （jest worker、`pnpm dev`、`tsc --watch`）继续占着管道，回调永远
+           * 不来，超时形同虚设，整个回合（连 Ctrl+C）都卡在这里。
+           * 到点就算 close 还没来也按超时/取消结算，绝不让循环无限等待。
+           */
+          const forceSettle = (): void => {
+            if (graceTimer !== null) {
+              return;
+            }
+            graceTimer = setTimeout(() => {
+              settle(() =>
+                reject(
+                  Object.assign(new Error(forcedTimeout ? "Command timed out" : "Command aborted"), {
+                    killed: true,
+                    signal: "SIGKILL",
+                  }),
+                ),
+              );
+            }, KILL_GRACE_MS);
+          };
+
+          const onAbort = (): void => {
+            void killProcessTree(running);
+            forceSettle();
+          };
+
           const running = exec(
             command,
             {
@@ -208,28 +265,25 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
               windowsHide: true,
             },
             (error, stdout, stderr) => {
-              if (error) {
-                Object.assign(error, { stdout, stderr });
-                reject(error);
-                return;
-              }
-              resolve({ stdout, stderr });
+              settle(() => {
+                if (error) {
+                  Object.assign(error, { stdout, stderr });
+                  reject(error);
+                  return;
+                }
+                resolve({ stdout, stderr });
+              });
             },
           );
 
           timer = setTimeout(() => {
             forcedTimeout = true;
             void killProcessTree(running);
+            forceSettle();
           }, timeout);
 
           // 用户取消时同样要连子进程一起结束，避免留下孤儿
-          signal?.addEventListener(
-            "abort",
-            () => {
-              void killProcessTree(running);
-            },
-            { once: true },
-          );
+          signal?.addEventListener("abort", onAbort, { once: true });
 
           running.once("close", () => {
             if (timer) {

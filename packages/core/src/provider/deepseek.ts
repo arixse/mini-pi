@@ -1,5 +1,6 @@
 import { Provider, buildModelsUrl } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 
 export class DeepSeekProvider implements Provider {
   private baseUrl: string = "https://api.deepseek.com";
@@ -41,6 +42,7 @@ export class DeepSeekProvider implements Provider {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {

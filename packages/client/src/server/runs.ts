@@ -212,3 +212,22 @@ export class RunRecord {
     };
   }
 }
+
+/**
+ * 这条记录能不能从内存里裁掉。
+ *
+ * 只裁**已收尾**的：还在跑/排队的记录是活动状态，删掉等于让界面失去控制入口。
+ * 「隔离改动还没合并、也没丢弃」的记录必须保留：worktree 还在磁盘上，
+ * 记录一旦消失，用户就再也找不到合并/丢弃它的入口，产物变成孤儿。
+ */
+export function prunableRun(
+  record: Pick<RunRecord, "endedAt" | "isolated" | "workspaceReleased" | "workspaceMerged">,
+): boolean {
+  if (record.endedAt === null) {
+    return false;
+  }
+  if (record.isolated && !record.workspaceReleased && !record.workspaceMerged) {
+    return false;
+  }
+  return true;
+}

@@ -157,6 +157,34 @@ export type ExecDeps = {
   platform?: { cwd: () => string };
 };
 
+/**
+ * 本次执行是否以模型失败收场。
+ *
+ * `RunResult.status` 只描述"执行有没有跑完"：模型 401 / 网络失败 / 空回复
+ * 会被循环写成一条 `stopReason:"error"` 的 assistant 消息，执行本身仍是 done。
+ * 对脚本来说这却是失败——旧实现因此退出码 0、错误文本还进了 stdout，
+ * CI 里 `mini-pi exec` 挂了也看不出来。这里只认**最后一条** assistant：
+ * 中间某个工具失败、模型随后自我修复不算失败。
+ */
+export function finalAssistantError(messages: readonly AgentMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const assistant = message as AssistantMessage;
+    if (assistant.stopReason !== "error") {
+      return null;
+    }
+    const text = assistant.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("")
+      .trim();
+    return assistant.errorMessage ?? (text !== "" ? text : "模型调用失败");
+  }
+  return null;
+}
+
 /** 从结果里取出模型最后一段正文；没有就给空串 */
 export function finalText(messages: readonly AgentMessage[]): string {
   const texts: string[] = [];
@@ -241,22 +269,35 @@ export async function runExec(
   });
 
   const text = finalText(result.newMessages);
+  const modelError = finalAssistantError(result.newMessages);
 
   if (json) {
-    // 末行是结论：脚本只需要看这一行就知道成败，不必自己解析事件流
+    // 末行是结论：脚本只需要看这一行就知道成败，不必自己解析事件流。
+    // 模型失败时 status 记 error——它不是 Run 的基础设施错误，但对脚本
+    // 来说就是这次执行失败，不能让 `exec_done` 与退出码互相矛盾。
     streams.stdout.write(
       `${JSON.stringify({
         type: "exec_done",
         runId: result.runId,
-        status: result.status,
+        status: modelError === null ? result.status : "error",
         elapsedMs: result.elapsedMs,
         text,
+        ...(modelError === null ? {} : { error: modelError }),
       })}\n`,
     );
+  } else if (modelError !== null) {
+    // 失败原因走 stderr，stdout 保持"只有答案"：命令替换不该把报错当答案
+    if (text) {
+      streams.stderr.write(`${text}\n`);
+    }
   } else if (text) {
     streams.stdout.write(`${text}\n`);
   }
 
+  if (modelError !== null) {
+    logger.error("❌ exec 模型调用失败:", modelError);
+    return 1;
+  }
   if (result.status === "error") {
     // 错误留痕：headless 下没人盯着终端，静默失败等于没发生
     logger.error("❌ exec 执行失败:", result.error ?? "未知原因");

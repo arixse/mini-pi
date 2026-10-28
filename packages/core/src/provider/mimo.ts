@@ -1,5 +1,6 @@
 import { Provider, buildModelsUrl } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 
 /**
  * 小米 MiMo（Xiaomi MiMo）提供商。
@@ -52,6 +53,7 @@ export class MiMoProvider implements Provider {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {

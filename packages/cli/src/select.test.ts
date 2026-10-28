@@ -347,6 +347,26 @@ describe("promptSelect", () => {
     assert.strictEqual(input.rawModeCalls.length, 0);
   });
 
+  /**
+   * 终端关闭 / 管道读完时输入流会 end。不处理的话 promise 永远不 settle：
+   * raw 模式与隐藏光标都不恢复，登录 / 选模型再也回不到 REPL。
+   */
+  it("输入流提前结束按取消收尾，并恢复终端状态", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const promise = promptSelect("选择", ["a", "b"], undefined, {
+      input: input as any,
+      output: output as any,
+    });
+
+    input.emit("end");
+
+    assert.strictEqual(await promise, null);
+    assert.strictEqual(input.rawModeCalls.at(-1), false, "必须退出 raw 模式");
+    assert.ok(output.text.includes(SHOW_CURSOR), "必须恢复光标");
+    assert.strictEqual(input.listenerCount("data"), 0, "data 监听要摘掉");
+  });
+
   it("initialIndex 把光标停在当前已选模型上", async () => {
     const input = new FakeInput();
     const output = new FakeOutput();

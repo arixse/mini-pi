@@ -200,6 +200,38 @@ describe("createSubAgentTraceWriter", () => {
     );
   });
 
+  /**
+   * 事件是 fire-and-forget 发进来的；`close` 若不等队列，最后几条事件会在
+   * 委派结束后才落盘，排障时看到的是残缺 trace。顺序也必须与调用一致，
+   * 否则工具结果会排在工具调用前面，误导排查方向。
+   */
+  it("close 会等待排队中的写入，且保持调用顺序", async () => {
+    const dir = makeTempDir();
+    const writer = createSubAgentTraceWriter({
+      enabled: true,
+      sessionFilePath: join(dir, "s.jsonl"),
+      agentId: "a1",
+    });
+
+    for (let i = 0; i < 50; i += 1) {
+      // 与真实调用一致：不 await，交给队列排队
+      void writer.writeEvent({ type: "turn_start", turn: i });
+    }
+
+    const tracePath = await writer.close();
+    assert.ok(tracePath);
+    const lines = readFileSync(tracePath, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { event: { turn: number } });
+
+    assert.strictEqual(lines.length, 50, "close 之后所有记录都必须已经落盘");
+    assert.deepStrictEqual(
+      lines.map((line) => line.event.turn),
+      Array.from({ length: 50 }, (_, i) => i),
+    );
+  });
+
   it("父目录不存在时自动创建", async () => {
     const dir = join(makeTempDir(), "nested", "deep");
     const writer = createSubAgentTraceWriter({

@@ -1197,11 +1197,20 @@ export class AppController {
     if (!sessionId) {
       return;
     }
+    // 请求在途时用户可能切走、切到同一会话里的另一条 Run，或整个重载：
+    // 这份快照只对"发起那一刻的视图"有效。只比 sessionId 不够——同一会话
+    // 里换成另一条 Run 时 sessionId 不变，旧响应会把视图强行拽回旧 Run，
+    // 并重新 attach 到它的流上。
+    const epoch = this.viewEpoch;
+    const stale = (): boolean =>
+      epoch !== this.viewEpoch ||
+      this.store.current.view.sessionId !== sessionId ||
+      this.store.current.view.activeRunId !== runId;
     this.gapRecovery.add(runId);
     try {
       const detail = await api.session(sessionId, root);
       // 请求回来时用户可能已经切走：这份快照不再属于眼前的时间线
-      if (this.store.current.view.sessionId !== sessionId) {
+      if (stale()) {
         return;
       }
       this.store.update((state) => {
@@ -1212,6 +1221,10 @@ export class AppController {
       const resume = Math.max(lastSeq, this.streamCursor);
       this.attach(runId, resume, true);
     } catch (error) {
+      // 过期的失败同样不该给新视图挂上缺口横幅
+      if (stale()) {
+        return;
+      }
       this.store.update((state) => {
         state.view.gap = true;
         state.view.streamNote = `事件流有缺口，自动重同步失败：${describe(error, "未知原因")}`;

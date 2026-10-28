@@ -1,5 +1,6 @@
 import { Provider } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 
 /** 模型列表接口要求的 API 版本号（Anthropic 所有接口都要带） */
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -58,6 +59,7 @@ export class AnthropicProvider implements Provider {
           "anthropic-version": ANTHROPIC_VERSION,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {

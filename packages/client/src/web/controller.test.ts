@@ -80,12 +80,14 @@ class FakeNotification {
 }
 
 type Route = { status?: number; body?: unknown };
+/** 路由可以返回 Promise：用来构造"响应迟到、期间用户已经切走"的竞态 */
+type RouteResult = Route | Promise<Route>;
 
 /** 假 fetch 打过的每一次请求：用来断言"这个动作根本没发请求" */
 const requested: Array<{ url: string; body: string; method: string }> = [];
 
 /** 按 URL 前缀给响应的假 fetch */
-function installFetch(routes: Record<string, Route | (() => Route)>): void {
+function installFetch(routes: Record<string, Route | (() => RouteResult)>): void {
   const respond = (route: Route): Response => {
     const status = route.status ?? 200;
     return new Response(status === 204 ? null : JSON.stringify(route.body ?? {}), {
@@ -104,7 +106,7 @@ function installFetch(routes: Record<string, Route | (() => Route)>): void {
       });
     }
     const route = routes[key]!;
-    return respond(typeof route === "function" ? route() : route);
+    return respond(typeof route === "function" ? await route() : route);
   }) as typeof fetch;
 }
 
@@ -1393,6 +1395,52 @@ describe("事件流自愈与文件预览", () => {
     assert.equal(state.view.gap, true);
     assert.match(state.view.streamNote ?? "", /自动重同步失败/);
     assert.match(state.view.streamNote ?? "", /会话文件坏了/);
+  });
+
+  /**
+   * 重同步是一个 await：拉会话详情期间用户可能切到同一会话里的另一条 Run。
+   * 只比对 sessionId 挡不住这种情况（同一个文件），旧响应会 syncItems 覆盖
+   * 时间线、再把视图强行 attach 回旧 Run——用户眼前的任务会自己跳走。
+   */
+  it("stream_gap：迟到的重同步不会把视图拽回旧 Run", async () => {
+    await openLiveRun();
+    const staleStream = runStreams()[0]!;
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    installFetch({
+      "/api/state": {
+        body: snapshot({
+          runs: [
+            runSummary("run_1", "running"),
+            runSummary("run_2", "running"),
+          ],
+          currentSessionId: "s1.jsonl",
+        }),
+      },
+      "/api/sessions/s1.jsonl": () =>
+        gate.then(() => ({ body: sessionDetail("s1.jsonl", "迟到的历史") })),
+    });
+
+    staleStream.emit("stream_gap", { type: "stream_gap", lastSeq: 42 }, 0);
+    // 快照还没回来，用户切到同一会话里的另一条 Run
+    await controller.actions.openRun("run_2");
+    await settle();
+    assert.equal(controller.store.current.view.activeRunId, "run_2");
+    const streamsBefore = runStreams().length;
+
+    release();
+    await settle();
+
+    const state = controller.store.current;
+    assert.equal(state.view.activeRunId, "run_2", "迟到的响应不能把视图拽回旧 Run");
+    assert.equal(runStreams().length, streamsBefore, "过期响应不该重新 attach 旧 Run");
+    assert.ok(
+      !state.view.items.some((item) => item.kind === "user" && item.text === "迟到的历史"),
+      "旧快照不能合进另一条 Run 的时间线",
+    );
   });
 
   it("openFile：带上 runId 读那次执行的目录，内容落到 store", async () => {

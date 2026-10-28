@@ -81,6 +81,7 @@ export async function appendAgentMessages(
 export async function clearSession(options: ReplOptions): Promise<void> {
   options.messages.length = 0;
   options.usageTracker?.reset();
+  options.resetSubAgentStats?.();
   // /clear 之后 /last 不该还能翻出清空前的工具输出
   resetToolRenderState();
   await options.sessionStore?.reset();
@@ -100,6 +101,7 @@ export function startNewSession(options: ReplOptions): boolean {
   options.sessionStore = created;
   created.syncContext(options.messages);
   options.usageTracker?.reset();
+  options.resetSubAgentStats?.();
   resetToolRenderState();
   return true;
 }
@@ -119,6 +121,7 @@ export function switchSession(options: ReplOptions, target: string): boolean {
   store.syncContext(options.messages);
   // 换会话后用量从头计：统计的是"当前会话"而不是"本次进程"
   options.usageTracker?.reset();
+  options.resetSubAgentStats?.();
   // 工具卡片缓存与 /last 的上一条输出同样属于旧会话
   resetToolRenderState();
   return true;

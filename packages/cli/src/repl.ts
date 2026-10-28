@@ -211,6 +211,11 @@ export async function startRepl(
       delegations: subAgentTotals.delegations,
       usage: { ...subAgentTotals.usage },
     });
+    // 统计口径是"当前会话"：切会话 / 清空时一起归零（与 usageTracker 同寿命）
+    options.resetSubAgentStats = () => {
+      subAgentTotals.delegations = 0;
+      subAgentTotals.usage = emptyUsage();
+    };
   }
 
   /**
