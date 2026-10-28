@@ -7,14 +7,21 @@
  */
 
 import { logger } from "../shared/logger";
+import { MODEL_LIST_TIMEOUT_MS, modelListSignal } from "./modelsRequest";
 
 /**
  * GET `{modelsUrl}`（Bearer 鉴权），把响应里的 `data[].id` 提成模型名列表。
  *
  * 失败一律原样抛出：调用方（设置界面）要区分"401 密钥不对"和
  * "网络不通"，自己编一个空列表回去会把配置错误说成"这家没有模型"。
+ *
+ * @param timeoutMs 覆盖超时；测试用它验证"接口一直不回"时不会挂死
  */
-export async function fetchOpenAiModelIds(modelsUrl: string, apiKey: string): Promise<string[]> {
+export async function fetchOpenAiModelIds(
+  modelsUrl: string,
+  apiKey: string,
+  timeoutMs = MODEL_LIST_TIMEOUT_MS,
+): Promise<string[]> {
   if (!apiKey) {
     throw new Error("API key is required");
   }
@@ -26,6 +33,7 @@ export async function fetchOpenAiModelIds(modelsUrl: string, apiKey: string): Pr
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
+      signal: modelListSignal(timeoutMs),
     });
 
     if (!response.ok) {

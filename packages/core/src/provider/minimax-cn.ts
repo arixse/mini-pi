@@ -1,5 +1,6 @@
 import { Provider } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 export class MiniMaxCnProvider implements Provider {
   private baseUrl: string = "https://api.minimax.cn/anthropic";
   private sdkType: string = "Anthropic";
@@ -43,6 +44,7 @@ export class MiniMaxCnProvider implements Provider {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {

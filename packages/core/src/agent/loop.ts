@@ -8,6 +8,7 @@ import {
     mapWithConcurrency,
 } from "./toolDispatch";
 import { LlmModel } from "./model";
+import { isAbortError } from "./model/errors";
 import { ToolRegistry } from "./tools/registry";
 
 
@@ -142,6 +143,20 @@ function emitMessageLifeCycle(
 }
 
 /**
+ * 取消产生的空 assistant 是给界面的收尾占位，不该写进会话历史。
+ *
+ * 只丢"没有正文、也没有工具调用"的 aborted 消息：带工具调用的必须保留，
+ * 否则同一轮补出的 toolResult 会失去对应的 toolCall，落盘后就是非法序列。
+ */
+function isCancelledPlaceholder(message: AgentMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    message.stopReason === "aborted" &&
+    !message.content.some((block) => block.type === "toolCall")
+  );
+}
+
+/**
  * 调用模型并发出完整的消息生命周期：start -> 流式 update -> end。
  *
  * 事件里的 `message` 始终是同一个对象：先作为空占位发出，
@@ -180,12 +195,25 @@ async function completeAssistantMessage(
     });
     Object.assign(message, assistant);
   } catch (error) {
-    // 模型实现抛错时也要收好生命周期，避免 start 没有对应的 end
-    Object.assign(message, {
-      content: [createTextContent(error instanceof Error ? error.message : String(error))],
-      stopReason: "error" as const,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    // 模型实现抛错时也要收好生命周期，避免 start 没有对应的 end。
+    //
+    // 取消不是故障：旧实现把 AbortError 的 message（"This operation was
+    // aborted"）当成模型回复写进 content，再以 error 收尾——用户取消一次，
+    // 历史里就多一条"模型说它被中止了"，`exec` 还会把它报成模型失败。
+    // 这里改成 `aborted` + 空正文，落盘时按占位消息丢掉（见 syncTurn）。
+    if (signal.aborted || isAbortError(error)) {
+      Object.assign(message, {
+        content: [],
+        stopReason: "aborted" as const,
+        errorMessage: "aborted",
+      });
+    } else {
+      Object.assign(message, {
+        content: [createTextContent(error instanceof Error ? error.message : String(error))],
+        stopReason: "error" as const,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
     streamed = false;
   }
 
@@ -288,8 +316,14 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
         if (delta.length === 0) {
             return
         }
+        const persistable = delta.filter((message) => !isCancelledPlaceholder(message))
+        if (persistable.length === 0) {
+            // 没有可落盘的内容也要推进游标，否则占位消息会被一直重投
+            syncedCount = newMessages.length
+            return
+        }
         try {
-            const compacted = await options.onTurnEnd(delta)
+            const compacted = await options.onTurnEnd(persistable)
             // 写成功之后才推进游标：失败时下一轮会连同新消息一起重投
             syncedCount = newMessages.length
             if (compacted) {

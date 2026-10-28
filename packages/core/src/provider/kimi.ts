@@ -1,5 +1,6 @@
 import { Provider, buildModelsUrl } from "./index";
 import { logger } from "../shared/logger";
+import { modelListSignal } from "./modelsRequest";
 
 /**
  * Kimi（Moonshot AI）提供商。
@@ -51,6 +52,7 @@ export class KimiProvider implements Provider {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+        signal: modelListSignal(),
       });
 
       if (!response.ok) {
