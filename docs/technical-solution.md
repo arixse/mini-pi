@@ -79,11 +79,16 @@ mini-pi/
 - `finish_reason = length`（OpenAI）/ `stop_reason = max_tokens`（Anthropic）
   映射为 `stopReason = "length"`，与 `"aborted"`（用户取消）区分，
   REPL 据此给出"可调大 maxTokens"的可操作提示。
+- **用户取消不写历史**：模型实现抛 `AbortError` 时按 `aborted` 收尾、正文留空，
+  不再把 "This operation was aborted" 当成模型回复（`exec` 也不会报模型失败）；
+  这种空 assistant 占位不落盘，带 `toolCall` 的仍保留，保证与补出的 `toolResult` 配对。
 
 ### 3.1.1 模型提供商 (Provider)
 
 - 通过 `Provider` 接口统一抽象各模型服务商（`getProviderName` / `getSdkType` / `getBaseUrl` / `getModelList`）
 - `ModelProviderService` 负责提供商注册、配置存储（apiKey/baseUrl/model）与模型列表获取
+- 模型列表（`GET /models`）统一带 15 秒超时（`provider/modelsRequest.ts`）：
+  供应商挂住连接时设置界面不会无限转圈；失败照常抛出，不伪造空列表
 - 当前已注册的提供商：9 家，名称 / SDK 类型 / 默认 Base URL 见
   [cli-config.md](./cli-config.md) §3（配置视角的唯一一张表）。
 - 除 9 家官方提供商外，还有**自定义供应商槽位**：未注册名 + Base URL 会当场建成一个

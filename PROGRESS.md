@@ -5,51 +5,42 @@
 
 ## 当前状态
 
-审计发现的 **8 个高危问题（H1–H8）已全部修复**，落在分支
-`fix/high-severity-audit`，按 5 个逻辑提交组织。每组改动都带回归测试，
-`pnpm check` 全绿（最近一次覆盖率 all files 97.62 / 91.02 / 93.25）。
+中危审计（A–E）已修复，落在 `fix/medium-severity-audit`（基于
+`fix/high-severity-audit` 的堆叠分支），按 5 个提交组织，每组都带回归测试。
+最近一次 `pnpm check` 全绿：tests 2312 / pass 2304 / fail 0 / skipped 8，
+覆盖率 all files 97.60 / 91.05 / 93.25。
 
-- 状态：分支上完成，尚未合入 / 推送 `main`（`main` 本地领先 `origin/main` 11 个提交）
-- 单元测试：审批串行化、路径与凭据守卫、压缩 stopReason、残行截断、
-  Anthropic 同角色合并、空回复、HTTP 来源校验、runId 随机后缀
-- 集成测试：`app.test.ts` 真起服务验证缺 Host / `Origin: null` /
-  端口不一致一律 403；`serveArgs` 拒绝非回环 `--host`
-- 端到端验证：`pnpm check` 全绿；缺 Host 用 HTTP/1.0 原始 socket 验证
-  应用层确实拒绝（HTTP/1.1 由 Node 自己回 400，到不了应用层）
+- 状态：分支上完成，尚未合入 / 推送 `main`
+- 验证层级：单元测试 → 集成测试（起真实服务器）→ 端到端（`pnpm check`）
+- 前一轮高危 H1–H8 在同一分支栈内，同样尚未合入 `main`
+- 原审计报告正文已不可检索，本轮中危清单由重新审计重建（只取中危，
+  低危与工程卫生未动）
 
-## 已完成
+## 已完成（中危）
 
-- **H1 审批串行化**（`packages/cli/src/approval.ts`、`repl.ts`）：
-  readline 的 `question()` 不可重入，并发工具审批会让第二个确认永远等不到回调。
-  用 promise 链把 `policy.confirm` 串起来（执行本身仍并发），新增 `isCancelled`，
-  Ctrl+C 后排队中的确认直接按拒绝收尾。
-- **H2 bash 守卫**（`packages/core/src/agent/tools/workspace.ts`、`risk.ts`）：
-  补 Windows 盘符相对（`C:secret.txt`，跨盘才逃逸）与盘根相对（`\Windows\x`）；
-  HOME 变量名单扩到 `HOME/USERPROFILE/HOMEPATH/HOMEDRIVE/APPDATA/LOCALAPPDATA/TEMP/TMP/TMPDIR`，
-  认 `${HOME}` 与 `$env:X`；凭据扫描改用词法切分（`.e"nv"` 不再漏），
-  通配符形式（`del .env*`）按剥掉通配符后的名字判定；风险评估补
-  `rd /s`、`del /s /q`、`Remove-Item -Recurse`、`format X:`、`diskpart` /
-  `bcdedit` / `vssadmin`、`reg delete`。
-- **H3 路径与凭据**（同文件）：`resolveInsideWorkspace` 拒绝 Windows ADS
-  （`.npmrc::$DATA`），`assertNotCredentialFile` 解析真实路径后再判一次，
-  symlink 别名不再免检。
-- **H4 压缩摘要**（`sessionStore.ts`）：`summarizeEntries` 先看 `stopReason`
-  再看正文，`error` / `length` / `aborted` 一律放弃本次压缩；空白正文同样按失败处理。
-  失败原因仍写进 `lastCompactionError` 供 `/status` 展示。
-- **H5 会话残行**（同文件）：加载时收拾文件末尾残行——完整行补换行，
-  写了一半的行从文件里截掉并记警告，避免下一次 append 与残行粘成一行吞掉新消息。
-- **H6 Anthropic 消息序列**（`model/anthropic.ts`）：`convertMessages` 末尾
-  合并相邻同角色消息，user 消息里把 `tool_result` 排在最前。修复并行工具调用
-  产生连续 user 被接口 400 的问题。
-- **H7 空回复**（`loop.ts`）：`completeAssistantMessage` 拦截空 `content`
-  （`aborted` 除外），转成带可读原因的错误消息并补发 delta，不再静默入上下文 / 落盘。
-- **H8 HTTP 安全**（`client/src/server/http.ts`、`serveArgs.ts`、`app.ts`）：
-  Host 必须存在且为回环；`Origin: null`、Origin 与 Host 端口不一致一律 403；
-  `--host` 只接受 `127.0.0.0/8` / `localhost` / `::1`，解析阶段与
-  `AppServer.start` 双重拦截；`newRunId` 追加 4 字节随机后缀，runId 不可枚举。
-- 文档：`docs/technical-solution.md`（安全模型、路径/凭据守卫）、
-  `docs/session-management.md`（残行处理）、`packages/client/README.md` 与
-  `README.md`（安全表格）同步。
+- **A CLI 授权与退出码**（`packages/cli/src`）：`a` 的会话级授权绑定当时的
+  档位，`/trust` 切回后重新逐次确认；`exec` 以最后一次模型结果判定成败
+  （模型失败 → 退出码 1、原因走 stderr、`exec_done.status=error`）；
+  输入流提前结束按取消收尾；`/clear` `/new` `/switch` 清零子 Agent 用量。
+- **B 工具层**（`packages/core/src/agent/tools`）：`read_file` 行数统计按块
+  去重；`write_file` / `edit_file` 解析真实路径并按原 mode 原子写（symlink
+  不再被替换成普通文件）；`bash` 超时/取消后留 1.5s 宽限期再强制结算；
+  `grep` 拒绝嵌套量词、超长行只匹配前 4096 字符、逐行响应取消。
+- **C 持久化并发**（`private-json-file` / `workspaceMemory` / `turn` /
+  `subagentTrace` / `subagentContext`）：同一路径写入排队；workspaceMemory
+  读改写整体串行；压缩失败不再触发整批重投；trace 收尾等队列清空；
+  子 Agent 压缩结果回写成下一轮基准。
+- **D 事件流与服务端记录**（`packages/client/src`）：`readFile` 只读 256KB
+  前缀；`finish` 同步认领终态，cancel 与 finish 竞争只发一次 `run_done`；
+  Run 记录按终态裁剪（保留未合并/未丢弃的隔离 Run），`state()` 不再 slice；
+  SSE 游标按 `stream_gap.lastSeq` 回退（仅当它小于当前游标），`recoverGap`
+  校验 epoch / 会话 / Run。
+- **E provider 与取消**（`provider/modelsRequest.ts`、`agent/loop.ts`）：
+  模型列表请求统一 15 秒超时；模型抛 `AbortError` 按 `aborted` 收尾并留空
+  正文，空 assistant 占位不落盘；真正的模型错误照常落盘。
+- 文档：`docs/technical-solution.md`、`docs/cli-ux-design.md`、
+  `docs/client-event-stream.md`、`packages/client/README.md` 同步了取消落盘、
+  模型列表超时、游标回退与 Run 记录上限。
 
 ## 进行中
 
@@ -57,39 +48,24 @@
 
 ## 已知问题
 
-- 路径与命令守卫都是**尽力而为的静态检查**：`node -e "..."`、变量拼接、
-  编码变换拦不住，最终防线仍是执行前的用户审批
-- Windows 上创建文件 symlink 需要开发者模式或管理员权限，symlink 用例在
-  这类机器上跳过，Linux CI 会真正执行
-- 盘符相对路径只在「该盘存在且与工作区不同盘」时判为逃逸；单盘机器无法构造
-  跨盘用例，测试会自动跳过
-- `--host` 收紧后不再支持局域网直连；跨机访问需要 SSH 隧道
-- 审计里的 14 个中危与工程卫生问题本轮未处理
+- 路径与命令守卫仍是尽力而为的静态检查，最终防线是执行前审批。
+- Windows 创建文件 symlink 需要开发者模式/管理员权限，相关用例按平台跳过。
+- 同一会话 `.jsonl` **没有跨进程写锁**：本轮只保证同进程并发安全；
+  两个进程同时写同一会话仍可能互相覆盖。
+- 裁剪后旧 Run 的 `/api/runs/:id` 返回 404（界面上早已点不到）。
+- `readFile` 的二进制判定只看前 256KB 前缀。
+- `state()` 在存在未合并隔离 Run 时可能多于 50 条（刻意保留）。
+- 低危与工程卫生项本轮未处理。
 
 ## 下一步
 
-- 合并 `fix/high-severity-audit` 到 `main` 前再跑一次 `pnpm check`，
-  并确认没有与 `main` 新提交的冲突面
-- 按优先级处理审计报告里的中危项（建议先看并发落盘、SSE 游标与工具输出截断）
-- 在真实终端冒烟一次并发审批（同一轮两个 `write_file`）与 Ctrl+C 取消排队确认
-- 在 Linux CI 上确认 symlink 别名用例真正执行且通过
+- 合并两个审计分支前再跑一次 `pnpm check`，并确认与 `main` 新提交无冲突。
+- 真实终端冒烟：并发审批、Ctrl+C 取消排队任务、SSE 断线重连。
+- Linux CI 上确认 symlink / 权限位 / POSIX 孙进程用例真正执行。
+- 评估低危与工程卫生项，以及跨进程会话文件写锁的可行性。
 
-## 上一轮（已完成）：火山方舟模型列表过滤已下线型号
+## 上一轮：高危 H1–H8（已完成，同分支栈）
 
-选择方舟后不会再出现官方已下线的型号：`VolcengineProvider.getModelList`
-在推荐排序与去重之后，按官方 EOS 清单过滤，仅到 EOM 的型号保留。
-本地清单见 `packages/core/src/provider/volcengine-retired.ts`，
-细节与取舍见 `DECISIONS.md`。
-
-## 更早（已完成）：火山方舟推荐排序与 Ctrl+E 手填
-
-把推荐型号固定排在最前（`prioritizeModelIds`）、`/model` 光标停在当前模型
-（`initialIndex`）、筛选无命中时 `Ctrl+E` 手填模型 ID / `ep-...`，并给方舟
-404 追加可执行提示。
-
-## 更早（已完成）：CLI 大段粘贴折叠
-
-终端开启 bracketed paste 后，多行或超过 200 字的粘贴折叠成 `[粘贴内容 #N ·
-12 行 · 1.2 KB]`，回车时换回原文并作为**一条**消息提交；选择器与隐藏输入
-临时关闭折叠，保证筛选关键字与 API Key 逐字收下。实现见
-`packages/cli/src/paste.ts`。
+审批串行化、bash 守卫与凭据保护、压缩摘要 stopReason、会话残行、Anthropic
+同角色合并、空回复、HTTP 来源校验、runId 不可枚举；详见 `DECISIONS.md`
+的高危审计章节。上一轮火山方舟模型列表过滤见 `docs/providers.md`。
