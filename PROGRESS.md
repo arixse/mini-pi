@@ -5,11 +5,12 @@
 
 ## 当前状态
 
-**Agent 评测 v1 已在 `feature/eval-harness` 落地**（5 个提交）：`exec` 的
-`--model` / `--home`、`eval/` runner 与隐藏测试判分、9 条任务 + oracle、
-端到端假 CLI 回归、真实 smoke 基线与 `.github/workflows/eval.yml`。
-分支上 `pnpm check` 全绿：tests 2373 / pass 2365 / fail 0 / skipped 8，
-覆盖率 97.47 / 90.70 / 93.29；oracle 19/19、变异验证 5/5 判红。
+**Agent 评测 v1 已合入 `main`**（`feature/eval-harness` 的 7 个提交 +
+`--no-ff` 合并提交 `48c871e`）：`exec` 的 `--model` / `--home`、`eval/`
+runner 与隐藏测试判分、9 条任务 + oracle、端到端假 CLI 回归、真实 smoke
+基线与 `.github/workflows/eval.yml`。合并后 `main` 上 `pnpm check` 全绿：
+tests 2378 / pass 2370 / fail 0 / skipped 8，覆盖率 97.47 / 90.66 / 93.29；
+oracle 19/19、变异验证 5/5 判红。
 
 此前高危（H1–H8）与中危（A–E）审计修复已合入 `main`（各带回归测试）。
 
@@ -80,7 +81,7 @@
 
 ## 进行中
 
-- 等待 `feature/eval-harness` 合入 `main`（本地 5 个提交，未推送）
+- 无（评测 v1 已合入 `main`，尚未推送）
 
 ## 已知问题
 
@@ -103,8 +104,8 @@
 
 ## 下一步
 
-- 合入 `feature/eval-harness` 前跑一次完整 `pnpm check`，并在 Linux CI
-  上确认 9 条任务的判分器路径（glob / git / 进程树）都能跑
+- 在 Linux CI 上确认 9 条任务的判分器路径（glob / git / 进程树）都能跑：
+  评测 v1 的 `pnpm check` 目前只在本机 Windows 上验证过
 - 配置仓库变量 `MINI_PI_EVAL_MODEL` 与 secret `MINI_PI_AUTH_JSON` 后，
   手动触发一次 workflow 验证 notice / 上传 / Job Summary
 - 预算允许时跑 `pnpm eval --suite regression --repeat 3 --update-baseline`，
