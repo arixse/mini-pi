@@ -1,0 +1,9 @@
+{
+  "id": "refactor-extract",
+  "title": "抽取重复的显示名逻辑，行为不变",
+  "smoke": false,
+  "timeoutMs": 120000,
+  "gradeTimeoutMs": 60000,
+  "forbidden": ["test/**"],
+  "gradeCommand": ["node", "--test", "test/**/*.test.mjs", "grade/**/*.test.mjs"]
+}

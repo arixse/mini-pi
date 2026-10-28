@@ -181,6 +181,7 @@ export async function runGrade(
   workspace: string,
   command: readonly string[],
   timeoutMs: number,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): Promise<GradeResult> {
   if (command.length === 0) {
     throw new Error("gradeCommand 不能为空");
@@ -192,7 +193,7 @@ export async function runGrade(
    * 结果 exit 0——判分器变成永远通过。这不是测试环境的特例，
    * 而是"评分必须跑在自己的干净环境里"的正常要求。
    */
-  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", ...extraEnv };
   delete env.NODE_TEST_CONTEXT;
   delete env.NODE_OPTIONS;
   const result = await spawnCollect(executable, args, {

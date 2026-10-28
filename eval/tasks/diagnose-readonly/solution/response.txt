@@ -1,0 +1,8 @@
+问题在 src/stats.mjs 第 5 行：
+
+    const mid = Math.floor(sorted.length / 2);
+
+这一行只取排序后数组的上中位数。长度为偶数时应取中间两个数的平均值，
+也就是 `(sorted[mid - 1] + sorted[mid]) / 2`；现在直接返回 `sorted[mid]`，
+所以 `median([1, 2, 3, 4])` 得到 3，而不是 2.5。奇数长度时取 `sorted[mid]`
+仍然正确。

@@ -1,0 +1,3 @@
+- TODO: 补充 README 安装步骤
+- TODO: 为 search 增加大小写不敏感测试
+- TODO: 清理未使用的依赖

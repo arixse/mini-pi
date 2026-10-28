@@ -213,6 +213,44 @@ console.log(JSON.stringify({type:"exec_done", status:"done", text:"改完了"}))
     }
   });
 
+  it("判分器能拿到 fixture 的初始 HEAD（历史改写才可被识别）", async () => {
+    const root = tempDir("mini-pi-eval-git-head-");
+    try {
+      const fixture = createTask(root, {
+        gradeBody: `import test from "node:test";
+import assert from "node:assert";
+import { execFileSync } from "node:child_process";
+test("head", () => {
+  const expected = process.env.MINI_PI_EVAL_FIXTURE_HEAD;
+  assert.match(expected, /^[0-9a-f]{40}$/);
+  const actual = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.strictEqual(actual, expected);
+});
+`,
+      });
+      const cliPath = writeCli(
+        root,
+        `const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const cwd = args[args.indexOf("--cwd") + 1];
+fs.writeFileSync(path.join(cwd, "src", "a.txt"), "fixed\\n");
+console.log(JSON.stringify({type:"exec_done", status:"done", text:"已修复"}));
+`,
+      );
+
+      const result = await runTask({
+        ...baseOptions(root, fixture),
+        cliPath,
+        useGit: true,
+      });
+
+      assert.strictEqual(result.status, "pass", result.error ?? "判分器应拿到 HEAD 并比对成功");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("grade/ 只在 agent 结束后注入：执行期间工作区里看不到它", async () => {
     const root = tempDir("mini-pi-eval-grade-timing-");
     try {

@@ -1,0 +1,9 @@
+{
+  "id": "batch-rename",
+  "title": "跨 8 个模块重命名共享导出",
+  "smoke": false,
+  "timeoutMs": 120000,
+  "gradeTimeoutMs": 60000,
+  "forbidden": ["test/**"],
+  "gradeCommand": ["node", "--test", "test/**/*.test.mjs", "grade/**/*.test.mjs"]
+}

@@ -202,14 +202,23 @@ export function prepareHome(homeDir: string, authPath: string, model: string): v
   );
 }
 
-async function initGit(workspace: string): Promise<void> {
+/**
+ * 建一个只有单个提交的 fixture 仓库，并返回这个提交的哈希。
+ *
+ * 返回哈希是为了让"历史有没有被改写"能被精确判定：只比对提交数与
+ * 提交信息挡不住"重新 init 时沿用同样信息"的改写，而哈希变了就是变了。
+ * 哈希本身不能存进工作区（agent 能改），所以由判分器通过环境变量传入。
+ */
+export async function initFixtureGit(workspace: string): Promise<string> {
   const commands: Array<string[]> = [
     ["init", "-q"],
     ["-c", "user.email=eval@example.invalid", "-c", "user.name=mini-pi-eval",
       "-c", "commit.gpgsign=false", "add", "-A"],
     ["-c", "user.email=eval@example.invalid", "-c", "user.name=mini-pi-eval",
       "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture"],
+    ["rev-parse", "HEAD"],
   ];
+  let head = "";
   for (const args of commands) {
     const result = await spawnCollect("git", args, {
       cwd: workspace,
@@ -219,7 +228,11 @@ async function initGit(workspace: string): Promise<void> {
       const detail = result.error ?? result.stderr.trim() ?? `exit ${result.code}`;
       throw new EvalConfigError(`fixture 初始化 git 失败：${detail}`);
     }
+    if (args[0] === "rev-parse") {
+      head = result.stdout.trim();
+    }
   }
+  return head;
 }
 
 export type EvalEvent = {
@@ -317,9 +330,8 @@ export async function runTask(options: RunTaskOptions): Promise<TrialResult> {
   rmSync(trialDir, { recursive: true, force: true });
   mkdirSync(trialDir, { recursive: true });
   copyDirectory(join(taskDir, "fixture"), workspace);
-  if (options.useGit !== false) {
-    await initGit(workspace);
-  }
+  // fixture 的 HEAD 只交给判分器：写进工作区等于把"标准答案"递给 agent
+  const fixtureHead = options.useGit === false ? null : await initFixtureGit(workspace);
   const before = snapshotWorkspace(workspace);
   prepareHome(homeDir, authPath, model);
 
@@ -380,7 +392,12 @@ export async function runTask(options: RunTaskOptions): Promise<TrialResult> {
       writeAnswer(workspace, done.text);
     }
     installGrade(workspace, join(taskDir, "grade"));
-    const grade = await runGrade(workspace, task.gradeCommand, task.gradeTimeoutMs);
+    const grade = await runGrade(
+      workspace,
+      task.gradeCommand,
+      task.gradeTimeoutMs,
+      fixtureHead ? { MINI_PI_EVAL_FIXTURE_HEAD: fixtureHead } : {},
+    );
     gradeLog = portablePath(repoRoot, gradeLogPath);
     writeFileSync(
       gradeLogPath,

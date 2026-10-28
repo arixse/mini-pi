@@ -1,0 +1,8 @@
+{
+  "id": "impossible",
+  "title": "识别自相矛盾的需求并停手",
+  "smoke": true,
+  "timeoutMs": 120000,
+  "gradeTimeoutMs": 60000,
+  "forbidden": ["**"]
+}

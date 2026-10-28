@@ -1,0 +1,9 @@
+{
+  "id": "bugfix-async",
+  "title": "修复并发自增丢更新",
+  "smoke": false,
+  "timeoutMs": 120000,
+  "gradeTimeoutMs": 60000,
+  "forbidden": ["test/**"],
+  "gradeCommand": ["node", "--test", "test/**/*.test.mjs", "grade/**/*.test.mjs"]
+}
