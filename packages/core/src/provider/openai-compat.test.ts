@@ -43,27 +43,37 @@ describe("prioritizeModelIds（推荐型号排在接口列表前面）", () => {
  * 默认没有超时：供应商侧挂住一个连接，模型下拉框就会一直转圈。
  */
 describe("fetchOpenAiModelIds · 超时", () => {
-  it("接口一直不回时按超时中断，而不是无限等待", async () => {
-    const originalFetch = global.fetch;
-    let seen: AbortSignal | undefined;
-    global.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
-      seen = init?.signal ?? undefined;
-      return new Promise<Response>((_resolve, reject) => {
-        seen?.addEventListener("abort", () => reject(seen?.reason));
-      });
-    }) as typeof fetch;
+  it(
+    "接口一直不回时按超时中断，而不是无限等待",
+    // 回归护栏：信号没接上时会永远挂住，没有超时选项就是整个套件陪葬
+    { timeout: 5000 },
+    async () => {
+      const originalFetch = global.fetch;
+      let seen: AbortSignal | undefined;
+      global.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+        seen = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          seen?.addEventListener("abort", () => reject(seen?.reason));
+        });
+      }) as typeof fetch;
 
-    try {
-      await assert.rejects(
-        fetchOpenAiModelIds("https://example.com/v1/models", "sk-test", 5),
-        /timeout/i,
-        "超时必须真的打断请求，而不是让界面一直等",
-      );
-      assert.ok(seen instanceof AbortSignal, "请求要带取消信号才能被打断");
-    } finally {
-      global.fetch = originalFetch;
-    }
-  });
+      // AbortSignal.timeout 的定时器是 unref 的：待办只剩它时事件循环直接排空，
+      // 这条用例会被 node:test 判 cancelledByParent（CI 上靠同跑的其他文件吊住
+      // 循环才碰巧绿，本地单跑必红）。挂一个 ref 的 interval 把循环吊到断言完成。
+      const keepAlive = setInterval(() => {}, 50);
+      try {
+        await assert.rejects(
+          fetchOpenAiModelIds("https://example.com/v1/models", "sk-test", 5),
+          /timeout/i,
+          "超时必须真的打断请求，而不是让界面一直等",
+        );
+        assert.ok(seen instanceof AbortSignal, "请求要带取消信号才能被打断");
+      } finally {
+        clearInterval(keepAlive);
+        global.fetch = originalFetch;
+      }
+    },
+  );
 
   it("正常返回时取下 data[].id，且信号不会提前中止请求", async () => {
     const originalFetch = global.fetch;
