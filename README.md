@@ -229,7 +229,6 @@ CLI 只在**构建期**用内核（`devDependencies`），它的 `dependencies` 
 | [客户端视觉稿交接](docs/client-visual-handoff.md) | 视觉交互稿定稿说明：物料清单、十屏验收要点、内核缺口、开发指令模板                      |
 | [客户端事件流](docs/client-event-stream.md)      | 两条 SSE 的分工：当前 Run 的正文与所有 Run 的控制事件，以及游标、缺口与降级语义 |
 | [客户端多工作区方案](docs/client-multi-workspace.md) | 已落地：宿主池、三层侧栏树、会话寻址与启动恢复（W1 ~ W3 已合入）           |
-| [开发日志索引](notes/README.md)                 | day1 ~ day31，按真实提交日期编排                                             |
 
 ## 范围
 

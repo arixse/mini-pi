@@ -369,7 +369,7 @@ describe("docs 数值与实现对得上", () => {
 });
 
 describe("docs 状态与清单不再回退", () => {
-  it("README 的多工作区状态与 notes 日志范围跟实现对得上", () => {
+  it("README 的多工作区状态跟实现对得上", () => {
     const readme = repoFile("README.md");
     const row =
       readme.split("\n").find((line) => line.includes("docs/client-multi-workspace.md")) ?? "";
@@ -377,16 +377,9 @@ describe("docs 状态与清单不再回退", () => {
     // W1~W3 已合入：README 再写"方案待定/未实施"会让读者以为功能不存在
     assert.ok(!/待定|未实施/.test(row), `README 把已落地的多工作区写回了未实施：${row}`);
 
-    // 开发日志范围以 notes/README.md 的真实条目为准，避免新增日志后忘改 README
-    const days = [...repoFile(join("notes", "README.md")).matchAll(/\(\.\/day(\d+)\.md\)/g)].map(
-      (match) => Number(match[1]),
-    );
-    assert.ok(days.length > 0, "应能从 notes/README.md 读到开发日志条目");
-    const latest = Math.max(...days);
-    assert.ok(
-      readme.includes(`day1 ~ day${latest}`),
-      `README 的开发日志范围应写到 day${latest}（以 notes/README.md 为准）`,
-    );
+    // notes/ 已本地化（.gitignore，不入库）：README 再链它就是死链，
+    // 新克隆的 CI 上「相对链接都指向存在的文件」会红
+    assert.ok(!readme.includes("](notes/"), "notes/ 已本地化，README 不应再链接它");
   });
 
   it("README 的 serve 默认工作区与 serveArgs 的说法一致", () => {
