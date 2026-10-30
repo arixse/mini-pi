@@ -32,3 +32,9 @@ packages/cli/LICENSE
 
 # 评测运行产物（workspace / transcript / 临时 home，每次生成，不入库）
 eval/.runs/
+
+AGENTS.md
+
+.agents
+
+notes
