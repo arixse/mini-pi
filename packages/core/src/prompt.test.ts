@@ -14,6 +14,28 @@ describe("buildSystemPrompt", () => {
     assert.ok(prompt.includes("凭据"), "应写明不读凭据类文件");
   });
 
+  it("不可逆操作要停下确认，不是警告后继续", () => {
+    const prompt = buildSystemPrompt({ workspaceRoot: root });
+
+    assert.ok(prompt.includes("# 安全边界"), "应有顶层的安全边界段落");
+    assert.ok(prompt.includes("不可逆操作默认不做"), "应默认拒绝不可逆操作");
+    assert.ok(
+      prompt.includes("替代对具体操作的确认"),
+      "应明确用户一句“不用确认”不能替代对具体操作的确认",
+    );
+    assert.ok(prompt.includes("停下"), "应要求停下而不是继续执行");
+    assert.ok(prompt.includes("明确确认"), "应要求对具体路径/命令做明确确认");
+    assert.ok(prompt.includes("`.git`"), "应点名 .git 属于受保护/不可逆对象");
+    assert.ok(
+      !prompt.includes("先说清影响范围，再动手"),
+      "旧措辞等于允许警告后直接执行，必须删掉",
+    );
+    assert.ok(
+      !prompt.includes("每次都要用户确认"),
+      "full-access / headless 下并不存在逐次确认，不能向模型承诺",
+    );
+  });
+
   it("工具指南要讲清检索优先与 edit 优先于 write", () => {
     const prompt = buildSystemPrompt({ workspaceRoot: root });
 
