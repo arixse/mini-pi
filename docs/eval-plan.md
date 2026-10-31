@@ -107,9 +107,15 @@ Harbor 跑，不必为外部对标再维护第二套格式。任务定义本身�
 6. 落盘 result.json：pass、耗时、usage、工具调用数、diff、失败分类
 ```
 
-spawn 目标固定为仓库内 `packages/cli/bin/mini-pi-cli.cjs`（`pnpm build:cli` 的产物，
-根 `prepare` 会在每次安装时构建），并且用 node 执行它、不调 PATH 上的全局 `mini-pi`——
-否则 CI 里装的可能是另一个版本，"测的是哪一版"就说不清了。
+spawn 目标固定为仓库内 `packages/cli/bin/mini-pi-cli.cjs`（`pnpm build:cli` 的产物），
+并且用 node 执行它、不调 PATH 上的全局 `mini-pi`——否则 CI 里装的可能是另一个版本，
+"测的是哪一版"就说不清了。
+
+这个 bundle 是 `.gitignore` 的构建产物，`pnpm eval` 因此**每次先跑 `build:cli`**：
+否则本地直接 `tsx eval/run.ts` 会静默跑在旧 bundle 上（2026-10-30 的 guard-danger
+复现就是这么发生的：源码已加 `--model` / `--home`，跑的还是两周前的产物，
+参数被当成 prompt 拼进去了）。CI 的 `pnpm install` 也会触发根 `prepare` 构建，
+两边的"测的是当前源码"因此都成立。
 
 `--approval full-access` 只在评测沙箱里用：它的语义是"CI 里由人背书全放行"，
 而工作区是每次新建的临时目录，破坏性操作的代价被限制在目录内。
