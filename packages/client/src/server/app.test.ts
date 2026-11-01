@@ -2815,3 +2815,32 @@ describe("装配透传", () => {
     );
   });
 });
+
+/**
+ * `webRoot` 这个口子只有浏览器层用例（`e2e-ui/`）用得上，但它坏掉的表现很
+ * 隐蔽：页面拿不到产物 → 一片空白，而那种失败在浏览器里看起来像"选择器
+ * 写错了"，排查会绕很远。这里就钉住"传了就当静态根"。
+ */
+describe("webRoot：把前端产物当静态根", () => {
+  it("index.html 与 assets 下的资源都取得到", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "minipi-webroot-"));
+    writeFileSync(
+      join(dir, "index.html"),
+      "<!doctype html><title>ok</title><div id=\"root\">BUILT</div>",
+      "utf8",
+    );
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "assets", "app.js"), "console.log(1)", "utf8");
+    const server = await startTestServer({ webRoot: dir });
+    try {
+      const page = await server.raw("/");
+      assert.equal(page.status, 200);
+      assert.match(await page.text(), /BUILT/);
+      const asset = await server.raw("/assets/app.js");
+      assert.equal(asset.status, 200, "静态资源要能取到，不然页面白屏");
+    } finally {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
