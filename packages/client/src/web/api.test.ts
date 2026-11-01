@@ -20,6 +20,7 @@ import {
   subscribeEvents,
   subscribeRun,
 } from "./api";
+import type { RunEventEnvelope, ServerEvent } from "../shared/types";
 
 describe("事件流重连退避", () => {
   it("第 n 次失败按 500ms 起翻倍，封顶 5s", () => {
@@ -266,6 +267,125 @@ describe("事件流游标", () => {
     } finally {
       (globalThis as { EventSource?: unknown }).EventSource = originalEventSource;
       (globalThis as { window?: unknown }).window = originalWindow;
+    }
+  });
+});
+
+/**
+ * 订阅清单的回归。
+ *
+ * `EventSource` 只把**命名事件**投给 `addEventListener(那个名字)`：清单里漏
+ * 一个类型，那类事件就永远到不了前端，而且不报错、不打日志。`session_title`
+ * 就这样漏过一次——服务端发得出、`state.ts` 也写了处理、直接喂事件给归约也
+ * 通过，界面上却要刷新才换名（`/api/state` 里带着已落盘的那条）。
+ *
+ * 这里从两头钉住：注册了哪些类型，以及帧能不能真的送到 `onEvent`。
+ */
+describe("事件订阅清单", () => {
+  /** 服务端会**命名发送**的控制事件：漏一个，界面就少一块行为 */
+  const CONTROL_EVENTS = [
+    "run_state",
+    "run_usage",
+    "approval_request",
+    "approval_resolved",
+    "run_done",
+    "stream_gap",
+    "journal_ready",
+    "session_title",
+  ] as const satisfies readonly ServerEvent["type"][];
+
+  /** 只记账的替身：记录注册了哪些类型，并能手动投一帧 */
+  class RecordingSource {
+    static last: RecordingSource | null = null;
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readonly url: string;
+    private readonly handlers = new Map<string, Array<(event: MessageEvent<string>) => void>>();
+    constructor(url: string) {
+      this.url = url;
+      RecordingSource.last = this;
+    }
+    addEventListener(type: string, handler: (event: MessageEvent<string>) => void): void {
+      const list = this.handlers.get(type) ?? [];
+      list.push(handler);
+      this.handlers.set(type, list);
+    }
+    registered(): string[] {
+      return [...this.handlers.keys()];
+    }
+    emit(type: string, data: unknown, id: number): void {
+      const message = { data: JSON.stringify(data), lastEventId: String(id) } as MessageEvent<string>;
+      for (const handler of this.handlers.get(type) ?? []) {
+        handler(message);
+      }
+    }
+    close(): void {}
+  }
+
+  const noop = {
+    onEvent: () => undefined,
+    onStatus: () => undefined,
+    onError: () => undefined,
+  };
+
+  /** 装上 `EventSource` 与最小 `window`，返回还原函数（两条流都要用） */
+  function install(): () => void {
+    const originalEventSource = (globalThis as { EventSource?: unknown }).EventSource;
+    const originalWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { EventSource?: unknown }).EventSource = RecordingSource;
+    (globalThis as { window?: unknown }).window = {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    };
+    return () => {
+      (globalThis as { EventSource?: unknown }).EventSource = originalEventSource;
+      (globalThis as { window?: unknown }).window = originalWindow;
+    };
+  }
+
+  it("两条流都登记了全部控制事件（漏一个 = 那类事件永远收不到）", () => {
+    const restore = install();
+    try {
+      for (const [label, open] of [
+        ["全局流", () => subscribeEvents(0, noop)],
+        ["per-run 流", () => subscribeRun("run_1", 0, noop)],
+      ] as const) {
+        const handle = open();
+        const registered = RecordingSource.last!.registered();
+        for (const type of CONTROL_EVENTS) {
+          assert.ok(registered.includes(type), `${label}没有订阅 ${type}：这类事件会静默丢掉`);
+        }
+        handle.close();
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("session_title 帧能送到 onEvent：侧栏靠它就地换名，而不是等刷新", () => {
+    const restore = install();
+    try {
+      const received: RunEventEnvelope[] = [];
+      const handle = subscribeEvents(0, {
+        ...noop,
+        onEvent: (envelope) => received.push(envelope),
+      });
+      const source = RecordingSource.last!;
+      source.emit(
+        "session_title",
+        { runId: "", root: "/ws", event: { type: "session_title", sessionId: "s1.jsonl", title: "收敛颜色令牌" } },
+        7,
+      );
+      assert.equal(received.length, 1, "这一帧没有被投递：订阅清单里少了 session_title");
+      assert.deepEqual(received[0]?.event, {
+        type: "session_title",
+        sessionId: "s1.jsonl",
+        title: "收敛颜色令牌",
+      });
+      assert.equal(handle.cursor(), 7, "游标要跟着走，断线重连才不会重放");
+      handle.close();
+    } finally {
+      restore();
     }
   });
 });
