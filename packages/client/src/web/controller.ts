@@ -27,6 +27,13 @@ import { ClientStore } from "./store";
 import type { Actions, SaveModelInput } from "./actions";
 import { textOf } from "./format";
 import {
+  FILE_PANEL_WIDTH,
+  SIDEBAR_WIDTH,
+  clampWidth,
+  writeLayout,
+  type LayoutState,
+} from "./layout";
+import {
   approvalNotification,
   detectNotifications,
   doneNotification,
@@ -976,6 +983,23 @@ export class AppController {
   }
 
   /**
+   * 记下拖拽后的侧栏宽度并持久化。
+   *
+   * 拖拽过程中 `SideResizer` 只改 CSS 变量、不碰状态：逐帧 `store.update`
+   * 会把整棵时间线重画一遍。松手（或双击复原）才走到这里，切一次状态。
+   */
+  private setLayoutWidth(key: keyof LayoutState, width: number | null): void {
+    const limits = key === "sidebarWidth" ? SIDEBAR_WIDTH : FILE_PANEL_WIDTH;
+    const next = width === null ? null : clampWidth(width, limits);
+    this.store.update((state) => {
+      state.layout[key] = next;
+    });
+    if (typeof localStorage !== "undefined") {
+      writeLayout(localStorage, this.store.current.layout);
+    }
+  }
+
+  /**
    * 把隔离改动合并回基准工作区。
    *
    * 失败（多半是主工作区也改了同一个文件）不关面板：用户正看着 diff，
@@ -1404,6 +1428,8 @@ export class AppController {
           state.search = keyword;
         });
       },
+      setSidebarWidth: (width) => this.setLayoutWidth("sidebarWidth", width),
+      setFilePanelWidth: (width) => this.setLayoutWidth("filePanelWidth", width),
       toggleSidebar: () => {
         this.store.update((state) => {
           state.ui.sidebar = !state.ui.sidebar;

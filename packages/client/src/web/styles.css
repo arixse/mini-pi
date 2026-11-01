@@ -37,6 +37,8 @@
      视觉稿的 232 / 760 是 1280 画布基准，不是所有屏幕上的上限。 */
   --sidebar-w: clamp(264px, 19vw, 320px);
   --main-w: clamp(760px, 84vw, 1280px);
+  /* 右侧文件面板：与左导航同构的常驻列，放得下一屏代码又不太吃会话宽度 */
+  --file-panel-w: clamp(320px, 27vw, 480px);
   /* 主列左右留白：窄屏收窄、宽屏略放，避免内容贴边 */
   --page-pad: clamp(12px, 1.6vw, 28px);
   color-scheme: dark light;
@@ -312,7 +314,9 @@ svg.ic {
 
 .body {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  /* 左导航 / 主列 / 右侧文件面板。第三列只在面板出现时占宽（auto），
+     关闭时整列自动收成 0，不挤压主列。 */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr) auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -353,6 +357,51 @@ svg.ic {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* ---------------- 侧栏拖拽条：贴在两条侧栏的内缘 ---------------- */
+
+/*
+ * 挂在 `.body` 上而不是侧栏内部：侧栏自己是滚动容器，绝对定位的子节点
+ * 会跟着内容滚走。宽度与拖拽条都用同一个 CSS 变量定位，拖的时候一起动。
+ */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 12;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+/* 平时不可见；hover / 拖动时露一条主色细线，提示这里能拖 */
+.resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.resizer:hover::after,
+.resizer:active::after {
+  background: var(--Client-accent-solid);
+}
+
+.resizer-left {
+  left: var(--sidebar-w);
+  transform: translateX(-4px);
+}
+
+.resizer-right {
+  right: var(--file-panel-w);
+  transform: translateX(4px);
 }
 
 .side-search {
@@ -2327,6 +2376,77 @@ svg.ic {
   color: var(--Client-text-tertiary);
 }
 
+/* ---------------- 右侧文件面板：常驻列，不是浮层 ---------------- */
+
+/*
+ * 与左侧导航同构：`.body` 的第三列，带左描边、无圆角卡片、无遮罩。
+ * 打开文件只是让这一列出现；关闭后列宽归零，主列照常铺满。
+ */
+.file-panel {
+  grid-column: 3;
+  grid-row: 1 / -1;
+  width: var(--file-panel-w);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--Client-border-subtle);
+  background: var(--Client-bg-sidebar);
+  overflow: hidden;
+  z-index: 5;
+}
+
+.file-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid var(--Client-border-subtle);
+}
+
+/* 路径是这一列的标题：单行省略，完整路径放 title */
+.file-panel-path {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--Client-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-panel-head .file-meta {
+  white-space: nowrap;
+}
+
+.file-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 面板里的正文不再自带左右留白叠两层：占满这一列 */
+.file-panel-body .file-body {
+  flex: 1 0 auto;
+}
+
+.file-panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 8px 10px 8px 12px;
+  border-top: 1px solid var(--Client-border-subtle);
+}
+
 .diff-stat .add {
   color: var(--Client-diff-add-text);
 }
@@ -2542,6 +2662,11 @@ svg.ic {
     display: inline-flex;
   }
 
+  /* 抽屉 / 覆盖层是固定宽度，"拖宽"在这档没有意义 */
+  .resizer {
+    display: none;
+  }
+
   .body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2568,6 +2693,8 @@ svg.ic {
     background: var(--Client-scrim);
   }
 
+  /* 单列布局下主列必须回到第 1 列（否则会凭空多出一条空的隐式列） */
+  .main-col,
   .main,
   .composer {
     grid-column: 1;
@@ -2583,6 +2710,19 @@ svg.ic {
 
   .diff-card {
     max-width: 100%;
+  }
+
+  /*
+   * 右侧文件面板：手机上放不下三列，改成贴右的常驻抽屉。
+   * 不是浮层弹窗——没有遮罩、没有圆角卡片，左缘一条阴影只是表明它盖在
+   * 会话上方；关掉即收起，会话立刻回到视野。
+   */
+  .file-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 25;
+    width: min(480px, 92vw);
+    box-shadow: -4px 0 24px -8px #000;
   }
 }
 
@@ -2714,6 +2854,12 @@ svg.ic {
 
   .picker-path-row input {
     flex-basis: 100%;
+  }
+
+  /* 手机宽度：文件面板铺满整列，一行代码多留几个字符 */
+  .file-panel {
+    width: 100%;
+    box-shadow: none;
   }
 }
 

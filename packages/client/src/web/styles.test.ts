@@ -132,6 +132,43 @@ describe("响应式版式契约", () => {
     assert.match(block, /\.tree-twist,\s*\.row-acts\s*\{[^}]*opacity:\s*1/s);
   });
 
+  /**
+   * 用户要求"文件内容都在右侧侧栏里显示，不再弹窗"。
+   *
+   * 守三件事：① `.body` 留出第三列；② 面板落在第三列、带左描边、不是
+   * absolute 浮层；③ 窄屏才降级成贴右抽屉（有 position: absolute）。
+   */
+  it("右侧文件面板是常驻第三列，不是浮层", () => {
+    assert.match(
+      blockAfter(css, ".body {"),
+      /grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto/,
+      "body 要有左导航 / 主列 / 右面板三列",
+    );
+    const panel = blockAfter(css, ".file-panel {");
+    assert.match(panel, /grid-column:\s*3/, "面板占第三列");
+    assert.match(panel, /border-left:/, "与主列用描边分区");
+    assert.doesNotMatch(panel, /position:\s*absolute/, "宽屏下是常驻列，不是浮层");
+    assert.match(
+      blockAfter(css, "@media (max-width: 879px)"),
+      /\.file-panel\s*\{[^}]*position:\s*absolute/s,
+      "窄屏放不下三列，降级成贴右抽屉",
+    );
+  });
+
+  /** 用户要求左右两条侧栏都能拖宽；手柄贴在各自内缘，窄屏收起 */
+  it("左右侧栏各有一条可拖拽的宽度手柄", () => {
+    const resizer = blockAfter(css, ".resizer {");
+    assert.match(resizer, /cursor:\s*col-resize/);
+    assert.match(resizer, /position:\s*absolute/);
+    assert.match(blockAfter(css, ".resizer-left {"), /left:\s*var\(--sidebar-w\)/);
+    assert.match(blockAfter(css, ".resizer-right {"), /right:\s*var\(--file-panel-w\)/);
+    assert.match(
+      blockAfter(css, "@media (max-width: 879px)"),
+      /\.resizer\s*\{[^}]*display:\s*none/s,
+      "抽屉模式下不该有拖宽手柄",
+    );
+  });
+
   it("输入区附加行与目录路径行都允许换行", () => {
     assert.match(blockAfter(css, ".composer-attach {"), /flex-wrap:\s*wrap/);
     assert.match(blockAfter(css, ".picker-path-row {"), /flex-wrap:\s*wrap/);

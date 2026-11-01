@@ -31,6 +31,7 @@ import type {
   WorkspaceView,
 } from "../shared/types";
 import { textOf } from "./format";
+import { readLayout, type LayoutState } from "./layout";
 import type { NotifyState } from "./notify";
 import { initialTheme, type ThemeMode } from "./theme";
 
@@ -191,6 +192,13 @@ export type ClientState = {
    * （服务端渲染、单测）里 `initialTheme` 自己会退到深色。
    */
   theme: ThemeMode;
+  /**
+   * 左右两条侧栏的宽度偏好（见 layout.ts）。
+   *
+   * `null` = 没调过，交给 CSS 的 clamp 随视口走；数字 = 用户拖到的像素宽。
+   * 与主题一样跨刷新记住，但拖拽过程中不逐帧写状态（见 `SideResizer`）。
+   */
+  layout: LayoutState;
   /** 活动工作区（"新任务去哪"）；与 `activeRoot` 指向同一个根 */
   workspace: WorkspaceView;
   /** 活动根：侧栏聚焦、输入区与状态行绑定谁 */
@@ -306,6 +314,7 @@ export function initialState(): ClientState {
         ? null
         : { matches: (query: string) => matchMedia(query).matches },
     ),
+    layout: readLayout(typeof localStorage === "undefined" ? null : localStorage),
     workspace: { root: "", name: "" },
     activeRoot: "",
     workspaces: [],

@@ -20,8 +20,9 @@ import { Composer } from "./components/Composer";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
-import { FilePreview } from "./components/FilePreview";
+import { FilePanel } from "./components/FilePanel";
 import { Picker } from "./components/Picker";
+import { SideResizer } from "./components/SideResizer";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import { Timeline } from "./components/Timeline";
@@ -49,6 +50,8 @@ const fakeActions = {
   openRun: () => undefined,
   decide: () => undefined,
   setSearch: () => undefined,
+  setSidebarWidth: () => undefined,
+  setFilePanelWidth: () => undefined,
   toggleSidebar: () => undefined,
   closeSidebar: () => undefined,
   openSettings: () => undefined,
@@ -134,6 +137,22 @@ describe("前端组件树", () => {
     assert.doesNotMatch(html, /class="statusbar"/);
     assert.match(html, /还没有工作区/, "还没拿到状态时应如实说工作区未打开");
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
+  });
+
+  it("左导航常驻一条拖拽条；没有文件面板时不出现右手柄", () => {
+    const html = renderToStaticMarkup(createElement(App));
+    assert.match(html, /class="resizer resizer-left"/, "左导航要能拖宽");
+    assert.match(html, /role="separator"/);
+    assert.doesNotMatch(html, /resizer-right/, "没有文件面板时右条无处可贴");
+  });
+
+  it("拖拽条标成竖直 separator，读屏能说清用途", () => {
+    const html = renderToStaticMarkup(
+      createElement(SideResizer, { side: "right", onCommit: () => undefined }),
+    );
+    assert.match(html, /class="resizer resizer-right"/);
+    assert.match(html, /aria-orientation="vertical"/);
+    assert.match(html, /aria-label="[^"]*文件面板宽度/);
   });
 
   it("状态行属于主列且有三枚指标：上下文 / 步数 / 缓存（模型交给输入区）", () => {
@@ -608,10 +627,18 @@ describe("文件预览", () => {
       createElement(
         ClientProvider,
         { value: { store, actions: fakeActions } },
-        createElement(FilePreview),
+        createElement(FilePanel),
       ),
     );
   }
+
+  /** 用户要的是"右侧常驻列"，不是又一扇浮层弹窗 */
+  it("画成右侧面板而不是浮层弹窗", () => {
+    const html = render(fileStore());
+    assert.match(html, /<aside class="file-panel"/, "是常驻的 aside 列");
+    assert.doesNotMatch(html, /role="dialog"/, "不再伪装成弹窗");
+    assert.doesNotMatch(html, /class="diff-panel"/, "不再复用变更面板的浮层骨架");
+  });
 
   it("正文带行号：每行一个 code-no，从 1 起（不是一列装饰）", () => {
     const html = render(fileStore());

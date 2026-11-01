@@ -79,6 +79,15 @@ export type Actions = {
   openRun: (runId: string) => void;
   decide: (approvalId: string, answer: ApprovalAnswer) => void;
   setSearch: (keyword: string) => void;
+  /**
+   * 记下拖拽后的左导航宽度（px）；`null` 表示复原成 CSS 默认值。
+   *
+   * 拖拽期间由 `SideResizer` 直接改 CSS 变量，松手才落到这里——
+   * 逐帧写状态会让整棵时间线跟着重画。
+   */
+  setSidebarWidth: (width: number | null) => void;
+  /** 同上，作用于右侧文件面板 */
+  setFilePanelWidth: (width: number | null) => void;
   toggleSidebar: () => void;
   closeSidebar: () => void;
   openSettings: () => void;

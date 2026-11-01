@@ -13,9 +13,10 @@ import { ClientProvider, useActions, useClient } from "./store";
 import { Boot } from "./components/Boot";
 import { Composer } from "./components/Composer";
 import { DiffPanel } from "./components/DiffPanel";
-import { FilePreview } from "./components/FilePreview";
+import { FilePanel } from "./components/FilePanel";
 import { Picker } from "./components/Picker";
 import { Settings } from "./components/Settings";
+import { SideResizer } from "./components/SideResizer";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import { Timeline } from "./components/Timeline";
@@ -98,11 +99,26 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
     }
   }, [title]);
 
+  /*
+   * 用户拖过的宽度以 CSS 变量落到 `.body` 上：侧栏、面板与两条拖拽条都按
+   * 同一个变量定位，一份宽度没有第二个真值。没拖过就交给 styles.css 的
+   * clamp 随视口走（这里不写任何变量）。
+   */
+  const bodyStyle = {
+    ...(state.layout.sidebarWidth !== null
+      ? { "--sidebar-w": `${state.layout.sidebarWidth}px` }
+      : {}),
+    ...(state.layout.filePanelWidth !== null
+      ? { "--file-panel-w": `${state.layout.filePanelWidth}px` }
+      : {}),
+  } as React.CSSProperties;
+
   return (
     <div className={`app${state.ui.sidebar ? " nav-open" : ""}`}>
       <Topbar />
-      <div className="body">
+      <div className="body" style={bodyStyle}>
         <Sidebar />
+        <SideResizer side="left" onCommit={actions.setSidebarWidth} />
         <div className="drawer-mask" onClick={() => actions.closeSidebar()} />
         {/*
          * 主列：状态行 / 会话 / 输入区三层，设计稿第 1 页的纵向结构。
@@ -114,10 +130,18 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
           <div className="main-stage">
             <Timeline />
             <DiffPanel />
-            <FilePreview />
           </div>
           <Composer handleRef={composerRef} />
         </div>
+        {/*
+         * 右侧文件面板：`.body` 栅格的第三列，与左侧导航同构。
+         * 打开文件（`ui.file` 非空）时这一列出现，关掉即收起——
+         * 文件内容不再以浮层弹窗的形式盖住会话。
+         */}
+        {state.ui.file ? (
+          <SideResizer side="right" onCommit={actions.setFilePanelWidth} />
+        ) : null}
+        <FilePanel />
       </div>
       <Settings />
       <Picker />
