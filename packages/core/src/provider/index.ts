@@ -7,6 +7,7 @@ import { KimiProvider } from "./kimi";
 import { ZhipuProvider } from "./zhipu";
 import { BailianProvider } from "./bailian";
 import { VolcengineProvider } from "./volcengine";
+import { GeminiProvider } from "./gemini";
 import { AnthropicProvider } from "./anthropic";
 import { CustomProvider } from "./custom";
 
@@ -97,6 +98,7 @@ export class ModelProviderService {
     this.registerProvider(new ZhipuProvider());
     this.registerProvider(new BailianProvider());
     this.registerProvider(new VolcengineProvider());
+    this.registerProvider(new GeminiProvider());
     this.registerProvider(new AnthropicProvider());
   }
   
@@ -316,5 +318,6 @@ export { KimiProvider } from "./kimi";
 export { ZhipuProvider } from "./zhipu";
 export { BailianProvider } from "./bailian";
 export { VolcengineProvider } from "./volcengine";
+export { GeminiProvider } from "./gemini";
 export { AnthropicProvider } from "./anthropic";
 export { CustomProvider } from "./custom";
