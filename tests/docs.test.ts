@@ -207,17 +207,40 @@ describe("许可声明", () => {
     assert.ok(existsSync("LICENSE"), "license 字段指向 LICENSE，但文件不存在");
   });
 
-  it("许可文本必须写明商业使用需授权，并且不是 ISC", () => {
+  it("许可文本必须写明对外商业化需授权，并且不是 ISC", () => {
     // 这是本项目唯一的差异化条款：只在 README 里口头声明、许可正文里不写，
     // 拿到 LICENSE 的人就看不到限制，等于没有限制
     const text = repoFile("LICENSE");
     assert.ok(text.length > 0, "应能读到 LICENSE");
-    for (const keyword of ["商业使用", "书面授权", "保留所有权利"]) {
+    for (const keyword of ["书面授权", "保留所有权利", "销售"]) {
       assert.ok(text.includes(keyword), `LICENSE 应写明「${keyword}」`);
     }
     assert.ok(
       !/ISC License|MIT License|Apache License/i.test(text),
       "LICENSE 不应混入其它标准许可的正文",
+    );
+  });
+
+  it("公司或机构的经营活动内部使用无需授权，README 与 LICENSE 口径一致", () => {
+    // 口径不一致是这类文档最容易出的问题：LICENSE 放宽了而 README 的表格没跟上，
+    // 读者会照着旧表格去申请授权，或者反过来以为可以随便对外卖
+    const license = repoFile("LICENSE");
+    assert.ok(license.includes("内部使用"), "LICENSE 应写明内部使用的边界");
+    assert.ok(license.includes("无需授权"), "LICENSE 应写明内部使用无需授权");
+    assert.ok(
+      !license.includes("内部使用亦属商业使用"),
+      "LICENSE 不应再声明内部使用属于商业使用",
+    );
+
+    const row = repoFile("README.md")
+      .split("\n")
+      .find((line) => line.includes("公司或机构的经营活动内部使用"));
+    if (row === undefined) {
+      assert.fail("README 的许可表格应保留「公司或机构的经营活动内部使用」一行");
+    }
+    assert.ok(
+      /\|\s*否\s*\|\s*$/.test(row),
+      `README 应把内部使用标为「否」，实际：${row}`,
     );
   });
 
