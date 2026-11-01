@@ -2790,3 +2790,28 @@ describe("App Server · Run 记录上限", () => {
     }
   });
 });
+
+/**
+ * 装配层的"接线守卫"。
+ *
+ * `bootAppServer` 是逐字段往 `AppServer` 抄的（不是 `...options`），于是
+ * "入口给了、装配没抄"在类型上完全合法，运行时却只是**功能静默不生效**：
+ * serve 与桌面壳都能起来，标题永远是原话截断，没有任何报错。
+ *
+ * 这条断言读源码而不是起服务：真起一个 bootAppServer 要备齐 provider、
+ * settings、sessions 三套临时路径，而这里要守的只是"那一行还在"。
+ * 行为本身由 `titleFlow.test.ts` 覆盖。
+ */
+describe("装配透传", () => {
+  it("bootAppServer 把会话标题存储抄给 AppServer", () => {
+    const source = readFileSync(new URL("./app.ts", import.meta.url), "utf8");
+    const start = source.indexOf("export async function bootAppServer");
+    assert.ok(start >= 0, "app.ts 里找不到 bootAppServer");
+    const body = source.slice(start);
+    assert.match(
+      body,
+      /options\.sessionTitles \? \{ sessionTitles: options\.sessionTitles \}/,
+      "漏了这行，三个入口接上标题存储也没用",
+    );
+  });
+});

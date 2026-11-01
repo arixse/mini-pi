@@ -15,6 +15,7 @@ import { AppServer } from "./app";
 import type { EventJournal } from "./journal";
 import { ProviderStore, ModelProviderService, SettingsStore } from "@minipi/core/provider";
 import { workspaceSessionDirName } from "@minipi/core/agent/sessionManager";
+import type { SessionTitles } from "./sessionTitles";
 import type { WorkspaceMemory } from "./workspaceMemory";
 import type { LlmModel, CompleteInput } from "@minipi/core/agent/model";
 import type { AssistantMessage } from "@minipi/core/shared/protocol";
@@ -138,6 +139,13 @@ export type TestServerOptions = {
    * 测试不该碰，因此这里和其他存储一样必须可注入。
    */
   workspaceMemory?: WorkspaceMemory;
+  /**
+   * 模型生成的会话标题存放处；不注入就**不生成**（省一次模型调用）。
+   *
+   * 默认实现写的是 `~/.mini-pi/client-titles.json`——用户的真实文件，
+   * 测试要用就自己传一个指向临时目录的 `fileSessionTitles(...)`。
+   */
+  sessionTitles?: SessionTitles;
   /** 注入小容量的应用级日志，用来覆盖 `gap` 路径 */
   journal?: EventJournal;
 };
@@ -197,6 +205,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
       ? { globalConcurrency: options.globalConcurrency }
       : {}),
     ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
+    ...(options.sessionTitles ? { sessionTitles: options.sessionTitles } : {}),
     ...(options.journal ? { journal: options.journal } : {}),
     settingsStore,
     providerService,

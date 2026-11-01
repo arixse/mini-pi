@@ -10,21 +10,33 @@
  */
 
 import { readFileSync } from "node:fs";
+import { clipTitle, excerptOf } from "./title";
 
 export type SessionMeta = {
-  /** 首条用户消息的前几个字；没有用户消息时为空串 */
+  /**
+   * 首条用户消息收成的**一行标题**（按显示宽度截断，不是按字符数）。
+   *
+   * 它只是兜底：`~/.mini-pi/client-titles.json` 里有模型生成的标题时，
+   * 宿主会用那一条覆盖它（见 `sessionTitles.ts`）。
+   */
   title: string;
+  /**
+   * 首条用户消息的**原话**（折叠空白、按显示宽度截断到 240 格）。
+   *
+   * 给侧栏 hover 用：`title` 无论如何都会被切一刀（模型收成一行、或这里
+   * 按宽度截断，CSS 再按像素省略），hover 时若只是把那句话再说一遍，
+   * 就等于什么都没给。
+   */
+  excerpt: string;
   messageCount: number;
   compactedCount: number;
 };
-
-const TITLE_LENGTH = 40;
 
 /** 从会话文件正文里提取元信息；坏行跳过（与 store 的容错口径一致） */
 export function parseSessionMeta(text: string): SessionMeta {
   let messageCount = 0;
   let compactedCount = 0;
-  let title = "";
+  let first = "";
 
   for (const line of text.split("\n")) {
     if (line.trim().length === 0) {
@@ -41,15 +53,21 @@ export function parseSessionMeta(text: string): SessionMeta {
     }
     if (entry.type === "message") {
       messageCount += 1;
-      if (title.length === 0) {
-        title = firstUserText(entry.message);
+      if (first.length === 0) {
+        first = firstUserText(entry.message);
       }
     } else if (entry.type === "compaction") {
       compactedCount += 1;
     }
   }
 
-  return { title, messageCount, compactedCount };
+  // 截断与剥标点只做一次：两者都从同一段原话出发，口径才不会漂
+  return {
+    title: first.length > 0 ? clipTitle(first) : "",
+    excerpt: first.length > 0 ? excerptOf(first) : "",
+    messageCount,
+    compactedCount,
+  };
 }
 
 /** 读文件并解析；读不到时返回空元信息而不是抛错——侧栏不该因为一个坏文件整列空掉 */
@@ -57,10 +75,11 @@ export function readSessionMeta(path: string): SessionMeta {
   try {
     return parseSessionMeta(readFileSync(path, "utf8"));
   } catch {
-    return { title: "", messageCount: 0, compactedCount: 0 };
+    return { title: "", excerpt: "", messageCount: 0, compactedCount: 0 };
   }
 }
 
+/** 第一段用户文本，**只折叠空白**——截断与加工交给调用方 */
 function firstUserText(message: unknown): string {
   if (!isRecord(message) || message.role !== "user" || !Array.isArray(message.content)) {
     return "";
@@ -68,10 +87,9 @@ function firstUserText(message: unknown): string {
   for (const part of message.content) {
     if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
       const flat = part.text.replace(/\s+/g, " ").trim();
-      if (flat.length === 0) {
-        continue;
+      if (flat.length > 0) {
+        return flat;
       }
-      return flat.length > TITLE_LENGTH ? `${flat.slice(0, TITLE_LENGTH)}…` : flat;
     }
   }
   return "";

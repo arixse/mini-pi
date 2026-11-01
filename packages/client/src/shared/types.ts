@@ -191,7 +191,15 @@ export type ServerEvent =
    * 每个 `turn_end` 之后发一条，状态行的「缓存」指标因此能在回合间更新，
    * 而不是等 `run_done` 才跳一次。
    */
-  | { type: "run_usage"; cache: CacheUsage };
+  | { type: "run_usage"; cache: CacheUsage }
+  /**
+   * 某段会话的标题生成好了。
+   *
+   * 只走全局流（`runId` 是空串）：标题是那段会话的属性，不属于任何一次执行。
+   * 生成发生在 Run 收尾之后（另一次模型调用），所以它总是跟在 `run_done`
+   * 后面到，前端收到就地换掉侧栏那一条。
+   */
+  | { type: "session_title"; sessionId: string; title: string };
 
 /** 已缓冲的事件 + 它的游标（游标就是 seq，1 起） */
 export type BufferedEvent = { seq: number; event: ServerEvent };
@@ -213,8 +221,22 @@ export type SessionSummary = {
   sessionId: string;
   /** 文件名里的时间戳，形如 2026-10-20T09-14-02 */
   timestamp: string;
-  /** 首条用户消息的前几个字；空会话给「新会话」 */
+  /**
+   * 侧栏那一行显示的名字。
+   *
+   * 优先用模型生成的标题（`~/.mini-pi/client-titles.json`，一轮跑完后收成
+   * 一行）；没有就退回首条用户消息按**显示宽度**截断的兜底（`clipTitle`）。
+   * 空会话给「新会话」。
+   */
   title: string;
+  /**
+   * 首条用户消息的**原话**（折叠空白，按显示宽度截到 240 格 ≈ 120 个汉字）。
+   *
+   * 侧栏 hover 时给的就是它。屏幕上那行标题一定是被切过的（模型收成一行、
+   * 或按宽度截断、CSS 再省略一次），hover 只能给"比标题更完整的东西"，
+   * 否则等于把屏幕上的字再说一遍。空会话为空串。
+   */
+  excerpt: string;
   messageCount: number;
   compactedCount: number;
   sizeBytes: number;

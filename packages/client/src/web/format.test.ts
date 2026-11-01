@@ -21,13 +21,14 @@ import {
   parseDiffRows,
   resultText,
   riskMeta,
+  sessionHint,
   statusMeta,
   textOf,
   tierLabel,
   toolMetaLine,
   TIER_LABELS,
 } from "./format";
-import type { Tier } from "../shared/types";
+import type { SessionSummary, Tier } from "../shared/types";
 
 describe("formatDuration", () => {
   it("十秒以内给到 0.1s", () => {
@@ -437,6 +438,34 @@ describe("formatBytes", () => {
     assert.equal(formatBytes(-1), "0 B");
     assert.equal(formatBytes(Number.NaN), "0 B");
     assert.equal(formatBytes(Number.POSITIVE_INFINITY), "0 B");
+  });
+});
+
+describe("sessionHint：侧栏 hover 给的话", () => {
+  const base: SessionSummary = {
+    sessionId: "2026-11-01T15-00-00.jsonl",
+    timestamp: "2026-11-01T15-00-00",
+    title: "收窄会话标题",
+    excerpt: "侧栏的会话标题太长了，会把后面的条数挤到下一行，能不能让模型总结一个短标题",
+    messageCount: 12,
+    compactedCount: 0,
+    sizeBytes: 4096,
+    isCurrent: false,
+  };
+
+  it("给的是原话，不是屏幕上那句已经被切过的标题", () => {
+    const hint = sessionHint(base);
+    assert.ok(hint.includes(base.excerpt));
+    assert.ok(!hint.includes(base.title), "标题正是用户眼前已有的东西，说一遍等于没给");
+  });
+
+  it("第一行是时间：tooltip 靠换行分两行，不是一长串", () => {
+    assert.strictEqual(sessionHint(base).split("\n")[0], "2026-11-01 15:00");
+  });
+
+  it("没有原话时退回标题；两样都没有就只给时间", () => {
+    assert.strictEqual(sessionHint({ ...base, excerpt: "" }), "2026-11-01 15:00\n收窄会话标题");
+    assert.strictEqual(sessionHint({ ...base, excerpt: "", title: "" }), "2026-11-01 15:00");
   });
 });
 

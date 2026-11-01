@@ -28,7 +28,7 @@ import { Timeline } from "./components/Timeline";
 import { ThinkingRow } from "./components/Thinking";
 import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
-import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
+import type { ApprovalRequest, RunDiff, RunSummary, SessionSummary } from "../shared/types";
 
 /** 渲染用的假动作：这里只验证 markup，不触发任何请求 */
 const fakeActions = {
@@ -340,6 +340,52 @@ describe("前端组件树", () => {
     );
     assert.match(htmlReady, /aria-label="在「a」开一段新会话"/);
     assert.match(htmlReady, /aria-label="在「b」开一段新会话"/, "每个工作区各自一个入口");
+  });
+
+  it("会话行 hover 给原话：屏幕上那行标题一定是被切过的", () => {
+    const excerpt = "侧栏的会话标题太长了，会把后面的条数挤到下一行，能不能让模型总结一个短标题";
+    const session: SessionSummary = {
+      sessionId: "2026-11-01T15-00-00.jsonl",
+      timestamp: "2026-11-01T15-00-00",
+      title: "收窄会话标题",
+      excerpt,
+      messageCount: 12,
+      compactedCount: 0,
+      sizeBytes: 4096,
+      isCurrent: false,
+    };
+    const store = new ClientStore();
+    store.update((state) => {
+      state.activeRoot = "/w";
+      state.workspaces = [
+        {
+          root: "/w",
+          name: "ws",
+          sessions: [session],
+          runs: [],
+          currentSessionId: null,
+          approvals: { pending: 0 },
+          sendable: true,
+          blockReason: null,
+          isolate: false,
+          isolateError: null,
+        },
+      ];
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Sidebar),
+      ),
+    );
+    // 行内看到的仍是收窄过的标题，全文只在 tooltip 里
+    assert.match(html, /class="tree-label">收窄会话标题</);
+    assert.ok(html.includes(excerpt), "原话要进 title 属性，hover 才看得见");
+    assert.ok(
+      html.includes("2026-11-01 15:00\n" + excerpt),
+      "时间与原话分两行：一句「时间 + 一长串话」读不动",
+    );
   });
 
   it("起不来的时候给的是说明与重试，不是一片空白", () => {

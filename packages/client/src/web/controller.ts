@@ -298,7 +298,7 @@ export class AppController {
     // 走 store.update 而不是直接改：状态是就地修改的，没有这一步
     // 侧栏状态要等到下一次刷新才重画
     this.store.update((state) => {
-      needsRefresh = applyRunMetaEvent(state, envelope.runId, envelope.event);
+      needsRefresh = applyRunMetaEvent(state, envelope.runId, envelope.event, envelope.root);
     });
     if (needsRefresh) {
       this.scheduleRefresh();

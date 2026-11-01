@@ -26,7 +26,7 @@
 import { useState } from "react";
 import { workspaceGroups, type ClientState, type WorkspaceGroup } from "../state";
 import { useActions, useClient } from "../store";
-import { formatSessionTime } from "../format";
+import { sessionHint } from "../format";
 import type { RunSummary, SessionSummary } from "../../shared/types";
 import { Icon } from "./Icon";
 
@@ -170,7 +170,7 @@ function WorkspaceNode({
       </span>
 
       {open ? (
-        <div className="tree-kids" style={{width:"80%"}}>
+        <div className="tree-kids">
           {group.groups.length === 0 ? (
             <div className="empty-hint" style={{ marginLeft: 30 }}>
               还没有会话
@@ -239,7 +239,7 @@ function SessionNode({
     <div className={`tree-row lv-session${active ? " is-active" : ""}`}>
       <button
         className="tree-main"
-        title={`${formatSessionTime(group.session.timestamp)} · ${group.session.title}`}
+        title={sessionHint(group.session)}
         onClick={() => actions.openSession(group.session.sessionId, root)}
       >
         <span className="tree-label">{group.session.title || "新会话"}</span>

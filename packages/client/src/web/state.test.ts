@@ -929,6 +929,88 @@ describe("applyRunMetaEvent：应用级事件只改 runs", () => {
     });
     assert.strictEqual(needsRefresh, false);
   });
+
+  /**
+   * 会话标题是**那段会话**的属性，不是某条 Run 的：事件里的 `runId` 是空串
+   * （它发生在 Run 收尾之后），按 Run 找就会走到"这条 Run 不认识 → 去刷新"，
+   * 白白重拉一次状态。
+   */
+  it("session_title 就地换掉三处标题，不要求重拉状态", () => {
+    const state = initialState();
+    state.activeRoot = "/w";
+    const summary = (title: string) => ({
+      sessionId: "s1.jsonl",
+      timestamp: "2026-11-01T06-00-00",
+      title,
+      excerpt: title,
+      messageCount: 2,
+      compactedCount: 0,
+      sizeBytes: 320,
+      isCurrent: false,
+    });
+    // 顶层 sessions 与 workspaces[].sessions 是两份独立对象（快照反序列化两次）
+    state.sessions = [summary("侧栏的会话标题太长了会把后面的条数挤…")];
+    state.workspaces = [
+      {
+        root: "/w",
+        name: "ws",
+        sessions: [summary("侧栏的会话标题太长了会把后面的条数挤…")],
+        runs: [],
+        currentSessionId: null,
+        approvals: { pending: 0 },
+        sendable: true,
+        blockReason: null,
+        isolate: false,
+        isolateError: null,
+      },
+    ];
+    state.view.sessionId = "s1.jsonl";
+    state.view.root = "/w";
+    state.view.title = "侧栏的会话标题太长了会把后面的条数挤…";
+
+    const needsRefresh = applyRunMetaEvent(
+      state,
+      "",
+      { type: "session_title", sessionId: "s1.jsonl", title: "收窄侧栏标题" },
+      "/w",
+    );
+
+    assert.strictEqual(needsRefresh, false);
+    assert.strictEqual(state.sessions[0]!.title, "收窄侧栏标题");
+    assert.strictEqual(state.workspaces[0]!.sessions[0]!.title, "收窄侧栏标题");
+    assert.strictEqual(state.view.title, "收窄侧栏标题", "正开着的那条也要换");
+  });
+
+  it("session_title 按 root 定位：同名会话在别的工作区里不该被改", () => {
+    const state = initialState();
+    state.activeRoot = "/w2";
+    const summary = (title: string) => ({
+      sessionId: "same.jsonl",
+      timestamp: "2026-11-01T06-00-00",
+      title,
+      excerpt: title,
+      messageCount: 1,
+      compactedCount: 0,
+      sizeBytes: 120,
+      isCurrent: false,
+    });
+    state.sessions = [summary("二号的原话")];
+    state.workspaces = [
+      { root: "/w1", name: "一", sessions: [summary("一号的原话")], runs: [], currentSessionId: null, approvals: { pending: 0 }, sendable: true, blockReason: null, isolate: false, isolateError: null },
+      { root: "/w2", name: "二", sessions: [summary("二号的原话")], runs: [], currentSessionId: null, approvals: { pending: 0 }, sendable: true, blockReason: null, isolate: false, isolateError: null },
+    ];
+
+    applyRunMetaEvent(
+      state,
+      "",
+      { type: "session_title", sessionId: "same.jsonl", title: "二号的标题" },
+      "/w2",
+    );
+
+    assert.strictEqual(state.workspaces[0]!.sessions[0]!.title, "一号的原话");
+    assert.strictEqual(state.workspaces[1]!.sessions[0]!.title, "二号的标题");
+    assert.strictEqual(state.sessions[0]!.title, "二号的标题");
+  });
 });
 
 describe("侧栏：进行中的任务", () => {
@@ -973,6 +1055,7 @@ describe("groupSessions：会话与 Run 归并", () => {
     sessionId,
     timestamp: "2026-10-20T09-14-02",
     title,
+    excerpt: title,
     messageCount: 3,
     compactedCount: 0,
     sizeBytes: 10,
@@ -1028,6 +1111,7 @@ describe("workspaceGroups：多工作区三层树", () => {
     sessionId,
     timestamp: "2026-10-20T09-14-02",
     title,
+    excerpt: title,
     messageCount: 3,
     compactedCount: 0,
     sizeBytes: 10,

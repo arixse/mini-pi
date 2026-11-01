@@ -40,6 +40,7 @@ import {
   type BootStreams,
 } from "../server/app";
 import { parseServeArgs, type ServeArgs } from "../server/serveArgs";
+import { fileSessionTitles } from "../server/sessionTitles";
 import { fileWorkspaceMemory } from "../server/workspaceMemory";
 
 /**
@@ -274,6 +275,7 @@ export async function runElectronMain(
       // 桌面壳自己起服务，因此"记住工作区"由它接上：界面里切换工作区后，
       // 下次启动要开的是新目录，而不是最初选的那个
       workspaceMemory: fileWorkspaceMemory,
+      sessionTitles: fileSessionTitles(),
     },
     streams,
   );
