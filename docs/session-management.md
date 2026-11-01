@@ -107,8 +107,13 @@ workspaceSessionDirName(workspaceRoot); // "--D--workspace-mini-pi--"
 ```jsonl
 {"type":"session","version":1,"id":"mini-pi-session","timestamp":"2024-01-15T10:30:00.000Z","cwd":"/path/to/workspace"}
 {"type":"message","id":"entry_1","parentId":null,"timestamp":"2024-01-15T10:30:01.000Z","message":{"role":"user","content":[{"type":"text","text":"你好"}],"timestamp":1705312201000}}
-{"type":"message","id":"entry_2","parentId":"entry_1","timestamp":"2024-01-15T10:30:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"你好！有什么可以帮助你的吗？"}],"stopReason":"stop","usage":{"input":10,"output":15,"totalTokens":25},"timestamp":1705312202000}}
+{"type":"message","id":"entry_2","parentId":"entry_1","timestamp":"2024-01-15T10:30:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"你好！有什么可以帮助你的吗？"}],"id":"msg_m7x1k2_3","stopReason":"stop","usage":{"input":10,"output":15,"totalTokens":25},"timestamp":1705312202000}}
 ```
+
+assistant 消息里的 `id` 是**消息身份**（不是条目 id `entry_N`）：内核在
+`message_start` 时就定下，模型返回后改写 `timestamp` / `content` 也不会变。
+客户端的时间线按它归约，因此"流式三段事件、事件缓冲重放、从会话文件重建"
+落到同一个条目上；老会话文件没有这个字段，读取方回落到 `timestamp`。
 
 ## 固定上下文（AGENTS.md）
 

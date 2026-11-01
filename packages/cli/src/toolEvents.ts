@@ -161,6 +161,18 @@ export function createAgentEventHandler(
     });
 
   return (event: AgentEvent): void => {
+    if (event.type === "turn_start") {
+      /**
+       * 每一轮模型调用前都重新竖起"思考中"。
+       *
+       * 首轮由 `turn.ts` 在开跑前设置，但工具批次结束时状态行就会收起
+       * （`status.end` 见到 pending 为空即 `stop`），而下一轮模型思考期间
+       * 没有任何事件会把它叫回来——终端上就是一段无提示的空白，用户分不清
+       * 是在思考还是卡死。`turn_start` 恰好在每次模型调用之前发出。
+       */
+      deps.status.set({ kind: "thinking", startedAt: Date.now() });
+      return;
+    }
     if (event.type === "message_update" && event.delta) {
       // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
       deps.status.stop();

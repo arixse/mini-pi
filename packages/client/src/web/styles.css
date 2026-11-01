@@ -955,6 +955,79 @@ svg.ic {
   }
 }
 
+/* ---------------- 思考中：等首个 token 的那一段 ---------------- */
+
+/*
+ * 一条与工具卡片同级的单行指示，不套气泡：此刻还没有任何"内容"可读，
+ * 用气泡会给它一个并不存在的正文体积。三个点用位移表达"还在动"，
+ * 文字与耗时都在，色弱与截图场景下也读得出当前状态。
+ */
+.thinking-line {
+  display: flex;
+  align-items: center;
+  /* 不用统一 gap：三点要贴着文字读作省略号，时长则要跟前面的动画拉开 */
+  gap: 0;
+  min-height: 26px;
+  font-size: 13px;
+  color: var(--Client-text-secondary);
+}
+
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  /* 略宽于词距，三点才不会粘在字母 g 上 */
+  margin-left: 5px;
+  gap: 3px;
+}
+
+.thinking-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--Client-accent-solid);
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
+.thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinking-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.thinking-label {
+  letter-spacing: 0.02em;
+}
+
+.thinking-elapsed {
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--Client-text-tertiary);
+}
+
+/* 关掉动效时保留文字与耗时：状态本身不能因为"不想看动画"而消失 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .copy {
   position: absolute;
   top: 6px;

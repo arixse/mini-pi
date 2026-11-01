@@ -9,12 +9,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pendingApprovals } from "../state";
+import { pendingApprovals, thinkingSinceOf } from "../state";
 import { revisionOf } from "../items";
 import { useActions, useClient, useRevision } from "../store";
 import { resolveHeights, virtualRange, type VirtualRange } from "../virtual";
 import { Icon } from "./Icon";
 import { RunHead } from "./RunHead";
+import { ThinkingRow } from "./Thinking";
 import { TimelineItemRow } from "./TimelineItems";
 
 /** 距底多少像素算"贴着底部看" */
@@ -214,6 +215,8 @@ export function Timeline(): React.ReactElement {
         viewport,
       );
   const visible = items.slice(range.start, range.end);
+  // 「思考中」跟着时间线末尾走：模型在跑但还没有第一个 token（见 ThinkingRow）
+  const thinking = thinkingSinceOf(state.view);
 
   return (
     <main className="main" id="timeline" ref={hostRef} onScroll={onScroll}>
@@ -245,6 +248,7 @@ export function Timeline(): React.ReactElement {
             </MeasuredItem>
           ))}
           {range.bottom > 0 ? <div style={{ height: range.bottom }} aria-hidden="true" /> : null}
+          {thinking === null ? null : <ThinkingRow since={thinking} />}
         </div>
       </div>
     </main>

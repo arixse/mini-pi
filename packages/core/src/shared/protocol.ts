@@ -48,6 +48,18 @@ export type AssistantMessage = {
     role:"assistant"
     content:Array<TextContent | ToolCallContent >
     /**
+     * 这条消息的稳定身份，由内核在 `message_start` 那一刻定下。
+     *
+     * 客户端的归约按它幂等：同一条消息无论是流式三段（start/update/end）、
+     * 事件缓冲重放，还是从会话文件重建，都必须算出同一个条目 id，否则同一段
+     * 回答会被画成两个气泡。`timestamp` 与 `content` **都不能当身份**——
+     * 模型返回后内核会把它们整体写回（见 `loop.ts` 的 `Object.assign`），
+     * 于是重放时分到的 id 与首次直播时算出的那个对不上。
+     *
+     * 老会话文件里没有这一项，读取方回落到 `timestamp`（历史行为）。
+     */
+    id?:string
+    /**
      * 结束原因：
      * - `stop`：正常结束；
      * - `toolUse`：要调用工具；

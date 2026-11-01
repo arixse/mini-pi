@@ -24,6 +24,8 @@ import { FilePreview } from "./components/FilePreview";
 import { Picker } from "./components/Picker";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
+import { Timeline } from "./components/Timeline";
+import { ThinkingRow } from "./components/Thinking";
 import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary } from "../shared/types";
@@ -349,6 +351,67 @@ describe("前端组件树", () => {
     // Boot 只在有错误时出现：初始状态（无错）不该渲染它
     const initial = initialState();
     assert.strictEqual(initial.error, null);
+  });
+});
+
+describe("思考中指示", () => {
+  function renderTimeline(store: ClientStore): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Timeline),
+      ),
+    );
+  }
+
+  it("等首个 token 时时间线末尾有一条 Thinking，且不套气泡", () => {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.view.status = "running";
+      state.view.thinkingSince = Date.now();
+    });
+
+    const html = renderTimeline(store);
+    assert.match(html, /class="thinking-line"/, "指示要挂在时间线上");
+    assert.match(html, /class="thinking-dots"/, "三点动画是「还在动」的信号");
+    assert.match(html, />Thinking</);
+    // 三点在文字**后面**：贴着词尾读作省略号。摆前面会像另一个图标，
+    // 和前面的头像挤在一起（用户反馈过这个排版）
+    assert.match(html, /thinking-label[^]*thinking-dots/);
+    assert.doesNotMatch(html, /bubble-wrap/, "此刻还没有正文，给气泡等于假装有内容");
+  });
+
+  it("ThinkingRow 带上已思考时长", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: new ClientStore(), actions: fakeActions } },
+        createElement(ThinkingRow, { since: Date.now() }),
+      ),
+    );
+    assert.match(html, /class="thinking-elapsed"/);
+    assert.match(html, /role="status"/, "状态变化要让读屏也能感知");
+  });
+
+  it("首 token 到了或 Run 已结束就不画（重放残留不能一直转）", () => {
+    const finished = new ClientStore();
+    finished.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.view.status = "done";
+      // 重连只补到 turn_start 时字段会残留
+      state.view.thinkingSince = Date.now();
+    });
+    assert.doesNotMatch(renderTimeline(finished), /thinking-line/);
+
+    const streaming = new ClientStore();
+    streaming.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.view.status = "running";
+      state.view.thinkingSince = null;
+    });
+    assert.doesNotMatch(renderTimeline(streaming), /thinking-line/);
   });
 });
 

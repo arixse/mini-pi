@@ -28,6 +28,7 @@ import {
   pendingApprovals,
   removeItem,
   syncItemsFromMessages,
+  thinkingSinceOf,
   upsertItem,
   workspaceGroups,
   workspaceMatches,
@@ -129,6 +130,18 @@ describe("messageId", () => {
     assert.equal(messageId(message), messageId({ ...message }));
   });
 
+  /**
+   * 时间戳与正文都会被内核在模型返回后整体改写，所以它们不能当身份：
+   * 一条**已经结束**的消息被重放时（缓冲重放、重连、从侧栏再点开这条 Run），
+   * 按时间戳算会得到另一个 id，时间线上就多出一条一模一样的气泡。
+   */
+  it("内核给了稳定 id 就以它为准，timestamp 改写不影响身份", () => {
+    const before = { ...assistantText("", 1000), id: "msg_abc" };
+    const after = { ...assistantText("全部正文", 9999), id: "msg_abc" };
+    assert.equal(messageId(before), "a:msg_abc");
+    assert.equal(messageId(after), messageId(before));
+  });
+
   it("同一条 assistant 消息里的文本与工具调用各自有 id", () => {
     const message: AssistantMessage = {
       role: "assistant",
@@ -206,6 +219,58 @@ describe("applyRunEvent：流式归约", () => {
     assert.equal(bubbles.length, 1, "同一条回答只能有一个气泡");
     assert.equal((bubbles[0] as Extract<TimelineItem, { kind: "assistant" }>).text, "正文");
     assert.equal(view.streamingAssistantId, null);
+  });
+
+  /**
+   * 用户报过的现象：一条消息发出去，界面上回答出现两遍。
+   *
+   * 来路是"整段重放"——断线重连、从侧栏再点开这条 Run、`retryStreams`，
+   * 都会带 `cursor=0` 把缓冲里的历史事件再放一遍。重放的事件持有的是
+   * **同一个**消息对象，而它在模型返回时已被整体改写（timestamp + 全文），
+   * 于是 `message_start` 算出另一个 id，凭空长出第二个气泡。
+   */
+  it("整段重放一条已经跑完的回答不会叠出第二条气泡", () => {
+    const view = emptyView();
+    const message: AssistantMessage = { ...assistantText("", 1000), id: "msg_1" };
+    const buffer: ServerEvent[] = [
+      { type: "message_start", message },
+      { type: "message_update", message, delta: "第一段。" },
+      { type: "message_update", message, delta: "第二段。" },
+      { type: "message_end", message },
+    ];
+    // 直播前半段
+    feed(view, "run_1", buffer.slice(0, 2));
+    // 模型返回：内核 Object.assign 改写同一个对象
+    message.timestamp = 9999;
+    message.content = [{ type: "text", text: "第一段。第二段。" }];
+    // 直播后半段
+    feed(view, "run_1", buffer.slice(2));
+
+    // 从头重放整批事件（cursor=0）
+    feed(view, "run_1", buffer);
+
+    const bubbles = itemsOfKind(view, "assistant") as Array<
+      Extract<TimelineItem, { kind: "assistant" }>
+    >;
+    assert.equal(bubbles.length, 1, "重放只能落到同一条气泡上");
+    assert.equal(bubbles[0]?.text, "第一段。第二段。");
+  });
+
+  it("会话文件重建出的条目与直播时是同一个 id", () => {
+    const view = emptyView();
+    const message: AssistantMessage = { ...assistantText("", 1000), id: "msg_9" };
+    feed(view, "run_1", [{ type: "message_start", message }]);
+    message.timestamp = 9999;
+    message.content = [{ type: "text", text: "正文" }];
+    feed(view, "run_1", [{ type: "message_end", message }]);
+
+    const live = itemsOfKind(view, "assistant").map((item) => item.id);
+    const history = itemsFromMessages([{ ...assistantText("正文", 9999), id: "msg_9" }]);
+    assert.deepEqual(
+      history.map((item) => item.id),
+      live,
+      "历史与直播必须算出同一个条目 id，否则刷新页面就会叠一份",
+    );
   });
 
   it("只有工具调用的消息从头到尾都不产生气泡", () => {
@@ -351,6 +416,86 @@ describe("applyRunEvent：流式归约", () => {
   });
 });
 
+/**
+ * 「思考中」指示的归约。
+ *
+ * 它回答的是"模型在跑、但还没有第一个 token"这一段：此前界面完全静止，
+ * 用户分不清在思考、断线还是卡死。终端里那行 `⠋ 思考中…` 就是这条的对应物。
+ */
+describe("思考中：等首个 token 的那一段", () => {
+  it("turn_start 点亮，首个 delta 熄灭", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+    ]);
+    assert.notEqual(thinkingSinceOf(view), null, "模型开始想时界面就该说明");
+
+    feed(view, "run_1", [
+      { type: "message_update", message: assistantText(""), delta: "你" },
+    ]);
+    assert.equal(view.thinkingSince, null, "正文到了，思考中要让位给气泡里的光标");
+  });
+
+  it("工具跑完后的下一轮思考重新点亮，不会停在空白", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        args: { path: "a.ts" },
+      },
+    ]);
+    assert.equal(view.thinkingSince, null, "工具执行中不该同时显示思考中");
+
+    feed(view, "run_1", [
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        result: { content: [{ type: "text", text: "ok" }] },
+        isError: false,
+      },
+      { type: "turn_end", turn: 1, message: assistantText(""), toolResults: [] },
+      { type: "turn_start", turn: 2 },
+    ]);
+    assert.notEqual(
+      thinkingSinceOf(view),
+      null,
+      "工具批次结束后到下一轮首个 token 之前必须重新显示思考中",
+    );
+  });
+
+  it("status 不是 running 时不显示（重放残留 / 待裁决）", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+    ]);
+    assert.notEqual(thinkingSinceOf(view), null);
+
+    // 重连只补到 turn_start、收尾事件被挤出窗口：字段还在，Run 其实已经结束
+    view.status = "done";
+    assert.equal(thinkingSinceOf(view), null, "已结束的 Run 不能还在转圈");
+
+    view.status = "blocked";
+    assert.equal(thinkingSinceOf(view), null, "等裁决时该看审批卡，不是转圈");
+  });
+
+  it("run_done 收尾时清掉指示", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+      { type: "run_done", status: "done", elapsedMs: 3, tokens: 0, cache: emptyCacheUsage() },
+    ]);
+    assert.equal(view.thinkingSince, null);
+  });
+});
+
 describe("乐观插入与快照", () => {
   it("addUserMessage 返回 id，removeItem 能撤回", () => {
     const view = emptyView();
@@ -464,6 +609,8 @@ describe("乐观插入与快照", () => {
       released: false,
       merged: false,
     });
+    // 还没落盘的那一轮在时间线上是空白：先按"在思考"显示，别让人觉得卡死
+    assert.notEqual(thinkingSinceOf(state.view), null);
   });
 
   /*

@@ -62,6 +62,46 @@ describe("loop", () => {
       assert.ok(result.events.some((e) => e.type === "agent_end"));
     });
 
+    /**
+     * 消息身份必须从 start 活到 end。
+     *
+     * 模型返回后内核把最终字段整体 assign 回同一个对象（含新 timestamp），
+     * 于是 `timestamp` 与 `content` 都不能当身份；客户端的时间线归约靠这个
+     * id 才能把 start/update/end、事件缓冲重放与会话历史认成同一条。
+     * 少了它，同一条回答会被画成两个气泡（"回复发了两遍"）。
+     */
+    it("message_start 与 message_end 带同一个稳定 id", async () => {
+      const response = createAssistantMessage([createTextContent("你好")]);
+      const model = createMockModel([response]);
+      const toolRegistry = createMockToolRegistry();
+
+      const result = await runAgentLoop({
+        systemPrompt: "You are a helpful assistant",
+        messages: [{ role: "user", content: [createTextContent("Hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry,
+      });
+
+      const start = result.events.find(
+        (event): event is Extract<AgentEvent, { type: "message_start" }> =>
+          event.type === "message_start",
+      );
+      const end = result.events.find(
+        (event): event is Extract<AgentEvent, { type: "message_end" }> => event.type === "message_end",
+      );
+      assert.ok(start && end);
+      const startId = (start.message as AssistantMessage).id;
+      assert.equal(typeof startId, "string");
+      assert.ok(startId && startId.length > 0, "start 必须带头身份");
+      assert.equal((end.message as AssistantMessage).id, startId, "end 不能换个身份");
+      assert.equal(
+        (result.newMessages[0] as AssistantMessage).id,
+        startId,
+        "落盘的消息也要带着它",
+      );
+    });
+
     it("should use default maxTurns of 100", async () => {
       const toolCall: ToolCallContent = {
         type: "toolCall",

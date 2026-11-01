@@ -1,6 +1,6 @@
 import { AgentEvent, AgentIdentity, AgentMessage, AssistantMessage, ToolCallContent, ToolDefinition, ToolResultMessage } from "../shared/protocol";
 import { logger } from "../shared/logger";
-import { createTextContent } from "./message";
+import { createTextContent, newMessageId } from "./message";
 import {
     MAX_CONCURRENT_TOOL_CALLS,
     createBlockedToolResult,
@@ -177,6 +177,9 @@ async function completeAssistantMessage(
     stopReason: "stop",
     usage: { input: 0, output: 0, totalTokens: 0 },
     timestamp: Date.now(),
+    // 身份在 start 就定下，并且必须活过下面的 `Object.assign`：
+    // 客户端的归约靠它把 end、缓冲重放与历史重建认成同一条消息
+    id: newMessageId(),
   };
 
   let streamed = false;
@@ -193,7 +196,11 @@ async function completeAssistantMessage(
         emit({ type: "message_update", message, delta });
       },
     });
+    const id = message.id;
     Object.assign(message, assistant);
+    // 模型返回的消息自带 timestamp（且没有 id）：身份仍然只认 start 那个，
+    // 否则同一个对象在 start/end、直播/重放之间会算出不同的条目 id
+    message.id = id;
   } catch (error) {
     // 模型实现抛错时也要收好生命周期，避免 start 没有对应的 end。
     //
@@ -259,6 +266,7 @@ function createLoopGuardrailMessage(maxTurns:number):AssistantMessage {
         stopReason:"error",
         usage:{input:0,output:0,totalTokens:0},
         timestamp:Date.now(),
+        id:newMessageId(),
         errorMessage:"max_turns_exceeded"
     }
 }
