@@ -3,7 +3,7 @@
  *
  * 这里断言的不是 YAML 结构（引一个解析器只为几行断言不划算），而是几条
  * **缺了就会出事**的接线：没密钥要跳过而不是失败、PR 要打标签才跑、
- * 失败也要留产物、凭据只能写进临时 home。
+ * 失败也要留产物、凭据只能写进临时 home，以及本地评测跑的不是过期 bundle。
  */
 
 import { describe, it } from "node:test";
@@ -44,5 +44,16 @@ describe("eval workflow", () => {
     assert.match(WORKFLOW, /actions\/upload-artifact@v4/);
     assert.match(WORKFLOW, /if: always\(\)/);
     assert.match(WORKFLOW, /path: eval\/\.runs/);
+  });
+
+  it("pnpm eval 先重建 CLI，避免本地评测跑在过期 bundle 上", () => {
+    // 2026-10-30 的 guard-danger 失败就是踩了这个坑：bin/mini-pi-cli.cjs 是
+    // .gitignore 的产物，`tsx eval/run.ts` 不会重建它。结果评测跑的是 10-20 的
+    // bundle——连 --model / --home 都没解析，参数被拼进了 prompt。CI 靠 install
+    // 的 prepare 侥幸躲过，本地却没有等价保障，所以把构建写进 eval 脚本本身。
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    assert.strictEqual(pkg.scripts.eval, "pnpm build:cli && tsx eval/run.ts");
   });
 });
