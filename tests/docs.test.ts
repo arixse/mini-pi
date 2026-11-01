@@ -244,13 +244,14 @@ describe("许可声明", () => {
     );
   });
 
-  it("README 的许可章节链接到 LICENSE，并说明它不是 OSI 开源许可", () => {
-    const text = repoFile("README.md");
-    assert.ok(text.includes("[LICENSE](LICENSE)"), "README 应链接到 LICENSE 全文");
-    // 限制商业使用就不是 OSI 认可的开源：README 必须说清，否则会误导下游选型
+  it("README 的许可章节链接到 LICENSE，许可正文说明它不是 OSI 开源许可", () => {
+    const readme = repoFile("README.md");
+    assert.ok(readme.includes("[LICENSE](LICENSE)"), "README 应链接到 LICENSE 全文");
+    // README 不再重复这段说明，但条款正文必须写清：对外商业化需授权就不是
+    // OSI 认可的开源，否则拿到 LICENSE 的人会按开源来选型
     assert.ok(
-      text.includes("source-available"),
-      "README 应说明本项目属于 source-available 而非开源许可",
+      repoFile("LICENSE").includes("source-available"),
+      "LICENSE 应说明本项目属于 source-available 而非开源许可",
     );
   });
 
