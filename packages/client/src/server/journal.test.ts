@@ -134,6 +134,11 @@ describe("isRunMetaEvent", () => {
     assert.strictEqual(isRunMetaEvent(running), true);
     assert.strictEqual(isRunMetaEvent(usage), true);
     assert.strictEqual(isRunMetaEvent(done), true);
+    // 标题在 Run 收尾之后才生成，不走这条通道侧栏就要等下一次刷新
+    assert.strictEqual(
+      isRunMetaEvent({ type: "session_title", sessionId: "s1.jsonl", title: "收窄标题" }),
+      true,
+    );
     assert.strictEqual(
       isRunMetaEvent({
         type: "approval_request",

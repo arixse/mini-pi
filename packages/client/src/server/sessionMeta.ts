@@ -10,15 +10,19 @@
  */
 
 import { readFileSync } from "node:fs";
+import { clipTitle } from "./title";
 
 export type SessionMeta = {
-  /** 首条用户消息的前几个字；没有用户消息时为空串 */
+  /**
+   * 首条用户消息收成的**一行标题**（按显示宽度截断，不是按字符数）。
+   *
+   * 它只是兜底：`~/.mini-pi/client-titles.json` 里有模型生成的标题时，
+   * 宿主会用那一条覆盖它（见 `sessionTitles.ts`）。
+   */
   title: string;
   messageCount: number;
   compactedCount: number;
 };
-
-const TITLE_LENGTH = 40;
 
 /** 从会话文件正文里提取元信息；坏行跳过（与 store 的容错口径一致） */
 export function parseSessionMeta(text: string): SessionMeta {
@@ -71,7 +75,7 @@ function firstUserText(message: unknown): string {
       if (flat.length === 0) {
         continue;
       }
-      return flat.length > TITLE_LENGTH ? `${flat.slice(0, TITLE_LENGTH)}…` : flat;
+      return clipTitle(flat);
     }
   }
   return "";

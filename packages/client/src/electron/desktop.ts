@@ -36,6 +36,7 @@ import {
   type BootResult,
   type BootStreams,
 } from "../server/app";
+import { fileSessionTitles } from "../server/sessionTitles";
 import { fileWorkspaceMemory } from "../server/workspaceMemory";
 import { SERVE_USAGE, parseServeArgs, type ServeArgs } from "../server/serveArgs";
 
@@ -406,6 +407,7 @@ export async function runDesktop(
       // 不能留 parse 出来的 false，否则装配层会当成"serve 没给 --cwd"而空池启动
       cwdGiven: true,
       workspaceMemory: fileWorkspaceMemory,
+      sessionTitles: fileSessionTitles(),
     },
     streams,
   );

@@ -36,6 +36,7 @@ import {
   type RememberedWorkspaces,
   type WorkspaceMemory,
 } from "./workspaceMemory";
+import type { SessionTitles } from "./sessionTitles";
 
 export type AppServerOptions = {
   /**
@@ -85,6 +86,13 @@ export type AppServerOptions = {
    * 应用里换了三次工作区，重启一问又回到最初那个。
    */
   workspaceMemory?: WorkspaceMemory;
+  /**
+   * 模型生成的会话标题；缺省**不记**（见 `nullSessionTitles`）。
+   *
+   * 不记的后果只是侧栏用"用户原话截断"当标题——生成照跑，只是重启后
+   * 又变回原话。真实入口要显式给 `fileSessionTitles()`。
+   */
+  sessionTitles?: SessionTitles;
   /**
    * 应用级事件日志；缺省新建一个。
    *
@@ -560,6 +568,12 @@ export class AppServer {
       // Host 只负责把控制事件交出来；日志归 AppServer，切工作区时不跟着换。
       // root 跟着宿主走：每条控制事件都标上它属于哪个工作区
       onRunEvent: (runId, event) => this.journal.push(runId, event, workspaceRoot),
+      // 标题生成在 Run 收尾之后单独跑完。走全局流（runId 空串）而不是
+      // 那条 Run 的流：Run 已经结束了，订阅它的前端早就在收尾时退订
+      onSessionTitle: (sessionId, title) => {
+        this.journal.push("", { type: "session_title", sessionId, title }, workspaceRoot);
+      },
+      ...(this.options.sessionTitles ? { sessionTitles: this.options.sessionTitles } : {}),
       // 多工作区的总闸；单工作区时池里只有一个宿主，等于不设限
       acquireRunSlot: () => this.acquireRunSlot(),
       ...(this.options.now ? { now: this.options.now } : {}),

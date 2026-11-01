@@ -29,7 +29,8 @@
 **目标**
 
 - 一条连接覆盖所有 Run 的生命周期与审批：`run_state` / `run_usage` /
-  `approval_request` / `approval_resolved` / `run_done`。
+  `approval_request` / `approval_resolved` / `run_done`，以及**不属于任何
+  Run** 的 `session_title`（Run 收尾之后才生成，见 §5.2）。
 - 可续传：断线重连从最后收到的序号补，补不上（被挤出缓冲 / 服务重启）时
   明确告诉前端"重新同步"，而不是假装连续。
 - 前端只开一条全局连接；当前 Run 的正文仍走原有的 per-run 流（见 §3）。
@@ -78,7 +79,7 @@ per-run  SSE   →  当前 Run 的完整事件（正文、工具卡、审批卡�
 
 - 每条记录 `{ seq, runId, event }`，`seq` 从 1 单调递增；
 - 只接收控制事件（`isRunMetaEvent`：`run_state` / `run_usage` /
-  `approval_request` / `approval_resolved` / `run_done`）；
+  `approval_request` / `approval_resolved` / `run_done` / `session_title`）；
 - 有上限（默认 `MAX_JOURNAL_EVENTS = 2000`，控制事件很小）；超出后从头丢，
   并用 `firstSeq` 表示"最早的还在的序号"；
 - `since(cursor)` 返回 `{ items, gap }`，`gap` 在两种情况下为真：
@@ -149,6 +150,7 @@ per-run 游标与全局游标的编号空间互不相干。
 | `run_usage` | 把 `cache` 快照写到那条 Run 上（**绝对值覆盖**，重放幂等）；侧栏不展示，但切回该会话时状态行直接拿它填「缓存」 |
 | `run_done` | 改 `status` / `elapsedMs` / `tokens` / `cache`，`pendingApprovals` 归零，并**安排一次**状态刷新；`elapsedMs` 只算真正开跑后的执行时间（排队与等全局槽位不计）；当前会话的下一条排队 Run 由刷新后的快照自动接管 |
 | `approval_request` / `approval_resolved` | 计数与 `oldestRunId` 以服务端为准，**安排一次**状态刷新 |
+| `session_title` | 就地改掉**三处**标题（`state.sessions`、对应工作区的 `workspaces[].sessions`、正开着那条的 `view.title`），**不**安排刷新——它在 Run 收尾之后到达，`runId` 是空串，按 Run 找会走到"这条 Run 不认识"。事件带 `root`，因为会话 id 是文件名、跨工作区会重名 |
 | `stream_gap` | 立即安排状态刷新 |
 | Run 不在 `state.runs` 里 | 同上（可能来自另一个标签页或刚换的工作区） |
 

@@ -60,6 +60,8 @@ import { isRunMetaEvent } from "./journal";
 import { previewToolArgs } from "../shared/preview";
 import { RunRecord, cacheUsageOf, prunableRun } from "./runs";
 import { readSessionMeta } from "./sessionMeta";
+import { type SessionTitles } from "./sessionTitles";
+import { firstUserPrompt, generateSessionTitle } from "./titleTask";
 import {
   isTier,
   type ApprovalAnswer,
@@ -132,6 +134,27 @@ export type WorkspaceHostOptions = {
    */
   onRunEvent?: (runId: string, event: ServerEvent) => void;
   /**
+   * 会话标题生成好了。
+   *
+   * 生成发生在 Run 收尾之后、**不阻塞** `run_done`：把一次额外的模型调用
+   * 塞进收尾路径，用户会看到"任务已经干完了，状态还绿不起来"。
+   * AppServer 拿它推一条 `session_title` 事件，侧栏就地换标题。
+   */
+  onSessionTitle?: (sessionId: string, title: string) => void;
+  /**
+   * 会话标题存储（模型生成的那一份）。
+   *
+   * 不注入时等于不记忆：标题退回"用户原话截断"，什么都不会写盘。
+   */
+  sessionTitles?: SessionTitles;
+  /**
+   * 生成标题那次模型调用的超时（毫秒），默认 20s。
+   *
+   * 标题是锦上添花，不能因为上游挂住就一直攥着一个请求；单测里调小可
+   * 以把"超时后不写标题"这条路径也跑到。
+   */
+  titleTimeoutMs?: number;
+  /**
    * 全局执行槽位（多工作区用）：`acquire` 等到一个槽位并返回释放函数。
    *
    * `RunManager` 是每个宿主自己的（默认 1），管不住"N 个工作区各跑一个"；
@@ -171,6 +194,17 @@ export class WorkspaceHost {
   private isolationError: string | null = null;
   private readonly resolveModelImpl: NonNullable<WorkspaceHostOptions["resolveModel"]>;
   private readonly onRunEvent: ((runId: string, event: ServerEvent) => void) | undefined;
+  private readonly onSessionTitle: ((sessionId: string, title: string) => void) | undefined;
+  private readonly titles: SessionTitles | null;
+  private readonly titleTimeoutMs: number;
+  /**
+   * 正在生成标题的会话。
+   *
+   * 生成要等一次模型调用；用户在两秒内连发两条时，第二轮收尾会看到
+   * `titles` 里还没有值，于是又发一次请求——同一段对话起两次标题纯属浪费，
+   * 而且后到的结果会覆盖先到的。这里按会话去重。
+   */
+  private readonly titlePending = new Set<string>();
   private readonly acquireRunSlot: NonNullable<WorkspaceHostOptions["acquireRunSlot"]> | undefined;
   private readonly now: () => number;
 
@@ -203,6 +237,9 @@ export class WorkspaceHost {
     this.settingsStore = options.settingsStore ?? new SettingsStore();
     this.resolveModelImpl = options.resolveModel ?? defaultResolveModel;
     this.onRunEvent = options.onRunEvent;
+    this.onSessionTitle = options.onSessionTitle;
+    this.titles = options.sessionTitles ?? null;
+    this.titleTimeoutMs = options.titleTimeoutMs ?? 20_000;
     this.acquireRunSlot = options.acquireRunSlot;
     this.skillLoader = new SkillLoader(this.workspaceRoot);
     this.sessionManager = new SessionManager(this.workspaceRoot, {
@@ -586,7 +623,15 @@ export class WorkspaceHost {
       if (!cached || cached.sizeBytes !== info.sizeBytes) {
         this.metaCache.set(info.fileName, { sizeBytes: info.sizeBytes, summary: base });
       }
-      return { ...base, isCurrent: info.fileName === this.currentSessionId };
+      // 生成过的标题优先：它把"这段对话在说什么"收成一行，而文件里那条
+      // 只是用户原话的截断。metaCache 只缓存**文件解析结果**，标题每次
+      // 现取，所以标题落盘的那一刻列表就是新的，不用等缓存失效
+      const generated = this.titles?.get(this.workspaceRoot, info.fileName) ?? null;
+      return {
+        ...base,
+        title: generated ?? base.title,
+        isCurrent: info.fileName === this.currentSessionId,
+      };
     });
   }
 
@@ -746,6 +791,9 @@ export class WorkspaceHost {
     this.sessions.delete(sessionId);
     this.metaCache.delete(sessionId);
     this.trustedSessions.delete(sessionId);
+    // 标题跟着会话走：文件都没了，留着一条只会在同名文件重建时冒出来。
+    // 不 await——删会话的响应不该等一次磁盘写
+    void this.titles?.forget(this.workspaceRoot, sessionId).catch(() => undefined);
     // 删掉的正是当前会话就回到"没有当前会话"：下一段对话从第一次发送算起，
     // 不再顺手补一个空文件（补出来的那条在侧栏里只是一条"新会话"）
     if (this.currentSessionId === sessionId) {
@@ -1109,11 +1157,14 @@ export class WorkspaceHost {
 
     await this.persistRemainder(session, result, synced);
     record.tokens = session.store.estimateContextTokens();
-    await this.finish(
-      record,
-      result.status === "error" ? "failed" : result.status === "cancelled" ? "cancelled" : "done",
-      result.error,
-    );
+    const phase: RunPhase =
+      result.status === "error" ? "failed" : result.status === "cancelled" ? "cancelled" : "done";
+    await this.finish(record, phase, result.error);
+    // 只有正常跑完才起标题：失败/取消的那一轮里，用户的第一句话往往
+    // 已经不代表这段会话要干什么了（他会接着说"换个办法"）
+    if (phase === "done") {
+      this.scheduleTitle(session, record.sessionId);
+    }
   }
 
   private async persistRemainder(
@@ -1178,6 +1229,58 @@ export class WorkspaceHost {
       ...(error ? { error } : {}),
     });
     this.pruneRecords();
+  }
+
+  /**
+   * 给这段会话起一个短标题（后台进行，不阻塞收尾）。
+   *
+   * 为什么值得多调一次模型：侧栏宽度是 264~320，"用户原话截断"出来的标题
+   * 十有八九是半句话（"把 packages/client 里写死的颜色收回到令"），既占
+   * 宽度又答不出"这段对话在干什么"。总结成一行 12 字以内才放得下。
+   *
+   * 只在这一段会话**还没有**生成过标题时做一次：标题是稳定标签，
+   * 每轮重算会让侧栏在对话过程中不停改名。
+   */
+  private scheduleTitle(session: SessionContext, sessionId: string): void {
+    // 没接标题存储 = 这个功能没开。不要在测试/未接线时白调一次模型：
+    // 生成结果没有地方落，纯粹是成本
+    if (this.titles === null) {
+      return;
+    }
+    if (this.titles.get(this.workspaceRoot, sessionId) !== null) {
+      return;
+    }
+    if (this.titlePending.has(sessionId)) {
+      return;
+    }
+    const prompt = firstUserPrompt(session.messages);
+    if (prompt.length === 0) {
+      return;
+    }
+    this.titlePending.add(sessionId);
+    void this.generateTitle(sessionId, prompt)
+      .catch((error) => {
+        // 标题只是锦上添花：写盘失败也只是下次重算一遍
+        logger.debug("会话标题未能记下:", errorMessage(error));
+      })
+      .finally(() => {
+        this.titlePending.delete(sessionId);
+      });
+  }
+
+  private async generateTitle(sessionId: string, prompt: string): Promise<void> {
+    const model = this.model;
+    const titles = this.titles;
+    if (!model || titles === null) {
+      return;
+    }
+    const title = await generateSessionTitle({ model, prompt, timeoutMs: this.titleTimeoutMs });
+    if (title === null) {
+      // 标题只是锦上添花：模型不支持、网关抖动、超时，都退回原话截断
+      return;
+    }
+    await titles.set(this.workspaceRoot, sessionId, title);
+    this.onSessionTitle?.(sessionId, title);
   }
 
   /**

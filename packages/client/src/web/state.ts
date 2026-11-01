@@ -550,9 +550,16 @@ export function applyRunMetaEvent(
   state: ClientState,
   runId: string,
   event: ServerEvent,
+  root?: string,
 ): boolean {
   if (event.type === "stream_gap") {
     return true;
+  }
+  // 会话标题不属于任何一次执行（`runId` 是空串，收尾之后才生成），
+  // 必须赶在"找不到这条 Run 就去刷新"之前处理掉
+  if (event.type === "session_title") {
+    retitle(state, event.sessionId, event.title, root);
+    return false;
   }
   const run = state.runs.find((item) => item.runId === runId);
   if (!run) {
@@ -582,6 +589,33 @@ export function applyRunMetaEvent(
       return true;
     default:
       return false;
+  }
+}
+
+/**
+ * 换掉一段会话的标题（侧栏、以及正开着的那条 view）。
+ *
+ * `root` 用得上：会话 id 是文件名，不同工作区里可以重名；事件里带着它，
+ * 就不该去猜"是哪一个"。两处都要改——`state.sessions` 是活动根的拷贝，
+ * 与 `workspaces[].sessions` 不是同一个数组。
+ */
+function retitle(state: ClientState, sessionId: string, title: string, root?: string): void {
+  const apply = (sessions: SessionSummary[]): void => {
+    const hit = sessions.find((session) => session.sessionId === sessionId);
+    if (hit) {
+      hit.title = title;
+    }
+  };
+  for (const workspace of state.workspaces) {
+    if (root === undefined || workspace.root === root) {
+      apply(workspace.sessions);
+    }
+  }
+  if (root === undefined || root === state.activeRoot) {
+    apply(state.sessions);
+  }
+  if (state.view.sessionId === sessionId && (root === undefined || root === state.view.root)) {
+    state.view.title = title;
   }
 }
 

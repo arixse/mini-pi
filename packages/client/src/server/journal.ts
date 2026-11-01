@@ -30,6 +30,9 @@ export function isRunMetaEvent(event: ServerEvent): boolean {
     case "approval_resolved":
     case "run_usage":
     case "run_done":
+    // 会话标题在 Run 收尾之后单独生成：没有它，侧栏要等下一次刷新
+    // 才从"用户原话截断"换成一句总结
+    case "session_title":
       return true;
     default:
       return false;
