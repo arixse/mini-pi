@@ -257,6 +257,14 @@ export type ClientState = {
   file: FileContent | null;
   fileLoading: boolean;
   fileError: string | null;
+  /**
+   * 工具输出里的路径"还在不在"：决定一段文字画不画成可点链接。
+   *
+   * 键见 `pathLinks.ts`（根与 Run 都参与）。缺键 = 还没问过；`true` = 可以点；
+   * `false` = 文件不在了，按普通文本显示——不画一条点开只会报「文件不存在」的
+   * 链接。答案由动作层批量问一次，渲染层只读。
+   */
+  pathExists: Record<string, boolean>;
   banner: Banner;
   /**
    * 应用级事件流的断线提示。
@@ -354,6 +362,7 @@ export function initialState(): ClientState {
     file: null,
     fileLoading: false,
     fileError: null,
+    pathExists: {},
     banner: null,
     globalNote: null,
     globalLost: false,

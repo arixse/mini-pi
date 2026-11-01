@@ -113,6 +113,14 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const DEFAULT_PORT = 4788;
 /** 请求体上限：审批参数、提问都在这里，1MB 对"文本"这个用途绰绰有余 */
 const MAX_BODY = "1mb";
+/**
+ * 一次最多问多少个路径存不存在。
+ *
+ * 前端按 200 个一批切（见 `controller.checkPaths`），这里留出余量：这道闸是
+ * 给"绕过界面直接打接口"准备的，不是给正常渲染用的——每次 `statSync` 很便宜，
+ * 但长度不设上限的数组就是让别人替你循环。
+ */
+const MAX_PATH_QUERY = 500;
 /** 同时打开的工作区上限（默认值；`maxWorkspaces` 可覆盖） */
 const DEFAULT_MAX_WORKSPACES = 4;
 /** 全局同时执行上限（默认值；`globalConcurrency` 可覆盖） */
@@ -859,6 +867,30 @@ export class AppServer {
         ? this.hostForRun(runId)
         : this.hostForRoot(queryParam(req.query.root));
       res.json(host.readFile(path, runId || undefined));
+    }));
+
+    // 批量"这些路径还能打开吗"。
+    //
+    // 工具输出里的路径在**画成链接之前**先问一次：模型会说"我准备改 src/a.ts"、
+    // 报错栈里会有已经删掉的文件、历史会话里的路径也会过时。点开一条只会报
+    // "文件不存在"的链接，比不给链接更糟。判定与 `/api/file` 共用宿主里同一套
+    // 解析，因此不会出现"链接在、点开报错"。
+    //
+    // 用 POST + 数组：一屏工具输出可能带着几十个路径，逐个 GET 就是几十次往返。
+    app.post("/api/paths/exist", wrap((req, res) => {
+      const payload = asRecord(req.body);
+      const paths = payload.paths;
+      if (!Array.isArray(paths) || paths.some((item) => typeof item !== "string")) {
+        throw new HttpError(400, "paths 必须是字符串数组");
+      }
+      if (paths.length > MAX_PATH_QUERY) {
+        throw new HttpError(400, `一次最多查 ${MAX_PATH_QUERY} 个路径`);
+      }
+      const runId = typeof payload.runId === "string" ? payload.runId : "";
+      const host = runId
+        ? this.hostForRun(runId)
+        : this.hostForRoot(typeof payload.root === "string" ? payload.root : undefined);
+      res.json({ exists: host.existsFiles(paths as string[], runId || undefined) });
     }));
 
     // 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务

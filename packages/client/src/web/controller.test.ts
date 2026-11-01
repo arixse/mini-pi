@@ -1639,3 +1639,138 @@ describe("事件流自愈与文件预览", () => {
     assert.equal(controller.store.current.ui.settings, false, "一次 Esc 只收一层");
   });
 });
+
+/**
+ * 路径存在性：决定时间线里那段文字画不画成链接。
+ *
+ * 判据只有一个——**确认存在才画**。这里守的是"怎么问"：并帧、去重、按工作区
+ * 分开，以及任务跑完要重问一遍否定结论（模型常常先写出文件名、后创建它）。
+ */
+describe("路径存在性", () => {
+  let controller: AppController;
+
+  beforeEach(() => {
+    (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+    (globalThis as { Notification?: unknown }).Notification = FakeNotification;
+    FakeEventSource.all = [];
+    FakeEventSource.last = null;
+    FakeNotification.reset();
+    requested.length = 0;
+    controller = new AppController();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { EventSource?: unknown }).EventSource;
+    delete (globalThis as { Notification?: unknown }).Notification;
+  });
+
+  const existCalls = (): Array<{ url: string; body: string; method: string }> =>
+    requested.filter((entry) => entry.url.includes("/api/paths/exist"));
+
+  it("同一帧的多次上报合并成一次请求，答案按位置写回", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/paths/exist": { body: { exists: [true, false] } },
+    });
+    await controller.boot();
+    await settle();
+
+    // 渲染层是一段段报上来的：两条工具输出，各一个路径
+    controller.actions.checkPaths(["src/a.ts"]);
+    controller.actions.checkPaths(["src/gone.ts"]);
+    await settle();
+
+    const calls = existCalls();
+    assert.equal(calls.length, 1, "同一帧的上报要合成一次");
+    assert.deepEqual(JSON.parse(calls[0]!.body), {
+      paths: ["src/a.ts", "src/gone.ts"],
+      root: "D:/ws",
+    });
+    assert.deepEqual(
+      Object.values(controller.store.current.pathExists),
+      [true, false],
+      "按位置对齐，不能张冠李戴",
+    );
+  });
+
+  it("问过的不再问：流式重画每秒把同一批路径报上来也只发一次", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/paths/exist": { body: { exists: [true] } },
+    });
+    await controller.boot();
+    await settle();
+
+    for (let round = 0; round < 5; round += 1) {
+      controller.actions.checkPaths(["src/a.ts"]);
+      await settle();
+    }
+    assert.equal(existCalls().length, 1);
+  });
+
+  it("隔离执行的同名路径单独问：runId 与根都带在请求里", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/paths/exist": { body: { exists: [true] } },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.checkPaths(["src/a.ts"], "run_1");
+    await settle();
+    controller.actions.checkPaths(["src/a.ts"], null);
+    await settle();
+
+    const calls = existCalls();
+    assert.equal(calls.length, 2, "worktree 里的 a.ts 与基准工作区的不是一份");
+    assert.equal(JSON.parse(calls[0]!.body).runId, "run_1");
+    assert.equal(JSON.parse(calls[1]!.body).runId, undefined);
+  });
+
+  it("还没打开工作区就不发请求：无从判定，按普通文本显示", async () => {
+    installFetch({
+      "/api/state": { body: snapshot({ activeRoot: "", workspace: { root: "", name: "" } }) },
+    });
+    await controller.boot();
+    await settle();
+
+    controller.actions.checkPaths(["src/a.ts"]);
+    await settle();
+
+    assert.equal(existCalls().length, 0);
+    assert.deepEqual(controller.store.current.pathExists, {});
+  });
+
+  /**
+   * 跑的过程中模型常先写"我来创建 src/new.ts"、后真的创建它。那段文字里的
+   * 路径早被判过"不存在"；跑完不重问的话，回看时它永远不是链接。
+   */
+  it("任务跑完忘掉否定结论：先前不存在的路径会重新变成待判定", async () => {
+    installFetch({
+      "/api/state": { body: snapshot({ runs: [runSummary("run_1", "running")], currentSessionId: "s1.jsonl" }) },
+      "/api/sessions/s1.jsonl": { body: sessionDetail("s1.jsonl", "历史问题") },
+      "/api/paths/exist": { body: { exists: [false, true] } },
+    });
+    await controller.boot();
+    await settle();
+    await controller.actions.openRun("run_1");
+    await settle();
+
+    controller.actions.checkPaths(["src/new.ts", "src/old.ts"]);
+    await settle();
+    assert.deepEqual(Object.values(controller.store.current.pathExists), [false, true]);
+
+    const stream = FakeEventSource.all.find((source) =>
+      source.url.includes("/api/runs/run_1/events"),
+    );
+    assert.ok(stream, "打开 Run 时应当连上 per-run 流");
+    stream.emit("run_done", { type: "run_done", status: "done", elapsedMs: 1 }, 9);
+    await settle();
+
+    assert.deepEqual(
+      Object.values(controller.store.current.pathExists),
+      [true],
+      "只丢否定结论：文件可能刚被这个任务创建出来",
+    );
+  });
+});

@@ -27,6 +27,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
 import { Timeline } from "./components/Timeline";
 import { ThinkingRow } from "./components/Thinking";
+import { pathScopeKey, pathScopeOf } from "./pathLinks";
 import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary, SessionSummary } from "../shared/types";
@@ -42,6 +43,7 @@ const fakeActions = {
   closeDiff: () => undefined,
   openFile: () => undefined,
   closeFile: () => undefined,
+  checkPaths: () => undefined,
   mergeWorktree: async () => undefined,
   newTask: () => undefined,
   newTaskIn: async () => undefined,
@@ -632,6 +634,19 @@ describe("文件预览", () => {
     );
   }
 
+  /**
+   * 直接把"这个路径在不在"塞进状态。
+   *
+   * 真实链路是渲染时动作层去问服务端（`useEffect` + `checkPaths`），而
+   * `renderToStaticMarkup` 不跑效应——这里验证的是**读到答案之后怎么画**，
+   * 问的那一半由 `controller.test.ts` 与 `app.test.ts` 各守一段。
+   */
+  function markKnown(store: ClientStore, path: string, exists: boolean): void {
+    store.update((state) => {
+      state.pathExists[pathScopeKey(pathScopeOf(state, null), path)] = exists;
+    });
+  }
+
   /** 用户要的是"右侧常驻列"，不是又一扇浮层弹窗 */
   it("画成右侧面板而不是浮层弹窗", () => {
     const html = render(fileStore());
@@ -670,9 +685,31 @@ describe("文件预览", () => {
 
   /** 文本文件里仍要能点路径：加了行号不等于退化成一块死文本 */
   it("文本文件里的路径仍可点，并带上行号去预览", () => {
-    const html = render(fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" }));
+    const store = fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" });
+    markKnown(store, "src/b.ts", true);
+    const html = render(store);
     assert.match(html, /class="path-link"/);
     assert.match(html, /title="预览 src\/b\.ts（第 12 行）"/);
+  });
+
+  /**
+   * 这是本功能的来由：工具输出里提到的路径不一定还在（模型先说出来再创建、
+   * 报错栈里的文件已被删掉、历史会话早过时）。点开一条只回「文件不存在」的
+   * 链接比不给链接更糟——用户还得手动把那个面板关掉。
+   */
+  it("确认不存在的路径不画链接，但原文一个字不少", () => {
+    const store = fileStore({ path: "notes.txt", content: "see src/gone.ts:12\n" });
+    markKnown(store, "src/gone.ts", false);
+    const html = render(store);
+    assert.doesNotMatch(html, /class="path-link"/);
+    assert.match(html, /src\/gone\.ts:12/, "只是没有下划线，文本照旧");
+    assert.match(html, /文件不存在/, "悬停能看出为什么这条点不动");
+  });
+
+  /** 问答案之前也按普通文本：宁可晚一条下划线，也不给一条假链接 */
+  it("还没问到答案时同样不画链接", () => {
+    const html = render(fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" }));
+    assert.doesNotMatch(html, /class="path-link"/);
   });
 });
 

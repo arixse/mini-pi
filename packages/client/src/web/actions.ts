@@ -54,6 +54,14 @@ export type Actions = {
    */
   openFile: (path: string, runId?: string, line?: number) => void;
   closeFile: () => void;
+  /**
+   * 问一批路径"还在不在"，答案落进 `state.pathExists`。
+   *
+   * 由渲染层调用（每段工具输出报上自己那几条），动作层负责去重、并帧、
+   * 按工作区分组，最后只发一两次请求。答案是"能不能画成链接"的唯一依据：
+   * 没问出结果的路径按普通文本显示（见 `pathLinks.ts`）。
+   */
+  checkPaths: (paths: string[], runId?: string | null) => void;
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;

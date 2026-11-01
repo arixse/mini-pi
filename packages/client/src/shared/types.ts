@@ -393,6 +393,14 @@ export type FileContent = {
   binary: boolean;
 };
 
+/**
+ * 一批路径"还能不能打开"的回答。
+ *
+ * 按**位置**对齐请求里的 `paths`，不以路径名作键：服务端会把绝对路径换回
+ * 相对形式（见 `FileContent.path`），拿换过的名字当键，前端就对不上号了。
+ */
+export type FileExistence = { exists: boolean[] };
+
 export type DirListing = {
   path: string;
   parent: string | null;
