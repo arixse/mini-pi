@@ -1087,6 +1087,9 @@ export async function bootAppServer(
     // 入口显式给才记：bootAppServer 自己不定默认值，否则单测调它就会
     // 往用户家目录里写文件
     ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
+    // 标题存储与"记住工作区"同理：这里逐字段抄给 AppServer，漏一个字段
+    // 就等于那条启动路径上功能静默失效（类型上却是合法的）
+    ...(options.sessionTitles ? { sessionTitles: options.sessionTitles } : {}),
     ...(options.now ? { now: options.now } : {}),
     concurrency: options.concurrency,
   });
