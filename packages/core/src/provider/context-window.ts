@@ -232,6 +232,16 @@ export const CONTEXT_WINDOW_RULES: readonly ContextWindowRule[] = [
     window: 131_072,
     note: "Doubao Seed Character（128K）",
   },
+  // ---- Google Gemini ----
+  // 出处：官方 Models 页（2026-10）。Gemini 4 Argon 是统一的 1,048,576
+  // 输入输出窗口；Gemini 3 全系（3.8 / 3.6 / 3.1 Pro / Flash-Lite）都是
+  // 1,048,576 输入 / 64K 输出。更早的 1.5 Pro 是 2M，按 1M 取只会提前压缩，
+  // 不会超窗；如果确实在用，settings.json 里显式配置 contextWindow 即可。
+  {
+    prefix: "gemini",
+    window: 1_048_576,
+    note: "Gemini 4 / 3 全系（1,048,576）",
+  },
   // ---- Anthropic ----
   // 当前一代（官方 Models overview，2026-10）：Fable 5 / 5.1、Opus 5.5、Sonnet 5.5、
   // Haiku 5.5 都是 1M，Haiku 4.5 是 200K。

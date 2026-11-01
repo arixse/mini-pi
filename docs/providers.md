@@ -14,6 +14,7 @@
 | 智谱（Zhipu） | OpenAI | https://open.bigmodel.cn/api/paas/v4 | ✅ 已对接 |
 | 阿里百炼（Bailian） | OpenAI | https://dashscope.aliyuncs.com/compatible-mode/v1 | ✅ 已对接 |
 | 火山方舟（Volcengine Ark） | OpenAI | https://ark.cn-beijing.volces.com/api/v3 | ✅ 已对接 |
+| Google Gemini | OpenAI | https://generativelanguage.googleapis.com/v1beta/openai | ✅ 已对接 |
 | Anthropic | Anthropic | https://api.anthropic.com | ✅ 已对接 |
 
 ---
@@ -565,9 +566,85 @@ OpenAI
 
 ---
 
+## 10. Google Gemini（Gemini API）
+
+### 官方文档
+
+| 文档 | 地址 |
+|------|------|
+| Gemini API 首页 | https://ai.google.dev/gemini-api/docs |
+| 模型列表（含上下文窗口） | https://ai.google.dev/gemini-api/docs/models |
+| OpenAI 兼容端点 | https://ai.google.dev/gemini-api/docs/openai |
+| 模型列表接口 | `GET https://generativelanguage.googleapis.com/v1beta/openai/models` |
+| API Key 管理 | https://aistudio.google.com/apikey |
+
+### 当前支持的模型
+
+| 模型 | 说明 |
+|------|------|
+| `gemini-3.8-flash` | 官方推荐给 agentic coding 的默认选择（1,048,576 上下文 / 64K 输出） |
+| `gemini-4-argon` | 旗舰推理模型（统一 1,048,576 输入输出窗口） |
+| `gemini-3.1-pro-preview` | Pro 推理线（1,048,576 / 64K） |
+| `gemini-3.6-flash` | 上一代 Flash，仍可用于生产（1,048,576 / 64K） |
+| `gemini-3.5-flash-lite` | 最低成本、最高吞吐的小模型（1,048,576 / 64K） |
+
+> 图像（Imagen / Nano Banana）、视频（Veo）、TTS、Live、Embedding 与
+> 研究类模型走各自接口，不在对话模型的默认列表里。`GET /models` 会把这些
+> 一起返回，Mini Pi 按名称过滤（见下）。
+
+### 接入方式
+
+Gemini 官方提供 OpenAI 兼容端点，这里**走该端点**：Mini Pi 的 OpenAI 路径
+（流式 + 工具调用 + `stream_options` / `max_tokens` 降级）走得更久，模型列表
+也与请求同源。
+
+```typescript
+// Base URL
+https://generativelanguage.googleapis.com/v1beta/openai
+
+// 模型列表
+https://generativelanguage.googleapis.com/v1beta/openai/models
+
+// SDK类型
+OpenAI
+```
+
+几条口径：
+
+- **鉴权**：OpenAI 兼容端点用标准的 `Authorization: Bearer <API Key>`
+  （原生 `generateContent` 才用 `x-goog-api-key`）。
+- **模型 ID 带 `models/` 前缀**：列表返回 `models/gemini-...`，Mini Pi 统一
+  去掉前缀后再写进 `settings.json` 与界面；请求时两种写法都合法。
+- **列表里混有非对话模型**：`embedding` / `imagen` / `veo` / `tts` / `live` /
+  `image` / `nano-banana` / `robotics` / `computer-use` / `deep-research` /
+  `native-audio` / `omni` / `aqa` 这些按名称过滤；未识别的模型一律保留，
+  新模型上线时最坏是多一项，而不是用户找不到自己开通的型号。
+- **流式工具调用的两个差异**（已在模型层处理）：OpenAI 兼容层不返回
+  `tool_calls[].index`，且即使只返回工具调用，`finish_reason` 仍是 `stop`；
+  Mini Pi 按 `id` 合并分片，并把"有工具调用的 stop"规范化为 `toolUse`，
+  否则状态栏会把"正在等工具"显示成"模型说完了"。
+- **`thought_signature` 必须回传**：Gemini 3/4 在
+  `tool_calls[].extra_content.google.thought_signature` 里下发签名，下一轮
+  缺了它直接 400。签名随 assistant 消息的 `providerMetadata` 落盘，适配器
+  原样写回 `extra_content`；其它提供方不返回时消息格式保持不变。
+- **上下文窗口**：3 / 4 全系按 1,048,576 登记（更早的 1.5 Pro 是 2M，
+  按 1M 取只会提前压缩，不会超窗；确需精确值请显式配置 `contextWindow`）。
+
+### 配置示例
+
+```json
+{
+  "gemini": {
+    "apiKey": "AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+}
+```
+
+---
+
 ## 自定义供应商（OpenAI 兼容网关）
 
-除了上面九家官方供应商，还可以在**客户端设置 → 模型 → 自定义供应商区**里
+除了上面十家官方供应商，还可以在**客户端设置 → 模型 → 自定义供应商区**里
 添加自建网关：填名称、Base URL 与 API Key 即可，协议固定按 OpenAI 兼容处理
 （模型列表 `GET {baseUrl}/models`，补全走 `openai` SDK）。典型的适用对象是
 one-api / new-api 之类的聚合网关，或自建的 vLLM、Ollama OpenAI 兼容层。
@@ -649,7 +726,7 @@ export interface Provider {
 
 | SDK类型 | 对应的 npm 包 | 适用场景 |
 |---------|---------------|----------|
-| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、智谱、阿里百炼、火山方舟、其他兼容服务商） |
+| OpenAI | `openai` | OpenAI 兼容接口（OpenAI、DeepSeek、MiMo、Kimi、智谱、阿里百炼、火山方舟、Gemini、其他兼容服务商） |
 | Anthropic | `@anthropic-ai/sdk` | Anthropic 兼容接口（Anthropic 官方、MiniMax-CN） |
 
 ---
@@ -673,6 +750,7 @@ export interface Provider {
 - **智谱**: 访问 https://open.bigmodel.cn/usercenter/apikeys
 - **阿里百炼**: 访问 https://help.aliyun.com/zh/model-studio/get-api-key（API Key 与地域绑定）
 - **火山方舟**: 访问 https://console.volcengine.com/ark（API Key 管理页创建，地域需与 Base URL 一致）
+- **Google Gemini**: 访问 https://aistudio.google.com/apikey
 - **Anthropic**: 访问 https://console.anthropic.com/settings/keys
 
 ### Q: 连接超时怎么办？
@@ -688,4 +766,4 @@ export interface Provider {
 
 ---
 
-*最后更新: 2026-10-25*
+*最后更新: 2026-11-01*

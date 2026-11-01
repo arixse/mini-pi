@@ -177,9 +177,19 @@ export type ChatCompletionChunkLike = {
     delta?: {
       content?: string | null;
       tool_calls?: Array<{
+        /**
+         * Gemini 的 OpenAI 兼容层**不返回** index（OpenAI 规范里用于拼装
+         * 并行调用）。缺少时按 id 匹配，其次占下一个空位——见
+         * {@link resolveToolCallIndex}。
+         */
         index?: number;
         id?: string;
         function?: { name?: string; arguments?: string };
+        /**
+         * 提供方扩展字段。Gemini 3/4 的 `thought_signature` 就在这里，
+         * 下一轮必须原样写回，否则 400。
+         */
+        extra_content?: Record<string, unknown> | null;
       }> | null;
     } | null;
     finish_reason?: string | null;
@@ -239,6 +249,53 @@ export function mapFinishReason(
 }
 
 /**
+ * 决定一个工具调用分片该并进哪个槽位。
+ *
+ * 标准 OpenAI 流一定带 `index`，直接用。Gemini 的 OpenAI 兼容层不带：
+ * - 同一调用被拆到多个分片时，用 `id` 认回原来的槽位；
+ * - 一批并行调用挤在同一个分片里时，依次占下一个空位。
+ *
+ * 没有 `id` 也没有 `index` 的分片只能按"新调用"处理——这种流无法安全
+ * 合并，强行猜会把两次不同的调用拼成一次。
+ */
+function resolveToolCallIndex(
+  call: { index?: number; id?: string },
+  toolCalls: Map<number, { id: string; name: string; args: string }>,
+): number {
+  if (typeof call.index === "number") {
+    return call.index;
+  }
+  if (call.id) {
+    for (const [index, entry] of toolCalls) {
+      if (entry.id === call.id) {
+        return index;
+      }
+    }
+  }
+  let next = 0;
+  while (toolCalls.has(next)) {
+    next += 1;
+  }
+  return next;
+}
+
+/**
+ * 结束原因：有工具调用时 `stop` 也应视为 `toolUse`。
+ *
+ * Gemini 的 OpenAI 兼容层在流式下即使只返回了工具调用，终止分片仍写
+ * `finish_reason: "stop"`（非流式是 `tool_calls`）。内核虽然按 content 里
+ * 有没有 toolCall 决定是否执行工具，但 `stopReason` 会落盘并出现在状态里，
+ * 记错会让"这一轮在等工具"看起来像"模型说完了"。
+ */
+function resolveStopReason(
+  finishReason: string | null | undefined,
+  hasToolCalls: boolean,
+): AssistantMessage["stopReason"] {
+  const mapped = mapFinishReason(finishReason);
+  return mapped === "stop" && hasToolCalls ? "toolUse" : mapped;
+}
+
+/**
  * 把 OpenAI 兼容的流式分片拼装成统一的 AssistantMessage。
  *
  * 纯函数：不依赖网络与 SDK，便于单测覆盖"增量文本 / 分片工具调用 / 用量 / finish_reason"。
@@ -257,7 +314,7 @@ export async function collectOpenAIStream(
   let usage: ChatCompletionChunkLike["usage"] = null;
   const toolCalls = new Map<
     number,
-    { id: string; name: string; args: string }
+    { id: string; name: string; args: string; extra?: Record<string, unknown> }
   >();
 
   for await (const chunk of chunks as AsyncIterable<ChatCompletionChunkLike>) {
@@ -280,7 +337,7 @@ export async function collectOpenAIStream(
     }
 
     for (const call of delta?.tool_calls ?? []) {
-      const index = call.index ?? 0;
+      const index = resolveToolCallIndex(call, toolCalls);
       const entry = toolCalls.get(index) ?? { id: "", name: "", args: "" };
       if (call.id) {
         entry.id = call.id;
@@ -290,6 +347,10 @@ export async function collectOpenAIStream(
       }
       if (call.function?.arguments) {
         entry.args += call.function.arguments;
+      }
+      if (call.extra_content && typeof call.extra_content === "object") {
+        // 同一次调用的扩展字段可能分片下发：浅合并即可，后到的键覆盖先到的
+        entry.extra = { ...entry.extra, ...call.extra_content };
       }
       toolCalls.set(index, entry);
     }
@@ -317,13 +378,15 @@ export async function collectOpenAIStream(
       id: call.id || `call_${index}`,
       name: call.name,
       arguments: args,
+      // 没有扩展字段时不写这个键：老会话与其它提供方的消息格式保持不变
+      ...(call.extra ? { providerMetadata: call.extra } : {}),
     } satisfies ToolCallContent);
   }
 
   return {
     role: "assistant",
     content,
-    stopReason: mapFinishReason(finishReason),
+    stopReason: resolveStopReason(finishReason, toolCalls.size > 0),
     usage: {
       input: usage?.prompt_tokens ?? 0,
       output: usage?.completion_tokens ?? 0,

@@ -122,6 +122,7 @@
 | `doubao-seed-evolving` / `doubao-seed-2-1-pro-260915` / `doubao-seed-2-1-lite-260915` | 1000000 | 火山方舟 |
 | `doubao-seed-2-1*` / `doubao-seed-2-0*` | 262144 | 火山方舟 |
 | `doubao-seed-character*` | 131072 | 火山方舟 |
+| `gemini*`（3 / 4 全系） | 1048576 | Google Gemini |
 | `claude-opus-5-5` / `claude-sonnet-5-5` / `claude-haiku-5-5` / `claude-fable-5-1` | 1000000 | Claude 5.5 |
 | `claude-opus-5` / `claude-sonnet-5` | 1000000 | Claude 5 |
 | `claude-haiku-4-5` | 200000 | Claude Haiku 4.5 |
@@ -177,6 +178,7 @@ JSONL 是上下文的唯一事实来源，一行损坏不会让整份会话打�
 | `zhipu` | OpenAI | `https://open.bigmodel.cn/api/paas/v4` |
 | `bailian` | OpenAI | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `volcengine` | OpenAI | `https://ark.cn-beijing.volces.com/api/v3` |
+| `gemini` | OpenAI | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `anthropic` | Anthropic | `https://api.anthropic.com` |
 
 > 各供应商的默认模型列表、接入细节与踩坑见 [providers.md](./providers.md)（唯一来源）。

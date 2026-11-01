@@ -226,6 +226,18 @@ describe("inferContextWindow（按模型名推断）", () => {
     );
   });
 
+  it("Google Gemini 全系 1,048,576", () => {
+    assert.strictEqual(inferContextWindow("gemini-3.8-flash"), 1_048_576);
+    assert.strictEqual(inferContextWindow("gemini-4-argon"), 1_048_576);
+    assert.strictEqual(inferContextWindow("gemini-3.1-pro-preview"), 1_048_576);
+    assert.strictEqual(inferContextWindow("gemini-3.6-flash"), 1_048_576);
+    assert.strictEqual(inferContextWindow("gemini-3.5-flash-lite"), 1_048_576);
+    // 带供应商前缀、大小写混写同样命中
+    assert.strictEqual(inferContextWindow("gemini/Gemini-3.8-Flash"), 1_048_576);
+    // 未登记的旧型号也按整条前缀兜底（估小只会多压缩几次）
+    assert.strictEqual(inferContextWindow("gemini-2.5-pro"), 1_048_576);
+  });
+
   it("Anthropic Claude 当前一代", () => {
     assert.strictEqual(inferContextWindow("claude-opus-5-5"), 1_000_000);
     assert.strictEqual(inferContextWindow("claude-sonnet-5-5"), 1_000_000);

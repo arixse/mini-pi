@@ -280,6 +280,11 @@ export class OpenAIModel implements LlmModel {
               name: block.name,
               arguments: JSON.stringify(block.arguments),
             },
+            // Gemini 3/4 的 thought_signature 必须原样带回；OpenAI SDK 的类型
+            // 没有这个字段，但请求体是整对象序列化，附加字段会照常发出。
+            ...(block.providerMetadata
+              ? { extra_content: block.providerMetadata }
+              : {}),
           }));
         if (toolCalls.length > 0) {
           assistantMessage.tool_calls = toolCalls;
