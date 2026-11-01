@@ -148,6 +148,15 @@ export type TestServerOptions = {
   sessionTitles?: SessionTitles;
   /** 注入小容量的应用级日志，用来覆盖 `gap` 路径 */
   journal?: EventJournal;
+  /**
+   * 前端产物目录。只有浏览器层用例（`e2e-ui/`）需要——它要拿**真的构建
+   * 产物**，页面才挂得起来。
+   *
+   * 刻意不给默认值：默认指到 `dist/web` 会让普通用例在一次 `build:web`
+   * 之后悄悄从"没有前端"变成"有前端"，那种依赖本机状态的差异最难查。
+   * 要页面的用例自己传，传错了在开跑前就报清楚。
+   */
+  webRoot?: string;
 };
 
 export async function startTestServer(options: TestServerOptions = {}): Promise<TestServer> {
@@ -207,6 +216,7 @@ export async function startTestServer(options: TestServerOptions = {}): Promise<
     ...(options.workspaceMemory ? { workspaceMemory: options.workspaceMemory } : {}),
     ...(options.sessionTitles ? { sessionTitles: options.sessionTitles } : {}),
     ...(options.journal ? { journal: options.journal } : {}),
+    ...(options.webRoot ? { webRoot: options.webRoot } : {}),
     settingsStore,
     providerService,
     resolveModel: async () => ({

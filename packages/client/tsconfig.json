@@ -8,5 +8,8 @@
       "@minipi/core/*": ["../core/src/*"]
     }
   },
-  "include": ["src"]
+  // `e2e-ui` 是浏览器层用例（真 Chromium + 真产物），不参与 `pnpm test`：
+  // 它要下载浏览器，只能按需跑。但**类型要照查**——那段代码量尺寸用的是
+  // DOM API，写错了只有跑起来才知道，比编译期报错贵得多
+  "include": ["src", "e2e-ui"]
 }

@@ -231,30 +231,41 @@ export const api = {
  * 服务端会把事件按类型命名（`event: message_update`），
  * 所以每个类型都要单独挂监听。这份清单是唯一的登记处——
  * 漏一个的表现是"某类卡片永远不出现"，而不是报错。
+ *
+ * 为什么要写成**以类型为键的表**而不是数组：`EventSource` 只把命名事件投给
+ * `addEventListener(那个名字)`，漏订阅**不会抛错、不会打日志**，只是那类事件
+ * 永远到不了前端。`session_title` 就这样漏过一次：服务端发了、`state.ts` 也
+ * 处理了、单测直接喂事件也过了，界面上却要刷新才换名。
+ *
+ * `satisfies Record<ServerEvent["type"], true>` 让"多一个事件类型忘了登记"
+ * 变成编译错误（漏键报缺、多键报多），不再依赖谁记得回来改这张表。
  */
-const EVENT_TYPES = [
-  "agent_start",
-  "agent_end",
-  "turn_start",
-  "turn_end",
-  "message_start",
-  "message_update",
-  "message_end",
-  "tool_execution_start",
-  "tool_execution_end",
-  "tool_permission",
-  "compaction",
-  "branch_switch",
-  "subagent_start",
-  "subagent_end",
-  "run_state",
-  "approval_request",
-  "approval_resolved",
-  "stream_gap",
-  "journal_ready",
-  "run_usage",
-  "run_done",
-] as const;
+const SUBSCRIBED_EVENTS = {
+  agent_start: true,
+  agent_end: true,
+  turn_start: true,
+  turn_end: true,
+  message_start: true,
+  message_update: true,
+  message_end: true,
+  tool_execution_start: true,
+  tool_execution_end: true,
+  tool_permission: true,
+  compaction: true,
+  branch_switch: true,
+  subagent_start: true,
+  subagent_end: true,
+  run_state: true,
+  approval_request: true,
+  approval_resolved: true,
+  stream_gap: true,
+  journal_ready: true,
+  run_usage: true,
+  run_done: true,
+  session_title: true,
+} satisfies Record<ServerEvent["type"], true>;
+
+const EVENT_TYPES = Object.keys(SUBSCRIBED_EVENTS) as ServerEvent["type"][];
 
 export type StreamHandlers = {
   onEvent: (event: ServerEvent) => void;

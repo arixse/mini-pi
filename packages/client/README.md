@@ -13,7 +13,13 @@ pnpm --filter @minipi/client run desktop         # 起服务并开桌面窗口
 pnpm --filter @minipi/client run dist:win        # 出 Windows 安装包（NSIS + 便携版）
 pnpm --filter @minipi/client run dist:mac        # 出 macOS 安装包（dmg + zip）
 pnpm --filter @minipi/client run test            # 本包测试
+pnpm --filter @minipi/client run e2e:ui          # 浏览器层（真 Chromium，先构建前端）
 ```
+
+`e2e:ui` 要一份 Chromium：首次先跑
+`pnpm --filter @minipi/client exec playwright install --no-shell chromium`。
+它不在 `pnpm check` 里——分层与"为什么不在门禁里"见
+[客户端测试分层](../../docs/client-testing.md)。
 
 `pnpm desktop`（仓库根）等于"构建前端 → 构建主进程 → `desktop`"三步；
 `pnpm dist:win` 等于"构建前端 → 构建主进程 → electron-builder --win"。

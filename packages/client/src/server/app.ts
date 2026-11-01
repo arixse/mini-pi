@@ -374,7 +374,21 @@ export class AppServer {
     if (!server) {
       return;
     }
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      /**
+       * 不等 keep-alive 超时。
+       *
+       * `close()` 只保证"不再接受新连接"，已经挂着的一律要等对端断——浏览器
+       * 和 node 的 fetch 池都会把空闲 socket 留到超时（4~5s），于是关服被拖成
+       * 几秒。实测（`startTestServer` 跑一轮真实前端）：`close()` 单独用是
+       * 3.8s，加上这一行是 7ms。
+       *
+       * 流上面已经逐个收掉了；`stop()` 本来就是"现在停"——此刻还在飞的请求
+       * 已经没有界面可回，切掉它比让进程悬着更诚实。
+       */
+      server.closeAllConnections();
+    });
   }
 
   // ------------------------------------------------------- 宿主寻址
