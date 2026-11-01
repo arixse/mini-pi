@@ -129,6 +129,18 @@ describe("messageId", () => {
     assert.equal(messageId(message), messageId({ ...message }));
   });
 
+  /**
+   * 时间戳与正文都会被内核在模型返回后整体改写，所以它们不能当身份：
+   * 一条**已经结束**的消息被重放时（缓冲重放、重连、从侧栏再点开这条 Run），
+   * 按时间戳算会得到另一个 id，时间线上就多出一条一模一样的气泡。
+   */
+  it("内核给了稳定 id 就以它为准，timestamp 改写不影响身份", () => {
+    const before = { ...assistantText("", 1000), id: "msg_abc" };
+    const after = { ...assistantText("全部正文", 9999), id: "msg_abc" };
+    assert.equal(messageId(before), "a:msg_abc");
+    assert.equal(messageId(after), messageId(before));
+  });
+
   it("同一条 assistant 消息里的文本与工具调用各自有 id", () => {
     const message: AssistantMessage = {
       role: "assistant",
@@ -206,6 +218,58 @@ describe("applyRunEvent：流式归约", () => {
     assert.equal(bubbles.length, 1, "同一条回答只能有一个气泡");
     assert.equal((bubbles[0] as Extract<TimelineItem, { kind: "assistant" }>).text, "正文");
     assert.equal(view.streamingAssistantId, null);
+  });
+
+  /**
+   * 用户报过的现象：一条消息发出去，界面上回答出现两遍。
+   *
+   * 来路是"整段重放"——断线重连、从侧栏再点开这条 Run、`retryStreams`，
+   * 都会带 `cursor=0` 把缓冲里的历史事件再放一遍。重放的事件持有的是
+   * **同一个**消息对象，而它在模型返回时已被整体改写（timestamp + 全文），
+   * 于是 `message_start` 算出另一个 id，凭空长出第二个气泡。
+   */
+  it("整段重放一条已经跑完的回答不会叠出第二条气泡", () => {
+    const view = emptyView();
+    const message: AssistantMessage = { ...assistantText("", 1000), id: "msg_1" };
+    const buffer: ServerEvent[] = [
+      { type: "message_start", message },
+      { type: "message_update", message, delta: "第一段。" },
+      { type: "message_update", message, delta: "第二段。" },
+      { type: "message_end", message },
+    ];
+    // 直播前半段
+    feed(view, "run_1", buffer.slice(0, 2));
+    // 模型返回：内核 Object.assign 改写同一个对象
+    message.timestamp = 9999;
+    message.content = [{ type: "text", text: "第一段。第二段。" }];
+    // 直播后半段
+    feed(view, "run_1", buffer.slice(2));
+
+    // 从头重放整批事件（cursor=0）
+    feed(view, "run_1", buffer);
+
+    const bubbles = itemsOfKind(view, "assistant") as Array<
+      Extract<TimelineItem, { kind: "assistant" }>
+    >;
+    assert.equal(bubbles.length, 1, "重放只能落到同一条气泡上");
+    assert.equal(bubbles[0]?.text, "第一段。第二段。");
+  });
+
+  it("会话文件重建出的条目与直播时是同一个 id", () => {
+    const view = emptyView();
+    const message: AssistantMessage = { ...assistantText("", 1000), id: "msg_9" };
+    feed(view, "run_1", [{ type: "message_start", message }]);
+    message.timestamp = 9999;
+    message.content = [{ type: "text", text: "正文" }];
+    feed(view, "run_1", [{ type: "message_end", message }]);
+
+    const live = itemsOfKind(view, "assistant").map((item) => item.id);
+    const history = itemsFromMessages([{ ...assistantText("正文", 9999), id: "msg_9" }]);
+    assert.deepEqual(
+      history.map((item) => item.id),
+      live,
+      "历史与直播必须算出同一个条目 id，否则刷新页面就会叠一份",
+    );
   });
 
   it("只有工具调用的消息从头到尾都不产生气泡", () => {

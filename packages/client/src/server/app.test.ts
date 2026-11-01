@@ -137,6 +137,26 @@ describe("App Server · 执行与事件流", () => {
       .join("");
     assert.strictEqual(text, "口径拆成两层了。");
 
+    /**
+     * 一条回答的三段事件必须带同一个消息 id，而且这个 id 要穿过 SSE 与
+     * 会话文件。前端的时间线按它归约：缓冲重放（重连、从侧栏再点开这条
+     * Run）与刷新后的历史重建都要落到同一个条目上，否则同一段回答会
+     * 在界面上出现两遍。id 不能由 timestamp 代替——模型返回后内核会改写它。
+     */
+    const assistantStart = events.find(
+      (event) => event.type === "message_start" && event.message.role === "assistant",
+    );
+    const assistantEnd = events.find(
+      (event) => event.type === "message_end" && event.message.role === "assistant",
+    );
+    const startId = (assistantStart as { message?: { id?: string } } | undefined)?.message?.id;
+    assert.ok(typeof startId === "string" && startId.length > 0, "message_start 要带稳定 id");
+    assert.strictEqual(
+      (assistantEnd as { message?: { id?: string } } | undefined)?.message?.id,
+      startId,
+      "end 不能换一个身份",
+    );
+
     const summary = await server.get<RunSummary>(`/api/runs/${created.runId}`);
     assert.strictEqual(summary.status, "done");
     assert.strictEqual(summary.model, "test/test-model");

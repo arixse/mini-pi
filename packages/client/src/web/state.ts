@@ -346,8 +346,18 @@ export function initialState(): ClientState {
  * 同一个 id，否则订阅一个跑了一半的 Run 会叠成两份。种类那一维是必要的——
  * 一轮里"工具调用"和"最终回答"可能是同一条 assistant 消息被拆成两条，
  * 时间戳相同而内容不同。
+ *
+ * assistant 消息优先用内核给的稳定 id（`message.id`）。时间戳与正文都不可作
+ * 身份：模型返回后内核会 `Object.assign` 整体改写它们，于是一条**已经结束**的
+ * 消息在被重放时会算出另一个 id（时间戳变了、正文从空变成全文），
+ * 时间线上就多出一条一模一样的气泡——这正是"同一段回答发了两遍"的来路。
+ * 会话文件里带着这个 id，因此历史重建与直播也落到同一条上。
+ * 老会话没有该字段时回落到时间戳（历史行为）。
  */
 export function messageId(message: AgentMessage): string {
+  if (message.role === "assistant" && typeof message.id === "string" && message.id.length > 0) {
+    return `a:${message.id}`;
+  }
   const time = "timestamp" in message ? message.timestamp : 0;
   if (message.role === "user") {
     return `u:${time}`;
