@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage, ToolResultMessage } from "@minipi/core/shared/protocol";
-import type { ApprovalRiskLevel, RunPhase, Tier } from "../shared/types";
+import type { ApprovalRiskLevel, RunPhase, SessionSummary, Tier } from "../shared/types";
 
 export type Tone = "slate" | "sky" | "amber" | "emerald" | "rose";
 
@@ -101,8 +101,23 @@ export function formatSessionTime(timestamp: string): string {
 }
 
 /**
- * 时钟：`14:02`（指令气泡里的时间戳）。
+ * 侧栏会话行 hover 时给出的那段话。
  *
+ * 屏幕上那行标题**一定被切过**：模型收成一行、或兜底按 32 格截断、CSS 再
+ * 按像素省略一次。所以 hover 不能是"把标题再说一遍"——那正是眼前已有的
+ * 东西，用户把鼠标停下来就是为了看它后面还有什么。这里给的是用户自己的
+ * 原话（`excerpt`），不点进去也能认出这段会话在讲什么。
+ *
+ * 第一行放时间：native tooltip 认 `\n`，两行比一句"时间 + 一长串话"好读。
+ */
+export function sessionHint(session: SessionSummary): string {
+  const when = formatSessionTime(session.timestamp);
+  const body = session.excerpt.length > 0 ? session.excerpt : session.title;
+  return body.length > 0 ? `${when}\n${body}` : when;
+}
+
+/**
+ * 时钟：`14:02`（指令气泡里的时间戳）。
  * 只要时分：气泡里放"2026-10-22 14:02:33"会把一条短消息撑成两行，
  * 而"哪一天"由侧栏的会话行说。取本地时区——这一刻是给人看的当下，
  * 不是审计线索。0 与非法值给空串：没有时间戳就不画那一行。

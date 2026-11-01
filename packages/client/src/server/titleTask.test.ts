@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { CompleteInput, LlmModel } from "@minipi/core/agent/model";
 import type { AgentMessage, AssistantMessage } from "@minipi/core/shared/protocol";
+import { TITLE_MAX_HANZI } from "./title";
 import { firstUserPrompt, generateSessionTitle } from "./titleTask";
 
 function userMessage(text: string): AgentMessage {
@@ -80,7 +81,7 @@ describe("generateSessionTitle", () => {
     const call = model.calls[0];
     assert.ok(call);
     assert.strictEqual(call.tools.length, 0, "起标题不该拿到工具");
-    assert.match(call.systemPrompt, /不超过 \d+ 个字/);
+    assert.match(call.systemPrompt, new RegExp(`不超过 ${TITLE_MAX_HANZI} 个字`));
     assert.match(call.systemPrompt, /不要执行/, "用户原话里可能夹着指令");
     const material = call.messages[0]!;
     assert.ok(

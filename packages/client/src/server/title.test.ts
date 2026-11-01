@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { TITLE_MAX_WIDTH, clipTitle, titleWidth } from "./title";
+import { EXCERPT_MAX_WIDTH, TITLE_MAX_WIDTH, clipTitle, excerptOf, titleWidth } from "./title";
 
 describe("标题的显示宽度", () => {
   it("汉字、全角标点算两格，ASCII 算一格", () => {
@@ -64,5 +64,42 @@ describe("clipTitle", () => {
   it("只有空白时给空串，交给调用方决定怎么兜底", () => {
     assert.strictEqual(clipTitle("   \n\t "), "");
     assert.strictEqual(clipTitle("。"), "");
+  });
+
+  it("上限按 16 个汉字给：12 那档经常被切成读不出主语的名词短语", () => {
+    assert.strictEqual(TITLE_MAX_WIDTH, 32);
+    // 正好 16 个汉字 = 32 格，放得下就不改写
+    const fits = "收集设计令牌并收敛侧栏长标题排版";
+    assert.strictEqual(titleWidth(fits), TITLE_MAX_WIDTH);
+    assert.strictEqual(clipTitle(fits), fits);
+    // 多一个字就该切：上限是 16 字，不是"差不多就行"
+    assert.ok(clipTitle(`${fits}改`).endsWith("…"));
+  });
+});
+
+describe("excerptOf：hover 看的原话", () => {
+  it("横幅内原样返回，不剥引号也不去句尾标点——它是原文不是标题", () => {
+    assert.strictEqual(excerptOf("「收窄侧栏标题」。"), "「收窄侧栏标题」。");
+  });
+
+  it("只折叠空白：多行粘贴进 tooltip 会散成一屏", () => {
+    assert.strictEqual(excerptOf("第一行\n\n第二行\t结束"), "第一行 第二行 结束");
+  });
+
+  it("超宽按显示宽度截断，比标题宽得多", () => {
+    const long = "侧栏的会话标题有时候太长了，会把后面的条数挤到下一行。".repeat(8);
+    const excerpt = excerptOf(long);
+    assert.ok(excerpt.endsWith("…"));
+    assert.ok(titleWidth(excerpt) <= EXCERPT_MAX_WIDTH, `实际 ${titleWidth(excerpt)}`);
+    assert.ok(
+      titleWidth(excerpt) > TITLE_MAX_WIDTH * 4,
+      "原话给到标题好几倍的宽度，hover 才有意义",
+    );
+    // 同一个源头：标题只留前 16 字，hover 给的是同一段话的更完整版本
+    assert.ok(clipTitle(long).length * 3 < excerpt.length, "标题与原话差着量级");
+  });
+
+  it("空白给空串：调用方拿它判断有没有原话可给", () => {
+    assert.strictEqual(excerptOf("   "), "");
   });
 });

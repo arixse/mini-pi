@@ -229,6 +229,14 @@ export type SessionSummary = {
    * 空会话给「新会话」。
    */
   title: string;
+  /**
+   * 首条用户消息的**原话**（折叠空白，按显示宽度截到 240 格 ≈ 120 个汉字）。
+   *
+   * 侧栏 hover 时给的就是它。屏幕上那行标题一定是被切过的（模型收成一行、
+   * 或按宽度截断、CSS 再省略一次），hover 只能给"比标题更完整的东西"，
+   * 否则等于把屏幕上的字再说一遍。空会话为空串。
+   */
+  excerpt: string;
   messageCount: number;
   compactedCount: number;
   sizeBytes: number;

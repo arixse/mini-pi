@@ -646,6 +646,8 @@ export class WorkspaceHost {
       sessionId: info.fileName,
       timestamp: info.timestamp,
       title: meta.title || "新会话",
+      // hover 用的原话：模型标题覆盖的是 `title`，这一项始终是用户自己说的
+      excerpt: meta.excerpt,
       messageCount: meta.messageCount,
       compactedCount: meta.compactedCount,
       sizeBytes: info.sizeBytes,
@@ -667,6 +669,7 @@ export class WorkspaceHost {
         sessionId,
         timestamp: sessionId.replace(/\.jsonl$/, ""),
         title: "新会话",
+        excerpt: "",
         messageCount: 0,
         compactedCount: 0,
         sizeBytes: 0,
@@ -1236,7 +1239,7 @@ export class WorkspaceHost {
    *
    * 为什么值得多调一次模型：侧栏宽度是 264~320，"用户原话截断"出来的标题
    * 十有八九是半句话（"把 packages/client 里写死的颜色收回到令"），既占
-   * 宽度又答不出"这段对话在干什么"。总结成一行 12 字以内才放得下。
+   * 宽度又答不出"这段对话在干什么"。总结成一行才放得下。
    *
    * 只在这一段会话**还没有**生成过标题时做一次：标题是稳定标签，
    * 每轮重算会让侧栏在对话过程中不停改名。

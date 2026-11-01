@@ -69,6 +69,15 @@ describe("parseSessionMeta", () => {
   it("没有用户消息时标题为空串，由调用方补「新会话」", () => {
     assert.strictEqual(parseSessionMeta(assistantLine).title, "");
     assert.strictEqual(parseSessionMeta("").title, "");
+    assert.strictEqual(parseSessionMeta(assistantLine).excerpt, "", "没原话可给，hover 退回标题");
+  });
+
+  it("原话与标题同源，但原话更长而且保留原文的标点", () => {
+    const long = "侧栏的会话标题太长了，会把后面的条数挤到下一行，能不能让模型总结一个短标题？";
+    const meta = parseSessionMeta(userLine(long));
+    assert.ok(meta.title.endsWith("…"), "标题是切过的");
+    assert.strictEqual(meta.excerpt, long, "这句不到 240 格，原话应当一字不改");
+    assert.ok(meta.excerpt.startsWith(meta.title.replace(/…$/, "")), "两者取的是同一句");
   });
 
   it("用户消息里没有文本块（只有附件）时继续找下一条文本", () => {

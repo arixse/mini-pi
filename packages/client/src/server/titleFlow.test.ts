@@ -55,6 +55,11 @@ describe("会话标题：跑完一轮之后由模型总结", () => {
     const target = sessions.find((session) => session.sessionId === sessionId);
     assert.ok(target);
     assert.strictEqual(target.title, "收窄侧栏标题", "列表里的标题要以生成结果为准");
+    // 标题换成模型的之后，用户自己的原话还得留着——侧栏 hover 靠它
+    assert.strictEqual(
+      target.excerpt,
+      "侧栏的会话标题太长了，会把后面的条数挤到下一行，能不能让模型总结一个短标题",
+    );
 
     // 1 次问答 + 1 次起标题
     assert.strictEqual(server.model.calls.length, 2);
