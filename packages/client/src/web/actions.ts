@@ -122,6 +122,13 @@ export type Actions = {
   toggleNotifications: () => Promise<void>;
   /** 主题：只切根节点 data-theme 并记住选择（见 theme.ts） */
   toggleTheme: () => void;
+  /**
+   * 时间线要不要显示工具调用（见 prefs.ts，默认不显示）。
+   *
+   * 纯展示开关：不重发请求、不改任何服务端状态，连正在流式输出的那一轮
+   * 也只是少画几行。
+   */
+  setShowToolCalls: (enabled: boolean) => void;
   openPicker: () => void;
   closePicker: () => void;
   /** 打开（或聚焦）一个工作区目录：切走不打断别的根跑着的任务 */

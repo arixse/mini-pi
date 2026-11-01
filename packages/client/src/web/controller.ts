@@ -45,6 +45,7 @@ import {
   showSystemNotification,
 } from "./notify";
 import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
+import { writePrefs } from "./prefs";
 import {
   applyTheme,
   initialTheme,
@@ -1620,6 +1621,14 @@ export class AppController {
           state.theme = next;
         });
         this.paintTheme(next);
+      },
+      setShowToolCalls: (enabled: boolean) => {
+        this.store.update((state) => {
+          state.prefs.showToolCalls = enabled;
+        });
+        if (typeof localStorage !== "undefined") {
+          writePrefs(localStorage, this.store.current.prefs);
+        }
       },
       openPicker: () => {
         this.store.update((state) => {

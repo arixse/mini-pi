@@ -1,7 +1,7 @@
 /**
- * 设置面板：一级分类「模型 / 权限」。
+ * 设置面板：一级分类「模型 / 权限 / 界面」。
  *
- * 两条口径来自设计稿与内核：
+ * 几条口径来自设计稿与内核：
  * - **模型页**：十家官方供应商按注册顺序平铺，行 = 名称 + 接入地址 +
  *   配置状态；选中行向下展开凭据编辑区；底部是自定义供应商区
  *   （名称 / Base URL / API Key）。**本屏没有审批档位**——档位归权限页，
@@ -10,6 +10,9 @@
  *   前端连"打码后的密钥"都拿不到，也就没有回显的可能。
  * - **权限页**：档位三选一，点一下立即生效（顶栏芯片同步），**不追溯**
  *   已挂起的审批。
+ *
+ * **界面页**放"只改显示、不改内核"的偏好（见 `prefs.ts`）：开关一拨立即
+ * 生效、跨刷新记住，且只写本地存储——服务端连"你关掉了工具调用"都不知道。
  *
  * 面板关闭时整棵卸载，于是"打开即重新读取"不需要额外的重置逻辑——
  * 密钥输入框也因此必然是空的。
@@ -20,21 +23,30 @@ import { api } from "../api";
 import { useActions, useClient } from "../store";
 import type { ClientState } from "../state";
 import { TIER_LABELS } from "../format";
+import type { UiPrefs } from "../prefs";
 import type { ProviderView, Tier } from "../../shared/types";
 import type { SaveModelInput } from "../actions";
 import { Icon } from "./Icon";
 
-type SettingsPage = "model" | "permission";
+type SettingsPage = "model" | "permission" | "interface";
 
 export function Settings(): React.ReactElement | null {
   const state = useClient();
   if (!state.ui.settings) {
     return null;
   }
-  return <SettingsDialog tier={state.tier} model={state.model} />;
+  return <SettingsDialog tier={state.tier} model={state.model} prefs={state.prefs} />;
 }
 
-function SettingsDialog({ tier, model }: { tier: Tier; model: ClientState["model"] }): React.ReactElement {
+function SettingsDialog({
+  tier,
+  model,
+  prefs,
+}: {
+  tier: Tier;
+  model: ClientState["model"];
+  prefs: UiPrefs;
+}): React.ReactElement {
   const actions = useActions();
   const [page, setPage] = useState<SettingsPage>("model");
 
@@ -72,12 +84,22 @@ function SettingsDialog({ tier, model }: { tier: Tier; model: ClientState["model
               <Icon name="sliders" size={13} />
               权限
             </button>
+            <button
+              className={`settings-nav-item${page === "interface" ? " is-on" : ""}`}
+              aria-pressed={page === "interface"}
+              onClick={() => setPage("interface")}
+            >
+              <Icon name="sparkles" size={13} />
+              界面
+            </button>
           </nav>
 
           {page === "model" ? (
             <ModelPage model={model} />
-          ) : (
+          ) : page === "permission" ? (
             <PermissionPage tier={tier} />
+          ) : (
+            <InterfacePage prefs={prefs} />
           )}
         </div>
       </div>
@@ -518,6 +540,51 @@ function PermissionPage({ tier }: { tier: Tier }): React.ReactElement {
       {error ? (
         <span style={{ fontSize: 12, color: "var(--Client-danger-text)" }}>{error}</span>
       ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 界面页
+
+const TOOL_CALLS_HINT =
+  "关掉后时间线只留对话与审批：工具调用的参数与输出整段不画，工具输出里那些可点的文件路径也跟着消失。";
+
+/**
+ * 界面页：只改"长什么样"的偏好。
+ *
+ * 这些开关一拨立即生效、跨刷新记住，并且**只写本地存储**——服务端不知道，
+ * 于是两台机器、两个标签页可以有不同的显示习惯，而任务本身一个字都不变。
+ *
+ * 导出是为了能单独渲染它：设置面板默认停在模型页，而那页挂了网络请求。
+ */
+export function InterfacePage({ prefs }: { prefs: UiPrefs }): React.ReactElement {
+  const actions = useActions();
+
+  return (
+    <div className="settings-page">
+      <div className="bar bar-warn" style={{ margin: 0 }}>
+        <Icon name="alert" />
+        这些开关只改这台机器上的显示，不影响任务怎么跑
+      </div>
+
+      <label className="pref-row">
+        <span className="pref-text">
+          <span className="pref-name">显示工具调用</span>
+          <span className="pref-hint">{TOOL_CALLS_HINT}</span>
+        </span>
+        <span className="switch">
+          <input
+            type="checkbox"
+            checked={prefs.showToolCalls}
+            aria-label="显示工具调用"
+            onChange={(event) => actions.setShowToolCalls(event.target.checked)}
+          />
+        </span>
+      </label>
+
+      <p style={hintStyle}>
+        审批卡不算工具调用：不管这个开关怎么拨，等你裁决的卡片都会出现——那件事不归显示偏好管。
+      </p>
     </div>
   );
 }

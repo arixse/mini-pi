@@ -25,8 +25,10 @@ import { Picker } from "./components/Picker";
 import { SideResizer } from "./components/SideResizer";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
-import { Timeline } from "./components/Timeline";
+import { Timeline, visibleItems } from "./components/Timeline";
+import { InterfacePage } from "./components/Settings";
 import { ThinkingRow } from "./components/Thinking";
+import type { UiPrefs } from "./prefs";
 import { pathScopeKey, pathScopeOf } from "./pathLinks";
 import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
@@ -65,6 +67,7 @@ const fakeActions = {
   setSubAgent: async () => undefined,
   setIsolate: async () => undefined,
   toggleNotifications: async () => undefined,
+  setShowToolCalls: () => undefined,
   toggleTheme: () => undefined,
   openPicker: () => undefined,
   closePicker: () => undefined,
@@ -900,5 +903,112 @@ describe("时间线条目的 markup", () => {
     assert.match(html, /rm -rf build/, "完整命令要给全");
     assert.match(html, /此操作不可撤销/);
     assert.doesNotMatch(html, /<code>/, "高危不叠summary 的理由行");
+  });
+});
+
+describe("工具调用开关", () => {
+  const user: TimelineItem = {
+    kind: "user",
+    id: "u1",
+    text: "看看这道目录",
+    queued: false,
+    locked: true,
+    at: 0,
+    runId: null,
+  };
+  const tool: TimelineItem = {
+    kind: "tool",
+    id: "t:1",
+    toolCallId: "1",
+    name: "grep",
+    args: JSON.stringify({ pattern: "TODO", path: "src" }),
+    status: "done",
+    output: "src/a.ts:12: // TODO",
+    startedAt: 0,
+    durationMs: 30,
+  };
+  const assistant: TimelineItem = {
+    kind: "assistant",
+    id: "a1",
+    text: "只有一处待办",
+    streaming: false,
+    locked: true,
+  };
+  const waiting: TimelineItem = {
+    kind: "approval",
+    id: "ap:ap1",
+    request: approval(),
+    state: "pending",
+  };
+
+  function storeWith(items: TimelineItem[], showToolCalls: boolean): ClientStore {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.prefs.showToolCalls = showToolCalls;
+      state.view.items.push(...items);
+    });
+    return store;
+  }
+
+  function renderTimeline(store: ClientStore): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Timeline),
+      ),
+    );
+  }
+
+  it("默认关：时间线上没有工具调用，对话与审批纹丝不动", () => {
+    const html = renderTimeline(storeWith([user, tool, assistant, waiting], false));
+    assert.doesNotMatch(html, /tool-line/, "默认关：工具调用整段不画");
+    assert.match(html, /看看这道目录/, "指令还在");
+    assert.match(html, /只有一处待办/, "助手正文还在");
+    assert.match(html, /class="approval/, "审批卡不归这个开关管：等你裁决的必须看得见");
+  });
+
+  it("打开开关就画出来，参数与输出一起", () => {
+    const html = renderTimeline(storeWith([user, tool, assistant, waiting], true));
+    assert.match(html, /tool-line/);
+    assert.match(html, /grep/);
+    assert.match(html, /src\/a\.ts:12/, "输出原样保留（这段渲染里还没问过存在性，路径是纯文本）");
+  });
+
+  it("visibleItems 只筛工具：其余条目位置不变、顺序不重排", () => {
+    const items = [user, tool, assistant, waiting];
+    assert.deepEqual(
+      visibleItems(items, true).map((item) => item.kind),
+      ["user", "tool", "assistant", "approval"],
+    );
+    assert.deepEqual(
+      visibleItems(items, false).map((item) => item.kind),
+      ["user", "assistant", "approval"],
+    );
+    // 筛出来的是同一个对象，不是复制品：条目是就地修改的，复制会让下一步
+    // 的 revision 对不上
+    assert.equal(visibleItems(items, false)[0], user);
+  });
+
+  function renderInterface(prefs: UiPrefs): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: new ClientStore(), actions: fakeActions } },
+        createElement(InterfacePage, { prefs }),
+      ),
+    );
+  }
+
+  it("设置 → 界面里那颗开关反映当前值，默认不勾", () => {
+    const off = renderInterface({ showToolCalls: false });
+    assert.match(off, /class="pref-row"/);
+    assert.match(off, /显示工具调用/);
+    assert.match(off, /aria-label="显示工具调用"/);
+    assert.doesNotMatch(off, /checked/, "默认关：不该画成勾上的");
+
+    const on = renderInterface({ showToolCalls: true });
+    assert.match(on, /checked/, "开着的时候必须勾上，否则开关在骗人");
   });
 });

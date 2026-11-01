@@ -33,6 +33,7 @@ import type {
 import { textOf } from "./format";
 import { readLayout, type LayoutState } from "./layout";
 import type { NotifyState } from "./notify";
+import { readPrefs, type UiPrefs } from "./prefs";
 import { initialTheme, type ThemeMode } from "./theme";
 
 export type ToolStatus = "running" | "done" | "failed";
@@ -199,6 +200,13 @@ export type ClientState = {
    * 与主题一样跨刷新记住，但拖拽过程中不逐帧写状态（见 `SideResizer`）。
    */
   layout: LayoutState;
+  /**
+   * 界面偏好（见 prefs.ts）：只决定"长什么样"，不改变内核怎么跑。
+   *
+   * 与主题、侧栏宽度同一档：跨刷新记住，但**不进会话**——换台机器可以
+   * 有不同的显示习惯，同一个会话照旧。
+   */
+  prefs: UiPrefs;
   /** 活动工作区（"新任务去哪"）；与 `activeRoot` 指向同一个根 */
   workspace: WorkspaceView;
   /** 活动根：侧栏聚焦、输入区与状态行绑定谁 */
@@ -323,6 +331,7 @@ export function initialState(): ClientState {
         : { matches: (query: string) => matchMedia(query).matches },
     ),
     layout: readLayout(typeof localStorage === "undefined" ? null : localStorage),
+    prefs: readPrefs(typeof localStorage === "undefined" ? null : localStorage),
     workspace: { root: "", name: "" },
     activeRoot: "",
     workspaces: [],

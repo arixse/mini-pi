@@ -174,4 +174,16 @@ describe("响应式版式契约", () => {
     assert.match(blockAfter(css, ".picker-path-row {"), /flex-wrap:\s*wrap/);
     assert.match(blockAfter(css, ".field-row {"), /flex-wrap:\s*wrap/);
   });
+
+  /**
+   * 设置 → 界面里的一行偏好：标题与说明在左、开关在右。
+   *
+   * 说明会写到两三行，开关必须 `flex: none` ——否则它被一起拉宽，
+   * 复选框和文字之间空出一大截，看着像另一个控件的占位。
+   */
+  it("界面偏好行：说明占满剩余宽度，开关不被拉宽", () => {
+    assert.match(blockAfter(css, ".pref-row {"), /display:\s*flex/);
+    assert.match(blockAfter(css, ".pref-text {"), /flex:\s*1 1 auto/);
+    assert.match(blockAfter(css, ".pref-row .switch {"), /flex:\s*none/);
+  });
 });

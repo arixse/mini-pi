@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { AgentMessage } from "@minipi/core/shared/protocol";
 import { AppController } from "./controller";
+import { PREFS_STORAGE_KEY } from "./prefs";
 import type { AppState, CacheUsage, RunSummary, SessionDetail } from "../shared/types";
 import type { ClientState } from "./state";
 
@@ -1772,5 +1773,80 @@ describe("路径存在性", () => {
       [true],
       "只丢否定结论：文件可能刚被这个任务创建出来",
     );
+  });
+});
+
+/**
+ * 界面偏好：时间线要不要显示工具调用。
+ *
+ * 这个开关的边界很窄，但两条都容易写错：
+ * - **默认关**：用户没表态过就不能自作主张把工具调用码满一屏；
+ * - **不发请求**：它只改显示，服务端连它存在都不知道。
+ */
+describe("界面偏好：工具调用开关", () => {
+  /** 临时顶一个 localStorage（Node 里没有），用完原样还回去 */
+  function withStorage<T>(run: (data: Map<string, string>) => T): T {
+    const data = new Map<string, string>();
+    const fake = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+    };
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      value: fake,
+      configurable: true,
+      writable: true,
+    });
+    try {
+      return run(data);
+    } finally {
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      } else {
+        delete (globalThis as { localStorage?: unknown }).localStorage;
+      }
+    }
+  }
+
+  it("没存过时默认关闭：时间线不替用户决定显示工具调用", () => {
+    withStorage(() => {
+      const fresh = new AppController();
+      assert.equal(fresh.store.current.prefs.showToolCalls, false);
+    });
+  });
+
+  it("拨一下就落盘，刷新后（重新构造）还是这个值", () => {
+    withStorage((data) => {
+      const first = new AppController();
+      first.actions.setShowToolCalls(true);
+      assert.equal(first.store.current.prefs.showToolCalls, true, "立即生效，不等重新拉状态");
+      assert.equal(
+        JSON.parse(data.get(PREFS_STORAGE_KEY) ?? "{}").showToolCalls,
+        true,
+        "写进本地存储才会跨刷新",
+      );
+
+      const reloaded = new AppController();
+      assert.equal(reloaded.store.current.prefs.showToolCalls, true);
+
+      reloaded.actions.setShowToolCalls(false);
+      assert.equal(
+        JSON.parse(data.get(PREFS_STORAGE_KEY) ?? "{}").showToolCalls,
+        false,
+        "关掉也要落盘，否则下次又冒出来",
+      );
+    });
+  });
+
+  it("不发任何请求：服务端不知道这个开关存在", () => {
+    withStorage(() => {
+      installFetch({});
+      const fresh = new AppController();
+      requested.length = 0;
+      fresh.actions.setShowToolCalls(true);
+      assert.equal(requested.length, 0);
+    });
   });
 });
