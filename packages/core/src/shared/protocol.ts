@@ -8,6 +8,15 @@ export type ToolCallContent = {
     id:string;
     name:string;
     arguments:Record<string,unknown>
+    /**
+     * 提供方要求在下一轮原样带回的附加字段（不参与渲染与工具执行）。
+     *
+     * 目前只有 Gemini 3/4 用到：OpenAI 兼容层把 `thought_signature` 放在
+     * `tool_calls[].extra_content.google.thought_signature`，缺了它下一次请求
+     * 会直接 400。字段随 assistant 消息一起落盘，适配器按原样写回请求体；
+     * 其它提供方不返回时这里保持 `undefined`，会话文件格式不变。
+     */
+    providerMetadata?:Record<string,unknown>
 }
 
 export type Usage = {

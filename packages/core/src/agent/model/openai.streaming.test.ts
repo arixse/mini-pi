@@ -337,4 +337,111 @@ describe("OpenAI 流式路径（本地 SSE）", () => {
       },
     );
   });
+
+  it("Gemini 形状：无 index、finish_reason=stop，且 thought_signature 原样回传", async () => {
+    await withServer(
+      (_req, res, body) => {
+        const payload = JSON.parse(body);
+        const isFollowUp = payload.messages.some(
+          (message: { role?: string }) => message.role === "tool",
+        );
+        if (isFollowUp) {
+          writeSse(res, [
+            { choices: [{ delta: { content: "读到了" } }] },
+            { choices: [{ delta: {}, finish_reason: "stop" }] },
+          ]);
+          return;
+        }
+        writeSse(res, [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      // Gemini 不返回 index；签名放在 extra_content 里
+                      id: "call_gemini_1",
+                      type: "function",
+                      function: {
+                        name: "read_file",
+                        arguments: '{"path":"a.txt"}',
+                      },
+                      extra_content: {
+                        google: { thought_signature: "sig-1" },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
+      },
+      async (baseUrl, requests) => {
+        const model = createOpenAIModel({
+          apiKey: "test-key",
+          baseUrl,
+          model: "gemini-3.8-flash",
+        });
+
+        const first = await model.complete(baseInput());
+
+        assert.strictEqual(first.stopReason, "toolUse");
+        assert.deepStrictEqual(first.content, [
+          {
+            type: "toolCall",
+            id: "call_gemini_1",
+            name: "read_file",
+            arguments: { path: "a.txt" },
+            providerMetadata: {
+              google: { thought_signature: "sig-1" },
+            },
+          },
+        ]);
+
+        const second = await model.complete({
+          systemPrompt: "s",
+          messages: [
+            {
+              role: "user",
+              content: [createTextContent("hi")],
+              timestamp: Date.now(),
+            },
+            first,
+            {
+              role: "toolResult",
+              toolCallId: "call_gemini_1",
+              toolName: "read_file",
+              content: [createTextContent("a.txt 的内容")],
+              isError: false,
+              timestamp: Date.now(),
+            },
+          ],
+          tools: [],
+        });
+
+        assert.strictEqual(second.stopReason, "stop");
+        assert.strictEqual(
+          (second.content[0] as { type: "text"; text: string }).text,
+          "读到了",
+        );
+
+        const followUp = JSON.parse(requests[1]);
+        const assistant = followUp.messages.find(
+          (message: { role?: string }) => message.role === "assistant",
+        );
+        assert.deepStrictEqual(
+          assistant.tool_calls[0].extra_content,
+          { google: { thought_signature: "sig-1" } },
+          "缺了 thought_signature 时 Gemini 下一轮会直接 400",
+        );
+        // 工具结果仍按标准 OpenAI 形状发出
+        const toolMessage = followUp.messages.find(
+          (message: { role?: string }) => message.role === "tool",
+        );
+        assert.strictEqual(toolMessage.tool_call_id, "call_gemini_1");
+      },
+    );
+  });
 });

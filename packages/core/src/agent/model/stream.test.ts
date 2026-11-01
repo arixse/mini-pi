@@ -339,6 +339,151 @@ describe("stream（collectOpenAIStream 拼装）", () => {
     );
   });
 
+  it("Gemini 流式工具调用不带 index 时按 id 续接", async () => {
+    // Gemini 的 OpenAI 兼容层不返回 index，同一调用被拆成多个分片时靠 id 合并
+    const message = await collectOpenAIStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { id: "call_g1", function: { name: "read_file", arguments: '{"pa' } },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { id: "call_g1", function: { arguments: 'th":"a.txt"}' } },
+              ],
+            },
+          },
+        ],
+      },
+      // Gemini 即使只返回工具调用，finish_reason 仍是 stop
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]);
+
+    assert.strictEqual(message.stopReason, "toolUse");
+    assert.deepStrictEqual(message.content, [
+      {
+        type: "toolCall",
+        id: "call_g1",
+        name: "read_file",
+        arguments: { path: "a.txt" },
+      },
+    ]);
+  });
+
+  it("同一分片里的多个无 index 工具调用应各占一个槽位", async () => {
+    const message = await collectOpenAIStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { id: "call_a", function: { name: "bash", arguments: "{}" } },
+                { id: "call_b", function: { name: "list_files", arguments: "{}" } },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ]);
+
+    assert.deepStrictEqual(
+      message.content.map((block) => (block as { id: string }).id),
+      ["call_a", "call_b"],
+    );
+  });
+
+  it("有工具调用时 stop 应规范化成 toolUse", async () => {
+    const withTools = await collectOpenAIStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, id: "c", function: { name: "bash", arguments: "{}" } }],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ]);
+    assert.strictEqual(
+      withTools.stopReason,
+      "toolUse",
+      "否则状态栏会把“正在等工具”显示成“模型说完了”",
+    );
+
+    // 没有工具调用的 stop 仍然是 stop
+    const withoutTools = await collectOpenAIStream([
+      { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] },
+    ]);
+    assert.strictEqual(withoutTools.stopReason, "stop");
+
+    // 其它结束原因不能被这次规范化顺带改掉
+    const length = await collectOpenAIStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, id: "c", function: { name: "bash", arguments: "{}" } }],
+            },
+            finish_reason: "length",
+          },
+        ],
+      },
+    ]);
+    assert.strictEqual(length.stopReason, "length");
+  });
+
+  it("Gemini 的 extra_content 应合并进 providerMetadata", async () => {
+    const message = await collectOpenAIStream([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_g1",
+                  function: { name: "read_file", arguments: "{}" },
+                  extra_content: { google: { thought_signature: "sig-1" } },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_g1",
+                  extra_content: { trace: "t-1" },
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ]);
+
+    // 浅合并：后到的顶层键覆盖先到的，未覆盖的键保留
+    assert.deepStrictEqual(
+      (message.content[0] as { providerMetadata: unknown }).providerMetadata,
+      { google: { thought_signature: "sig-1" }, trace: "t-1" },
+    );
+  });
+
   it("参数不是合法 JSON 时降级为空对象而不是抛错", async () => {
     const message = await collectOpenAIStream([
       {

@@ -224,6 +224,53 @@ describe("openai（消息转换与取消）", () => {
     };
   }
 
+  it("工具调用的 providerMetadata 应写回 extra_content，缺失时不写", () => {
+    const model = createOpenAIModel({ apiKey: "k" });
+    const convert = (
+      model as unknown as {
+        convertMessages(
+          system: string,
+          messages: AgentMessage[],
+        ): Array<{
+          role: string;
+          tool_calls?: Array<{ extra_content?: unknown }>;
+        }>;
+      }
+    ).convertMessages.bind(model);
+
+    const assistant = (
+      providerMetadata?: Record<string, unknown>,
+    ): AgentMessage => ({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "read_file",
+          arguments: { path: "a.txt" },
+          ...(providerMetadata ? { providerMetadata } : {}),
+        },
+      ],
+      stopReason: "toolUse",
+      usage: { input: 1, output: 1, totalTokens: 2 },
+      timestamp: 0,
+    });
+
+    const withMetadata = convert("s", [
+      assistant({ google: { thought_signature: "sig-1" } }),
+    ]);
+    assert.deepStrictEqual(withMetadata[1].tool_calls?.[0].extra_content, {
+      google: { thought_signature: "sig-1" },
+    });
+
+    // 其它提供方不返回该字段：请求体保持原样，不能凭空多出 extra_content
+    const withoutMetadata = convert("s", [assistant()]);
+    assert.strictEqual(
+      "extra_content" in (withoutMetadata[1].tool_calls?.[0] ?? {}),
+      false,
+    );
+  });
+
   it("OpenAI 路径只靠正文传达失败（无 is_error 字段）", () => {
     const model = createOpenAIModel({ apiKey: "k" });
     const convert = (
