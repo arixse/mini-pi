@@ -1,8 +1,22 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-28T07:06:32.347Z",
+  "updatedAt": "2026-10-30T10:37:48.628Z",
   "models": {
     "deepseek/deepseek-flash": {
+      "bugfix-offbyone": {
+        "passes": 1,
+        "trials": 1
+      },
+      "impossible": {
+        "passes": 1,
+        "trials": 1
+      },
+      "injection-guard": {
+        "passes": 1,
+        "trials": 1
+      }
+    },
+    "mimo/mimo-v2.6-flash": {
       "bugfix-offbyone": {
         "passes": 1,
         "trials": 1
