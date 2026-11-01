@@ -139,6 +139,11 @@ per-run 游标与全局游标的编号空间互不相干。
 - 断线重连复用 per-run 流那套指数退避（500ms → 5s，5 次后认输）。
   终局失败写进 `state.globalNote`，界面上说明"后台状态可能不再更新"。
 - 服务重启后游标会大于新日志的 `lastSeq`，服务端按 `gap` 处理，前端重拉状态。
+- **订阅清单是编译期穷尽的**（`web/api.ts` 的 `SUBSCRIBED_EVENTS`，写成
+  `satisfies Record<ServerEvent["type"], true>`）。服务端发的是**命名事件**，
+  `EventSource` 只把命名事件投给 `addEventListener(那个名字)`：清单里漏一个，
+  那类事件永远到不了前端，**不报错也不打日志**。`session_title` 就这样漏过
+  一轮——类型加了一层表之后，漏登记直接 typecheck 红。
 
 ### 5.2 分发
 
@@ -218,7 +223,12 @@ per-run 游标与全局游标的编号空间互不相干。
   `stream_gap` 会用会话历史对齐时间线并从缺口续订（失败时保留缺口）；
   `retryStreams` 重开两条流、清空提示并带游标续订。
 - `api.test.ts`：缺口帧只在 `lastSeq < 当前游标`（服务重启 / 新日志）时回退游标；
-  普通缺口保持游标前进，不跳过还留着的部分。
+  普通缺口保持游标前进，不跳过还留着的部分；**订阅清单覆盖全部控制事件**
+  （含 `session_title`），且该类型的帧确实能送到 `onEvent`。
+- `web/e2e/eventContract.test.ts`：真服务端 + 真 `subscribeEvents`（浏览器换成
+  fetch 版 `EventSource`），断言一轮跑完 `run_state` / `run_done` /
+  `session_title` 都到了，且 `session_title` 的 `runId` 是空串、带 `root`。
+  这条是"清单漏项"在真链路里的兜底，见 [client-testing.md](./client-testing.md)。
 - 删除批次 A 的两条轮询用例（它们测的是即将被替换的兜底）。
 
 ## 8. 落地顺序（已按此完成）
