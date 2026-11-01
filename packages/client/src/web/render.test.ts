@@ -377,6 +377,9 @@ describe("思考中指示", () => {
     assert.match(html, /class="thinking-line"/, "指示要挂在时间线上");
     assert.match(html, /class="thinking-dots"/, "三点动画是「还在动」的信号");
     assert.match(html, />Thinking</);
+    // 三点在文字**后面**：贴着词尾读作省略号。摆前面会像另一个图标，
+    // 和前面的头像挤在一起（用户反馈过这个排版）
+    assert.match(html, /thinking-label[^]*thinking-dots/);
     assert.doesNotMatch(html, /bubble-wrap/, "此刻还没有正文，给气泡等于假装有内容");
   });
 

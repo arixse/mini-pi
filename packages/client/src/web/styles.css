@@ -965,7 +965,8 @@ svg.ic {
 .thinking-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* 不用统一 gap：三点要贴着文字读作省略号，时长则要跟前面的动画拉开 */
+  gap: 0;
   min-height: 26px;
   font-size: 13px;
   color: var(--Client-text-secondary);
@@ -974,6 +975,8 @@ svg.ic {
 .thinking-dots {
   display: inline-flex;
   align-items: center;
+  /* 略宽于词距，三点才不会粘在字母 g 上 */
+  margin-left: 5px;
   gap: 3px;
 }
 
@@ -1011,6 +1014,7 @@ svg.ic {
 }
 
 .thinking-elapsed {
+  margin-left: 8px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--Client-text-tertiary);

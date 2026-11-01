@@ -23,12 +23,14 @@ export function ThinkingRow({ since }: { since: number }): React.ReactElement {
       <div className="stack">
         {/* role=status + aria-live：读屏用户同样需要知道"它在想" */}
         <div className="thinking-line" role="status" aria-live="polite">
+          {/* 三点跟在文字后面而不是前面：贴着词尾读作省略号，是「还在继续」的
+              标点符号；摆在前面会先于文字抢注意力，看着像另一个图标 */}
+          <span className="thinking-label">Thinking</span>
           <span className="thinking-dots" aria-hidden="true">
             <i />
             <i />
             <i />
           </span>
-          <span className="thinking-label">Thinking</span>
           <Elapsed since={since} />
         </div>
       </div>
