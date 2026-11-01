@@ -411,6 +411,72 @@ describe("createAgentEventHandler（工具卡片的生产接线）", () => {
     });
     assert.strictEqual(status.isActive(), false, "最后一个结束后应收起状态行");
   });
+
+  /**
+   * 回归用例：工具批次结束时状态行就收起了（`status.end` 见 pending 为空即 stop），
+   * 而第二轮模型思考期间此前没有任何事件把它叫回来——终端上是一段无提示的
+   * 空白，用户分不清模型在思考还是已经卡死。`turn_start` 恰好在每次模型调用前发出。
+   */
+  it("工具跑完后的下一轮思考要重新出现状态行", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "read_file",
+      description: "test double",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [createTextContent("content")] };
+      },
+    });
+
+    let calls = 0;
+    const model: LlmModel = {
+      async complete() {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "a.ts" } },
+            ],
+            stopReason: "toolUse",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            timestamp: Date.now(),
+          };
+        }
+        return createAssistantMessage([createTextContent("done")]);
+      },
+    };
+
+    const result = await runAgentLoop({
+      systemPrompt: "s",
+      messages: [createUserMessage("read it")],
+      tools: [],
+      model,
+      toolRegistry: registry,
+    });
+
+    const { status, states } = createFakeStatus();
+    const handler = createAgentEventHandler({
+      status,
+      renderContext: context,
+      quiet: () => {},
+      write: () => {},
+    });
+    capture(() => {
+      for (const event of result.events) {
+        handler(event);
+      }
+    });
+
+    const kinds = states.map((state) => state.kind);
+    const lastTool = kinds.lastIndexOf("tool");
+    const lastThinking = kinds.lastIndexOf("thinking");
+    assert.ok(lastTool >= 0, "应有工具执行状态");
+    assert.ok(
+      lastThinking > lastTool,
+      `工具结束后、下一轮模型调用前应重新显示"思考中"，实际状态序列：${kinds.join(" → ")}`,
+    );
+  });
 });
 
 describe("/last 与工具渲染的会话级状态", () => {
