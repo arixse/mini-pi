@@ -27,7 +27,7 @@ mini-pi/
 │   │       │   ├── model/       # 模型封装（index.ts 汇总导出；config / types / errors / retry / stream / response / openai / anthropic / factory）
 │   │       │   ├── tools/       # 工具定义（registry / search / files / bash / workspace）
 │   │       │   └── sessionStore.ts # 会话存储
-│   │       ├── provider/    # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / bailian / volcengine / anthropic）
+│   │       ├── provider/    # 模型提供商（openai / deepseek / minimax-cn / mimo / kimi / zhipu / bailian / volcengine / gemini / anthropic）
 │   │       ├── shared/      # 共享模块（protocol.ts 通信协议）
 │   │       ├── run.ts       # 一次完整执行；runManager.ts 并发上限与排队
 │   │       ├── prompt.ts    # 系统提示词组装；projectStack.ts 技术栈探测
@@ -89,9 +89,9 @@ mini-pi/
 - `ModelProviderService` 负责提供商注册、配置存储（apiKey/baseUrl/model）与模型列表获取
 - 模型列表（`GET /models`）统一带 15 秒超时（`provider/modelsRequest.ts`）：
   供应商挂住连接时设置界面不会无限转圈；失败照常抛出，不伪造空列表
-- 当前已注册的提供商：9 家，名称 / SDK 类型 / 默认 Base URL 见
+- 当前已注册的提供商：10 家，名称 / SDK 类型 / 默认 Base URL 见
   [cli-config.md](./cli-config.md) §3（配置视角的唯一一张表）。
-- 除 9 家官方提供商外，还有**自定义供应商槽位**：未注册名 + Base URL 会当场建成一个
+- 除 10 家官方提供商外，还有**自定义供应商槽位**：未注册名 + Base URL 会当场建成一个
   OpenAI 兼容的 `CustomProvider`（凭据存成 auth.json 里带 `custom` 标记的独立条目，
   重启后由 `loadCustomProviders()` 注册回来）。入口在客户端设置里，CLI 与客户端
   经 `createModelFromSettings` 同一个收口加载——细节见 [providers.md](./providers.md)。
