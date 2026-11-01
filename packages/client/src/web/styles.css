@@ -458,6 +458,9 @@ svg.ic {
   gap: 1px;
   /* 在行内时独占第二行：会话行自己是第一行，它的 Run 是第二行起 */
   flex-basis: 100%;
+  /* 曾经这里写死一个百分比宽度，等于凭空扣掉一行里两成的宽度给标题用，
+     长标题因此更早触发换行。缩进交给 `.lv-session` 的 padding-left */
+  min-width: 0;
 }
 
 .tree-row {
@@ -504,8 +507,12 @@ svg.ic {
   color: var(--Client-text-primary);
 }
 
+/* 会话行没有子树，所以不需要 wrap：`.tree-row` 的 wrap 是给工作区行的
+   `.tree-kids` 独占第二行用的，落到会话行上只会让长标题把「42 条」和
+   行菜单顶到下一行。标题再长也只能被省略号吃掉 */
 .tree-row.lv-session {
   padding-left: 18px;
+  flex-wrap: nowrap;
 }
 
 .tree-row.lv-run {
@@ -522,14 +529,19 @@ svg.ic {
 }
 
 /* 行里的主点击目标：铺满除行操作外的全部宽度。
-   行操作只在 hover 时出现，没必要常年砍掉标题的 20% 宽度 */
+   行操作只在 hover 时出现，没必要常年砍掉标题的 20% 宽度。
+
+   `flex-basis: 0` 而不是 `auto`：按内容宽度分配时，标题越长这个按钮要的
+   份额越多，右侧的「42 条」和行菜单就会被挤到下一行。固定基准 0 之后，
+   标题只能在自己的份额里用省略号收尾，兄弟元素的位置不受标题长度影响 */
 .tree-main {
   max-width: 100%;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
+  overflow: hidden;
   border: 0;
   background: transparent;
   padding: 0;
@@ -608,6 +620,9 @@ svg.ic {
 
 .tree-meta {
   flex: none;
+  /* 10.5px 的「42 条 · 已压缩 2 次」在窄侧栏里本来就可能折成两行，
+     一折就把整行撑高。它是一行元信息，不是段落 */
+  white-space: nowrap;
   font-size: 10.5px;
   color: var(--Client-text-tertiary);
   font-family: var(--mono);

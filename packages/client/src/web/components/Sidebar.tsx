@@ -170,7 +170,7 @@ function WorkspaceNode({
       </span>
 
       {open ? (
-        <div className="tree-kids" style={{width:"80%"}}>
+        <div className="tree-kids">
           {group.groups.length === 0 ? (
             <div className="empty-hint" style={{ marginLeft: 30 }}>
               还没有会话

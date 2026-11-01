@@ -93,6 +93,23 @@ describe("响应式版式契约", () => {
     assert.match(blockAfter(css, ".tree-main {"), /max-width:\s*100%/);
   });
 
+  /**
+   * 用户报过："标题太长会把后面的东西挤到下一行"。
+   *
+   * 三个原因叠在一起：`.tree-row` 的 `flex-wrap: wrap`（本来是给工作区行的
+   * 子树用的）、`.tree-main` 的 `flex-basis: auto`（标题越长要的份额越多）、
+   * 以及 `.tree-kids` 那个 `width: 80%`（凭空扣掉两成宽度）。三者都要被钉住。
+   */
+  it("会话行不换行：长标题只吃省略号，不把条数与行菜单挤到第二行", () => {
+    assert.match(blockAfter(css, ".tree-row.lv-session {"), /flex-wrap:\s*nowrap/);
+    assert.match(blockAfter(css, ".tree-main {"), /flex:\s*1 1 0/);
+    assert.match(blockAfter(css, ".tree-meta {"), /white-space:\s*nowrap/);
+    assert.doesNotMatch(
+      blockAfter(css, ".tree-kids {"),
+      /width:\s*\d+%/,
+      "会话行的宽度不该再被百分比扣掉",
+    );  });
+
   it("879 断点：侧栏收成抽屉，主列独占整行", () => {
     const block = blockAfter(css, "@media (max-width: 879px)");
     assert.match(block, /\.drawer-btn\s*\{[^}]*display:\s*inline-flex/s);
