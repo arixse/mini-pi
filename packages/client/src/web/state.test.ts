@@ -28,6 +28,7 @@ import {
   pendingApprovals,
   removeItem,
   syncItemsFromMessages,
+  thinkingSinceOf,
   upsertItem,
   workspaceGroups,
   workspaceMatches,
@@ -415,6 +416,86 @@ describe("applyRunEvent：流式归约", () => {
   });
 });
 
+/**
+ * 「思考中」指示的归约。
+ *
+ * 它回答的是"模型在跑、但还没有第一个 token"这一段：此前界面完全静止，
+ * 用户分不清在思考、断线还是卡死。终端里那行 `⠋ 思考中…` 就是这条的对应物。
+ */
+describe("思考中：等首个 token 的那一段", () => {
+  it("turn_start 点亮，首个 delta 熄灭", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+    ]);
+    assert.notEqual(thinkingSinceOf(view), null, "模型开始想时界面就该说明");
+
+    feed(view, "run_1", [
+      { type: "message_update", message: assistantText(""), delta: "你" },
+    ]);
+    assert.equal(view.thinkingSince, null, "正文到了，思考中要让位给气泡里的光标");
+  });
+
+  it("工具跑完后的下一轮思考重新点亮，不会停在空白", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        args: { path: "a.ts" },
+      },
+    ]);
+    assert.equal(view.thinkingSince, null, "工具执行中不该同时显示思考中");
+
+    feed(view, "run_1", [
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        result: { content: [{ type: "text", text: "ok" }] },
+        isError: false,
+      },
+      { type: "turn_end", turn: 1, message: assistantText(""), toolResults: [] },
+      { type: "turn_start", turn: 2 },
+    ]);
+    assert.notEqual(
+      thinkingSinceOf(view),
+      null,
+      "工具批次结束后到下一轮首个 token 之前必须重新显示思考中",
+    );
+  });
+
+  it("status 不是 running 时不显示（重放残留 / 待裁决）", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+    ]);
+    assert.notEqual(thinkingSinceOf(view), null);
+
+    // 重连只补到 turn_start、收尾事件被挤出窗口：字段还在，Run 其实已经结束
+    view.status = "done";
+    assert.equal(thinkingSinceOf(view), null, "已结束的 Run 不能还在转圈");
+
+    view.status = "blocked";
+    assert.equal(thinkingSinceOf(view), null, "等裁决时该看审批卡，不是转圈");
+  });
+
+  it("run_done 收尾时清掉指示", () => {
+    const view = emptyView();
+    feed(view, "run_1", [
+      { type: "run_state", status: "running" },
+      { type: "turn_start", turn: 1 },
+      { type: "run_done", status: "done", elapsedMs: 3, tokens: 0, cache: emptyCacheUsage() },
+    ]);
+    assert.equal(view.thinkingSince, null);
+  });
+});
+
 describe("乐观插入与快照", () => {
   it("addUserMessage 返回 id，removeItem 能撤回", () => {
     const view = emptyView();
@@ -528,6 +609,8 @@ describe("乐观插入与快照", () => {
       released: false,
       merged: false,
     });
+    // 还没落盘的那一轮在时间线上是空白：先按"在思考"显示，别让人觉得卡死
+    assert.notEqual(thinkingSinceOf(state.view), null);
   });
 
   /*

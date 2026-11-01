@@ -159,6 +159,17 @@ export type View = {
    */
   streamingAssistantId: string | null;
   /**
+   * 这一轮模型调用"开始思考"的墙钟；null 表示模型没有在思考。
+   *
+   * 用来在时间线末尾画一条「思考中」指示。首 token 到达之前界面本来什么
+   * 都不动，用户分不清模型在思考、网络断了，还是卡死了。`turn_start` /
+   * `message_start` 点亮它，第一个 delta 或第一个工具落地就熄灭。
+   *
+   * 只用这个字段不够：重放一段已结束的 Run 时也可能收到 `turn_start`
+   * 而没补到收尾事件，所以是否显示还要看 `status`（见 {@link thinkingSinceOf}）。
+   */
+  thinkingSince: number | null;
+  /**
    * 运行头正在讲的那个 Run 的工作区（M3）。
    *
    * 带 runId 是因为「丢弃」按钮要点名具体哪一个；跑完也不擦——
@@ -279,6 +290,7 @@ export function emptyView(): View {
     streamLost: false,
     runError: null,
     streamingAssistantId: null,
+    thinkingSince: null,
     workspace: null,
   };
 }
@@ -650,6 +662,15 @@ export function openSession(
     // 活 Run 的 cache 已经包含会话历史（服务端开跑时用 sumUsage 起的算）
     view.cache = options.liveRun.cache;
     view.title = options.liveRun.title;
+    /**
+     * 切到一个正在跑的 Run：还没落盘的这一轮在时间线上是空白。
+     *
+     * 重放拿到 `turn_start` 之前先按"在思考"显示，否则用户点进来看到的
+     * 是一段没有任何动静的对话——正是这条指示要解释的那种空白。
+     * `blocked` / `queued` 不会显示（见 {@link thinkingSinceOf}），
+     * 正在流式输出正文时也只是短暂重合，收尾事件一到就熄灭。
+     */
+    view.thinkingSince = Date.now();
   }
   const head = options.liveRun ?? options.run ?? null;
   view.workspace = head ? { runId: head.runId, ...head.workspace } : null;
@@ -773,6 +794,9 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         return;
       }
       view.steps = event.turn;
+      // 每一轮都是"模型开始想"。工具批次结束后没有别的事件能把它叫回来，
+      // 不在这里点亮，下一轮思考在界面上就是一段无提示的空白。
+      view.thinkingSince = Date.now();
       return;
     }
 
@@ -790,6 +814,10 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
         return;
       }
       view.status = event.status;
+      // 只有真正在跑的 Run 才可能"在想"：排队、待裁决、收尾都不该继续转
+      if (event.status !== "running") {
+        view.thinkingSince = null;
+      }
       // 新的一轮开始：上一轮的失败原因不该继续挂着
       if (event.status === "queued" || event.status === "running") {
         view.runError = null;
@@ -809,6 +837,8 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
     case "message_start": {
       if (event.message.role === "assistant") {
         const id = messageId(event.message);
+        // 请求刚发出、还没有任何正文：从这一刻起界面要回答"模型在干什么"
+        view.thinkingSince = Date.now();
         // 流式期间 id 以 start 为准（见 View.streamingAssistantId 的注释）
         view.streamingAssistantId = id;
         const existing = findItem(view, "assistant", id);
@@ -849,6 +879,10 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
     }
 
     case "message_update": {
+      // 第一个 token 到了：正文开始流动，"思考中"该让位给气泡里的光标
+      if (event.delta.length > 0) {
+        view.thinkingSince = null;
+      }
       const id = view.streamingAssistantId ?? messageId(event.message);
       const item =
         findItem(view, "assistant", id) ??
@@ -902,6 +936,8 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
     }
 
     case "tool_execution_start": {
+      // 模型已经想完并开始动手：工具卡片自己会说明进度
+      view.thinkingSince = null;
       upsertItem(view, {
         kind: "tool",
         id: `t:${event.toolCallId}`,
@@ -1021,6 +1057,7 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
       view.status = event.status;
       view.elapsedMs = event.elapsedMs;
       view.streamingAssistantId = null;
+      view.thinkingSince = null;
       view.streamNote = null;
       // 已经执行完（含失败）的 Run 一定离开过队列；正常路径上 running 那
       // 条事件已经清了，这里兜住"事件被裁掉/重连只补到收尾"的情况。
@@ -1060,8 +1097,8 @@ export function applyRunEvent(view: View, runId: string, event: ServerEvent): vo
     }
 
     default:
-      // message_start/end 之外的 agent_start/turn_start/tool_permission 等
-      // 不影响时间线形状，忽略即可
+      // agent_start / agent_end / tool_permission / branch_switch 等不改变
+      // 时间线的形状，忽略即可
       return;
   }
 }
@@ -1071,6 +1108,18 @@ export function pendingApprovals(view: View): number {
   return view.items.filter(
     (item) => item.kind === "approval" && item.state === "pending",
   ).length;
+}
+
+/**
+ * 「思考中」指示该不该画，以及从什么时候算起（`Date.now()` 基准）。
+ *
+ * 判定放在这里而不是归约里，是因为**字段残留**是正常现象：重连、从侧栏
+ * 再点开一条跑了一半的 Run 时，缓冲重放可能只补到 `turn_start` 而收尾事件
+ * 已经被挤出窗口。那一刻 `thinkingSince` 还在，但这个 Run 其实已经结束了。
+ * 只有 `status === "running"` 才作数——排队与等裁决都不该转圈。
+ */
+export function thinkingSinceOf(view: View): number | null {
+  return view.status === "running" ? view.thinkingSince : null;
 }
 
 /** 这条 Run 还在执行链上：排队、跑着、或等裁决 */
