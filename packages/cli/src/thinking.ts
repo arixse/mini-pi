@@ -16,12 +16,14 @@
  * 会把回答整个刷出屏幕。超出后停止渲染，收尾时打一行"已省略 N 行"。
  *
  * 只负责"怎么画"：何时开关由 `toolEvents.ts`（turn_start 开块，正文/工具
- * 一开始即收尾）与 `turn.ts`（回合结束兜底）决定；显不显示由
- * `/thinking` 开关（`enabled`）决定。
+ * 一开始即收尾）与 `turn.ts`（回合结束兜底）决定；`/thinking` 开关
+ * （`enabled`）只隐藏**正文**——等待期的 spinner 是"它在想"的唯一信号，
+ * 关掉显示也必须保留，否则模型长时间不出正文时终端一片死寂。
  */
 
 import type { RenderContext } from "./render";
 import { formatDuration, spinnerFrame } from "./status";
+import { createInlineLine } from "./inlineLine";
 import { displayWidth, truncateToWidth } from "./width";
 
 /** 块内正文默认的最大行数；超出部分省略 */
@@ -75,8 +77,9 @@ export type ThinkingPrinterOptions = {
   maxLines?: number;
   /**
    * 是否渲染推理内容的实时开关（`/thinking`）。
-   * 缺省渲染。返回 false 时 begin/print 都不画；若开关时块已打开，
-   * 已画出的部分照常由 end() 收尾，不会留半截。
+   * 缺省渲染。返回 false 时**正文与块头不画**（reasoning 不输出），
+   * 但等待期的 spinner 照常竖起——它是"模型还在工作"的唯一信号；
+   * 若开关时块已打开，已画出的部分照常由 end() 收尾，不会留半截。
    */
   enabled?: () => boolean;
   /** 可注入时钟与间隔，便于单测 */
@@ -105,8 +108,6 @@ export function createThinkingPrinter(
   let waiting = false;
   let spinnerStartedAt = 0;
   let timer: NodeJS.Timeout | null = null;
-  /** spinner 当前占多少显示列（擦除用） */
-  let spinnerWidth = 0;
   /** 本次块内已渲染的行数（不含块头） */
   let lineCount = 0;
   /** 超出上限后置真：后续增量不再渲染，只数行数 */
@@ -118,6 +119,13 @@ export function createThinkingPrinter(
 
   const paint = (text: string): string => context.style.dim(text);
 
+  /** spinner 的行内覆写：画 / 擦 / 宽度记账与状态行共用同一原语（着色在测量后套用） */
+  const spinnerLine = createInlineLine(write, {
+    maxWidth: () => context.width,
+    style: paint,
+    carriageReturn: true,
+  });
+
   /** 正文可用的列数：终端宽度减去 gutter 占用 */
   const bodyColumns = (): number =>
     Math.max(10, context.width - displayWidth(gutter));
@@ -126,11 +134,8 @@ export function createThinkingPrinter(
     const elapsed = Math.max(0, now() - spinnerStartedAt);
     const frame = spinnerFrame(elapsed, context.ascii);
     const label = retryNote ? `Thinking… (${retryNote})` : "Thinking…";
-    const raw = `${frame} ${label} ${formatDuration(elapsed)}`;
-    // 与状态行同理：超宽会折行，\r 就擦不干净，按上下文宽度截断
-    const text = truncateToWidth(raw, Math.max(20, context.width - 1));
-    write(`\r${paint(text)}`);
-    spinnerWidth = displayWidth(text);
+    // 原语会先擦上一帧再画：帧变短时（重试提示消失）不留残字
+    spinnerLine.draw(`${frame} ${label} ${formatDuration(elapsed)}`);
   };
 
   const clearSpinner = (): void => {
@@ -138,15 +143,15 @@ export function createThinkingPrinter(
       clearInterval(timer);
       timer = null;
     }
-    if (spinnerWidth > 0) {
-      write(`\r${" ".repeat(spinnerWidth)}\r`);
-      spinnerWidth = 0;
-    }
+    spinnerLine.clear();
   };
 
   return {
     begin(): void {
-      if (open || waiting || !spinnerEnabled || !isEnabled()) {
+      // spinner 不受 /thinking 开关约束：正文可以不显示，"模型在等"
+      // 这个信号不能没有——关掉后 print 会拦住一切正文，spinner 由
+      // end()（正文到达 / 工具开始 / 回合结束）收回。
+      if (open || waiting || !spinnerEnabled) {
         return;
       }
       waiting = true;
@@ -164,6 +169,8 @@ export function createThinkingPrinter(
 
     print(delta: string): void {
       if (!delta || !isEnabled()) {
+        // 开关关闭：reasoning 一概不输出。这里不能顺手 clearSpinner——
+        // 等待期的 spinner 是唯一的"还在工作"信号，由 end() 收回。
         return;
       }
       if (waiting) {
@@ -256,7 +263,8 @@ export function createThinkingPrinter(
     },
 
     retry(attempt: number, maxAttempts: number): void {
-      if (!isEnabled() || !waiting) {
+      // 与 begin 同口径：spinner 在开关关闭时也在转，重试提示要跟上
+      if (!waiting) {
         return;
       }
       retryNote = `重试 ${attempt}/${maxAttempts}`;

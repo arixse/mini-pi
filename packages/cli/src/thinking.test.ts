@@ -355,13 +355,28 @@ describe("ThinkingPrinter（/thinking 开关）", () => {
     };
   }
 
-  it("关闭时 begin 与 print 都不画", () => {
-    const { printer, chunks } = makeSwitchable(false);
+  it("关闭时正文与块头不画，但等待期 spinner 照常竖起", () => {
+    const { printer, chunks, text } = makeSwitchable(false);
     printer.begin();
     printer.print("推理");
     printer.end();
 
-    assert.strictEqual(chunks.length, 0, `不应有任何输出：${JSON.stringify(chunks)}`);
+    const out = text();
+    assert.ok(out.includes("Thinking…"), `spinner 应显示：${JSON.stringify(chunks)}`);
+    assert.ok(!out.includes("推理"), "reasoning 不应输出");
+    assert.ok(!out.includes("💭 Thinking"), "块头不应出现");
+    assert.ok(!printer.isOpen(), "开关关闭时块从未打开");
+    // spinner 被收回：end 后不应留残影（清屏写入了覆写空格）
+    assert.ok(chunks.some((chunk) => chunk.includes("\r")), "spinner 应被原地擦除");
+  });
+
+  it("关闭时重试提示仍跟随 spinner 文案", () => {
+    const { printer, text } = makeSwitchable(false);
+    printer.begin();
+    printer.retry?.(2, 3);
+
+    assert.ok(text().includes("重试 2/3"), "重试提示应出现在 spinner 上");
+    printer.end();
   });
 
   it("中途关闭：已打开的块由 end 正常收尾，不再添新内容", () => {
