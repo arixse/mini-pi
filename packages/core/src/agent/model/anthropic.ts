@@ -155,7 +155,7 @@ export class AnthropicModel implements LlmModel {
       this.streamIdleTimeoutMs,
     );
     // 已经外发过正文就不再重试（见 toNonRetryableIfPartialStream）
-    const emitter = createDeltaEmitter(input.onDelta);
+    const emitter = createDeltaEmitter(input.onDelta, input.onThinkingDelta);
 
     try {
       const stream = this.client.messages.stream(
@@ -172,6 +172,12 @@ export class AnthropicModel implements LlmModel {
       if (emitter.onDelta) {
         stream.on("text", (delta: string) => {
           emitter.onDelta?.(delta);
+        });
+      }
+      // 推理内容（extended thinking）：与正文分开送回展示层，不拼进消息正文
+      if (emitter.onThinkingDelta) {
+        stream.on("thinking", (delta: string) => {
+          emitter.onThinkingDelta?.(delta);
         });
       }
 

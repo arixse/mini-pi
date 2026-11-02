@@ -56,6 +56,14 @@ export type RunAgentLoopOptions = {
      */
     onTurnEnd?:(turnMessages:AgentMessage[])=>Promise<AgentMessage[] | undefined>
     onEvent?:(event:AgentEvent)=>void
+    /**
+     * 推理内容（思维链）的流式回调。
+     *
+     * 刻意**不进 `AgentEvent`**：推理是过程，不落盘、不重放，
+     * 网页端与服务端也没有消费方。单独一条回调避免为它扩大事件协议，
+     * 也避免把推理增量塞进 SSE（会成倍放大一条本已很重的流）。
+     */
+    onThinkingDelta?:(delta:string)=>void
 }
 
 async function decideToolCall(
@@ -195,6 +203,7 @@ async function completeAssistantMessage(
         streamed = true;
         emit({ type: "message_update", message, delta });
       },
+      onThinkingDelta: options.onThinkingDelta,
     });
     const id = message.id;
     Object.assign(message, assistant);

@@ -1146,6 +1146,37 @@ describe("loop", () => {
       assert.strictEqual(result.newMessages.length, 1);
     });
 
+    it("推理内容：模型回调 onThinkingDelta 时透传给调用方，且不产生 message_update 事件", async () => {
+      const events: AgentEvent[] = [];
+      const thinking: string[] = [];
+      const model: LlmModel = {
+        async complete(input) {
+          input.onThinkingDelta?.("先想");
+          input.onThinkingDelta?.("一步");
+          // 推理不是正文：不落盘、不重放，也不该挤进消息内容
+          return createAssistantMessage([createTextContent("答案")]);
+        },
+      };
+
+      const result = await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onEvent: (event) => events.push(event),
+        onThinkingDelta: (delta) => thinking.push(delta),
+      });
+
+      assert.deepStrictEqual(thinking, ["先想", "一步"]);
+      // 推理增量不能伪装成正文 delta
+      assert.deepStrictEqual(
+        eventsOfType(events, "message_update").map((event) => event.delta),
+        ["答案"],
+      );
+      assert.strictEqual(result.newMessages.length, 1);
+    });
+
     it("非流式模型：补发一次性文本，保证终端仍能看到回复", async () => {
       const events: AgentEvent[] = [];
       const model: LlmModel = {

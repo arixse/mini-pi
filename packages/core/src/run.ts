@@ -88,6 +88,13 @@ export type RunHooks = {
   beforeToolCall?: BeforeToolCall;
   onEvent?: (event: AgentEvent) => void;
   /**
+   * 推理内容（思维链）的流式回调。
+   *
+   * 与 `onEvent` 分开：它不是事件、不重放，只有真正要展示过程的客户端
+   * （目前是 CLI）才接。服务端不接，因此不会占用 SSE 带宽。
+   */
+  onThinkingDelta?: (delta: string) => void;
+  /**
    * 每轮结束：落盘与压缩由调用方决定（内核不知道"会话文件"长什么样）。
    *
    * 返回新的上下文时循环用它替换内部上下文——压缩后必须让模型立刻看到摘要，
@@ -246,6 +253,7 @@ export class Run {
         signal: this.signal,
         onTurnEnd: hooks.onTurnEnd,
         onEvent: emit,
+        onThinkingDelta: hooks.onThinkingDelta,
       });
 
       const aborted = this.signal.aborted;

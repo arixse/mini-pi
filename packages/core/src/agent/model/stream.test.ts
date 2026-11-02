@@ -188,6 +188,22 @@ describe("stream（已外发正文追踪）", () => {
     assert.deepStrictEqual(seen, ["你"]);
     assert.strictEqual(emitter.emittedAny(), true);
   });
+
+  it("未配置 onThinkingDelta 时不产生包装回调", () => {
+    const emitter = createDeltaEmitter(undefined, undefined);
+
+    assert.strictEqual(emitter.onThinkingDelta, undefined);
+    assert.strictEqual(emitter.emittedAny(), false);
+  });
+
+  it("外发过推理内容同样算 emittedAny（已产出就不该再重试）", () => {
+    const seen: string[] = [];
+    const emitter = createDeltaEmitter(undefined, (delta) => seen.push(delta));
+
+    emitter.onThinkingDelta?.("想");
+    assert.deepStrictEqual(seen, ["想"]);
+    assert.strictEqual(emitter.emittedAny(), true, "推理也是产出：发过就不能再当作'干净'重试");
+  });
 });
 
 describe("stream（collectOpenAIStream 拼装）", () => {
@@ -220,6 +236,58 @@ describe("stream（collectOpenAIStream 拼装）", () => {
     );
     assert.strictEqual(message.stopReason, "stop");
     assert.deepStrictEqual(message.usage, { input: 12, output: 2, totalTokens: 14 });
+  });
+
+  it("推理增量只回调 onThinkingDelta，不拼进正文", async () => {
+    const thinking: string[] = [];
+    const deltas: string[] = [];
+    const message = await collectOpenAIStream(
+      [
+        // DeepSeek / Kimi / GLM 的字段
+        { choices: [{ delta: { reasoning_content: "先想" } }] },
+        // 同一分片里推理与正文并存：各自走各自的回调
+        { choices: [{ delta: { reasoning_content: "一步", content: "答" } }] },
+        // OpenRouter 一类网关的 fallback 字段
+        { choices: [{ delta: { reasoning: "网关字段" } }] },
+        { choices: [{ delta: { content: "案" }, finish_reason: "stop" }] },
+      ],
+      (delta) => deltas.push(delta),
+      undefined,
+      (delta) => thinking.push(delta),
+    );
+
+    assert.deepStrictEqual(thinking, ["先想", "一步", "网关字段"]);
+    assert.deepStrictEqual(deltas, ["答", "案"], "推理增量不能混进正文回调");
+    const text = message.content[0] as { type: "text"; text: string };
+    assert.strictEqual(text.text, "答案", "推理内容不能写进消息正文");
+    assert.strictEqual(message.stopReason, "stop");
+  });
+
+  it("两个推理字段同时出现时以 reasoning_content 为准", async () => {
+    const thinking: string[] = [];
+    await collectOpenAIStream(
+      [{ choices: [{ delta: { reasoning_content: "优先", reasoning: "忽略" } }] }],
+      undefined,
+      undefined,
+      (delta) => thinking.push(delta),
+    );
+
+    assert.deepStrictEqual(thinking, ["优先"]);
+  });
+
+  it("未配置 onThinkingDelta 时推理增量被丢弃（不抛错、不进正文）", async () => {
+    const deltas: string[] = [];
+    const message = await collectOpenAIStream(
+      [
+        { choices: [{ delta: { reasoning_content: "只想不说" } }] },
+        { choices: [{ delta: { content: "好" }, finish_reason: "stop" }] },
+      ],
+      (delta) => deltas.push(delta),
+    );
+
+    assert.deepStrictEqual(deltas, ["好"]);
+    const text = message.content[0] as { type: "text"; text: string };
+    assert.strictEqual(text.text, "好");
   });
 
   it("应解析 OpenAI 兼容的缓存命中与写入量", async () => {

@@ -24,6 +24,8 @@ import { appendAgentMessages, appendUserMessage, compactContext } from "./sessio
 import { printSeparator } from "./ui";
 import type { RenderContext } from "./render";
 import type { StatusController } from "./status";
+import { NOOP_THINKING } from "./thinking";
+import type { ThinkingPrinter } from "./thinking";
 import type { ReplOptions } from "./options";
 
 /**
@@ -87,6 +89,10 @@ export type RunAgentTurnDeps = {
   /** 本回合的取消信号：Ctrl+C 与 /exit 都走它 */
   signal: AbortSignal;
   status: StatusController;
+  /**
+   * 推理内容的落点。可选：不传时完全不展示（`exec` 与测试替身）。
+   */
+  thinking?: ThinkingPrinter;
   renderContext: RenderContext;
   /** 需要先让出状态行再打印的输出 */
   quiet: (...args: unknown[]) => void;
@@ -108,6 +114,7 @@ export async function runAgentTurn(
   deps: RunAgentTurnDeps,
 ): Promise<TurnStats> {
   const { options, signal, status, beforeToolCall } = deps;
+  const thinking = deps.thinking ?? NOOP_THINKING;
 
   try {
     console.log("");
@@ -158,6 +165,11 @@ export async function runAgentTurn(
     const result = await run.execute({
       beforeToolCall,
       onEvent: deps.onAgentEvent,
+      onThinkingDelta: (delta) => {
+        // 有推理内容就说明模型已经开始产出：spinner 让位给正文
+        status.stop();
+        thinking.print(delta);
+      },
       onTurnEnd: async (turnMessages) => {
         // 落盘必须成功才推进游标：写失败时循环会把这批消息连同下一轮一起重投
         await appendAgentMessages(options, turnMessages);
@@ -179,6 +191,7 @@ export async function runAgentTurn(
     });
 
     status.stop();
+    thinking.end();
     // 只补写尚未落盘的部分：既包括到达最大轮次时的 guardrail 消息，
     // 也包括某一轮落盘失败后循环重投过来的那批（见 runAgentLoop.syncTurn）
     const pending = result.newMessages.slice(syncedMessages);
@@ -212,9 +225,11 @@ export async function runAgentTurn(
     return { delegations: result.delegations, usage: result.subAgentUsage };
   } catch (error) {
     status.stop();
+    thinking.end();
     logger.error("❌ 错误:", error instanceof Error ? error.message : error);
     return { delegations: 0, usage: emptyUsage() };
   } finally {
     status.stop();
+    thinking.end();
   }
 }

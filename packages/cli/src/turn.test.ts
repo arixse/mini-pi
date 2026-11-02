@@ -8,10 +8,12 @@ import { formatTurnFooter, runAgentTurn } from "./turn";
 import { visibleToolRegistry } from "@minipi/core/run";
 import { SUBAGENT_TOOL_NAME } from "@minipi/core/agent/subagent";
 import { ToolRegistry } from "@minipi/core/agent/tools/registry";
-import { createTextContent } from "@minipi/core/agent/message";
+import { createTextContent, createAssistantMessage } from "@minipi/core/agent/message";
 import type { LlmModel } from "@minipi/core/agent/model";
 import type { AssistantMessage, ToolCallContent } from "@minipi/core/shared/protocol";
 import { createFakeStatus, createMockModel, makeReplOptions } from "./testRepl";
+import { NOOP_THINKING } from "./thinking";
+import type { ThinkingPrinter } from "./thinking";
 import { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
 import { createUsageTracker } from "@minipi/core/agent/usage";
 import { compactionBudget } from "./context";
@@ -436,5 +438,77 @@ describe("runAgentTurn（回合编排）", () => {
       memory.entries.some((entry) => entry.level === "error"),
       "落盘失败必须留日志，不能静默",
     );
+  });
+
+  /** 记录 print/end 调用的假 ThinkingPrinter */
+  function createFakeThinking(): {
+    printer: ThinkingPrinter;
+    prints: string[];
+    ends: number;
+  } {
+    const prints: string[] = [];
+    let ends = 0;
+    return {
+      printer: {
+        print: (delta) => prints.push(delta),
+        end: () => {
+          ends += 1;
+        },
+        isOpen: () => false,
+      },
+      prints,
+      get ends(): number {
+        return ends;
+      },
+    };
+  }
+
+  it("模型流式返回推理内容时交给 ThinkingPrinter，并让状态行给正文", async () => {
+    const fake = createFakeThinking();
+    const model: LlmModel = {
+      async complete(input) {
+        input.onThinkingDelta?.("先想");
+        input.onThinkingDelta?.("一步");
+        return {
+          role: "assistant",
+          content: [createTextContent("答案")],
+          stopReason: "stop",
+          usage: { input: 1, output: 1, totalTokens: 2 },
+          timestamp: Date.now(),
+        };
+      },
+    };
+    const { options, deps } = makeDeps();
+
+    const captured = capture();
+    try {
+      await runAgentTurn("你好", { ...deps, model, thinking: fake.printer });
+    } finally {
+      captured.restore();
+    }
+
+    assert.deepStrictEqual(fake.prints, ["先想", "一步"], "推理增量应逐段交给 printer");
+    assert.ok(fake.ends > 0, "回合结束必须收尾 Thinking 块");
+    // 推理不是正文：不写进消息（会话文件里只有 user + assistant 正文）
+    const messages = options.messages.filter((message) => message.role === "assistant");
+    assert.strictEqual(messages.length, 1);
+  });
+
+  it("未传 thinking 时推理增量走空实现（exec 与测试替身不展示）", async () => {
+    const model: LlmModel = {
+      async complete(input) {
+        input.onThinkingDelta?.("只想不说");
+        return createAssistantMessage([createTextContent("答案")]);
+      },
+    };
+    const { deps } = makeDeps();
+
+    const captured = capture();
+    try {
+      await runAgentTurn("你好", { ...deps, model }); // 不带 thinking，不应抛错
+    } finally {
+      captured.restore();
+    }
+    assert.ok(NOOP_THINKING.isOpen() === false, "NOOP 实现永远不打开");
   });
 });

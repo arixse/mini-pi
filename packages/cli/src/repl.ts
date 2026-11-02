@@ -33,6 +33,7 @@ import {
 } from "./paste";
 import { RenderContext, createRenderContext, followTerminalWidth } from "./render";
 import { createStatusLine } from "./status";
+import { createThinkingPrinter } from "./thinking";
 import { createAgentEventHandler } from "./toolEvents";
 import { runAgentTurn } from "./turn";
 import type { ReplOptions } from "./options";
@@ -193,10 +194,18 @@ export async function startRepl(
   const renderContext: RenderContext = createRenderContext();
   // 宽度要跟着终端走：会话是长期存在的，中途拖窗口不该让后续卡片按旧列数排版
   const unfollowWidth = followTerminalWidth(renderContext, env.stdout);
+  // 推理内容（Thinking）的终端落点：模型流式返回思维链时在正文前单独成块。
+  // 开关时机在 `turn.ts`（onThinkingDelta 先停状态行再 print）与
+  // `toolEvents.ts`（正文 / 工具 / 子 Agent 一开始就 end），这里只管"画"。
+  const thinking = createThinkingPrinter({
+    write: (text) => env.stdout.write(text),
+    context: renderContext,
+  });
   const onAgentEvent = createAgentEventHandler({
     status,
     renderContext,
     quiet,
+    thinking,
   });
 
   /**
@@ -358,6 +367,7 @@ export async function startRepl(
         model: options.model,
         signal: run.signal,
         status,
+        thinking,
         renderContext,
         quiet,
         onAgentEvent,

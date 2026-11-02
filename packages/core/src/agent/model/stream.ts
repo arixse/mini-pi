@@ -130,12 +130,15 @@ export function assertStreamNotIdleTimedOut(
 export type DeltaEmitter = {
   /** 传给 SDK 的回调；未配置 onDelta 时保持 undefined，避免多余包装 */
   onDelta?: (delta: string) => void;
-  /** 是否已经外发过任何正文 */
+  /** 推理内容的回调；同样只在调用方需要时才包装 */
+  onThinkingDelta?: (delta: string) => void;
+  /** 是否已经外发过任何内容（正文或推理） */
   emittedAny: () => boolean;
 };
 
 export function createDeltaEmitter(
   onDelta?: (delta: string) => void,
+  onThinkingDelta?: (delta: string) => void,
 ): DeltaEmitter {
   let any = false;
 
@@ -144,6 +147,12 @@ export function createDeltaEmitter(
       ? (delta: string): void => {
           any = true;
           onDelta(delta);
+        }
+      : undefined,
+    onThinkingDelta: onThinkingDelta
+      ? (delta: string): void => {
+          any = true;
+          onThinkingDelta(delta);
         }
       : undefined,
     emittedAny: () => any,
@@ -176,6 +185,14 @@ export type ChatCompletionChunkLike = {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      /**
+       * 推理内容（思维链）。不同提供方放在不同字段里：
+       * - DeepSeek / Kimi / GLM 等用 `reasoning_content`；
+       * - OpenRouter 一类网关用 `reasoning`。
+       * 两者都按字符串处理；同时出现时以 `reasoning_content` 为准。
+       */
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{
         /**
          * Gemini 的 OpenAI 兼容层**不返回** index（OpenAI 规范里用于拼装
@@ -308,6 +325,7 @@ export async function collectOpenAIStream(
   chunks: AsyncIterable<ChatCompletionChunkLike> | Iterable<ChatCompletionChunkLike>,
   onDelta?: (delta: string) => void,
   onChunk?: () => void,
+  onThinkingDelta?: (delta: string) => void,
 ): Promise<AssistantMessage> {
   let text = "";
   let finishReason: string | null = null;
@@ -331,6 +349,11 @@ export async function collectOpenAIStream(
     }
 
     const delta = choice.delta;
+    // 推理内容只回调给展示层，不拼进正文：它是"过程"，不是"答案"
+    const reasoningDelta = delta?.reasoning_content ?? delta?.reasoning;
+    if (reasoningDelta) {
+      onThinkingDelta?.(reasoningDelta);
+    }
     if (delta?.content) {
       text += delta.content;
       onDelta?.(delta.content);

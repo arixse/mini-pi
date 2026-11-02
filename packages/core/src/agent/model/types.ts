@@ -18,6 +18,13 @@ export type CompleteInput = {
   signal?: AbortSignal;
   /** 流式回调：模型每产出一段文本就调用一次（用于逐字渲染） */
   onDelta?: (delta: string) => void;
+  /**
+   * 流式回调：模型每产出一段**推理内容**（reasoning / thinking）就调用一次。
+   *
+   * 与 {@link onDelta} 分开：推理是"过程"不是"答案"，不该混进正文气泡，
+   * 也不该写进会话历史。提供方没返回推理内容时永远不回调。
+   */
+  onThinkingDelta?: (delta: string) => void;
 };
 
 export type ModelConfig = {

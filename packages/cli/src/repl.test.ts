@@ -138,6 +138,8 @@ describe("startRepl（主循环装配）", () => {
   let originalLog: typeof console.log;
   let exits: number[];
   let fakeRl: ReturnType<typeof createFakeRl>;
+  /** 假 stdout 收到的全部写入（ Thinking 块等直接写 stdout 的输出在这里观测） */
+  let output: string[];
 
   beforeEach(() => {
     logs = [];
@@ -148,6 +150,7 @@ describe("startRepl（主循环装配）", () => {
     };
     exits = [];
     fakeRl = createFakeRl();
+    output = [];
   });
 
   afterEach(() => {
@@ -156,7 +159,12 @@ describe("startRepl（主循环装配）", () => {
 
   function makeEnv(overrides: { isTTY?: boolean } = {}): ReplEnvironment {
     const stdout = new EventEmitter() as unknown as NodeJS.WriteStream;
-    (stdout as unknown as { write: (chunk: string) => boolean }).write = () => true;
+    (stdout as unknown as { write: (chunk: string) => boolean }).write = (
+      chunk: string,
+    ) => {
+      output.push(chunk);
+      return true;
+    };
     (stdout as unknown as { columns: number }).columns = 80;
     (stdout as unknown as { isTTY: boolean }).isTTY = overrides.isTTY ?? false;
     return {
@@ -227,6 +235,36 @@ describe("startRepl（主循环装配）", () => {
     assert.strictEqual(options.usageTracker!.snapshot().requests, 1);
     assert.strictEqual(fakeRl.prompts.length, 2, "回合结束要还回提示");
     assert.match(logs.join("\n"), /↳/, "脚注要打出来");
+  });
+
+  it("模型流式返回推理内容时，终端显示 Thinking 块（真接线：printer 由 REPL 创建并传入回合）", async () => {
+    // 模型在返回前先流式吐两段推理增量
+    const model: LlmModel = {
+      async complete(input) {
+        input.onThinkingDelta?.("用户想验证接线");
+        input.onThinkingDelta?.("\n再想想");
+        return textMessage("答案");
+      },
+    };
+    const options = optionsWith({ model });
+    await startRepl(options, makeEnv());
+
+    fakeRl.emit("line", "你好");
+    await waitFor(() => options.messages.length === 2, "回合应把问答写进 messages");
+
+    const out = output.join("");
+    assert.match(out, /Thinking/, "应出现 Thinking 块头");
+    assert.ok(out.includes("用户想验证接线"), "第一段推理增量应被画出");
+    assert.ok(out.includes("再想想"), "跨行的后续增量应接着画");
+    assert.ok(!out.includes("\r"), "网关的 \\r\\n 不应把 \\r 带进终端");
+    // 推理不进会话历史：消息里只有正文
+    const assistant = options.messages.find((message) => message.role === "assistant");
+    assert.ok(assistant);
+    const text = assistant.content.find((part) => part.type === "text") as {
+      type: "text";
+      text: string;
+    };
+    assert.strictEqual(text.text, "答案");
   });
 
   it("大段粘贴经 REPL 后仍是一条完整消息，终端只显示摘要", async () => {

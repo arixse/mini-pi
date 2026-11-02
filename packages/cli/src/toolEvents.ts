@@ -18,6 +18,7 @@ import {
   renderToolCall,
 } from "./render";
 import type { StatusController } from "./status";
+import type { ThinkingPrinter } from "./thinking";
 
 // 缓存 tool_execution_start 事件信息
 const toolStartCache = new Map<
@@ -138,6 +139,11 @@ export type AgentEventHandlerDeps = {
   renderContext: RenderContext;
   /** 需要先让出状态行再打印的输出（例如审批结果） */
   quiet: (...args: unknown[]) => void;
+  /**
+   * 推理内容的落点。推理是"过程"：正文或工具一开始就得收尾，
+   * 否则后续输出会被拼进 Thinking 块里。
+   */
+  thinking?: ThinkingPrinter;
   /** 流式正文的落点，默认写 stdout */
   write?: (text: string) => void;
 };
@@ -170,15 +176,22 @@ export function createAgentEventHandler(
        * 没有任何事件会把它叫回来——终端上就是一段无提示的空白，用户分不清
        * 是在思考还是卡死。`turn_start` 恰好在每次模型调用之前发出。
        */
+      deps.thinking?.end();
       deps.status.set({ kind: "thinking", startedAt: Date.now() });
       return;
     }
     if (event.type === "message_update" && event.delta) {
       // 首个 token 到达即让出状态行，避免与流式文本互相覆盖
       deps.status.stop();
+      deps.thinking?.end();
       write(event.delta);
     }
+    if (event.type === "message_end") {
+      // 只回工具调用、没有正文的消息也要把 Thinking 块收尾
+      deps.thinking?.end();
+    }
     if (event.type === "tool_execution_start") {
+      deps.thinking?.end();
       // 必须先喂卡片缓存，再更新状态行
       printToolInfo(event, deps.renderContext);
       /**
@@ -200,16 +213,19 @@ export function createAgentEventHandler(
       // 记账先行：还有工具在跑时它会把状态切过去（不重绘），没有了才收尾
       deps.status.end(event.toolCallId);
       // 卡片是多行输出，打印前必须让出状态行，打印后再把未完成的进度接回来
+      deps.thinking?.end();
       deps.status.suspend();
       printToolInfo(event, deps.renderContext);
       deps.status.resume();
       return;
     }
     if (event.type === "tool_permission") {
+      deps.thinking?.end();
       const label = event.action === "block" ? "❌ 已拒绝" : "✅ 已允许";
       deps.quiet(chalk.dim(`\n${label}: ${event.toolName}`));
     }
     if (event.type === "subagent_start") {
+      deps.thinking?.end();
       // 委派期间不能留着上一轮的 spinner：子 Agent 的工具事件会另起状态行，
       // 两者叠在同一行会互相覆盖
       deps.status.stop();
@@ -219,6 +235,7 @@ export function createAgentEventHandler(
       return;
     }
     if (event.type === "subagent_end") {
+      deps.thinking?.end();
       deps.status.stop();
       for (const line of renderSubAgentFooter(event, deps.renderContext)) {
         deps.quiet(line);
@@ -228,6 +245,7 @@ export function createAgentEventHandler(
     if (event.type === "turn_end" && event.message.stopReason === "length") {
       // 输出被 max_tokens 截断：必须与"用户取消"区分开并给出可操作建议，
       // 否则用户只看到回答莫名其妙地断在半句上
+      deps.thinking?.end();
       deps.status.stop();
       deps.quiet(
         chalk.yellow(

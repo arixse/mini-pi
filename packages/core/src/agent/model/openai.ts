@@ -216,7 +216,7 @@ export class OpenAIModel implements LlmModel {
       this.streamIdleTimeoutMs,
     );
     // 已经外发过正文就不再重试（见 toNonRetryableIfPartialStream）
-    const emitter = createDeltaEmitter(input.onDelta);
+    const emitter = createDeltaEmitter(input.onDelta, input.onThinkingDelta);
 
     try {
       const stream = await this.client.chat.completions.create(
@@ -231,7 +231,12 @@ export class OpenAIModel implements LlmModel {
         { signal: watchdog.signal, timeout: REQUEST_TIMEOUT_MS },
       );
 
-      const message = await collectOpenAIStream(stream, emitter.onDelta, watchdog.touch);
+      const message = await collectOpenAIStream(
+        stream,
+        emitter.onDelta,
+        watchdog.touch,
+        emitter.onThinkingDelta,
+      );
       // 被掐断时迭代器可能"干净地结束"，会产出一个看起来正常的截断回复
       assertStreamNotIdleTimedOut(watchdog, this.streamIdleTimeoutMs, input.signal);
       return message;
