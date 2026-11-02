@@ -499,6 +499,7 @@ function bodyLines(
   view: ToolCallView,
   details: Record<string, unknown>,
   ctx: RenderContext,
+  editDiff: EditDiff | null,
 ): BodyLine[] {
   const hasStreams =
     details.stdout !== undefined || details.stderr !== undefined;
@@ -516,9 +517,10 @@ function bodyLines(
     case "read_file":
       return readFileBody(view, details);
     case "list_files":
-      return listFilesBody(details, ctx, bodyLimit(view, ctx));
+      return listFilesBody(view, details, ctx, bodyLimit(view, ctx));
     case "edit_file":
-      return editFileBody(view, details);
+      // diff 由调用方算好传入：页脚的 +/- 统计要用同一份，大 diff 不能算两遍
+      return editFileBody(details, editDiff ?? editDiffOf(view));
     case "write_file":
       // 写入内容不重复展示（参数里已过滤大字段），规模信息放在页脚
       return [];
@@ -562,30 +564,50 @@ function readFileBody(
 }
 
 function listFilesBody(
+  view: ToolCallView,
   details: Record<string, unknown>,
   ctx: RenderContext,
-  maxLines: number = MAX_BODY_LINES,
+  maxLines: number,
 ): BodyLine[] {
   const entries = Array.isArray(details.entries)
     ? (details.entries as string[])
     : [];
-  return packItems(entries, Math.max(20, ctx.width - 4), maxLines).lines.map(
+  // 打包宽度必须与 renderToolCall 里对正文行的最终截断一致：
+  // 卡片会给每行加 `缩进 + │ + 空格` 前缀再截断，这里若按无缩进的
+  // ctx.width - 4 打包，深缩进 + 窄终端下条目会被二次截断切掉半个
+  const prefixWidth =
+    displayWidth(depthIndent(view.identity?.depth)) + displayWidth(gutterGlyph(ctx)) + 1;
+  return packItems(entries, contentWidth(ctx, prefixWidth), maxLines).lines.map(
     plain,
   );
 }
 
-function editFileBody(
-  view: ToolCallView,
-  details: Record<string, unknown>,
-): BodyLine[] {
-  const diff = diffLines(
+/** edit_file 的一次性 diff 结果：正文与页脚共用，避免大 diff 算两遍 */
+type EditDiff = {
+  lines: DiffLine[];
+  added: number;
+  removed: number;
+};
+
+function editDiffOf(view: ToolCallView): EditDiff {
+  const lines = diffLines(
     stringOf(view.args.oldText),
     stringOf(view.args.newText),
   );
+  return {
+    lines,
+    added: lines.filter((line) => line.type === "add").length,
+    removed: lines.filter((line) => line.type === "remove").length,
+  };
+}
+
+function editFileBody(
+  details: Record<string, unknown>,
+  diff: EditDiff,
+): BodyLine[] {
   const replacements = numberOf(details.replacements) ?? 1;
   const lineNumber = numberOf(details.lineNumber);
-  const added = diff.filter((line) => line.type === "add").length;
-  const removed = diff.filter((line) => line.type === "remove").length;
+  const { added, removed } = diff;
 
   const lines: BodyLine[] = [];
   if (replacements > 1) {
@@ -597,7 +619,7 @@ function editFileBody(
     });
   }
 
-  for (const line of diff) {
+  for (const line of diff.lines) {
     const marker = line.type === "add" ? "+ " : line.type === "remove" ? "- " : "  ";
     lines.push({
       text: `${marker}${line.text}`,
@@ -652,6 +674,7 @@ function footerText(
   view: ToolCallView,
   details: Record<string, unknown>,
   shownBodyLines: number,
+  editDiff: EditDiff | null,
 ): string | null {
   switch (view.name) {
     case "bash": {
@@ -694,12 +717,8 @@ function footerText(
     }
     case "edit_file": {
       const replacements = numberOf(details.replacements) ?? 1;
-      const diff = diffLines(
-        stringOf(view.args.oldText),
-        stringOf(view.args.newText),
-      );
-      const added = diff.filter((line) => line.type === "add").length;
-      const removed = diff.filter((line) => line.type === "remove").length;
+      // 与正文共用同一次 diff 计算（bodyLines 传入），不再各算各的
+      const { added, removed } = editDiff ?? editDiffOf(view);
       return `${replacements} 处修改 · +${added} -${removed}`;
     }
     case "list_files": {
@@ -930,7 +949,10 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   }
 
   // ---- 正文
-  const body = bodyLines(view, details, ctx);
+  // edit_file 的 diff 一次算好：正文（hunk）与页脚（+/- 统计）共用，
+  // 旧实现各调一次 diffLines，大 diff 白算一遍
+  const editDiff = view.name === "edit_file" ? editDiffOf(view) : null;
+  const body = bodyLines(view, details, ctx, editDiff);
   const limit = bodyLimit(view, ctx);
   // 失败时窗口移到末尾：报错在尾部，取前 8 行等于把原因藏起来
   const failed = isFailedCall(view, details);
@@ -967,7 +989,7 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
 
   // ---- 页脚
   const omitted = window.headOmitted + window.tailOmitted;
-  const baseFooter = footerText(view, details, window.lines.length);
+  const baseFooter = footerText(view, details, window.lines.length, editDiff);
   // 卡片只给结论，被省掉的部分必须告诉用户去哪儿看：不然"显示前 8 行"
   // 就变成了"剩下的你自己想办法"
   const footer =

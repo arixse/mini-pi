@@ -78,7 +78,7 @@ function stateLabel(state: RunState): string {
   }
 }
 
-import { displayWidth, truncateToWidth } from "./width";
+import { createInlineLine } from "./inlineLine";
 
 export type StatusController = {
   /** 切换状态；重复设置同一状态只刷新计时 */
@@ -143,38 +143,21 @@ export function createStatusLine(options: StatusOptions): StatusController {
 
   let state: RunState | null = null;
   let timer: NodeJS.Timeout | null = null;
-  /** 上一次绘制占了多少**显示列**（不是字符数） */
-  let renderedWidth = 0;
   /** 进行中的并发单元，按开始顺序排列；空=这一批跑完了 */
   const pending = new Map<string, RunState>();
 
-  const clear = (): void => {
-    if (renderedWidth === 0) {
-      return;
-    }
-    // 用空格覆写而不是 ANSI 擦除：即使颜色被禁用也能正确清除。
-    // 终端被拉窄后不能继续按旧宽度写空格——超过列数的空格会折到下一行，
-    // 每清一次屏就多留一行空白；按当前列数夹紧，最多清到行尾前一列。
-    const columns = stream.columns ?? 0;
-    const clearWidth =
-      columns > 1 ? Math.min(renderedWidth, columns - 1) : renderedWidth;
-    stream.write(`\r${" ".repeat(clearWidth)}\r`);
-    renderedWidth = 0;
-  };
+  // 行内覆写机制（画 / 擦 / 宽度记账）与 Thinking spinner 共用同一原语
+  const line = createInlineLine(
+    (text) => stream.write(text),
+    { maxWidth: () => stream.columns ?? 0 },
+  );
+  const clear = (): void => line.clear();
 
   const draw = (): void => {
     if (!state) {
       return;
     }
-    const raw = statusText(state, now(), ascii);
-    // 画得太宽会在窄终端上折行，此时 \r + 空格只能清掉第一行，清屏必须留够宽度
-    const columns = stream.columns ?? 0;
-    const text = columns > 8 ? truncateToWidth(raw, columns - 1) : raw;
-    clear();
-    stream.write(text);
-    // 必须按显示宽度记录：状态文案里全是中文（"思考中…" 字符数 4 / 显示 7 列），
-    // 按 length 覆写会少写空格，清除后屏幕上留下上一帧的残字
-    renderedWidth = displayWidth(text);
+    line.draw(statusText(state, now(), ascii));
   };
 
   const stopTimer = (): void => {

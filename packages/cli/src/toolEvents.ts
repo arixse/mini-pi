@@ -149,9 +149,9 @@ export function printToolInfo(
   };
   lastToolCall = view;
 
-  for (const line of renderToolCall(view, context)) {
-    console.log(line);
-  }
+  // 一次 write 而不是逐行 console.log：卡片动辄十几行，逐行打印既多 syscall
+  // 又可能在状态行让位与打印之间被并发输出插队
+  console.log(renderToolCall(view, context).join("\n"));
 }
 
 /** Agent 事件处理所需的依赖（抽出来是为了能脱离 readline 单测） */
@@ -271,17 +271,13 @@ export function createAgentEventHandler(
       // 委派期间不能留着上一轮的 spinner：子 Agent 的工具事件会另起状态行，
       // 两者叠在同一行会互相覆盖
       deps.status.stop();
-      for (const line of renderSubAgentHeader(event, deps.renderContext)) {
-        deps.quiet(line);
-      }
+      deps.quiet(renderSubAgentHeader(event, deps.renderContext).join("\n"));
       return;
     }
     if (event.type === "subagent_end") {
       deps.thinking?.end();
       deps.status.stop();
-      for (const line of renderSubAgentFooter(event, deps.renderContext)) {
-        deps.quiet(line);
-      }
+      deps.quiet(renderSubAgentFooter(event, deps.renderContext).join("\n"));
       return;
     }
     if (event.type === "turn_end" && event.message.stopReason === "length") {
@@ -318,8 +314,7 @@ export function printLastToolOutput(
   const parsed = Number.parseInt(argument, 10);
   const maxLines = Number.isFinite(parsed) && parsed > 0 ? parsed : 200;
 
-  for (const line of renderLastToolOutput(view, context, { maxLines })) {
-    console.log(line);
-  }
-  console.log("");
+  const lines = renderLastToolOutput(view, context, { maxLines });
+  lines.push("");
+  console.log(lines.join("\n"));
 }

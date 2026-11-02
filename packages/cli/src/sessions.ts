@@ -43,11 +43,12 @@ export function handleSessions(options: ReplOptions, ascii = false): void {
     return;
   }
 
-  // 标题、工作目录与页脚都可能超过窄终端：逐行收进宽度，别让终端替我们折行
+  // 标题、工作目录与页脚都可能超过窄终端：逐行收进宽度，别让终端替我们折行；
+  // 整块拼好一次写出，避免逐行 console.log 的闪烁与多余 syscall
   const width = terminalWidth();
   const titleIcon = ascii ? "" : "📚 ";
-  console.log("");
-  console.log(
+  const out: string[] = [""];
+  out.push(
     chalk.cyan(
       truncateToWidth(
         `${titleIcon}会话列表（当前工作目录共 ${sessions.length} 个，越靠下越新）`,
@@ -55,8 +56,8 @@ export function handleSessions(options: ReplOptions, ascii = false): void {
       ),
     ),
   );
-  console.log(
-    `${chalk.dim("│")} ${chalk.dim(
+  out.push(
+    `${chalk.dim(ascii ? "|" : "│")} ${chalk.dim(
       truncateToWidth(options.workspaceRoot, Math.max(10, width - 2)),
     )}`,
   );
@@ -66,9 +67,9 @@ export function handleSessions(options: ReplOptions, ascii = false): void {
     width,
     ascii,
   )) {
-    console.log(`${chalk.dim(ascii ? "|" : "│")} ${line}`);
+    out.push(`${chalk.dim(ascii ? "|" : "│")} ${line}`);
   }
-  console.log(
+  out.push(
     chalk.dim(
       truncateToWidth(
         `${ascii ? "+" : "└"} 用 /switch <序号> 切换（会恢复该会话的历史上下文）`,
@@ -76,5 +77,6 @@ export function handleSessions(options: ReplOptions, ascii = false): void {
       ),
     ),
   );
-  console.log("");
+  out.push("");
+  console.log(out.join("\n"));
 }

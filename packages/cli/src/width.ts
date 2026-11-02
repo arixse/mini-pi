@@ -97,21 +97,27 @@ export function truncateToWidth(text: string, maxWidth: number): string {
   if (maxWidth <= 0) {
     return "";
   }
-  if (displayWidth(text) <= maxWidth) {
-    return text;
-  }
 
+  // 单遍累积：旧实现先整行测量再遍历两次，长行（bash 尾窗、思维链）
+  // 每次截断都是三倍工作量。断点判定与旧实现完全一致（width + c > maxWidth - 1），
+  // 唯一的语义细节：恰好 maxWidth 列的文本不加省略号原样返回，
+  // 因此断下时还要量一次余部才能下结论——这只发生在确实超宽的罕见路径上。
   let width = 0;
   let result = "";
+  let offset = 0;
   for (const char of text) {
     const charCols = charDisplayWidth(char);
     if (width + charCols > maxWidth - 1) {
-      break;
+      if (width + displayWidth(text.slice(offset)) <= maxWidth) {
+        return text;
+      }
+      return `${result}…`;
     }
     result += char;
     width += charCols;
+    offset += char.length;
   }
-  return `${result}…`;
+  return result;
 }
 
 /**
@@ -144,6 +150,9 @@ export function wrapToWidth(text: string, maxWidth: number): string[] {
 
   const lines: string[] = [];
   let line = "";
+  // 当前行宽随写入增量维护：旧实现每来一个字符就对整行 displayWidth，
+  // O(n²)——几千字的段落要测几百万列
+  let lineWidth = 0;
 
   const breakAt = (): number => {
     // 行内最后一个空格之后的内容留给下一行
@@ -157,28 +166,36 @@ export function wrapToWidth(text: string, maxWidth: number): string[] {
       if (line === "") {
         continue;
       }
-      if (displayWidth(line) >= maxWidth) {
+      if (lineWidth >= maxWidth) {
         lines.push(line.trimEnd());
         line = "";
+        lineWidth = 0;
         continue;
       }
       line += char;
+      lineWidth += charDisplayWidth(char);
       continue;
     }
 
-    if (displayWidth(line) + displayWidth(char) > maxWidth) {
+    const charCols = charDisplayWidth(char);
+    if (lineWidth + charCols > maxWidth) {
       const cut = breakAt();
       if (cut > 0) {
+        const kept = line.slice(cut);
         lines.push(line.slice(0, cut).trimEnd());
-        line = line.slice(cut) + char;
+        line = kept + char;
+        // 断行是罕见路径，余部宽度重测一次即可（余部通常很短）
+        lineWidth = displayWidth(kept) + charCols;
       } else {
         lines.push(line);
         line = char;
+        lineWidth = charCols;
       }
       continue;
     }
 
     line += char;
+    lineWidth += charCols;
   }
 
   // 折出来的行不该带尾随空格（多余空格在输出里看不见，却会干扰断言与比较），

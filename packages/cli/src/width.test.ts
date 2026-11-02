@@ -77,6 +77,8 @@ describe("width", () => {
     it("放得下时原样返回", () => {
       assert.strictEqual(truncateToWidth("abc", 10), "abc");
       assert.strictEqual(truncateToWidth("模型", 4), "模型");
+      // 恰好 maxWidth 列也算放得下：不加省略号（单遍重写后的语义钉）
+      assert.strictEqual(truncateToWidth("abcde", 5), "abcde");
     });
 
     it("按显示宽度而不是字符数截断", () => {

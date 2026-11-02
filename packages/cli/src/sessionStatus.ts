@@ -154,15 +154,15 @@ export function printStatus(
   width: number = terminalWidth(),
   ascii = false,
 ): void {
-  console.log("");
-  console.log(chalk.cyan(ascii ? "会话状态" : "📊 会话状态"));
+  const out: string[] = [""];
+  out.push(chalk.cyan(ascii ? "会话状态" : "📊 会话状态"));
   for (const line of sessionStatusLines(
     sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace, ascii),
     width,
   )) {
-    console.log(chalk.dim(line));
+    out.push(chalk.dim(line));
   }
-  console.log(
+  out.push(
     chalk.dim(
       truncateToWidth(
         `${ascii ? "+" : "└"} 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换`,
@@ -170,5 +170,7 @@ export function printStatus(
       ),
     ),
   );
-  console.log("");
+  out.push("");
+  // 整块一次写出：与 /help、/sessions 同一纪律
+  console.log(out.join("\n"));
 }

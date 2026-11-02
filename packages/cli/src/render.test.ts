@@ -26,6 +26,7 @@ import {
   toLines,
   truncateToWidth,
 } from "./render";
+import { stripAnsi } from "./width";
 
 const ctx: RenderContext = { ...PLAIN_CONTEXT, width: 80 };
 
@@ -817,6 +818,27 @@ describe("renderToolCall", () => {
     assert.ok(lines[1].endsWith("✅ 6ms · 3 项"));
     assert.strictEqual(lines[2], "│ a.txt  b.txt  docs/");
     assert.strictEqual(lines[3], "└ 3 项（1 目录 / 2 文件）");
+  });
+
+  it("list_files：子 Agent 缩进要计入打包宽度，条目不被二次截断", () => {
+    // 24 列终端 + depth 2（缩进 2 列）：正文前缀占 4 列，打包宽度只有 19。
+    // 旧实现按 ctx.width - 4 = 20 打包，条目打包后再被正文截断二次处理
+    const lines = renderToolCall(
+      view({
+        name: "list_files",
+        args: { path: "docs" },
+        identity: { depth: 2, agentId: "abcd1234", parentId: null },
+        result: {
+          content: [{ type: "text", text: "a".repeat(21) }],
+          details: { entries: ["a".repeat(21)], dirCount: 0, fileCount: 1 },
+        },
+      }),
+      { ...ctx, width: 24 },
+    );
+    const body = lines.find((line) => line.includes("│")) ?? "";
+    // 打包宽度已经扣掉缩进：条目一次截到位，正文行不超终端
+    assert.ok(body.includes("…"), `条目应被规整截断：${JSON.stringify(body)}`);
+    assert.ok(displayWidth(stripAnsi(body)) <= 24, JSON.stringify(body));
   });
 
   it("未知工具：兜底图标并显示工具名", () => {

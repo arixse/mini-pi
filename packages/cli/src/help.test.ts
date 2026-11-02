@@ -21,6 +21,11 @@ describe("/help（printHelp）", () => {
     return { lines, restore: () => void (console.log = original) };
   }
 
+  /** printHelp 已改为整块一次写出：捕获后要按真实换行拆回行 */
+  function realLines(lines: string[]): string[] {
+    return lines.flatMap((line) => line.split("\n"));
+  }
+
   it("注册表里的每条命令都打印出来，并附使用提示", () => {
     const captured = capture();
     try {
@@ -59,7 +64,7 @@ describe("/help（printHelp）", () => {
       } finally {
         captured.restore();
       }
-      for (const line of captured.lines) {
+      for (const line of realLines(captured.lines)) {
         assert.ok(
           displayWidth(line) <= width,
           `${width} 列终端上超宽 ${displayWidth(line)} 列：${line}`,
