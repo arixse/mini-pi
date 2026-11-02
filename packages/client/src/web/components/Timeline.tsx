@@ -6,10 +6,14 @@
  *   把正在读的东西抽走。
  * - **条目按指纹 memo**。流式输出每秒几十条事件，整棵树重画会丢滚动位置，
  *   也会把"展开全部"这类局部状态冲掉。
+ *
+ * 还有一条展示口径：工具调用**可以整类不画**（设置 → 界面，默认关）。
+ * 它只改画不画，条目照旧进 `view.items`；筛的位置在窗口计算之前，
+ * 见 {@link visibleItems}。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pendingApprovals, thinkingSinceOf } from "../state";
+import { pendingApprovals, thinkingSinceOf, type TimelineItem } from "../state";
 import { revisionOf } from "../items";
 import { useActions, useClient, useRevision } from "../store";
 import { resolveHeights, virtualRange, type VirtualRange } from "../virtual";
@@ -20,6 +24,22 @@ import { TimelineItemRow } from "./TimelineItems";
 
 /** 距底多少像素算"贴着底部看" */
 const STICK_THRESHOLD_PX = 80;
+
+/**
+ * 按界面偏好筛掉工具调用（默认关，见 `prefs.ts`）。
+ *
+ * 只动"画哪些"：条目本身还在 `view.items` 里，事件流照旧往里写；审批卡是
+ * 另一种 kind，**任何时候都看得见**——那不归显示偏好管。
+ *
+ * 筛在计算窗口之前，而不是渲染时逐条 `return null`：时间线是窗口化的，
+ * 高度表与上下占位块都按这个数组算，就地留个空壳会滚出一截不存在的空白。
+ */
+export function visibleItems(
+  items: readonly TimelineItem[],
+  showToolCalls: boolean,
+): readonly TimelineItem[] {
+  return showToolCalls ? items : items.filter((item) => item.kind !== "tool");
+}
 
 export function Timeline(): React.ReactElement {
   const state = useClient();
@@ -205,7 +225,7 @@ export function Timeline(): React.ReactElement {
     );
   }
 
-  const items = state.view.items;
+  const items = visibleItems(state.view.items, state.prefs.showToolCalls);
   const ids = items.map((item) => item.id);
   const range: VirtualRange = forceAll
     ? { virtual: false, start: 0, end: items.length, top: 0, bottom: 0, total: 0 }

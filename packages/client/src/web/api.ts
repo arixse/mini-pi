@@ -15,6 +15,7 @@ import type {
   ApprovalRequest,
   DirListing,
   FileContent,
+  FileExistence,
   ProviderView,
   RunDiff,
   RunEventEnvelope,
@@ -220,6 +221,19 @@ export const api = {
         root ? `&root=${encodeURIComponent(root)}` : ""
       }${runId ? `&runId=${encodeURIComponent(runId)}` : ""}`,
     ),
+  /**
+   * 问一批路径"还在不在"。
+   *
+   * 工具输出里的路径在**画成链接之前**先问一次——点开一条只会报"文件不存在"
+   * 的链接比不给链接更糟。寻址与 {@link api.file} 同一套：`root` 决定哪个
+   * 工作区，`runId` 决定是不是那次隔离执行干活的目录。
+   */
+  pathsExist: (paths: string[], root?: string, runId?: string): Promise<FileExistence> =>
+    post<FileExistence>("/api/paths/exist", {
+      paths,
+      ...(root ? { root } : {}),
+      ...(runId ? { runId } : {}),
+    }),
   /** 打开（或聚焦）一个工作区：不销毁别的宿主，切走不打断跑着的任务 */
   openWorkspace: (path: string): Promise<WorkspaceView> => post("/api/workspace", { path }),
   /** 显式关闭一个工作区；跑着任务时服务端 409 */

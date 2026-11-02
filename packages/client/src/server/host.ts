@@ -713,15 +713,8 @@ export class WorkspaceHost {
    * - 凭据类文件与服务端自己的读取上限复用内核同一套判定，不在这里另写一份。
    */
   readFile(input: string, runId?: string): FileContent {
-    const base = runId ? this.record(runId).workspaceRoot || this.workspaceRoot : this.workspaceRoot;
-    let target: string;
-    try {
-      target = resolveInsideWorkspace(base, input);
-      assertNotCredentialFile(target, base);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new HttpError(400, message);
-    }
+    const base = this.previewBase(runId);
+    const target = this.previewTarget(base, input);
     const stats = (() => {
       try {
         return statSync(target);
@@ -774,6 +767,51 @@ export class WorkspaceHost {
       truncated,
       binary,
     };
+  }
+
+  /**
+   * 批量回答"这些路径还能不能打开"。
+   *
+   * 唯一的用途是：工具输出里的路径在**画成链接之前**先问一次。点开一条只会
+   * 报"文件不存在"的链接，比不给链接更糟——那等于把"可点"这个承诺打破一次。
+   *
+   * 判据必须与 {@link readFile} 完全一致（同一个 base、同一套越界与凭据判定、
+   * 同样只认普通文件），否则会出现"链接在、点开报错"，或者反过来的
+   * "打不开、却画着下划线"。所以这里共用 `previewBase` / `previewTarget`，
+   * 不另写一套。
+   *
+   * 单条失败按"不存在"处理：一批里有一条越界或坏路径，不该让整批没有回答。
+   * 用 `statSync` 而不是读内容——这条路径可能一天被问几十次。
+   */
+  existsFiles(inputs: string[], runId?: string): boolean[] {
+    const base = this.previewBase(runId);
+    return inputs.map((input) => {
+      try {
+        return statSync(this.previewTarget(base, input)).isFile();
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** 这次执行真正干活的目录：隔离时是 worktree，否则是基准工作区 */
+  private previewBase(runId?: string): string {
+    return runId ? this.record(runId).workspaceRoot || this.workspaceRoot : this.workspaceRoot;
+  }
+
+  /**
+   * 预览用的路径解析：越界与凭据类文件都在这里拦。
+   * @throws HttpError 400 路径不能被预览时
+   */
+  private previewTarget(base: string, input: string): string {
+    try {
+      const target = resolveInsideWorkspace(base, input);
+      assertNotCredentialFile(target, base);
+      return target;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new HttpError(400, message);
+    }
   }
 
   deleteSession(sessionId: string): { currentSessionId: string | null } {

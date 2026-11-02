@@ -27,6 +27,14 @@ import { ClientStore } from "./store";
 import type { Actions, SaveModelInput } from "./actions";
 import { textOf } from "./format";
 import {
+  FILE_PANEL_WIDTH,
+  SIDEBAR_WIDTH,
+  clampWidth,
+  writeLayout,
+  type LayoutState,
+} from "./layout";
+import { pathScopeKey, pathScopeOf, type PathScope } from "./pathLinks";
+import {
   approvalNotification,
   detectNotifications,
   doneNotification,
@@ -37,6 +45,7 @@ import {
   showSystemNotification,
 } from "./notify";
 import type { ApprovalAnswer, RunEventEnvelope, ServerEvent, Tier } from "../shared/types";
+import { writePrefs } from "./prefs";
 import {
   applyTheme,
   initialTheme,
@@ -63,6 +72,14 @@ export type ComposerRef = { current: ComposerHandle | null };
 const BANNER_TTL_MS = 6000;
 
 /**
+ * 每次向服务端问多少个路径"还在不在"。
+ *
+ * 一屏工具输出可能带着上百个路径。整批发出去看着省事，但服务端就多一个
+ * "一次请求循环多久"的口子；200 个一批，本地服务一轮 `stat` 不到 1ms。
+ */
+const PATH_CHECK_CHUNK = 200;
+
+/**
  * 应用级事件触发的状态刷新合并窗口。
  *
  * 一轮里常连着来几条（审批请求 → 裁决 → 结束），每条都拉 `/api/state`
@@ -87,6 +104,17 @@ export class AppController {
   private readonly gapRecovery = new Set<string>();
   /** 当前文件预览的请求标识：连点两个路径时，先回来的那份不该覆盖后点的 */
   private fileKey: string | null = null;
+  /**
+   * 正在问"这些路径还在不在"的缓存键。
+   *
+   * 渲染层每次重画都会把"还没答案的路径"报上来，而流式输出一秒重画几十次；
+   * 没有这张表就是几十次重复请求。问出结果后留在表里，键已进
+   * `state.pathExists` 的也不会再问。
+   */
+  private readonly pathPending = new Set<string>();
+  /** 待问的路径：同一帧里多个组件报上来的合成一批 */
+  private readonly pathQueue: Array<{ key: string; path: string; scope: PathScope }> = [];
+  private pathTimer: ReturnType<typeof setTimeout> | null = null;
   /** 乐观插入的用户消息：等服务端把同一条消息发回来时让位给它 */
   private pendingUsers: Array<{ id: string; text: string }> = [];
   /**
@@ -976,6 +1004,117 @@ export class AppController {
   }
 
   /**
+   * 问一批路径"还在不在"。
+   *
+   * 调用方是渲染层（每段工具输出报上自己那几条，见 `pathLinks.ts`）。这里做三件
+   * 事，缺一件都会变成明显的毛病：
+   *
+   * - **并帧**：一屏工具输出带着几十个路径，逐个发就是一个路径一次往返；
+   *   等这一帧的渲染都走完再一次问完。
+   * - **去重**：流式输出每秒重画几十次，同一个路径会被反复报上来。已经在问的
+   *   不再排队，已经问出结果的不再问（`state.pathExists` 里就有答案）。
+   * - **按工作区分组**：一次请求只能问一个根（`runId` 决定是不是隔离目录）。
+   */
+  private checkPaths(paths: string[], runId?: string | null): void {
+    const scope = pathScopeOf(this.store.current, runId);
+    if (scope.root === "") {
+      return; // 还没打开工作区：无从判定，按普通文本显示（见 pathLinks.ts）
+    }
+    let added = false;
+    for (const path of paths) {
+      const key = pathScopeKey(scope, path);
+      if (this.pathPending.has(key) || key in this.store.current.pathExists) {
+        continue;
+      }
+      this.pathPending.add(key);
+      this.pathQueue.push({ key, path, scope });
+      added = true;
+    }
+    if (!added || this.pathTimer !== null) {
+      return;
+    }
+    this.pathTimer = setTimeout(() => {
+      this.pathTimer = null;
+      void this.flushPathChecks();
+    }, 0);
+  }
+
+  /** 把排队的路径按 (根, Run) 分组问掉，答案按位置写回缓存 */
+  private async flushPathChecks(): Promise<void> {
+    const batch = this.pathQueue.splice(0, this.pathQueue.length);
+    const groups = new Map<string, { scope: PathScope; items: typeof batch }>();
+    for (const item of batch) {
+      const groupKey = `${item.scope.root}\u0000${item.scope.runId ?? ""}`;
+      const group = groups.get(groupKey) ?? { scope: item.scope, items: [] };
+      group.items.push(item);
+      groups.set(groupKey, group);
+    }
+
+    await Promise.all(
+      [...groups.values()].map(async (group) => {
+        // 服务端一次最多收 500 个（见 app.ts 的 MAX_PATH_QUERY），这里按 200 切
+        for (let index = 0; index < group.items.length; index += PATH_CHECK_CHUNK) {
+          const chunk = group.items.slice(index, index + PATH_CHECK_CHUNK);
+          try {
+            const answer = await api.pathsExist(
+              chunk.map((item) => item.path),
+              group.scope.root,
+              group.scope.runId ?? undefined,
+            );
+            this.store.update((state) => {
+              chunk.forEach((item, position) => {
+                state.pathExists[item.key] = answer.exists[position] === true;
+              });
+            });
+            for (const item of chunk) {
+              this.pathPending.delete(item.key);
+            }
+          } catch {
+            // 问不到（服务重启 / 根已关闭）就**不写答案**：这一版按普通文本显示，
+            // 而且继续留在 pending 里——失败的请求不该在流式重画时反复重发。
+            // 写一条 `false` 会更糟：那等于把"问不到"记成"文件不存在"。
+          }
+        }
+      }),
+    );
+  }
+
+  /**
+   * 忘掉"这些路径不存在"的结论。
+   *
+   * 只在一次任务跑完时做：过程中模型常先写"我来创建 src/new.ts"、后真的创建
+   * 它——那段文字里的路径早被判过"不存在"，不重问的话，跑完回看时它永远是
+   * 普通文本。否定结论会过期，肯定结论不会（真被删掉也只是链接指向一个刚消失
+   * 的文件，点开面板会如实说「文件不存在」）。
+   */
+  private forgetMissingPaths(): void {
+    this.store.update((state) => {
+      for (const [key, exists] of Object.entries(state.pathExists)) {
+        if (!exists) {
+          delete state.pathExists[key];
+        }
+      }
+    });
+  }
+
+  /**
+   * 记下拖拽后的侧栏宽度并持久化。
+   *
+   * 拖拽过程中 `SideResizer` 只改 CSS 变量、不碰状态：逐帧 `store.update`
+   * 会把整棵时间线重画一遍。松手（或双击复原）才走到这里，切一次状态。
+   */
+  private setLayoutWidth(key: keyof LayoutState, width: number | null): void {
+    const limits = key === "sidebarWidth" ? SIDEBAR_WIDTH : FILE_PANEL_WIDTH;
+    const next = width === null ? null : clampWidth(width, limits);
+    this.store.update((state) => {
+      state.layout[key] = next;
+    });
+    if (typeof localStorage !== "undefined") {
+      writeLayout(localStorage, this.store.current.layout);
+    }
+  }
+
+  /**
    * 把隔离改动合并回基准工作区。
    *
    * 失败（多半是主工作区也改了同一个文件）不关面板：用户正看着 diff，
@@ -1283,6 +1422,9 @@ export class AppController {
       this.stream = null;
       this.streamedRunId = null;
       this.streamCursor = 0;
+      // 这一轮可能刚创建了前面文字里提到的文件：重问一遍否定结论，
+      // 让回看时的路径重新变成链接（见 forgetMissingPaths）
+      this.forgetMissingPaths();
       this.store.update((state) => {
         state.view.streamLost = false;
       });
@@ -1392,6 +1534,7 @@ export class AppController {
       closeDiff: () => this.closeDiff(),
       openFile: (path, runId, line) => void this.openFile(path, runId, line),
       closeFile: () => this.closeFile(),
+      checkPaths: (paths, runId) => this.checkPaths(paths, runId),
       mergeWorktree: (runId) => this.mergeWorktree(runId),
       newTask: () => void this.newTask(),
       newTaskIn: (root) => this.newTaskIn(root),
@@ -1404,6 +1547,8 @@ export class AppController {
           state.search = keyword;
         });
       },
+      setSidebarWidth: (width) => this.setLayoutWidth("sidebarWidth", width),
+      setFilePanelWidth: (width) => this.setLayoutWidth("filePanelWidth", width),
       toggleSidebar: () => {
         this.store.update((state) => {
           state.ui.sidebar = !state.ui.sidebar;
@@ -1476,6 +1621,14 @@ export class AppController {
           state.theme = next;
         });
         this.paintTheme(next);
+      },
+      setShowToolCalls: (enabled: boolean) => {
+        this.store.update((state) => {
+          state.prefs.showToolCalls = enabled;
+        });
+        if (typeof localStorage !== "undefined") {
+          writePrefs(localStorage, this.store.current.prefs);
+        }
       },
       openPicker: () => {
         this.store.update((state) => {

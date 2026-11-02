@@ -2211,6 +2211,48 @@ describe("App Server · 文件预览", () => {
     }
   });
 
+  /**
+   * 时间线里的路径在画成链接之前先问一次存在性。
+   *
+   * 判据必须与 `/api/file` 完全一致：越界、凭据、目录、缺文件一律"不在"。
+   * 差一条就会出现"画着下划线、点开报错"——那正是这个接口要消灭的现象。
+   */
+  it("批量问存在性：按位置回答，缺文件 / 越界 / 凭据 / 目录都算不在了", async () => {
+    const server = await startTestServer({
+      workspaceFiles: { "note.txt": "x", ".env": "SECRET=1" },
+    });
+    try {
+      mkdirSync(join(server.workspace, "dir"));
+      const answer = await server.post<{ exists: boolean[] }>("/api/paths/exist", {
+        paths: ["note.txt", "nope.txt", "../outside.txt", ".env", "dir"],
+      });
+      assert.deepStrictEqual(answer.exists, [true, false, false, false, false]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("批量问存在性：paths 必须是字符串数组，一次也不许超量", async () => {
+    const server = await startTestServer({ workspaceFiles: { "note.txt": "x" } });
+    try {
+      const notArray = await server.raw("/api/paths/exist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: "note.txt" }),
+      });
+      assert.strictEqual(notArray.status, 400);
+
+      const tooMany = await server.raw("/api/paths/exist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: Array.from({ length: 501 }, (_, i) => `f${i}.ts`) }),
+      });
+      assert.strictEqual(tooMany.status, 400);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("二进制：`content` 留空但 `binary` 为真（别把 NUL 拼进 pre 里）", async () => {
     const server = await startTestServer();
     try {

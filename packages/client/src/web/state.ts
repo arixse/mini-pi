@@ -31,7 +31,9 @@ import type {
   WorkspaceView,
 } from "../shared/types";
 import { textOf } from "./format";
+import { readLayout, type LayoutState } from "./layout";
 import type { NotifyState } from "./notify";
+import { readPrefs, type UiPrefs } from "./prefs";
 import { initialTheme, type ThemeMode } from "./theme";
 
 export type ToolStatus = "running" | "done" | "failed";
@@ -191,6 +193,20 @@ export type ClientState = {
    * （服务端渲染、单测）里 `initialTheme` 自己会退到深色。
    */
   theme: ThemeMode;
+  /**
+   * 左右两条侧栏的宽度偏好（见 layout.ts）。
+   *
+   * `null` = 没调过，交给 CSS 的 clamp 随视口走；数字 = 用户拖到的像素宽。
+   * 与主题一样跨刷新记住，但拖拽过程中不逐帧写状态（见 `SideResizer`）。
+   */
+  layout: LayoutState;
+  /**
+   * 界面偏好（见 prefs.ts）：只决定"长什么样"，不改变内核怎么跑。
+   *
+   * 与主题、侧栏宽度同一档：跨刷新记住，但**不进会话**——换台机器可以
+   * 有不同的显示习惯，同一个会话照旧。
+   */
+  prefs: UiPrefs;
   /** 活动工作区（"新任务去哪"）；与 `activeRoot` 指向同一个根 */
   workspace: WorkspaceView;
   /** 活动根：侧栏聚焦、输入区与状态行绑定谁 */
@@ -249,6 +265,14 @@ export type ClientState = {
   file: FileContent | null;
   fileLoading: boolean;
   fileError: string | null;
+  /**
+   * 工具输出里的路径"还在不在"：决定一段文字画不画成可点链接。
+   *
+   * 键见 `pathLinks.ts`（根与 Run 都参与）。缺键 = 还没问过；`true` = 可以点；
+   * `false` = 文件不在了，按普通文本显示——不画一条点开只会报「文件不存在」的
+   * 链接。答案由动作层批量问一次，渲染层只读。
+   */
+  pathExists: Record<string, boolean>;
   banner: Banner;
   /**
    * 应用级事件流的断线提示。
@@ -306,6 +330,8 @@ export function initialState(): ClientState {
         ? null
         : { matches: (query: string) => matchMedia(query).matches },
     ),
+    layout: readLayout(typeof localStorage === "undefined" ? null : localStorage),
+    prefs: readPrefs(typeof localStorage === "undefined" ? null : localStorage),
     workspace: { root: "", name: "" },
     activeRoot: "",
     workspaces: [],
@@ -345,6 +371,7 @@ export function initialState(): ClientState {
     file: null,
     fileLoading: false,
     fileError: null,
+    pathExists: {},
     banner: null,
     globalNote: null,
     globalLost: false,

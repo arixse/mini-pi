@@ -54,6 +54,14 @@ export type Actions = {
    */
   openFile: (path: string, runId?: string, line?: number) => void;
   closeFile: () => void;
+  /**
+   * 问一批路径"还在不在"，答案落进 `state.pathExists`。
+   *
+   * 由渲染层调用（每段工具输出报上自己那几条），动作层负责去重、并帧、
+   * 按工作区分组，最后只发一两次请求。答案是"能不能画成链接"的唯一依据：
+   * 没问出结果的路径按普通文本显示（见 `pathLinks.ts`）。
+   */
+  checkPaths: (paths: string[], runId?: string | null) => void;
   /** 把隔离改动合并回基准工作区；冲突时服务端 409，worktree 保留 */
   mergeWorktree: (runId: string) => Promise<void>;
   newTask: () => void;
@@ -79,6 +87,15 @@ export type Actions = {
   openRun: (runId: string) => void;
   decide: (approvalId: string, answer: ApprovalAnswer) => void;
   setSearch: (keyword: string) => void;
+  /**
+   * 记下拖拽后的左导航宽度（px）；`null` 表示复原成 CSS 默认值。
+   *
+   * 拖拽期间由 `SideResizer` 直接改 CSS 变量，松手才落到这里——
+   * 逐帧写状态会让整棵时间线跟着重画。
+   */
+  setSidebarWidth: (width: number | null) => void;
+  /** 同上，作用于右侧文件面板 */
+  setFilePanelWidth: (width: number | null) => void;
   toggleSidebar: () => void;
   closeSidebar: () => void;
   openSettings: () => void;
@@ -105,6 +122,13 @@ export type Actions = {
   toggleNotifications: () => Promise<void>;
   /** 主题：只切根节点 data-theme 并记住选择（见 theme.ts） */
   toggleTheme: () => void;
+  /**
+   * 时间线要不要显示工具调用（见 prefs.ts，默认不显示）。
+   *
+   * 纯展示开关：不重发请求、不改任何服务端状态，连正在流式输出的那一轮
+   * 也只是少画几行。
+   */
+  setShowToolCalls: (enabled: boolean) => void;
   openPicker: () => void;
   closePicker: () => void;
   /** 打开（或聚焦）一个工作区目录：切走不打断别的根跑着的任务 */

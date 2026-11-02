@@ -20,12 +20,16 @@ import { Composer } from "./components/Composer";
 import { TimelineItemRow } from "./components/TimelineItems";
 import { RunHead } from "./components/RunHead";
 import { DiffPanel } from "./components/DiffPanel";
-import { FilePreview } from "./components/FilePreview";
+import { FilePanel } from "./components/FilePanel";
 import { Picker } from "./components/Picker";
+import { SideResizer } from "./components/SideResizer";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
-import { Timeline } from "./components/Timeline";
+import { Timeline, visibleItems } from "./components/Timeline";
+import { InterfacePage } from "./components/Settings";
 import { ThinkingRow } from "./components/Thinking";
+import type { UiPrefs } from "./prefs";
+import { pathScopeKey, pathScopeOf } from "./pathLinks";
 import type { ComposerHandle } from "./controller";
 import type { Actions } from "./actions";
 import type { ApprovalRequest, RunDiff, RunSummary, SessionSummary } from "../shared/types";
@@ -41,6 +45,7 @@ const fakeActions = {
   closeDiff: () => undefined,
   openFile: () => undefined,
   closeFile: () => undefined,
+  checkPaths: () => undefined,
   mergeWorktree: async () => undefined,
   newTask: () => undefined,
   newTaskIn: async () => undefined,
@@ -49,6 +54,8 @@ const fakeActions = {
   openRun: () => undefined,
   decide: () => undefined,
   setSearch: () => undefined,
+  setSidebarWidth: () => undefined,
+  setFilePanelWidth: () => undefined,
   toggleSidebar: () => undefined,
   closeSidebar: () => undefined,
   openSettings: () => undefined,
@@ -60,6 +67,7 @@ const fakeActions = {
   setSubAgent: async () => undefined,
   setIsolate: async () => undefined,
   toggleNotifications: async () => undefined,
+  setShowToolCalls: () => undefined,
   toggleTheme: () => undefined,
   openPicker: () => undefined,
   closePicker: () => undefined,
@@ -134,6 +142,22 @@ describe("前端组件树", () => {
     assert.doesNotMatch(html, /class="statusbar"/);
     assert.match(html, /还没有工作区/, "还没拿到状态时应如实说工作区未打开");
     assert.match(html, /未配置模型/, "还没拿到状态时不该假装模型已配好");
+  });
+
+  it("左导航常驻一条拖拽条；没有文件面板时不出现右手柄", () => {
+    const html = renderToStaticMarkup(createElement(App));
+    assert.match(html, /class="resizer resizer-left"/, "左导航要能拖宽");
+    assert.match(html, /role="separator"/);
+    assert.doesNotMatch(html, /resizer-right/, "没有文件面板时右条无处可贴");
+  });
+
+  it("拖拽条标成竖直 separator，读屏能说清用途", () => {
+    const html = renderToStaticMarkup(
+      createElement(SideResizer, { side: "right", onCommit: () => undefined }),
+    );
+    assert.match(html, /class="resizer resizer-right"/);
+    assert.match(html, /aria-orientation="vertical"/);
+    assert.match(html, /aria-label="[^"]*文件面板宽度/);
   });
 
   it("状态行属于主列且有三枚指标：上下文 / 步数 / 缓存（模型交给输入区）", () => {
@@ -608,10 +632,31 @@ describe("文件预览", () => {
       createElement(
         ClientProvider,
         { value: { store, actions: fakeActions } },
-        createElement(FilePreview),
+        createElement(FilePanel),
       ),
     );
   }
+
+  /**
+   * 直接把"这个路径在不在"塞进状态。
+   *
+   * 真实链路是渲染时动作层去问服务端（`useEffect` + `checkPaths`），而
+   * `renderToStaticMarkup` 不跑效应——这里验证的是**读到答案之后怎么画**，
+   * 问的那一半由 `controller.test.ts` 与 `app.test.ts` 各守一段。
+   */
+  function markKnown(store: ClientStore, path: string, exists: boolean): void {
+    store.update((state) => {
+      state.pathExists[pathScopeKey(pathScopeOf(state, null), path)] = exists;
+    });
+  }
+
+  /** 用户要的是"右侧常驻列"，不是又一扇浮层弹窗 */
+  it("画成右侧面板而不是浮层弹窗", () => {
+    const html = render(fileStore());
+    assert.match(html, /<aside class="file-panel"/, "是常驻的 aside 列");
+    assert.doesNotMatch(html, /role="dialog"/, "不再伪装成弹窗");
+    assert.doesNotMatch(html, /class="diff-panel"/, "不再复用变更面板的浮层骨架");
+  });
 
   it("正文带行号：每行一个 code-no，从 1 起（不是一列装饰）", () => {
     const html = render(fileStore());
@@ -643,9 +688,31 @@ describe("文件预览", () => {
 
   /** 文本文件里仍要能点路径：加了行号不等于退化成一块死文本 */
   it("文本文件里的路径仍可点，并带上行号去预览", () => {
-    const html = render(fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" }));
+    const store = fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" });
+    markKnown(store, "src/b.ts", true);
+    const html = render(store);
     assert.match(html, /class="path-link"/);
     assert.match(html, /title="预览 src\/b\.ts（第 12 行）"/);
+  });
+
+  /**
+   * 这是本功能的来由：工具输出里提到的路径不一定还在（模型先说出来再创建、
+   * 报错栈里的文件已被删掉、历史会话早过时）。点开一条只回「文件不存在」的
+   * 链接比不给链接更糟——用户还得手动把那个面板关掉。
+   */
+  it("确认不存在的路径不画链接，但原文一个字不少", () => {
+    const store = fileStore({ path: "notes.txt", content: "see src/gone.ts:12\n" });
+    markKnown(store, "src/gone.ts", false);
+    const html = render(store);
+    assert.doesNotMatch(html, /class="path-link"/);
+    assert.match(html, /src\/gone\.ts:12/, "只是没有下划线，文本照旧");
+    assert.match(html, /文件不存在/, "悬停能看出为什么这条点不动");
+  });
+
+  /** 问答案之前也按普通文本：宁可晚一条下划线，也不给一条假链接 */
+  it("还没问到答案时同样不画链接", () => {
+    const html = render(fileStore({ path: "notes.txt", content: "see src/b.ts:12\n" }));
+    assert.doesNotMatch(html, /class="path-link"/);
   });
 });
 
@@ -836,5 +903,112 @@ describe("时间线条目的 markup", () => {
     assert.match(html, /rm -rf build/, "完整命令要给全");
     assert.match(html, /此操作不可撤销/);
     assert.doesNotMatch(html, /<code>/, "高危不叠summary 的理由行");
+  });
+});
+
+describe("工具调用开关", () => {
+  const user: TimelineItem = {
+    kind: "user",
+    id: "u1",
+    text: "看看这道目录",
+    queued: false,
+    locked: true,
+    at: 0,
+    runId: null,
+  };
+  const tool: TimelineItem = {
+    kind: "tool",
+    id: "t:1",
+    toolCallId: "1",
+    name: "grep",
+    args: JSON.stringify({ pattern: "TODO", path: "src" }),
+    status: "done",
+    output: "src/a.ts:12: // TODO",
+    startedAt: 0,
+    durationMs: 30,
+  };
+  const assistant: TimelineItem = {
+    kind: "assistant",
+    id: "a1",
+    text: "只有一处待办",
+    streaming: false,
+    locked: true,
+  };
+  const waiting: TimelineItem = {
+    kind: "approval",
+    id: "ap:ap1",
+    request: approval(),
+    state: "pending",
+  };
+
+  function storeWith(items: TimelineItem[], showToolCalls: boolean): ClientStore {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.workspace = { root: "/tmp/ws", name: "ws" };
+      state.prefs.showToolCalls = showToolCalls;
+      state.view.items.push(...items);
+    });
+    return store;
+  }
+
+  function renderTimeline(store: ClientStore): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(Timeline),
+      ),
+    );
+  }
+
+  it("默认关：时间线上没有工具调用，对话与审批纹丝不动", () => {
+    const html = renderTimeline(storeWith([user, tool, assistant, waiting], false));
+    assert.doesNotMatch(html, /tool-line/, "默认关：工具调用整段不画");
+    assert.match(html, /看看这道目录/, "指令还在");
+    assert.match(html, /只有一处待办/, "助手正文还在");
+    assert.match(html, /class="approval/, "审批卡不归这个开关管：等你裁决的必须看得见");
+  });
+
+  it("打开开关就画出来，参数与输出一起", () => {
+    const html = renderTimeline(storeWith([user, tool, assistant, waiting], true));
+    assert.match(html, /tool-line/);
+    assert.match(html, /grep/);
+    assert.match(html, /src\/a\.ts:12/, "输出原样保留（这段渲染里还没问过存在性，路径是纯文本）");
+  });
+
+  it("visibleItems 只筛工具：其余条目位置不变、顺序不重排", () => {
+    const items = [user, tool, assistant, waiting];
+    assert.deepEqual(
+      visibleItems(items, true).map((item) => item.kind),
+      ["user", "tool", "assistant", "approval"],
+    );
+    assert.deepEqual(
+      visibleItems(items, false).map((item) => item.kind),
+      ["user", "assistant", "approval"],
+    );
+    // 筛出来的是同一个对象，不是复制品：条目是就地修改的，复制会让下一步
+    // 的 revision 对不上
+    assert.equal(visibleItems(items, false)[0], user);
+  });
+
+  function renderInterface(prefs: UiPrefs): string {
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store: new ClientStore(), actions: fakeActions } },
+        createElement(InterfacePage, { prefs }),
+      ),
+    );
+  }
+
+  it("设置 → 界面里那颗开关反映当前值，默认不勾", () => {
+    const off = renderInterface({ showToolCalls: false });
+    assert.match(off, /class="pref-row"/);
+    assert.match(off, /显示工具调用/);
+    assert.match(off, /aria-label="显示工具调用"/);
+    assert.doesNotMatch(off, /checked/, "默认关：不该画成勾上的");
+
+    const on = renderInterface({ showToolCalls: true });
+    assert.match(on, /checked/, "开着的时候必须勾上，否则开关在骗人");
   });
 });
