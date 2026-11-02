@@ -127,10 +127,13 @@ export class AnthropicModel implements LlmModel {
         () => this.streamCompletion(input, system, messages, tools),
         {
           signal: input.signal,
-          onRetry: (attempt, error, delayMs) =>
+          onRetry: (attempt, error, delayMs) => {
+            // 展示层通道在前：事件先于日志发出去，终端才看得到"在重试"
+            input.onRetry?.(attempt, error, delayMs);
             logger.warn(
               `Anthropic 请求失败（第 ${attempt} 次重试，${delayMs}ms 后）：${describeError(error)}`,
-            ),
+            );
+          },
         },
       );
       return this.convertResponse(response);

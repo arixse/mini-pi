@@ -8,6 +8,7 @@
 
 import chalk from "chalk";
 import type { AgentEvent, AgentIdentity } from "@minipi/core/shared/protocol";
+import { MAX_REQUEST_ATTEMPTS } from "@minipi/core/agent/model";
 import {
   RenderContext,
   ToolCallView,
@@ -186,6 +187,12 @@ export function createAgentEventHandler(
       deps.status.stop();
       deps.thinking?.end();
       write(event.delta);
+    }
+    if (event.type === "model_retry") {
+      // 等待期的 spinner 文案换成"重试 N/M"：provider 的静默重试要显形，
+      // 否则终端上一动不动，分不清"在重试"还是"卡死"
+      deps.thinking?.retry?.(event.attempt, MAX_REQUEST_ATTEMPTS);
+      return;
     }
     if (event.type === "message_end") {
       // 只回工具调用、没有正文的消息也要把 Thinking 块收尾

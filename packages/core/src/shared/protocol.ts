@@ -207,6 +207,14 @@ export type AgentEvent =
      */
     | ({type:"subagent_start";goal:string;role?:string} & AgentIdentity)
     | ({type:"subagent_end";ok:boolean;goal:string;role?:string;turns:number;usage:Usage;elapsedMs:number;toolCalls?:string[]} & AgentIdentity)
+    /**
+     * 模型调用即将重试（每次重试前发出，等待开始之前）。
+     *
+     * provider 层的重试此前只有 logger 一条路：终端上 spinner 原地转，
+     * 用户分不清"在重试"还是"卡死"。`error` 带的是 message 字符串——
+     * 事件可能经 SSE 序列化，Error 对象过去就只剩 `{}`。
+     */
+    | {type:"model_retry";attempt:number;delayMs:number;error:string;identity?:AgentIdentity}
 
 export type SessionResponse = {
     sessionId:string

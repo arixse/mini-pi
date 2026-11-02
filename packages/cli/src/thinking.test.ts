@@ -213,6 +213,54 @@ describe("ThinkingPrinter（等待期 spinner）", () => {
     assert.doesNotThrow(() => NOOP_THINKING.begin());
     assert.strictEqual(NOOP_THINKING.isOpen(), false);
   });
+
+  it("retry：等待期的 spinner 文案附加重试序号", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    mock.timers.tick(100);
+    printer.retry!(2, 3);
+
+    const draws = chunks.filter((chunk) => chunk.includes("Thinking…"));
+    assert.match(
+      draws.at(-1)!,
+      /Thinking… \(重试 2\/3\) \d/,
+      `spinner 文案要显示重试进度：${JSON.stringify(draws.at(-1))}`,
+    );
+  });
+
+  it("retry 后时间照常前进：后续帧保持重试文案", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.retry!(1, 3);
+    mock.timers.tick(300);
+
+    const draws = chunks.filter((chunk) => chunk.includes("Thinking…"));
+    assert.ok(draws.length >= 3);
+    for (const draw of draws.slice(1)) {
+      assert.ok(draw.includes("(重试 1/3)"), `每帧都带重试标记：${JSON.stringify(draw)}`);
+    }
+  });
+
+  it("首个增量到达：重试标记清掉，正文照常渲染", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.retry!(1, 3);
+    printer.print("推理");
+
+    const after = chunks.slice(chunks.findIndex((chunk) => chunk.includes("💭"))).join("");
+    assert.ok(!after.includes("重试"), `块内容不应残留重试标记：${JSON.stringify(after)}`);
+    assert.ok(after.includes("│ 推理"));
+  });
+
+  it("retry 在块打开后（非等待期）是空操作", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.print("先到这里");
+    printer.retry!(2, 3);
+
+    // 等待期已结束：不应再画一行 spinner
+    assert.ok(!chunks.at(-1)!.includes("Thinking…"));
+  });
 });
 
 describe("ThinkingPrinter（行数上限）", () => {

@@ -1177,6 +1177,34 @@ describe("loop", () => {
       assert.strictEqual(result.newMessages.length, 1);
     });
 
+    it("模型调用 onRetry 时发出 model_retry 事件（带序号、等待时长与错误文案）", async () => {
+      const events: AgentEvent[] = [];
+      const model: LlmModel = {
+        async complete(input) {
+          // 模拟 provider 内部的重试：每次重试前回调
+          input.onRetry?.(1, new Error("HTTP 429"), 1200);
+          input.onRetry?.(2, new Error("HTTP 500"), 2400);
+          return createAssistantMessage([createTextContent("答案")]);
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: createMockToolRegistry(),
+        onEvent: (event) => events.push(event),
+      });
+
+      const retries = eventsOfType(events, "model_retry");
+      assert.strictEqual(retries.length, 2, "两次重试各一条事件");
+      assert.strictEqual(retries[0].attempt, 1);
+      assert.strictEqual(retries[0].delayMs, 1200);
+      assert.strictEqual(retries[0].error, "HTTP 429", "error 带的是 message 字符串");
+      assert.strictEqual(retries[1].attempt, 2);
+    });
+
     it("非流式模型：补发一次性文本，保证终端仍能看到回复", async () => {
       const events: AgentEvent[] = [];
       const model: LlmModel = {

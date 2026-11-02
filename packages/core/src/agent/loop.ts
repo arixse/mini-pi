@@ -204,6 +204,17 @@ async function completeAssistantMessage(
         emit({ type: "message_update", message, delta });
       },
       onThinkingDelta: options.onThinkingDelta,
+      onRetry: (attempt, error, delayMs) => {
+        // provider 的静默重试转为显式事件：终端 spinner 才能显示"重试 2/3"，
+        // 用户分得清"在重试"还是"卡死"。error 只带 message（事件可能走 SSE 序列化）
+        emit({
+          type: "model_retry",
+          attempt,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+          identity: options.identity,
+        });
+      },
     });
     const id = message.id;
     Object.assign(message, assistant);

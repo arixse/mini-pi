@@ -255,6 +255,8 @@ const SUBSCRIBED_EVENTS = {
   branch_switch: true,
   subagent_start: true,
   subagent_end: true,
+  // 内核新事件：前端暂不做专属 UI，但必须登记才能进事件流（漏登记不报错）
+  model_retry: true,
   run_state: true,
   approval_request: true,
   approval_resolved: true,

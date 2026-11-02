@@ -25,6 +25,14 @@ export type CompleteInput = {
    * 也不该写进会话历史。提供方没返回推理内容时永远不回调。
    */
   onThinkingDelta?: (delta: string) => void;
+  /**
+   * 重试回调：每次重试**之前**调用（等待开始前），带上即将进行的尝试序号、
+   * 触发重试的错误与本次等待的毫秒数。
+   *
+   * 与 onDelta 同理是展示层通道：provider 内部重试此前只有 logger，
+   * 终端上 spinner 原地转，用户分不清"在重试"还是"卡死"。
+   */
+  onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
 };
 
 export type ModelConfig = {

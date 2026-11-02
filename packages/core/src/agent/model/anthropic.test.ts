@@ -439,3 +439,61 @@ describe("anthropic（响应转换）", () => {
     assert.deepStrictEqual(message.usage, { input: 3, output: 4, totalTokens: 7 });
   });
 });
+
+describe("anthropic（重试可见）", () => {
+  function userMessage(): AgentMessage {
+    return { role: "user", content: [createTextContent("hi")], timestamp: Date.now() };
+  }
+
+  function okStream() {
+    return {
+      on() {},
+      async finalMessage() {
+        return {
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          model: "claude",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "hi" }],
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_input_tokens: null,
+            cache_creation_input_tokens: null,
+          },
+        };
+      },
+    };
+  }
+
+  it("重试前回调 onRetry：带尝试序号与等待时长", async () => {
+    const model = createAnthropicModel({ apiKey: "k" });
+    let calls = 0;
+    (model as unknown as { client: { messages: { stream: unknown } } }).client.messages.stream =
+      (() => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error("HTTP 429"), { status: 429 });
+        }
+        return okStream();
+      }) as never;
+
+    const retries: Array<{ attempt: number; delayMs: number }> = [];
+    const result = await model.complete({
+      systemPrompt: "s",
+      messages: [userMessage()],
+      tools: [],
+      onRetry: (attempt, _error, delayMs) => retries.push({ attempt, delayMs }),
+    });
+
+    assert.strictEqual(calls, 2, "第一次失败后应重试一次");
+    assert.strictEqual(retries.length, 1);
+    assert.strictEqual(retries[0].attempt, 1);
+    assert.ok(
+      retries[0].delayMs >= 800 && retries[0].delayMs <= 1200,
+      `退避应落在 800~1200ms：${retries[0].delayMs}`,
+    );
+    assert.strictEqual(result.content[0].type, "text");
+  });
+});

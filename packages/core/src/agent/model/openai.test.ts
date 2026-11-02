@@ -339,3 +339,82 @@ describe("openai（消息转换与取消）", () => {
     assert.deepStrictEqual(entries, [], "用户取消不应打印 API 错误日志");
   });
 });
+
+describe("openai（重试可见）", () => {
+  function userMessage(): AgentMessage {
+    return { role: "user", content: [createTextContent("hi")], timestamp: Date.now() };
+  }
+
+  /** 把模型的 SDK 客户端换成假实现：第 N 次前抛可重试错误，之后回一个最小流 */
+  function stubClient(
+    model: OpenAIModel,
+    create: () => Promise<unknown>,
+  ): void {
+    (model as unknown as { client: { chat: { completions: { create: unknown } } } }).client.chat.completions.create =
+      create as never;
+  }
+
+  function okStream(): AsyncGenerator<unknown> {
+    return (async function* () {
+      yield { choices: [{ delta: { content: "hi" } }] };
+    })();
+  }
+
+  it("重试前回调 onRetry：带尝试序号与等待时长", async () => {
+    const model = createOpenAIModel({ apiKey: "k" });
+    let calls = 0;
+    stubClient(model, async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error("HTTP 429"), { status: 429 });
+      }
+      return okStream();
+    });
+
+    const retries: Array<{ attempt: number; delayMs: number }> = [];
+    const result = await model.complete({
+      systemPrompt: "s",
+      messages: [userMessage()],
+      tools: [],
+      onRetry: (attempt, _error, delayMs) => retries.push({ attempt, delayMs }),
+    });
+
+    assert.strictEqual(calls, 2, "第一次失败后应重试一次");
+    assert.strictEqual(retries.length, 1);
+    assert.strictEqual(retries[0].attempt, 1);
+    // 1s 基础退避 ±20% 抖动
+    assert.ok(
+      retries[0].delayMs >= 800 && retries[0].delayMs <= 1200,
+      `退避应落在 800~1200ms：${retries[0].delayMs}`,
+    );
+    assert.strictEqual(result.content[0].type, "text");
+  });
+
+  it("不可重试的错误不触发 onRetry", async () => {
+    // 失败路径会走 logger.error：用内存 sink 接住，不污染测试输出
+    const { sink } = createMemorySink();
+    configureLogger({ level: "error", sink });
+
+    const model = createOpenAIModel({ apiKey: "k" });
+    let calls = 0;
+    stubClient(model, async () => {
+      calls += 1;
+      throw Object.assign(new Error("HTTP 401"), { status: 401 });
+    });
+
+    try {
+      const retries: number[] = [];
+      await model.complete({
+        systemPrompt: "s",
+        messages: [userMessage()],
+        tools: [],
+        onRetry: (attempt) => retries.push(attempt),
+      });
+
+      assert.strictEqual(calls, 1, "401 重试没有意义");
+      assert.deepStrictEqual(retries, []);
+    } finally {
+      resetLogger();
+    }
+  });
+});

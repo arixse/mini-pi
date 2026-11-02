@@ -37,6 +37,13 @@ export type ThinkingPrinter = {
   begin(): void;
   /** 追加一段推理增量；首次调用会先打印块头并擦掉 spinner */
   print(delta: string): void;
+  /**
+   * 标记模型调用即将重试：等待期的 spinner 文案变为 `重试 N/M`。
+   *
+   * 只在 spinner 显示中生效；块已打开或非 TTY 时无事可做
+   * （后者由 logger 兜底）。下一个增量到达即恢复正常文案。
+   */
+  retry?(attempt: number, maxAttempts: number): void;
   /** 收尾：擦掉 spinner、必要时补一个换行，幂等 */
   end(): void;
   isOpen(): boolean;
@@ -104,13 +111,16 @@ export function createThinkingPrinter(
   let truncated = false;
   /** 收尾时要报告的省略行数 */
   let omittedLines = 0;
+  /** 模型调用重试标记：spinner 文案附加重试序号，下个增量到达即清掉 */
+  let retryNote: string | null = null;
 
   const paint = (text: string): string => context.style.dim(text);
 
   const drawSpinner = (): void => {
     const elapsed = Math.max(0, now() - spinnerStartedAt);
     const frame = spinnerFrame(elapsed, context.ascii);
-    const raw = `${frame} Thinking… ${formatDuration(elapsed)}`;
+    const label = retryNote ? `Thinking… (${retryNote})` : "Thinking…";
+    const raw = `${frame} ${label} ${formatDuration(elapsed)}`;
     // 与状态行同理：超宽会折行，\r 就擦不干净，按上下文宽度截断
     const text = truncateToWidth(raw, Math.max(20, context.width - 1));
     write(`\r${paint(text)}`);
@@ -135,6 +145,7 @@ export function createThinkingPrinter(
       }
       waiting = true;
       spinnerStartedAt = now();
+      retryNote = null;
       drawSpinner();
       timer = setInterval(() => {
         if (waiting) {
@@ -152,6 +163,7 @@ export function createThinkingPrinter(
       if (waiting) {
         clearSpinner();
         waiting = false;
+        retryNote = null;
       }
       if (!open) {
         write(`${paint(header)}\n`);
@@ -218,6 +230,14 @@ export function createThinkingPrinter(
 
     isOpen(): boolean {
       return open;
+    },
+
+    retry(attempt: number, maxAttempts: number): void {
+      if (!isEnabled() || !waiting) {
+        return;
+      }
+      retryNote = `重试 ${attempt}/${maxAttempts}`;
+      drawSpinner();
     },
   };
 }
