@@ -9,7 +9,12 @@
  * 同一个注册表要同时喂给 chalk 着色的 `/help` 和不含 ANSI 的测试断言。
  */
 
-import { displayWidth } from "./width";
+import {
+  displayWidth,
+  terminalWidth,
+  truncateToWidth,
+  wrapToWidth,
+} from "./width";
 
 export type CommandSpec = {
   /** 用法全称，含参数占位符：`/switch <n>` */
@@ -94,6 +99,81 @@ export function helpEntries(
     description: spec.description,
     note: spec.note,
   }));
+}
+
+/**
+ * 说明列至少要有这么宽才和用法同排。
+ *
+ * 用法列现在最长的一条是 41 列（`/subagent [on|off|trace on|trace off]`）：
+ * 80 列终端上再挤 24 列说明只剩 15 列，中文一行放不下三四个字，
+ * 折出来的续行反而比"说明另起一行"更难读。
+ */
+const MIN_INLINE_DESCRIPTION_WIDTH = 24;
+
+/** `/help` 的一行：用法列 + 该行的说明（续行用等宽空格占位） */
+export type HelpLine = {
+  usage: string;
+  description: string;
+};
+
+/**
+ * 把命令清单排成不超过 `width` 的行。
+ *
+ * 此前 `/help` 每行都是"用法 + 完整说明"直接打印：`/approval` 那行在
+ * 80 列终端上占 106 列，终端自动折行后第二行从第 0 列开始，和用法列
+ * 完全对不上。这里把说明按显示宽度折行，续行用用法列的宽度挂起对齐；
+ * 终端窄到同排放不下说明时，说明整体挪到下一行并缩进 4 列。
+ */
+export function helpLines(
+  entries: readonly HelpEntry[] = helpEntries(),
+  width: number = terminalWidth(),
+): HelpLine[] {
+  if (entries.length === 0) {
+    return [];
+  }
+  const usageWidth = Math.max(
+    ...entries.map((entry) => displayWidth(entry.usage)),
+  );
+  const inline =
+    usageWidth + MIN_INLINE_DESCRIPTION_WIDTH <= width;
+  const descriptionIndent = inline ? " ".repeat(usageWidth) : "    ";
+  const descriptionWidth = Math.max(
+    20,
+    width - displayWidth(descriptionIndent),
+  );
+  const lines: HelpLine[] = [];
+
+  for (const entry of entries) {
+    const descriptionLines = wrapToWidth(entry.description, descriptionWidth);
+    if (inline) {
+      lines.push({
+        usage: entry.usage,
+        description: descriptionLines[0] ?? "",
+      });
+      for (const text of descriptionLines.slice(1)) {
+        lines.push({ usage: descriptionIndent, description: text });
+      }
+    } else {
+      // 同排说明放不下时，用法列不再需要补齐：去掉尾部空格与 `- ` 分隔符，
+      // 否则最长那条用法（39 列）在 40 列终端上仍然恰好顶到边界外。
+      const usage = entry.usage
+        .replace(/\s*-\s*$/, "")
+        .trimEnd();
+      lines.push({
+        usage: truncateToWidth(usage, Math.max(10, width)),
+        description: "",
+      });
+      for (const text of descriptionLines) {
+        lines.push({ usage: descriptionIndent, description: text });
+      }
+    }
+    if (entry.note) {
+      for (const text of wrapToWidth(entry.note.trim(), descriptionWidth)) {
+        lines.push({ usage: descriptionIndent, description: text });
+      }
+    }
+  }
+  return lines;
 }
 
 /** 按命令名取说明：欢迎语等处引用单条命令时用它，避免再手抄一遍文案 */

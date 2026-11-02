@@ -13,7 +13,7 @@ import { formatUsage } from "@minipi/core/agent/usage";
 import { describeApprovalMode } from "@minipi/core/policy";
 import type { ApprovalMode } from "@minipi/core/policy";
 import { KEEP_RECENT_MESSAGES, contextUsage, contextWindowInfo } from "./context";
-import { padToWidth, terminalWidth, wrapToWidth } from "./width";
+import { padToWidth, terminalWidth, truncateToWidth, wrapToWidth } from "./width";
 import type { ReplOptions } from "./options";
 
 /** `/status` 标签列的最小显示宽度 */
@@ -149,14 +149,23 @@ export function printStatus(
   approvalMode: ApprovalMode,
   subAgentEnabled = false,
   subAgentTrace = false,
+  width: number = terminalWidth(),
 ): void {
   console.log("");
   console.log(chalk.cyan("📊 会话状态"));
   for (const line of sessionStatusLines(
     sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace),
+    width,
   )) {
     console.log(chalk.dim(line));
   }
-  console.log(chalk.dim("└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换"));
+  console.log(
+    chalk.dim(
+      truncateToWidth(
+        "└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换",
+        width,
+      ),
+    ),
+  );
   console.log("");
 }

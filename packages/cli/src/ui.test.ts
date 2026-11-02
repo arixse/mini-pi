@@ -84,6 +84,35 @@ describe("printWelcome", () => {
     assert.ok(text.includes("尚未配置模型"));
     assert.ok(text.includes("/login") && text.includes("/model"));
   });
+
+  /**
+   * 回归用例：Provider / Model 名来自配置，长度没有上限。
+   * 此前直接整行打印，窄终端上会折行，把启动画面右边界冲掉。
+   */
+  it("窄终端上长 Provider / Model 名不顶出宽度", () => {
+    printWelcome("p".repeat(80), "m".repeat(80), {
+      window: 204_800,
+      source: "inferred",
+    }, 40);
+
+    for (const line of captured.lines) {
+      assert.ok(
+        displayWidth(line) <= 40,
+        `超出行宽 ${displayWidth(line)} 列：${line}`,
+      );
+    }
+  });
+
+  it("窄终端上未配置提示折行，但 /login 与 /model 都还在", () => {
+    printWelcome(null, null, undefined, 40);
+
+    const text = captured.lines.join("\n");
+    assert.ok(text.includes("尚未配置模型"));
+    assert.ok(text.includes("/login") && text.includes("/model"));
+    for (const line of captured.lines) {
+      assert.ok(displayWidth(line) <= 40, `超出行宽：${line}`);
+    }
+  });
 });
 
 describe("printResumedSession", () => {

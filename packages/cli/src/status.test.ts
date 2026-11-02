@@ -195,6 +195,40 @@ describe("status", () => {
       assert.ok(drawn.length < 40);
     });
 
+    /**
+     * 回归用例：绘制时是 80 列，用户把窗口拉到 40 列后再刷新。
+     * 如果仍按旧的 80 列写空格擦除，多出来的空格会折到下一行，
+     * 每刷新一次就在屏幕上多留一行空白。
+     */
+    it("终端变窄后按当前列数擦除，不写出会折行的空格", () => {
+      const fake = createFakeStream(80);
+      const status = createStatusLine({
+        stream: fake.stream,
+        enabled: true,
+        now: () => 0,
+        intervalMs: 60_000,
+      });
+
+      status.set({
+        kind: "tool",
+        toolName: "bash",
+        detail: "a very long command that easily fills more than forty columns",
+        startedAt: 0,
+      });
+      const drawn = displayWidth(fake.writes.at(-1) ?? "");
+      assert.ok(drawn > 40, `先按 80 列画出一行：${drawn}`);
+
+      (fake.stream as unknown as { columns: number }).columns = 40;
+      status.set({ kind: "compacting", startedAt: 0 });
+
+      const lastClear = clearingWidths(fake.writes).at(-1) ?? 0;
+      assert.ok(
+        lastClear <= 39,
+        `40 列终端上最多擦 39 列，实际 ${lastClear} 列会折行`,
+      );
+      assert.ok(lastClear > 0, "仍应擦掉旧内容");
+    });
+
     it("清屏宽度与实际绘制的宽度一致（换帧后不会少擦）", () => {
       const fake = createFakeStream();
       const status = createStatusLine({

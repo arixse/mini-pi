@@ -17,6 +17,7 @@ import { createFakeStatus, createMockModel, makeReplOptions } from "./testRepl";
 import { KEEP_RECENT_MESSAGES, MAX_CONTEXT_TOKENS } from "./context";
 import { getLastToolCall, printToolInfo, resetToolRenderState } from "./toolEvents";
 import { PLAIN_CONTEXT } from "./render";
+import { displayWidth } from "./width";
 import type { ReplOptions } from "./options";
 import { JsonlSessionStore } from "@minipi/core/agent/sessionStore";
 import { createAssistantMessage, createTextContent, createUserMessage } from "@minipi/core/agent/message";
@@ -284,6 +285,29 @@ describe("session context wiring", () => {
     assert.ok(!lines[0].includes("❯"), "非当前会话不应带标记");
     assert.ok(lines[1].startsWith("❯"), "当前会话应带标记");
     assert.ok(lines[1].includes("b.jsonl") && lines[1].includes("2.0 KB"));
+  });
+
+  /**
+   * 回归用例：会话文件名没有长度上限（同日多次创建会带 `-2` 后缀），
+   * 窄终端上原来会顶出 `│ ` 前缀的右边界，终端折行后列表无法逐行阅读。
+   */
+  it("formatSessionList 应把每行收进指定宽度", () => {
+    const lines = formatSessionList(
+      [
+        {
+          fileName: "2026-11-01T12-34-56-very-long-session-name-2.jsonl",
+          path: "/tmp/a.jsonl",
+          sizeBytes: 123456,
+        },
+      ],
+      "/tmp/b.jsonl",
+      40,
+    );
+    assert.ok(
+      displayWidth(lines[0]) <= 38,
+      `应给行首的竖线与空格留出 2 列：${lines[0]}`,
+    );
+    assert.ok(lines[0].includes("…"), "超长行应显式截断");
   });
 
   it("switchSession 应切换 store 并按新会话重建上下文", async () => {

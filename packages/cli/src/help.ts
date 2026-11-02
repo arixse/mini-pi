@@ -7,25 +7,31 @@
  */
 
 import chalk from "chalk";
-import { helpEntries } from "./commands";
+import { helpLines } from "./commands";
+import { terminalWidth, wrapToWidth } from "./width";
 
-export function printHelp(): void {
+export function printHelp(width: number = terminalWidth()): void {
   console.log("");
   console.log(chalk.cyan("📖 可用命令（所有命令以 / 开头）:"));
   console.log("");
   // 命令清单来自 src/cli/commands.ts：/help、启动欢迎语、README 与交互文档
   // 此前四处各抄一份，新增命令漏改一处就会出现"文档里没有但能用"的命令
-  for (const entry of helpEntries()) {
-    console.log(chalk.white(entry.usage) + chalk.dim(entry.description));
-    if (entry.note) {
-      console.log(chalk.dim(entry.note));
-    }
+  for (const line of helpLines(undefined, width)) {
+    console.log(chalk.white(line.usage) + chalk.dim(line.description));
   }
   console.log("");
   console.log(chalk.dim("💡 提示:"));
-  console.log(chalk.dim("  - 直接输入问题即可开始对话"));
-  console.log(chalk.dim("  - 支持多轮对话，上下文会自动保持"));
-  console.log(chalk.dim("  - 输入编程问题或文件操作请求"));
-  console.log(chalk.dim("  - 需要某个 skill 时模型会自行加载，也可用 /load 手动加载"));
+  for (const tip of [
+    "直接输入问题即可开始对话",
+    "支持多轮对话，上下文会自动保持",
+    "输入编程问题或文件操作请求",
+    "需要某个 skill 时模型会自行加载，也可用 /load 手动加载",
+  ]) {
+    const parts = wrapToWidth(tip, Math.max(20, width - 4));
+    parts.forEach((line, index) => {
+      // 续行不再画第二个项目符号：它不是一条新提示
+      console.log(chalk.dim(`${index === 0 ? "  - " : "    "}${line}`));
+    });
+  }
   console.log("");
 }

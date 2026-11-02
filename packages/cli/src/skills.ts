@@ -14,9 +14,13 @@ import chalk from "chalk";
 import { SessionManager } from "@minipi/core/agent/sessionManager";
 import { SkillWithSource } from "@minipi/core/agent/skillLoader";
 import type { ReplOptions } from "./options";
+import { displayWidth, terminalWidth, truncateToWidth } from "./width";
 
 /** 显示所有可用的 skills */
-export function handleSkills(sessionManager?: SessionManager): void {
+export function handleSkills(
+  sessionManager?: SessionManager,
+  width: number = terminalWidth(),
+): void {
   if (!sessionManager) {
     console.log(chalk.red("\n❌ SessionManager 未初始化\n"));
     return;
@@ -63,14 +67,36 @@ export function handleSkills(sessionManager?: SessionManager): void {
     const skills = bySource.get(source);
     if (!skills || skills.length === 0) continue;
 
-    console.log(chalk.yellow(sourceLabels[source] || source));
+    console.log(
+      chalk.yellow(
+        truncateToWidth(sourceLabels[source] || source, Math.max(10, width)),
+      ),
+    );
     for (const skill of skills) {
-      console.log(chalk.white(`  ${skill.name}`) + chalk.dim(` - ${skill.description}`));
+      // 描述来自 skill 的 frontmatter，长度没有上限：按剩余列宽截断，
+      // 不然窄终端会自动折行，第二条 skill 看起来就像第一行的一部分
+      const prefix = `  ${skill.name} - `;
+      console.log(
+        chalk.white(`  ${skill.name}`) +
+          chalk.dim(
+            ` - ${truncateToWidth(
+              skill.description,
+              Math.max(8, width - displayWidth(prefix)),
+            )}`,
+          ),
+      );
     }
     console.log("");
   }
 
-  console.log(chalk.dim("使用 /load <name> 加载 skill 完整内容"));
+  console.log(
+    chalk.dim(
+      truncateToWidth(
+        "使用 /load <name> 加载 skill 完整内容",
+        Math.max(10, width),
+      ),
+    ),
+  );
   console.log("");
 }
 

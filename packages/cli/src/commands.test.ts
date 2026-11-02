@@ -7,6 +7,7 @@ import {
   commandDescription,
   commandName,
   helpEntries,
+  helpLines,
 } from "./commands";
 import { displayWidth } from "./width";
 
@@ -92,6 +93,60 @@ describe("helpEntries 排版", () => {
     const entries = helpEntries([{ usage: "/x", description: "d" }]);
     assert.strictEqual(entries.length, 1);
     assert.ok(entries[0].usage.startsWith("  /x"));
+  });
+});
+
+describe("helpLines 折行", () => {
+  /** `usage + description` 才是屏幕上真正的一行 */
+  function lineWidth(line: { usage: string; description: string }): number {
+    return displayWidth(line.usage + line.description);
+  }
+
+  it("80 / 60 / 40 列终端上都不超宽", () => {
+    for (const width of [100, 80, 60, 40]) {
+      for (const line of helpLines(undefined, width)) {
+        assert.ok(
+          lineWidth(line) <= width,
+          `${width} 列终端上超宽 ${lineWidth(line)} 列：${line.usage}${line.description}`,
+        );
+      }
+    }
+  });
+
+  it("说明折行后仍以用法列挂起对齐（宽终端）", () => {
+    const lines = helpLines(undefined, 80);
+    const continuation = lines.find(
+      (line) =>
+        line.description !== "" &&
+        line.usage.trim() === "" &&
+        displayWidth(line.usage) > 0,
+    );
+    assert.ok(continuation, "80 列下应出现挂起对齐的续行");
+    assert.strictEqual(
+      displayWidth(continuation!.usage),
+      Math.max(...helpEntries().map((entry) => displayWidth(entry.usage))),
+      "续行缩进应与说明列起点一致",
+    );
+  });
+
+  it("窄终端放不下同排说明时，说明整体挪到下一行", () => {
+    const lines = helpLines(undefined, 40);
+    const newLine = lines.find((line) => line.usage.startsWith("  /new"));
+    assert.ok(newLine, "用法列仍应保留缩进");
+    assert.strictEqual(newLine!.description, "", "40 列下说明另起一行");
+    const next = lines[lines.indexOf(newLine!) + 1];
+    assert.ok(next?.description.includes("创建新的会话"));
+  });
+
+  it("note 也按宽度折行，不单独占用超宽行", () => {
+    for (const line of helpLines(undefined, 40)) {
+      assert.ok(lineWidth(line) <= 40);
+    }
+    const flat = helpLines(undefined, 40)
+      .map((line) => line.usage + line.description)
+      .join("")
+      .replace(/\s+/g, "");
+    assert.ok(flat.includes("y=允许本次/n=拒绝/a=本会话全部允许"));
   });
 });
 

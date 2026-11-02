@@ -128,8 +128,13 @@ export function createStatusLine(options: StatusOptions): StatusController {
     if (renderedWidth === 0) {
       return;
     }
-    // 用空格覆写而不是 ANSI 擦除：即使颜色被禁用也能正确清除
-    stream.write(`\r${" ".repeat(renderedWidth)}\r`);
+    // 用空格覆写而不是 ANSI 擦除：即使颜色被禁用也能正确清除。
+    // 终端被拉窄后不能继续按旧宽度写空格——超过列数的空格会折到下一行，
+    // 每清一次屏就多留一行空白；按当前列数夹紧，最多清到行尾前一列。
+    const columns = stream.columns ?? 0;
+    const clearWidth =
+      columns > 1 ? Math.min(renderedWidth, columns - 1) : renderedWidth;
+    stream.write(`\r${" ".repeat(clearWidth)}\r`);
     renderedWidth = 0;
   };
 

@@ -767,8 +767,14 @@ export function renderLastToolOutput(
   if (layout.mode === "inline") {
     out.push(`${indent}${title}${" ".repeat(layout.pad)}${ctx.style.dim(rightPlain)}`);
   } else {
-    out.push(`${indent}${title}`);
-    out.push(`${indent}  ${ctx.style.dim(rightPlain)}`);
+    // 叠成两行时标题与右侧信息都要各自收进终端宽度：
+    // `layoutHeader` 只给出可用的最大左宽，不负责真的裁剪。
+    out.push(`${indent}${truncateToWidth(title, layout.maxLeft)}`);
+    out.push(
+      `${indent}  ${ctx.style.dim(
+        truncateToWidth(rightPlain, Math.max(1, available - 2)),
+      )}`,
+    );
   }
 
   // 缩进保持纯文本（不参与着色），只把竖线本身压暗
@@ -787,7 +793,12 @@ export function renderLastToolOutput(
     hidden > 0
       ? `显示第 ${firstLine}-${lastLine} 行，共 ${total} 行 · /last ${shown.length + maxLines} 查看后续`
       : `共 ${total} 行`;
-  out.push(`${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
+  const footerWidth = contentWidth(ctx, displayWidth(indent) + 2);
+  out.push(
+    `${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(
+      truncateToWidth(footer, footerWidth),
+    )}`,
+  );
 
   return out;
 }
@@ -867,8 +878,17 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
       primaryPlain,
       Math.max(1, layout.maxLeft - displayWidth(icon) - 1),
     );
+    // 状态行另起一行时同样要收进终端宽度：同批工具多、耗时与退出码一起
+    // 堆上去时，`✅ 1m02s · exit 1 · 1234 行` 本身就能超过窄终端。
+    const rightMax = Math.max(
+      1,
+      available - 2 - displayWidth(statusPlain) - 1,
+    );
+    const rightTrimmed = `${paintStatus(statusPlain)} ${ctx.style.dim(
+      truncateToWidth(tailPlain, rightMax),
+    )}`;
     lines.push(`${indent}${icon} ${paint(trimmed)}`);
-    lines.push(`${indent}  ${rightStyled}`);
+    lines.push(`${indent}  ${rightTrimmed}`);
   }
 
   // ---- 正文
@@ -879,8 +899,12 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   const window = selectBodyWindow(body, limit, failed);
   const gutterPlain = `${indent}${gutterGlyph(ctx)}`;
   const gutterWithIndent = `${indent}${ctx.style.dim(gutterGlyph(ctx))}`;
+  // 正文与页脚共用同一套可用宽度：页脚以前按原文直接打印，窄终端上
+  // `└ 12345 行 · 1.2 MB · stderr · 已截断 · 超时（30.0s） · /last 查看全部`
+  // 会顶出屏幕，终端折行后把下一张卡片挤歪。
+  const noteWidth = contentWidth(ctx, displayWidth(gutterPlain) + 1);
   const bodyLimitNote = (text: string): string =>
-    `${gutterWithIndent} ${ctx.style.dim(text)}`;
+    `${gutterWithIndent} ${ctx.style.dim(truncateToWidth(text, noteWidth))}`;
 
   if (window.headOmitted > 0) {
     lines.push(bodyLimitNote(`… 已省略前 ${window.headOmitted} 行`));
@@ -908,7 +932,11 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
         ? `${baseFooter} · /last 查看全部`
         : baseFooter;
   if (footer) {
-    lines.push(`${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(footer)}`);
+    lines.push(
+      `${indent}${ctx.style.dim(footerGlyph(ctx))} ${ctx.style.dim(
+        truncateToWidth(footer, noteWidth),
+      )}`,
+    );
   }
 
   return lines;
@@ -930,9 +958,12 @@ export function renderSubAgentHeader(
   const indent = depthIndent(event.depth);
   const label = event.role ?? "agent";
   const icon = ctx.ascii ? "[sub]" : "\u{1F916}";
-  const heading = ctx.style.cyan(
+  // 角色名来自用户配置，长度没有上限；标题同样要收进终端宽度
+  const headingPlain = truncateToWidth(
     `${indent}${icon} 委派 ${label} #${event.agentId.slice(0, 8)}`,
+    Math.max(10, ctx.width),
   );
+  const heading = ctx.style.cyan(headingPlain);
   const goal = inlineText(event.goal);
   const width = Math.max(10, ctx.width - displayWidth(indent) - 2);
   return [
@@ -993,14 +1024,21 @@ export function renderSubAgentFooter(
   const prefix = `${indent}${event.ok ? okMark : failMark}`;
   const tag = event.role ?? "agent";
   const stats = `${event.turns} 轮 · ${event.usage.totalTokens} tokens · ${formatDuration(event.elapsedMs)}`;
+  const headingPlain = truncateToWidth(
+    event.ok
+      ? `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 完成`
+      : `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 未完成`,
+    Math.max(10, ctx.width),
+  );
   const heading = event.ok
-    ? `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 完成`
-    : `${prefix} 子 Agent ${tag} #${event.agentId.slice(0, 8)} 未完成`;
+    ? ctx.style.green(headingPlain)
+    : ctx.style.red(headingPlain);
+  const statsWidth = Math.max(10, ctx.width - displayWidth(indent) - 2);
 
   const lines = [
     "",
-    event.ok ? ctx.style.green(heading) : ctx.style.red(heading),
-    `  ${indent}${ctx.style.dim(stats)}`,
+    heading,
+    `  ${indent}${ctx.style.dim(truncateToWidth(stats, statsWidth))}`,
   ];
   // "它到底动了什么"与耗时同等重要：只读评审和真的跑过验证是两回事，
   // 而两者在轮次与 token 上可能长得一模一样

@@ -4,7 +4,12 @@ import { messageText } from "@minipi/core/agent/message";
 import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "@minipi/core/provider";
 import { commandDescription } from "./commands";
 import { APP_VERSION, formatVersion } from "./version";
-import { DEFAULT_TERMINAL_WIDTH, truncateToWidth } from "./width";
+import {
+  DEFAULT_TERMINAL_WIDTH,
+  displayWidth,
+  truncateToWidth,
+  wrapToWidth,
+} from "./width";
 
 /** 分隔线的宽度上下限：再宽没有信息量，再窄就只剩装饰 */
 export const SEPARATOR_MAX_WIDTH = 100;
@@ -84,41 +89,71 @@ export function printWelcome(
   providerName: string | null,
   modelName: string | null,
   contextWindow?: ResolvedContextWindow,
+  width: number = process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
 ): void {
-  const rule = (): void => printSeparator();
+  const rule = (): void => printSeparator(width);
+  /** 值列可用宽度：标签本身要占位，长模型名不能把行顶出终端 */
+  const valueWidth = (label: string): number =>
+    Math.max(8, width - displayWidth(label));
+
   if(providerName && modelName) {
     rule();
-    console.log(chalk.dim("  Provider: ") + chalk.white(providerName));
-    console.log(chalk.dim("  Model:    ") + chalk.white(modelName));
+    console.log(
+      chalk.dim("  Provider: ") +
+        chalk.white(truncateToWidth(providerName, valueWidth("  Provider: "))),
+    );
+    console.log(
+      chalk.dim("  Model:    ") +
+        chalk.white(truncateToWidth(modelName, valueWidth("  Model:    "))),
+    );
     // 窗口与来源一起显示：用户一眼能看出该值是不是猜的，
     // 猜错（真实窗口更小）时去 settings.json 配 contextWindow 即可
     if (contextWindow) {
+      const label = "  Context:  ";
+      const value = `${contextWindow.window}（${CONTEXT_WINDOW_SOURCE_LABEL[contextWindow.source]}）`;
       console.log(
-        chalk.dim("  Context:  ") +
-          chalk.white(String(contextWindow.window)) +
-          chalk.dim(`（${CONTEXT_WINDOW_SOURCE_LABEL[contextWindow.source]}）`),
+        chalk.dim(label) +
+          chalk.white(
+            truncateToWidth(value, valueWidth(label)),
+          ),
       );
     }
     rule();
   } else {
     rule();
     console.log(chalk.yellow("  ⚠️  尚未配置模型"));
-    console.log(chalk.yellow("  请使用 ") + chalk.cyan("/login") + chalk.yellow(" 配置 API Key，再使用 ") + chalk.cyan("/model") + chalk.yellow(" 选择模型"));
+    // 提示语本身也可能超过窄终端：按宽度折行，命令名不因截断而消失
+    const hintWidth = Math.max(20, width - 2);
+    for (const line of wrapToWidth(
+      "请使用 /login 配置 API Key，再使用 /model 选择模型",
+      hintWidth,
+    )) {
+      console.log(chalk.yellow(`  ${line}`));
+    }
     rule();
   }
-  
+
   console.log();
   // 提示哪几条命令也来自注册表：手工挑命令容易漏，
   // 说明文字改了也是同一份，不会与 /help 说辞打架
   for (const usage of ["/help", "/new", "/status"]) {
     const description = commandDescription(usage);
     if (description) {
+      const prefix = `  ${usage} `;
       console.log(
-        `${chalk.dim("  ")}${chalk.cyan(usage)} ${chalk.dim(description)}`,
+        chalk.dim("  ") +
+          chalk.cyan(usage) +
+          " " +
+          chalk.dim(
+            truncateToWidth(
+              description,
+              Math.max(8, width - displayWidth(prefix)),
+            ),
+          ),
       );
     }
   }
-  console.log(chalk.dim("  直接输入问题即可开始对话"));
+  console.log(chalk.dim(truncateToWidth("  直接输入问题即可开始对话", width)));
   console.log();
   rule();
   console.log();
@@ -160,7 +195,11 @@ export function printResumedSession(
     );
   }
   // 只提示真实存在的命令：此前那句 /history 从来没有被实现过
-  console.log(chalk.dim("└ /new 开启新会话 · /sessions 选择其它会话"));
+  console.log(
+    chalk.dim(
+      truncateToWidth("└ /new 开启新会话 · /sessions 选择其它会话", width),
+    ),
+  );
   console.log();
 }
 
