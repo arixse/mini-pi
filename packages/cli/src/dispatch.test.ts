@@ -734,3 +734,59 @@ describe("其余命令的分派接线", () => {
     assert.match(captured.lines.join("\n"), /还没有工具调用记录/);
   });
 });
+
+/**
+ * 命令回执的统一模板：**空行 + 一行文案 + 空行**，ASCII 模式下状态位
+ * 降级为 [ok] / [fail]、装饰 emoji 一律不出现（与工具卡片同一套语法）。
+ */
+describe("命令回执模板与 ASCII 降级", () => {
+  function makeContext(ascii = false): SlashCommandContext {
+    const renderContext = { ...createRenderContext(), ascii };
+    return {
+      options: {
+        prompt: "> ",
+        systemPrompt: "",
+        messages: [],
+        model: null,
+        toolRegistry: {} as ReplOptions["toolRegistry"],
+        workspaceRoot: tmpdir(),
+      } as ReplOptions,
+      rl: {} as SlashCommandContext["rl"],
+      quiet: () => {},
+      renderContext,
+      requestExit: () => {},
+      approvalMode: { get: () => "workspace-write" as ApprovalMode, set: () => {} },
+      subAgent: { get: () => false, set: () => {} },
+      subAgentTrace: { get: () => false, set: () => {} },
+      thinking: { get: () => true, set: () => {} },
+    };
+  }
+
+  async function run(input: string, ctx: SlashCommandContext): Promise<string> {
+    const captured = capture();
+    try {
+      await handleSlashCommand(input, ctx);
+    } finally {
+      captured.restore();
+    }
+    return captured.lines.join("\n");
+  }
+
+  it("回执统一为空行 + 文案 + 空行（/new 未配置时的失败回执）", async () => {
+    const text = await run("/new", makeContext());
+    assert.ok(text.startsWith("\n"), `回执应以空行开头：${JSON.stringify(text)}`);
+    assert.ok(text.endsWith("\n"), `回执应以空行收尾：${JSON.stringify(text)}`);
+  });
+
+  it("ASCII 模式下状态位是 [fail]，不出现 emoji", async () => {
+    const text = await run("/new", makeContext(true));
+    assert.ok(text.includes("[fail]"), `应有 [fail] 状态位：${text}`);
+    assert.ok(!/\p{Extended_Pictographic}/u.test(text), `不该出现 emoji：${text}`);
+  });
+
+  it("/load 缺参数的报错也走同一模板", async () => {
+    const text = await run("/load", makeContext());
+    assert.ok(text.startsWith("\n") && text.endsWith("\n"), JSON.stringify(text));
+    assert.ok(text.includes("请指定 skill 名称"));
+  });
+});

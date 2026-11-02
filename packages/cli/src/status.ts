@@ -28,7 +28,7 @@ export type RunState =
 const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ASCII_FRAMES = ["|", "/", "-", "\\"];
 
-/** 把毫秒格式化成紧凑的时长：`840ms` / `3.2s` / `1m02s` */
+/** 把毫秒格式化成紧凑的时长：`840ms` / `3.2s` / `1m02s` / `2h05m` */
 export function formatDuration(ms: number): string {
   const safe = Math.max(0, ms);
   if (safe < 1000) {
@@ -37,6 +37,12 @@ export function formatDuration(ms: number): string {
   const seconds = safe / 1000;
   if (seconds < 60) {
     return `${seconds.toFixed(1)}s`;
+  }
+  // 一小时以上进小时档：`125m03s` 这种读法要先做一次除法才能理解
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours}h${String(minutes).padStart(2, "0")}m`;
   }
   const minutes = Math.floor(seconds / 60);
   const rest = Math.round(seconds % 60);

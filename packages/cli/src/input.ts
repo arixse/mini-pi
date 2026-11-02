@@ -59,19 +59,32 @@ export type InputScheduler = {
 export function createInputScheduler(
   handle: (line: string) => Promise<void>,
   options: {
-    /** 输入被排队（而非立即执行）时回调 */
-    onQueued?: (line: string) => void;
+    /**
+     * 输入被排队（而非立即执行）时回调。
+     *
+     * `waiting` 是包含本条在内、尚未开始执行的排队条数——同一波连敲
+     * 多条时它逐条递增，调用方可以只在第一条时提示、其余静默（聚合）。
+     */
+    onQueued?: (line: string, waiting: number) => void;
+    /**
+     * 一波排队全部执行完毕（队列重新变空）时回调。
+     * 聚合提示用它在下一波重新开始计数。
+     */
+    onIdle?: () => void;
     /** 处理过程抛出未捕获异常时回调；不处理的话会吞掉后续输入 */
     onError?: (error: unknown) => void;
   } = {},
 ): InputScheduler {
   let queue: Promise<void> = Promise.resolve();
   let running = false;
+  /** 已排队、尚未开始执行的条数 */
+  let waiting = 0;
 
   return {
     schedule(line: string): void {
       if (running) {
-        options.onQueued?.(line);
+        waiting += 1;
+        options.onQueued?.(line, waiting);
       }
       queue = queue
         .then(async () => {
@@ -80,6 +93,15 @@ export function createInputScheduler(
             await handle(line);
           } finally {
             running = false;
+            // 本条已彻底收尾。只有"真的消化掉一条排队、且队列随之排空"
+            // 才算一波结束：没有排队的普通收尾不该触发 onIdle，
+            // 否则每条执行完都会多报一次"空闲"。
+            if (waiting > 0) {
+              waiting -= 1;
+              if (waiting === 0) {
+                options.onIdle?.();
+              }
+            }
           }
         })
         .catch((error) => {

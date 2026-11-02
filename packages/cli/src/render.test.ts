@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   MAX_BODY_LINES,
+  MAX_BODY_LINES_CAP,
   MAX_TEXT_WIDTH,
   PLAIN_CONTEXT,
   PLAIN_STYLE,
@@ -73,6 +74,12 @@ describe("render 宽度工具", () => {
     assert.strictEqual(formatBytes(512), "512 B");
     assert.strictEqual(formatBytes(2048), "2.0 KB");
     assert.strictEqual(formatBytes(1024 * 1024 * 3), "3.0 MB");
+  });
+
+  it("formatBytes：GB / TB 不再堆成 1024.0 MB", () => {
+    assert.strictEqual(formatBytes(1024 ** 3), "1.0 GB");
+    assert.strictEqual(formatBytes(1024 ** 3 * 2.5), "2.5 GB");
+    assert.strictEqual(formatBytes(1024 ** 4 * 1.2), "1.2 TB");
   });
 
   it("toLines：统一 CRLF，末尾换行不算额外一行", () => {
@@ -347,6 +354,38 @@ describe("renderToolCall", () => {
     // 8 行正文 + 1 行省略提示
     assert.strictEqual(bodyCount, MAX_BODY_LINES + 1);
     assert.ok(lines.some((line) => line.includes("省略 12 行")));
+  });
+
+  it("高终端上正文行数按一屏的 1/4 放宽（下限 8、上限 16）", () => {
+    const stdout = Array.from({ length: 40 }, (_, i) => `row-${i}`).join("\n");
+    const make = (height?: number): string[] =>
+      renderToolCall(
+        view({
+          name: "bash",
+          args: { command: "ls -la" },
+          result: {
+            content: [{ type: "text", text: stdout }],
+            details: { command: "ls -la", exitCode: 0, stdout, stderr: "" },
+          },
+        }),
+        { ...PLAIN_CONTEXT, width: 80, height },
+      );
+
+    // 48 行终端 → 12 行正文 + 1 行省略提示
+    assert.strictEqual(
+      make(48).filter((line) => line.startsWith("│ ")).length,
+      13,
+    );
+    // 80 行终端 → 封顶 16 行
+    assert.strictEqual(
+      make(80).filter((line) => line.startsWith("│ ")).length,
+      MAX_BODY_LINES_CAP + 1,
+    );
+    // 未给高度（测试 / 非 TTY）保持原上限
+    assert.strictEqual(
+      make(undefined).filter((line) => line.startsWith("│ ")).length,
+      MAX_BODY_LINES + 1,
+    );
   });
 
   it("read_file：带行号与规模页脚", () => {
@@ -686,6 +725,18 @@ describe("renderToolCall", () => {
       lines[2].includes("Command failed"),
       `正文不应是 (no output)：${lines[2]}`,
     );
+  });
+
+  it("ascii 模式下卡片状态位降级为 [ok] / [fail]，与子 Agent 页脚同一套语法", () => {
+    const asciiCtx: RenderContext = { ...PLAIN_CONTEXT, ascii: true, width: 80 };
+    const ok = renderToolCall(view({ name: "bash", args: { command: "true" } }), asciiCtx).join("\n");
+    const failed = renderToolCall(
+      view({ name: "bash", args: { command: "false" }, isError: true }),
+      asciiCtx,
+    ).join("\n");
+    assert.ok(ok.includes("[ok]"), `成功应显示 [ok]：${ok}`);
+    assert.ok(failed.includes("[fail]"), `失败应显示 [fail]：${failed}`);
+    assert.ok(!/\p{Extended_Pictographic}/u.test(ok), `不该出现 emoji：${ok}`);
   });
 
   it("bash 成功但没有输出时仍显示 (no output)", () => {

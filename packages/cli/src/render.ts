@@ -64,6 +64,13 @@ export function createChalkStyle(): Style {
 export type RenderContext = {
   /** 终端可用列数 */
   width: number;
+  /**
+   * 终端行数（可缺省：测试与非 TTY 场景可以不填）。
+   *
+   * 只用来给卡片正文行数封顶——正文是"扫一眼的摘要"，不该占满整屏；
+   * 高终端上比矮终端多给几行，但绝不按行数等比放大。
+   */
+  height?: number;
   style: Style;
   /** ASCII 模式：用 [bash] 之类的标签代替 emoji，用 | / + 代替框线 */
   ascii: boolean;
@@ -114,9 +121,11 @@ export function followTerminalWidth(
   context: RenderContext,
   stdout: NodeJS.WriteStream = process.stdout,
 ): () => void {
-  const update = (): void => {
-    context.width = stdout.columns ?? DEFAULT_TERMINAL_WIDTH;
-  };
+const update = (): void => {
+  context.width = stdout.columns ?? DEFAULT_TERMINAL_WIDTH;
+  // 行数同样跟随：正文行数的动态封顶用的是它
+  context.height = stdout.rows ?? undefined;
+};
   update();
   stdout.on("resize", update);
   return () => {
@@ -124,8 +133,10 @@ export function followTerminalWidth(
   };
 }
 
-/** 卡片正文默认最多显示的行数 */
+/** 卡片正文默认最多显示的行数（矮终端与未知高度时的下限） */
 export const MAX_BODY_LINES = 8;
+/** 卡片正文行数的上限：再高也不让一张卡片吞掉四分之一屏以上 */
+export const MAX_BODY_LINES_CAP = 16;
 /** diff 最多显示的行数（比普通正文宽松一些） */
 export const MAX_DIFF_LINES = 20;
 /** 单行最多保留的列数 */
@@ -294,7 +305,14 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 ** 3) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  // 大模型上下文与大文件都会过 GB：`1024.0 MB` 这种读不出量级
+  if (bytes < 1024 ** 4) {
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  }
+  return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
 
 // ---------------------------------------------------------------- diff
@@ -409,9 +427,20 @@ function headerSuffix(
   return suffixes;
 }
 
-/** 正文显示上限：diff 放宽到 MAX_DIFF_LINES */
-function bodyLimit(view: ToolCallView): number {
-  return view.name === "edit_file" ? MAX_DIFF_LINES : MAX_BODY_LINES;
+/**
+ * 正文显示上限。
+ *
+ * diff 放宽到 MAX_DIFF_LINES；普通正文按终端高度动态：一屏的 1/4，
+ * 下限 MAX_BODY_LINES（矮终端与未知高度），上限 MAX_BODY_LINES_CAP——
+ * 8 行在 40 行高的终端上偏少，但不设上限的话一次 grep 就是一整屏。
+ */
+function bodyLimit(view: ToolCallView, ctx: RenderContext): number {
+  if (view.name === "edit_file") {
+    return MAX_DIFF_LINES;
+  }
+  const rows = ctx.height ?? 0;
+  const byHeight = rows > 0 ? Math.floor(rows / 4) : MAX_BODY_LINES;
+  return Math.min(MAX_BODY_LINES_CAP, Math.max(MAX_BODY_LINES, byHeight));
 }
 
 /**
@@ -487,7 +516,7 @@ function bodyLines(
     case "read_file":
       return readFileBody(view, details);
     case "list_files":
-      return listFilesBody(details, ctx);
+      return listFilesBody(details, ctx, bodyLimit(view, ctx));
     case "edit_file":
       return editFileBody(view, details);
     case "write_file":
@@ -535,11 +564,12 @@ function readFileBody(
 function listFilesBody(
   details: Record<string, unknown>,
   ctx: RenderContext,
+  maxLines: number = MAX_BODY_LINES,
 ): BodyLine[] {
   const entries = Array.isArray(details.entries)
     ? (details.entries as string[])
     : [];
-  return packItems(entries, Math.max(20, ctx.width - 4), MAX_BODY_LINES).lines.map(
+  return packItems(entries, Math.max(20, ctx.width - 4), maxLines).lines.map(
     plain,
   );
 }
@@ -853,7 +883,13 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
   const primaryPlain = truncateToWidth(primaryText(view), MAX_TEXT_WIDTH);
   const leftPlain = `${icon} ${primaryPlain}`;
 
-  const statusPlain = view.isError ? "❌" : "✅";
+  const statusPlain = view.isError
+    ? ctx.ascii
+      ? "[fail]"
+      : "❌"
+    : ctx.ascii
+      ? "[ok]"
+      : "✅";
   const tailPlain = `${formatDuration(durationMs)}${headerSuffix(view, details)
     .map((item) => ` · ${item}`)
     .join("")}`;
@@ -895,7 +931,7 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
 
   // ---- 正文
   const body = bodyLines(view, details, ctx);
-  const limit = bodyLimit(view);
+  const limit = bodyLimit(view, ctx);
   // 失败时窗口移到末尾：报错在尾部，取前 8 行等于把原因藏起来
   const failed = isFailedCall(view, details);
   const window = selectBodyWindow(body, limit, failed);

@@ -36,13 +36,16 @@ export { describeTaskCall, describeToolCall } from "@minipi/core/toolSummary";
  * 分开写迟早会说辞不一致。M4 起 `/trust` 只是"在全权与工作区读写之间切换"
  * 的简写，三档本身由 {@link printApprovalNotice} 回执。
  */
-export function printTrustNotice(trusted: boolean): void {
+export function printTrustNotice(trusted: boolean, ascii = false): void {
+  // ASCII 模式不带图标：🔓 这类符号在不支持 emoji 的终端上是乱码，
+  // 语义已经由文案本身表达，图标只是装饰
+  const icon = ascii ? "" : trusted ? "🔓 " : "🔒 ";
   console.log(
     trusted
       ? chalk.yellow(
-          "\n🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n",
+          `\n${icon}已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n`,
         )
-      : chalk.green("\n🔒 已关闭信任模式：写文件与执行命令需逐次确认\n"),
+      : chalk.green(`\n${icon}已关闭信任模式：写文件与执行命令需逐次确认\n`),
   );
 }
 
@@ -52,11 +55,17 @@ export function printTrustNotice(trusted: boolean): void {
  * 每一档都要说清"下一步会被怎么处理"，否则切到只读档的人会发现
  * 写文件的请求静默失败而不知道原因。
  */
-export function printApprovalNotice(mode: ApprovalMode): void {
-  const icon = mode === "read-only" ? "🔎" : mode === "full-access" ? "🔓" : "✍️";
+export function printApprovalNotice(mode: ApprovalMode, ascii = false): void {
+  const icon = ascii
+    ? ""
+    : mode === "read-only"
+      ? "🔎 "
+      : mode === "full-access"
+        ? "🔓 "
+        : "✍️ ";
   console.log(
     chalk.yellow(
-      `\n${icon} 审批策略已切换为 ${mode}：${describeApprovalMode(mode)}` +
+      `\n${icon}审批策略已切换为 ${mode}：${describeApprovalMode(mode)}` +
         `（/approval <mode> 可再切）\n`,
     ),
   );
@@ -185,10 +194,11 @@ export function buildApprovalQuestion(
   const tag = agentTag(context);
   const risk = assessToolRisk(call, fileExists);
 
+  const warn = ascii ? "[!] " : "⚠️  ";
   const header =
     risk.level === "high"
-      ? `${chalk.red("⚠️")}  ${chalk.red("高危操作待确认")}  ${chalk.red(call.name)}`
-      : `⚠️  需要确认  ${call.name}`;
+      ? `${chalk.red(warn)}${chalk.red("高危操作待确认")}  ${chalk.red(call.name)}`
+      : `${warn}需要确认  ${call.name}`;
 
   const lines: string[] = [
     "",
@@ -203,7 +213,8 @@ export function buildApprovalQuestion(
   }
 
   for (const reason of risk.reasons) {
-    const text = `${gutter}${risk.level === "high" ? "⚠ 高危" : "· 注意"}：${reason}`;
+    const mark = risk.level === "high" ? (ascii ? "[!] 高危" : "⚠ 高危") : "· 注意";
+    const text = `${gutter}${mark}：${reason}`;
     lines.push(risk.level === "high" ? chalk.red(text) : chalk.yellow(text));
   }
 

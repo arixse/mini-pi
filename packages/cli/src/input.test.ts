@@ -101,7 +101,7 @@ describe("createInputScheduler（回合串行化）", () => {
   });
 
   it("后提交的输入要触发 onQueued，用户才知道自己被排队了", async () => {
-    const queued: string[] = [];
+    const queued: Array<[string, number]> = [];
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -113,7 +113,7 @@ describe("createInputScheduler（回合串行化）", () => {
           await gate;
         }
       },
-      { onQueued: (line) => queued.push(line) },
+      { onQueued: (line, waiting) => queued.push([line, waiting]) },
     );
 
     scheduler.schedule("a");
@@ -121,11 +121,62 @@ describe("createInputScheduler（回合串行化）", () => {
     assert.strictEqual(scheduler.isBusy(), true, "第一条正在处理");
 
     scheduler.schedule("b");
-    assert.deepStrictEqual(queued, ["b"], "第二条应被标记为排队");
+    scheduler.schedule("c");
+    assert.deepStrictEqual(
+      queued,
+      [
+        ["b", 1],
+        ["c", 2],
+      ],
+      "第二条应被标记为排队，第三条带累计排队数",
+    );
 
     release();
     await tick(20);
     assert.strictEqual(scheduler.isBusy(), false, "全部结束后应回到空闲");
+  });
+
+  it("排队提示按波聚合：onIdle 只在队列排空后触发一次", async () => {
+    const queued: number[] = [];
+    let idleCount = 0;
+    const gates: Array<() => void> = [];
+    const gateFor = (line: string): Promise<void> =>
+      line === "a" || line === "d"
+        ? new Promise<void>((resolve) => gates.push(resolve))
+        : Promise.resolve();
+
+    const scheduler = createInputScheduler(
+      async (line) => {
+        await gateFor(line);
+      },
+      {
+        onQueued: (_line, waiting) => queued.push(waiting),
+        onIdle: () => {
+          idleCount += 1;
+        },
+      },
+    );
+
+    scheduler.schedule("a");
+    await tick(5);
+    scheduler.schedule("b");
+    scheduler.schedule("c");
+    await tick(5);
+    assert.strictEqual(idleCount, 0, "队列未排空前不该报空闲");
+
+    gates.shift()!();
+    await tick(30);
+    assert.strictEqual(idleCount, 1, "一波结束后 onIdle 恰好触发一次");
+    assert.deepStrictEqual(queued, [1, 2]);
+
+    // 下一波重新计数：d 挂起期间 e 提交，排队数又从 1 开始
+    scheduler.schedule("d");
+    await tick(5);
+    scheduler.schedule("e");
+    assert.deepStrictEqual(queued, [1, 2, 1], "下一波的排队计数重新从 1 开始");
+    gates.shift()!();
+    await tick(30);
+    assert.strictEqual(idleCount, 2, "第二波结束同样触发一次 onIdle");
   });
 
   it("某一条抛错不能吞掉后面的输入", async () => {

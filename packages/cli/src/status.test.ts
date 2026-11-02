@@ -42,6 +42,12 @@ describe("status", () => {
       assert.strictEqual(formatDuration(62_000), "1m02s");
     });
 
+    it("一小时以上进小时档，不再堆分钟", () => {
+      assert.strictEqual(formatDuration(3_600_000), "1h00m");
+      assert.strictEqual(formatDuration(3_600_000 + 5 * 60_000), "1h05m");
+      assert.strictEqual(formatDuration(2 * 3_600_000 + 59 * 60_000), "2h59m");
+    });
+
     it("负值不应产生奇怪输出", () => {
       assert.strictEqual(formatDuration(-5), "0ms");
     });

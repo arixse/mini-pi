@@ -3,7 +3,6 @@ import assert from "node:assert";
 import {
   LOGO_LINES,
   MIN_LOGO_WIDTH,
-  SEPARATOR_MAX_WIDTH,
   SEPARATOR_MIN_WIDTH,
   printLogo,
   printResumedSession,
@@ -12,6 +11,7 @@ import {
   printWelcome,
   separatorLine,
 } from "./ui";
+import { MAX_TEXT_WIDTH } from "./render";
 import { commandDescription } from "./commands";
 import { APP_VERSION } from "./version";
 import { displayWidth } from "./width";
@@ -252,7 +252,8 @@ describe("separatorLine", () => {
   });
 
   it("超宽与超窄都被夹到可读区间", () => {
-    assert.strictEqual(separatorLine(500).length, SEPARATOR_MAX_WIDTH);
+    // 上限与卡片正文同宽：宽屏上分隔线不该只有卡片一半
+    assert.strictEqual(separatorLine(500).length, MAX_TEXT_WIDTH);
     assert.strictEqual(separatorLine(1).length, SEPARATOR_MIN_WIDTH);
   });
 });

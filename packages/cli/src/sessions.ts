@@ -14,11 +14,13 @@ export function formatSessionList(
   sessions: Array<{ fileName: string; path: string; sizeBytes: number }>,
   currentPath: string | undefined,
   width: number = terminalWidth(),
+  ascii = false,
 ): string[] {
   // 行首还有 `│ ` 两列，留给文件名与大小的只有 width - 2
   const lineWidth = Math.max(20, width - 2);
   return sessions.map((session, index) => {
-    const marker = session.path === currentPath ? "❯" : " ";
+    // ❯ 在部分终端按宽字符渲染，ASCII 模式统一退化为 ">"
+    const marker = session.path === currentPath ? (ascii ? ">" : "❯") : " ";
     const size = session.sizeBytes < 1024
       ? `${session.sizeBytes} B`
       : `${(session.sizeBytes / 1024).toFixed(1)} KB`;
@@ -29,25 +31,26 @@ export function formatSessionList(
   });
 }
 
-export function handleSessions(options: ReplOptions): void {
+export function handleSessions(options: ReplOptions, ascii = false): void {
   if (!options.sessionManager) {
-    console.log(chalk.red("\n❌ SessionManager 未初始化\n"));
+    console.log(chalk.red("\n[fail] SessionManager 未初始化\n"));
     return;
   }
 
   const sessions = options.sessionManager.listSessions();
   if (sessions.length === 0) {
-    console.log(chalk.dim("\n📭 还没有任何会话\n"));
+    console.log(chalk.dim(ascii ? "\n还没有任何会话\n" : "\n📭 还没有任何会话\n"));
     return;
   }
 
   // 标题、工作目录与页脚都可能超过窄终端：逐行收进宽度，别让终端替我们折行
   const width = terminalWidth();
+  const titleIcon = ascii ? "" : "📚 ";
   console.log("");
   console.log(
     chalk.cyan(
       truncateToWidth(
-        `📚 会话列表（当前工作目录共 ${sessions.length} 个，越靠下越新）`,
+        `${titleIcon}会话列表（当前工作目录共 ${sessions.length} 个，越靠下越新）`,
         width,
       ),
     ),
@@ -61,13 +64,14 @@ export function handleSessions(options: ReplOptions): void {
     sessions,
     options.sessionStore?.getFilePath(),
     width,
+    ascii,
   )) {
-    console.log(`${chalk.dim("│")} ${line}`);
+    console.log(`${chalk.dim(ascii ? "|" : "│")} ${line}`);
   }
   console.log(
     chalk.dim(
       truncateToWidth(
-        "└ 用 /switch <序号> 切换（会恢复该会话的历史上下文）",
+        `${ascii ? "+" : "└"} 用 /switch <序号> 切换（会恢复该会话的历史上下文）`,
         width,
       ),
     ),

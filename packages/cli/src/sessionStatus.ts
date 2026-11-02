@@ -40,6 +40,7 @@ export function sessionStatusEntries(
   subAgentEnabled = false,
   // 同上：trace 默认关（它是磁盘上额外的敏感数据副本）
   subAgentTrace = false,
+  ascii = false,
 ): Array<[string, string]> {
   const store = options.sessionStore;
   const { window, source } = contextWindowInfo(options);
@@ -58,12 +59,12 @@ export function sessionStatusEntries(
         return `约 ${usage.used} tokens（其中固定开销 ${usage.overhead}，上限 ${usage.budget}，压缩后保留 ${KEEP_RECENT_MESSAGES} 条）· ${store.messageCount()} 条消息`;
       })(),
     ],
-    ...compactionStatusRow(store),
+    ...compactionStatusRow(store, ascii),
     // 用量：模型返回的 usage 此前只在消息里躺着，没人累加，/status 也看不到
     ...(options.usageTracker
       ? ([["用量", formatUsage(options.usageTracker.snapshot())]] as Array<[string, string]>)
       : []),
-    ...subAgentStatusRow(options, subAgentEnabled, subAgentTrace),
+    ...subAgentStatusRow(options, subAgentEnabled, subAgentTrace, ascii),
     // 档位名 + 一句话语义：只写"workspace-write"答不出"下一步会被怎么处理"，
     // 而切到只读档的人恰恰需要这句话（写请求会被静默拒绝）
     [
@@ -84,13 +85,14 @@ function subAgentStatusRow(
   options: ReplOptions,
   subAgentEnabled: boolean,
   subAgentTrace = false,
+  ascii = false,
 ): Array<[string, string]> {
   const stats = options.subAgentStats?.();
-  const traceLabel = subAgentTrace ? " · 🔍 trace 开" : "";
+  const traceLabel = subAgentTrace ? (ascii ? " · trace 开" : " · 🔍 trace 开") : "";
   if (!subAgentEnabled) {
     // 关掉时（也是默认状态）必须占一行：否则用户看到"本会话未委派"会以为是模型不想用，
     // 更不会知道有这条命令可以打开
-    return [["子 Agent", `🚫 已关闭（/subagent 开启）${traceLabel}`]];
+    return [["子 Agent", `${ascii ? "已关闭" : "🚫 已关闭"}（/subagent 开启）${traceLabel}`]];
   }
   if (!stats) {
     return [];
@@ -108,7 +110,7 @@ function subAgentStatusRow(
 }
 
 /** 压缩失败时追加一行说明：否则用户只看到"一直没压缩"，无从判断原因 */
-function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[string, string]> {
+function compactionStatusRow(store: JsonlSessionStore | undefined, ascii = false): Array<[string, string]> {
   const reason = store?.getLastCompactionError();
   if (!reason) {
     return [];
@@ -116,7 +118,7 @@ function compactionStatusRow(store: JsonlSessionStore | undefined): Array<[strin
   return [
     [
       "压缩状态",
-      `⚠️  上次压缩失败（${reason}），已保留完整历史未做删减`,
+      `${ascii ? "[!]" : "⚠️ "} 上次压缩失败（${reason}），已保留完整历史未做删减`,
     ],
   ];
 }
@@ -150,11 +152,12 @@ export function printStatus(
   subAgentEnabled = false,
   subAgentTrace = false,
   width: number = terminalWidth(),
+  ascii = false,
 ): void {
   console.log("");
-  console.log(chalk.cyan("📊 会话状态"));
+  console.log(chalk.cyan(ascii ? "会话状态" : "📊 会话状态"));
   for (const line of sessionStatusLines(
-    sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace),
+    sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace, ascii),
     width,
   )) {
     console.log(chalk.dim(line));
@@ -162,7 +165,7 @@ export function printStatus(
   console.log(
     chalk.dim(
       truncateToWidth(
-        "└ 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换",
+        `${ascii ? "+" : "└"} 用 /new 开新会话，/sessions 查看列表，/switch <序号> 切换`,
         width,
       ),
     ),

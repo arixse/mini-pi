@@ -51,3 +51,13 @@ export function formatVersion(version: string = APP_VERSION): string {
 export function wantsVersion(argv: readonly string[]): boolean {
   return argv.includes("--version") || argv.includes("-v");
 }
+
+/**
+ * 是否要求安静启动（`--quiet` / `-q`）。
+ *
+ * 启动画面（logo + 欢迎块 + 会话回放）日常好看，但在脚本与录屏里是
+ * 十几行噪音。quiet 模式跳过全部装饰，只打一行"已就绪"。
+ */
+export function wantsQuiet(argv: readonly string[]): boolean {
+  return argv.includes("--quiet") || argv.includes("-q");
+}

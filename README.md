@@ -8,6 +8,7 @@
 npm install -g @minipi/mini-pi   # 包名带 scope，命令名不带
 mini-pi --version                # 只看版本号，不进 REPL
 mini-pi                          # 在任意项目目录下启动
+mini-pi --quiet                  # 安静启动：跳过 logo 与欢迎块，只打一行就绪
 ```
 
 从源码运行：

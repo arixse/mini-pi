@@ -133,10 +133,11 @@ export async function startRepl(
   // NO_COLOR 不在这里——它只是"不要颜色"，盲文 spinner 不是颜色；
   // 关掉它 NO_COLOR 用户会退化成一行行静态刷屏。文案颜色由
   // renderContext 的样式开关（同样认 NO_COLOR）负责退化。
+  const asciiMode = Boolean(env.env.MINI_PI_ASCII);
   const status = createStatusLine({
     stream: env.stdout,
     enabled: Boolean(env.stdout.isTTY),
-    ascii: Boolean(env.env.MINI_PI_ASCII),
+    ascii: asciiMode,
   });
   const quiet = (...args: unknown[]): void => {
     status.stop();
@@ -172,7 +173,7 @@ export async function startRepl(
       return parseApprovalAnswer(answer);
     },
     // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
-    ascii: Boolean(env.env.MINI_PI_ASCII),
+    ascii: asciiMode,
     /**
      * 用户在确认时按了 `a`：语义等价于 `/trust`（全权），只是由真实上下文触发。
      *
@@ -181,7 +182,7 @@ export async function startRepl(
      */
     onSessionAllow: () => {
       approvalMode = "full-access";
-      printTrustNotice(true);
+      printTrustNotice(true, asciiMode);
     },
     // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
@@ -409,11 +410,23 @@ export async function startRepl(
     rl.prompt();
   };
 
+  // 排队提示按"一波"聚合：连敲 3 条只提示一次，否则每条一行
+  // "已排队"把真正的回合输出顶得七零八落。一波结束（队列排空）后复位，
+  // 下一波的第一条仍然有提示。
+  let queueNoticeShown = false;
   const scheduler = createInputScheduler(handleLine, {
-    onQueued: () =>
+    onQueued: () => {
+      if (queueNoticeShown) {
+        return;
+      }
+      queueNoticeShown = true;
       console.log(
-        chalk.dim("\n⏳ 上一条消息仍在处理，本条已排队，将在其结束后执行\n"),
-      ),
+        chalk.dim("\n⏳ 上一条消息仍在处理，本条已排队，将在其结束后依次执行\n"),
+      );
+    },
+    onIdle: () => {
+      queueNoticeShown = false;
+    },
     onError: (error) =>
       logger.error("❌ 错误:", error instanceof Error ? error.message : error),
   });

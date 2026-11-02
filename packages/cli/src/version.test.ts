@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { APP_VERSION, PACKAGE_NAME, formatVersion, wantsVersion } from "./version";
+import { APP_VERSION, PACKAGE_NAME, formatVersion, wantsQuiet, wantsVersion } from "./version";
 
 /**
  * 独立于被测模块读一次 package.json：
@@ -56,5 +56,17 @@ describe("wantsVersion", () => {
     // 误判的后果很重：main() 打印完就返回，REPL 根本起不来
     assert.strictEqual(wantsVersion([]), false);
     assert.strictEqual(wantsVersion(["帮我看看这个项目"]), false);
+  });
+});
+
+describe("wantsQuiet", () => {
+  it("认 --quiet 与 -q", () => {
+    assert.strictEqual(wantsQuiet(["--quiet"]), true);
+    assert.strictEqual(wantsQuiet(["-q"]), true);
+  });
+
+  it("普通启动参数不该被误判成安静启动", () => {
+    assert.strictEqual(wantsQuiet([]), false);
+    assert.strictEqual(wantsQuiet(["帮我看看这个项目"]), false);
   });
 });

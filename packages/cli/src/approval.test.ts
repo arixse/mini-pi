@@ -787,3 +787,13 @@ describe("workspaceFileExists（审批提示里的覆盖判断）", () => {
     assert.strictEqual(workspaceFileExists(dir, "   "), false);
   });
 });
+
+describe("审批回执与提示的 ASCII 降级", () => {
+  it("ascii 模式下确认提示头部用 [!]，不出现 emoji", () => {
+    const question = buildApprovalQuestion(call("write_file", { path: "a.ts" }), undefined, undefined, {
+      ascii: true,
+    });
+    assert.ok(question.includes("[!]"), `应有 [!] 状态位：${question}`);
+    assert.ok(!/\p{Extended_Pictographic}/u.test(question), `不该出现 emoji：${question}`);
+  });
+});

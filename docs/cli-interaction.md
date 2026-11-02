@@ -88,7 +88,8 @@ CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
 7. **加载固定上下文**：`getFixedContext()` 读取全局与项目的 `AGENTS.md`。
 8. **加载 Skill 元数据**：`getSkillSummary()` 生成概览并打印。
 9. **构建 System Prompt**：基础提示词 + 自动探测的项目技术栈 + 固定上下文 + Skill 摘要。
-10. **打印 Logo、版本号与欢迎信息**。
+10. **打印 Logo、版本号与欢迎信息**（`--quiet` / `-q` 时跳过 logo、欢迎块、
+    skill 列表与会话回放，只打一行「mini-pi vX · 供应商/模型」）。
 11. **版本更新检测**：只在发现新版本时打印提示（详见 [cli-commands.md](./cli-commands.md) §5.12）。
 12. **进入 REPL**：`startRepl()`。
 
@@ -151,7 +152,9 @@ CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
 2. **空输入**：直接重新显示提示符。
 3. **`/exit` 与 `/quit` 立即处理**，不排队。
 4. **其余输入串行执行**：模型思考期间再敲一行不会并发跑第二个 Agent 循环，
-   而是打印 `⏳ 上一条消息仍在处理，本条已排队，将在其结束后执行` 后排到队尾。
+   而是排到队尾；同一波排队只在第一条时打印
+   `⏳ 上一条消息仍在处理，本条已排队，将在其结束后依次执行`，其余静默
+   （队列排空后复位，下一波重新提示）。
 5. **匹配斜杠命令**（详见 [cli-commands.md](./cli-commands.md) §5）。
 6. **普通对话输入**：
    - 若 `model` 为空，提示先配置模型。
@@ -249,7 +252,9 @@ CLI 入口 `main()`（`packages/cli/src/index.ts`）按以下顺序初始化：
   共用同一套宽度计算；超长时显式带 `…`，而不是让终端自己折行把 gutter 冲乱。
 - **失败时看尾部**：调用失败时正文改为显示**末尾**的 N 行。
 - **省略后给出去处**：页脚追加 `· /last 查看全部`（窄到放不下时可能被截断）。
-- **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`；
+- **降级**：`MINI_PI_ASCII=1` 时图标变为 `[list] [read] [write] [edit] [bash]`，
+  状态位变为 `[ok] / [fail]`（与子 Agent 页脚同一套语法），命令回执与
+  `/sessions` / `/help` / `/status` / 审批提示同步去掉 emoji；
   `NO_COLOR` 或非 TTY 时不输出 ANSI。
 
 ### 4.3 工作状态行

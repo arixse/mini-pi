@@ -66,6 +66,15 @@ export async function handleSlashCommand(
   ctx: SlashCommandContext,
 ): Promise<boolean> {
   const { options, rl } = ctx;
+  /**
+   * 回执的统一模板：**空行 + 一行文案 + 空行**。
+   *
+   * 此前 /new 紧贴上文、/clear 带前后空行、/switch 又带——同一块屏幕上
+   * 三种密度混着，扫读时反而抓不住哪句是命令的结论。状态位在 ASCII 模式
+   * 下降级为 [ok] / [fail]（与工具卡片、子 Agent 页脚同一套语法）。
+   */
+  const okMark = ctx.renderContext.ascii ? "[ok]" : "✅";
+  const failMark = ctx.renderContext.ascii ? "[fail]" : "❌";
 
   if (input === "/exit" || input === "/quit") {
     ctx.requestExit();
@@ -74,7 +83,7 @@ export async function handleSlashCommand(
 
   if (input === "/clear") {
     await clearSession(options);
-    console.log(chalk.dim("\n🗑️  历史已清除\n"));
+    console.log(chalk.dim(ctx.renderContext.ascii ? "\n历史已清除\n" : "\n🗑️  历史已清除\n"));
     return true;
   }
 
@@ -84,7 +93,7 @@ export async function handleSlashCommand(
     const next: ApprovalMode =
       ctx.approvalMode.get() === "full-access" ? "workspace-write" : "full-access";
     ctx.approvalMode.set(next);
-    printTrustNotice(next === "full-access");
+    printTrustNotice(next === "full-access", ctx.renderContext.ascii);
     return true;
   }
 
@@ -106,32 +115,32 @@ export async function handleSlashCommand(
     if (!mode) {
       console.log(
         chalk.red(
-          `\n❌ 无法识别的审批档位：${argument}\n  可选：${APPROVAL_MODES.join(" / ")}\n`,
+          `\n${failMark} 无法识别的审批档位：${argument}\n  可选：${APPROVAL_MODES.join(" / ")}\n`,
         ),
       );
       return true;
     }
     ctx.approvalMode.set(mode);
-    printApprovalNotice(mode);
+    printApprovalNotice(mode, ctx.renderContext.ascii);
     return true;
   }
 
   if (input === "/status") {
-    printStatus(options, ctx.approvalMode.get(), ctx.subAgent.get(), ctx.subAgentTrace.get());
+    printStatus(options, ctx.approvalMode.get(), ctx.subAgent.get(), ctx.subAgentTrace.get(), undefined, ctx.renderContext.ascii);
     return true;
   }
 
   if (input === "/sessions") {
-    handleSessions(options);
+    handleSessions(options, ctx.renderContext.ascii);
     return true;
   }
 
   if (input.startsWith("/switch ")) {
     const target = input.slice(8).trim();
     if (switchSession(options, target)) {
-      console.log(chalk.green(`\n✅ 已切换到会话 ${target}（已恢复其历史上下文）\n`));
+      console.log(chalk.green(`\n${okMark} 已切换到会话 ${target}（已恢复其历史上下文）\n`));
     } else {
-      console.log(chalk.red(`\n❌ 未找到会话：${target}（用 /sessions 查看列表）\n`));
+      console.log(chalk.red(`\n${failMark} 未找到会话：${target}（用 /sessions 查看列表）\n`));
     }
     return true;
   }
@@ -142,7 +151,7 @@ export async function handleSlashCommand(
   }
 
   if (input === "/help") {
-    printHelp();
+    printHelp(undefined, ctx.renderContext.ascii);
     return true;
   }
 
@@ -171,14 +180,12 @@ export async function handleSlashCommand(
         }
         ctx.quiet(
           chalk.green(
-            `\n✅ 已切换到 ${options.modelLabel ?? "新模型"}：上下文窗口 ${next.contextWindow}（${CONTEXT_WINDOW_SOURCE_LABEL[next.contextWindowSource]}）\n`,
+            `\n${okMark} 已切换到 ${options.modelLabel ?? "新模型"}：上下文窗口 ${next.contextWindow}（${CONTEXT_WINDOW_SOURCE_LABEL[next.contextWindowSource]}）\n`,
           ),
         );
       } catch (error) {
-        console.log(
-          chalk.red("\n❌ 切换模型失败:"),
-          error instanceof Error ? error.message : error,
-        );
+        const detail = error instanceof Error ? error.message : error;
+        console.log(chalk.red(`\n${failMark} 切换模型失败: ${detail}\n`));
       }
     }
     return true;
@@ -186,9 +193,9 @@ export async function handleSlashCommand(
 
   if (input === "/new") {
     if (startNewSession(options)) {
-      console.log("✅ 已创建新会话");
+      console.log(chalk.green(`\n${okMark} 已创建新会话\n`));
     } else {
-      console.log(chalk.red("\n❌ 新会话功能未配置\n"));
+      console.log(chalk.red(`\n${failMark} 新会话功能未配置\n`));
     }
     return true;
   }
@@ -211,12 +218,13 @@ export async function handleSlashCommand(
           // 重载必然重算过窗口，来源缺省时按"已配置"展示
           options.contextWindowSource = contextWindowSource ?? "configured";
         }
-        console.log(chalk.green("\n✅ 配置已重载\n"));
+        console.log(chalk.green(`\n${okMark} 配置已重载\n`));
       } catch (error) {
-        console.log(chalk.red("\n❌ 重载失败:"), error instanceof Error ? error.message : error);
+        const detail = error instanceof Error ? error.message : error;
+        console.log(chalk.red(`\n${failMark} 重载失败: ${detail}\n`));
       }
     } else {
-      console.log(chalk.red("\n❌ 重载功能未配置\n"));
+      console.log(chalk.red(`\n${failMark} 重载功能未配置\n`));
     }
     return true;
   }
@@ -269,7 +277,7 @@ export async function handleSlashCommand(
     if (skillName) {
       await handleLoadSkill(options.sessionManager, skillName, options);
     } else {
-      console.log(chalk.red("\n❌ 请指定 skill 名称，例如: /load stock-analysis\n"));
+      console.log(chalk.red(`\n${failMark} 请指定 skill 名称，例如: /load stock-analysis\n`));
     }
     return true;
   }

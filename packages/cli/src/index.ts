@@ -28,7 +28,7 @@ import {
 import { SessionManager } from "@minipi/core/agent/sessionManager";
 import { SkillLoader } from "@minipi/core/agent/skillLoader";
 import { printLogo, printResumedSession, printVersion, printWelcome } from "./ui";
-import { wantsVersion } from "./version";
+import { wantsVersion, wantsQuiet, APP_VERSION, formatVersion } from "./version";
 import { createUpdateChecker, printUpdateNotice } from "./updateCheck";
 import { terminalWidth, truncateToWidth } from "./width";
 import chalk from "chalk";
@@ -438,15 +438,23 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // 从会话文件恢复历史上下文（含压缩摘要），而不是丢弃历史重新开始
   const messages: AgentMessage[] = sessionStore.syncContext([]);
 
-  // 显示 logo 和欢迎信息
-  printLogo();
-  printWelcome(providerName, modelName, { window: contextWindow, source: contextWindowSource });
-  if (skillsNotice) {
-    console.log(chalk.dim(skillsNotice));
-  }
-  if (messages.length > 0) {
-    // 只报条数时用户认不出这是哪次对话，多会话并行很容易在错误的上下文里继续
-    printResumedSession(messages);
+  // 启动画面：quiet 模式（--quiet / -q）跳过 logo、欢迎块、skill 列表与
+  // 会话回放——脚本与录屏里那是十几行噪音。模型名是排障时第一个要问的
+  // 信息，一行就绪里也要带上；没配模型则明说，否则用户以为坏了。
+  if (wantsQuiet(argv)) {
+    const label =
+      providerName && modelName ? `${providerName}/${modelName}` : "未配置模型（/login 与 /model 配置）";
+    console.log(chalk.dim(`mini-pi ${formatVersion(APP_VERSION)} · ${label}`));
+  } else {
+    printLogo();
+    printWelcome(providerName, modelName, { window: contextWindow, source: contextWindowSource });
+    if (skillsNotice) {
+      console.log(chalk.dim(skillsNotice));
+    }
+    if (messages.length > 0) {
+      // 只报条数时用户认不出这是哪次对话，多会话并行很容易在错误的上下文里继续
+      printResumedSession(messages);
+    }
   }
 
   // 会话文件有损坏行时明确告知（加载时已跳过，不影响继续使用）

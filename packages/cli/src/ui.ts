@@ -3,6 +3,7 @@ import { AgentMessage } from "@minipi/core/shared/protocol";
 import { messageText } from "@minipi/core/agent/message";
 import { CONTEXT_WINDOW_SOURCE_LABEL, ResolvedContextWindow } from "@minipi/core/provider";
 import { commandDescription } from "./commands";
+import { MAX_TEXT_WIDTH } from "./render";
 import { APP_VERSION, formatVersion } from "./version";
 import {
   DEFAULT_TERMINAL_WIDTH,
@@ -11,8 +12,7 @@ import {
   wrapToWidth,
 } from "./width";
 
-/** 分隔线的宽度上下限：再宽没有信息量，再窄就只剩装饰 */
-export const SEPARATOR_MAX_WIDTH = 100;
+/** 分隔线的宽度下限：再窄就只剩装饰 */
 export const SEPARATOR_MIN_WIDTH = 24;
 
 /**
@@ -20,13 +20,15 @@ export const SEPARATOR_MIN_WIDTH = 24;
  *
  * 此前写死 60 列：卡片已经能按终端宽度排版了，唯独分隔线在窄终端上折行、
  * 在宽终端上又只占一半，把"自适应"这件事破了个洞。
+ * 上限与卡片正文一致（MAX_TEXT_WIDTH）：宽屏上分隔线只有卡片一半宽，
+ * 同一块启动画面里两套宽度看上去就是排版事故。
  */
 export function separatorLine(
   width: number = process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH,
 ): string {
   const columns = Math.max(
     SEPARATOR_MIN_WIDTH,
-    Math.min(SEPARATOR_MAX_WIDTH, width),
+    Math.min(width, MAX_TEXT_WIDTH),
   );
   return "─".repeat(columns);
 }
@@ -133,6 +135,8 @@ export function printWelcome(
     rule();
   }
 
+  // 启动画面要紧凑：欢迎块只留必要的三条线，命令提示紧跟其后不留空行——
+  // logo 本身已有 8 行，欢迎块每多一条空行都是屏幕高度的净浪费
   console.log();
   // 提示哪几条命令也来自注册表：手工挑命令容易漏，
   // 说明文字改了也是同一份，不会与 /help 说辞打架
@@ -154,7 +158,6 @@ export function printWelcome(
     }
   }
   console.log(chalk.dim(truncateToWidth("  直接输入问题即可开始对话", width)));
-  console.log();
   rule();
   console.log();
 }
