@@ -1,6 +1,6 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert";
-import { createThinkingPrinter } from "./thinking";
+import { createThinkingPrinter, NOOP_THINKING } from "./thinking";
 import { PLAIN_CONTEXT } from "./render";
 import type { RenderContext } from "./render";
 
@@ -8,21 +8,22 @@ import type { RenderContext } from "./render";
  * 推理内容（Thinking）块的渲染用例。
  *
  * 渲染器是纯输出（write 注入），断言直接对写入序列做；样式用 PLAIN_CONTEXT
- * （dim 恒等），所以期望文本里没有 ANSI 转义。
+ * （dim 恒等），所以期望文本里没有 ANSI 转义。等待期的 spinner 用
+ * mock.timers 驱动，验证帧与耗时会随时间前进。
  */
 
-function makePrinter(context: RenderContext = PLAIN_CONTEXT) {
+function makePrinter(context: RenderContext = PLAIN_CONTEXT, spinner = false) {
   const chunks: string[] = [];
   const printer = createThinkingPrinter({
     write: (text) => chunks.push(text),
     context,
+    spinner,
   });
   return {
     printer,
     /** 把写入序列拼成完整文本，便于整体断言 */
     text: (): string => chunks.join(""),
-    /** 断言辅助：去掉换行后不应出现 \r（网关回 \r\n 时的归一化） */
-    hasNoCarriageReturn: (): boolean => !chunks.join("").includes("\r"),
+    chunks,
   };
 }
 
@@ -65,10 +66,11 @@ describe("ThinkingPrinter（推理内容块）", () => {
   });
 
   it("网关回 \\r\\n 时归一化成 \\n，不出现 \\r", () => {
-    const { printer, text, hasNoCarriageReturn } = makePrinter();
+    const { printer, text } = makePrinter();
     printer.print("一行\r\n二行\r\n");
 
-    assert.ok(hasNoCarriageReturn(), "输出不应包含 \\r");
+    // 擦 spinner 的 `\r` 是控制字符，这里没有开 spinner，不应出现
+    assert.ok(!text().includes("\r"), `输出不应包含 \\r：${JSON.stringify(text())}`);
     assert.ok(text().includes("\n│ 二行"));
   });
 
@@ -114,5 +116,101 @@ describe("ThinkingPrinter（推理内容块）", () => {
     assert.ok(out.startsWith("Thinking\n"), `ASCII 块头：${JSON.stringify(out)}`);
     assert.ok(out.includes("| 甲"));
     assert.ok(!out.includes("💭"), "ASCII 模式不应出现 emoji");
+  });
+});
+
+describe("ThinkingPrinter（等待期 spinner）", () => {
+  beforeEach(() => {
+    mock.timers.enable({ apis: ["setInterval", "Date"] });
+  });
+
+  afterEach(() => {
+    mock.timers.reset();
+  });
+
+  it("begin 立即画出一行 Thinking spinner（帧 + 文案 + 耗时）", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+
+    assert.strictEqual(chunks.length, 1, "begin 只画一次，不静态打印多行");
+    assert.match(chunks[0], /^\r⠋ Thinking… 0ms$/);
+  });
+
+  it("时间前进时原地刷新：帧与耗时跟着走，不换行", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    mock.timers.tick(1500);
+
+    const draws = chunks.filter((chunk) => chunk.includes("Thinking…"));
+    assert.ok(draws.length >= 15, `100ms 一帧，1.5s 应至少刷新 15 次：${draws.length}`);
+    assert.match(draws.at(-1)!, /^\r⠴ Thinking… 1\.5s$/);
+    // 全程没有写过 \n：spinner 一直占同一行
+    assert.ok(!chunks.join("").includes("\n"), "spinner 刷新不应换行");
+  });
+
+  it("begin 幂等：重复调用不叠加 spinner", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.begin();
+    mock.timers.tick(100);
+
+    const draws = chunks.filter((chunk) => chunk.includes("Thinking…"));
+    assert.strictEqual(draws.length, 2, "只有一份定时器在刷新（t0 + 100ms）");
+  });
+
+  it("首个增量到达：先擦掉 spinner 再打印块头与正文", () => {
+    const { printer, chunks, text } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.print("推理内容");
+
+    const cleared = chunks.find((chunk) => /^\r +\r$/.test(chunk));
+    assert.ok(cleared, "print 前必须把 spinner 行擦干净");
+    const out = text();
+    const headerIndex = out.indexOf("💭 Thinking");
+    assert.ok(headerIndex >= 0, "应打印块头");
+    assert.ok(out.includes("│ 推理内容"));
+    // 擦除在前，块头与正文在后
+    assert.ok(chunks.indexOf(cleared) < chunks.findIndex((chunk) => chunk.includes("💭 Thinking")));
+    assert.ok(printer.isOpen());
+  });
+
+  it("模型不返回推理直接吐正文：end 擦净 spinner，屏幕不留 Thinking 痕迹", () => {
+    const { printer, text } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.end();
+
+    const out = text();
+    // spinner 画过又被等宽空格擦掉，整行收回
+    assert.ok(out.includes("Thinking…"), "spinner 确实画过");
+    assert.ok(/\r +\r$/.test(out), `擦除必须收回整行：${JSON.stringify(out.slice(-30))}`);
+    // 块头从未打印：正文到达走的是 message_update 的裸 write（在擦净的行首续写），
+    // 不经过 thinking.print，因此终端上完全看不到 Thinking
+    assert.strictEqual(out.split("💭 Thinking").length - 1, 0);
+    assert.ok(!printer.isOpen());
+  });
+
+  it("end 幂等，且收尾后定时器不再刷新", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, true);
+    printer.begin();
+    printer.end();
+    const countAfterEnd = chunks.length;
+    printer.end();
+    assert.strictEqual(chunks.length, countAfterEnd, "end 幂等");
+    mock.timers.tick(500);
+    assert.strictEqual(chunks.length, countAfterEnd, "定时器已被停掉，不再刷新");
+  });
+
+  it("未启用 spinner（非 TTY）时 begin 是空操作", () => {
+    const { printer, chunks } = makePrinter(PLAIN_CONTEXT, false);
+    printer.begin();
+
+    assert.strictEqual(chunks.length, 0, "非 TTY 不刷屏：等待期什么都不写");
+    printer.print("推理");
+    assert.ok(chunks.join("").includes("💭 Thinking"));
+  });
+
+  it("NOOP_THINKING 的 begin 是空操作", () => {
+    assert.doesNotThrow(() => NOOP_THINKING.begin());
+    assert.strictEqual(NOOP_THINKING.isOpen(), false);
   });
 });

@@ -450,6 +450,7 @@ describe("runAgentTurn（回合编排）", () => {
     let ends = 0;
     return {
       printer: {
+        begin: () => {},
         print: (delta) => prints.push(delta),
         end: () => {
           ends += 1;

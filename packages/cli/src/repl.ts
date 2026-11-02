@@ -194,12 +194,14 @@ export async function startRepl(
   const renderContext: RenderContext = createRenderContext();
   // 宽度要跟着终端走：会话是长期存在的，中途拖窗口不该让后续卡片按旧列数排版
   const unfollowWidth = followTerminalWidth(renderContext, env.stdout);
-  // 推理内容（Thinking）的终端落点：模型流式返回思维链时在正文前单独成块。
-  // 开关时机在 `turn.ts`（onThinkingDelta 先停状态行再 print）与
-  // `toolEvents.ts`（正文 / 工具 / 子 Agent 一开始就 end），这里只管"画"。
+  // 推理内容（Thinking）的终端落点：模型流式返回思维链时在正文前单独成块；
+  // 等待模型输出期间块的位置显示 Thinking spinner（旧「思考中」状态行的替代）。
+  // 开关时机在 `toolEvents.ts`（turn_start 开块，正文 / 工具 / 子 Agent 一开始
+  // 就 end）与 `turn.ts`（回合结束兜底），这里只管"画"。
   const thinking = createThinkingPrinter({
     write: (text) => env.stdout.write(text),
     context: renderContext,
+    spinner: Boolean(env.stdout.isTTY) && !env.env.NO_COLOR,
   });
   const onAgentEvent = createAgentEventHandler({
     status,

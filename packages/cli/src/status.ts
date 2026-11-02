@@ -6,10 +6,12 @@
  * - 交互部分通过注入的 `stream` 写入，测试用假流即可断言写入序列；
  * - 非 TTY（管道、重定向）不刷屏，也不使用光标控制，只在状态切换时静态打印一行，
  *   这样 CI 日志里仍能看到"做过什么"。
+ *
+ * 注意：模型思考不再走状态行——那段时间由 Thinking 块的等待 spinner 负责
+ * （见 `thinking.ts`），这里只保留压缩与工具执行两类状态。
  */
 
 export type RunState =
-  | { kind: "thinking"; startedAt: number }
   | { kind: "compacting"; startedAt: number }
   | { kind: "tool"; toolName: string; detail: string; startedAt: number };
 
@@ -52,8 +54,6 @@ export function statusTextPlain(state: RunState): string {
 
 function stateLabel(state: RunState): string {
   switch (state.kind) {
-    case "thinking":
-      return "思考中…";
     case "compacting":
       return "压缩上下文…";
     case "tool":

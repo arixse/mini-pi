@@ -132,7 +132,8 @@ export async function runAgentTurn(
     // 会话文件是上下文的唯一事实来源：先落盘，再按需压缩，最后重建上下文
     await appendUserMessage(options, createUserMessage(input), signal);
 
-    status.set({ kind: "thinking", startedAt: Date.now() });
+    // 等待模型输出期间的状态由 Thinking 块的 spinner 负责（turn_start 开启），
+    // 这里不再往状态行切「思考中」。
     // 脚注里的耗时从真正开始干活算起：排队与读输入不算本回合的账
     const turnStartedAt = Date.now();
 
@@ -166,8 +167,8 @@ export async function runAgentTurn(
       beforeToolCall,
       onEvent: deps.onAgentEvent,
       onThinkingDelta: (delta) => {
-        // 有推理内容就说明模型已经开始产出：spinner 让位给正文
-        status.stop();
+        // 有推理内容就说明模型已经开始产出：Thinking 块自己擦掉等待 spinner
+        // 让位给正文（状态行在 turn_start 时已停，模型调用期间不该有 spinner）
         thinking.print(delta);
       },
       onTurnEnd: async (turnMessages) => {

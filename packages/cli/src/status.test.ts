@@ -63,12 +63,6 @@ describe("status", () => {
   });
 
   describe("statusText", () => {
-    it("思考中：包含帧、文案与耗时", () => {
-      const text = statusText({ kind: "thinking", startedAt: 1000 }, 4200);
-      // 已过 3.2s -> 第 32 个 100ms 槽 -> 10 帧循环取第 2 帧
-      assert.strictEqual(text, "⠹ 思考中… 3.2s");
-    });
-
     it("压缩上下文：文案区分", () => {
       const text = statusText({ kind: "compacting", startedAt: 0 }, 2500);
       assert.ok(text.includes("压缩上下文"));
@@ -101,9 +95,9 @@ describe("status", () => {
         intervalMs: 60_000,
       });
 
-      status.set({ kind: "thinking", startedAt: 0 });
+      status.set({ kind: "compacting", startedAt: 0 });
       // 已过 1.5s -> 第 15 个 100ms 槽 -> 10 帧循环取第 5 帧
-      assert.strictEqual(fake.writes.at(-1), "⠴ 思考中… 1.5s");
+      assert.strictEqual(fake.writes.at(-1), "⠴ 压缩上下文… 1.5s");
 
       status.set({ kind: "tool", toolName: "bash", detail: "npm test", startedAt: 0 });
       const last = fake.writes.at(-1) ?? "";
@@ -125,11 +119,11 @@ describe("status", () => {
         now: () => 0,
       });
 
-      status.set({ kind: "thinking", startedAt: 0 });
+      status.set({ kind: "tool", toolName: "bash", detail: "npm test", startedAt: 0 });
       status.set({ kind: "compacting", startedAt: 0 });
       status.stop();
 
-      assert.deepStrictEqual(fake.writes, ["… 思考中…\n", "… 压缩上下文…\n"]);
+      assert.deepStrictEqual(fake.writes, ["… 执行 npm test…\n", "… 压缩上下文…\n"]);
       assert.ok(!fake.text().includes("\r"));
     });
 
@@ -141,7 +135,7 @@ describe("status", () => {
         intervalMs: 60_000,
       });
 
-      status.set({ kind: "thinking", startedAt: 0 });
+      status.set({ kind: "compacting", startedAt: 0 });
       status.stop();
       const afterFirstStop = fake.writes.length;
       status.stop();
@@ -150,7 +144,7 @@ describe("status", () => {
 
     /**
      * 回归用例：清屏宽度此前用 `text.length`，而状态文案全是中文
-     * （"思考中…" 4 个字符 / 7 个显示列），覆写的空格数不够，
+     * （"压缩上下文…" 5 个字符 / 10 个显示列），覆写的空格数不够，
      * 屏幕上会留下上一帧的残字。
      */
     it("清除时按显示宽度覆写（中文文案不会留残字）", () => {
@@ -162,11 +156,11 @@ describe("status", () => {
         intervalMs: 60_000,
       });
 
-      status.set({ kind: "thinking", startedAt: 0 });
-      const frame = "⠴ 思考中… 1.5s";
+      status.set({ kind: "compacting", startedAt: 0 });
+      const frame = "⠴ 压缩上下文… 1.5s";
       status.stop();
 
-      // 擦除用的空格数必须等于该帧的显示宽度（14 列），而不是它的字符数（11）
+      // 擦除用的空格数必须等于该帧的显示宽度，而不是它的字符数
       assert.strictEqual(fake.writes.at(-1), `\r${" ".repeat(displayWidth(frame))}\r`);
       assert.ok(
         displayWidth(frame) > frame.length,
@@ -239,7 +233,7 @@ describe("status", () => {
       });
 
       status.set({ kind: "compacting", startedAt: 0 });
-      status.set({ kind: "thinking", startedAt: 0 });
+      status.set({ kind: "tool", toolName: "bash", detail: "npm test", startedAt: 0 });
       status.stop();
 
       const widths = clearingWidths(fake.writes);

@@ -417,7 +417,7 @@ describe("createAgentEventHandler（工具卡片的生产接线）", () => {
    * 而第二轮模型思考期间此前没有任何事件把它叫回来——终端上是一段无提示的
    * 空白，用户分不清模型在思考还是已经卡死。`turn_start` 恰好在每次模型调用前发出。
    */
-  it("工具跑完后的下一轮思考要重新出现状态行", async () => {
+  it("工具跑完后的下一轮模型调用要重新竖起 Thinking 块（不再走状态行）", async () => {
     const registry = new ToolRegistry();
     registry.register({
       name: "read_file",
@@ -456,11 +456,19 @@ describe("createAgentEventHandler（工具卡片的生产接线）", () => {
     });
 
     const { status, states } = createFakeStatus();
+    const begins: number[] = [];
+    const thinking = {
+      begin: () => begins.push(begins.length),
+      print: () => {},
+      end: () => {},
+      isOpen: () => false,
+    };
     const handler = createAgentEventHandler({
       status,
       renderContext: context,
       quiet: () => {},
       write: () => {},
+      thinking,
     });
     capture(() => {
       for (const event of result.events) {
@@ -468,14 +476,18 @@ describe("createAgentEventHandler（工具卡片的生产接线）", () => {
       }
     });
 
-    const kinds = states.map((state) => state.kind);
-    const lastTool = kinds.lastIndexOf("tool");
-    const lastThinking = kinds.lastIndexOf("thinking");
-    assert.ok(lastTool >= 0, "应有工具执行状态");
+    // 思考等待期不再占用状态行：RunState 里已没有 thinking 这一支
     assert.ok(
-      lastThinking > lastTool,
-      `工具结束后、下一轮模型调用前应重新显示"思考中"，实际状态序列：${kinds.join(" → ")}`,
+      states.every((state) => state.kind === "tool" || state.kind === "compacting"),
+      `状态行只应有压缩与工具两类，实际：${states.map((s) => s.kind).join(" → ")}`,
     );
+    // 每轮模型调用前都要 begin：首轮 + 工具后的第二轮
+    assert.ok(
+      begins.length >= 2,
+      `两轮模型调用应各 begin 一次 Thinking 块，实际 ${begins.length} 次`,
+    );
+    const lastTool = states.map((state) => state.kind).lastIndexOf("tool");
+    assert.ok(lastTool >= 0, "应有工具执行状态");
   });
 });
 
