@@ -14,13 +14,32 @@
  * 否则 ANSI 转义序列会被计入列宽导致错位。
  */
 
-/** 探测不到终端宽度时的兜底值 */
+/**
+ * 探测不到终端宽度时的兜底值
+ */
 export const DEFAULT_TERMINAL_WIDTH = 80;
+
+/**
+ * 少数落在宽字符区间里、实际按 1 列渲染的码点（text presentation）。
+ *
+ * 首选 `❯`（U+276F）：它在 [0x2600,0x27bf] 区间内，但多数终端按普通
+ * 符号渲染成 1 列；把它算成 2 列会让选择列表的右对齐整体偏 1 列。
+ * 高估的代价是"截早一点"，不会花屏，但对齐会歪，所以单独排除。
+ */
+const NARROW_EXCEPTIONS: ReadonlySet<number> = new Set([0x276f]);
 
 /** East Asian Wide / Fullwidth、常见 emoji 与符号的码点区间（够用即可） */
 const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x1100, 0x115f],
-  [0x2600, 0x27bf], // ☀ ✅ ❌ 等符号，CJK 环境下通常占 2 列
+  [0x2139, 0x2139], // ℹ（代码里恒与 VS16 连用，终端按 emoji 渲染 2 列）
+  [0x2190, 0x2199], // ↑ ↓ ← →：East Asian Ambiguous，CJK 终端按 2 列渲染
+  [0x231a, 0x231b], // ⌚ ⏳（Unicode Wide）
+  [0x23e9, 0x23ec], // ⏩ ⏪ ⏫ ⏬
+  [0x23f0, 0x23f0], // ⏰
+  [0x23f3, 0x23f3], // ⏳（沙漏的另一枚，队列提示在用）
+  [0x23f8, 0x23fa], // ⏸ ⏹ ⏺（与 VS16 连用时终端按 2 列渲染）
+  [0x2600, 0x27bf], // ☀ ✅ ❌ 等符号，CJK 环境下通常占 2 列（❯ 例外见上）
+  [0x2b05, 0x2b07], // ⬅ ⬆ ⬇（更新提示在用，恒与 VS16 连用）
   [0x2e80, 0x303e],
   [0x3041, 0x33ff],
   [0x3400, 0x4dbf],
@@ -49,6 +68,9 @@ export function isZeroWidth(codePoint: number): boolean {
 
 /** 该码点是否占 2 列 */
 export function isWide(codePoint: number): boolean {
+  if (NARROW_EXCEPTIONS.has(codePoint)) {
+    return false;
+  }
   return WIDE_RANGES.some(([start, end]) => codePoint >= start && codePoint <= end);
 }
 
@@ -170,4 +192,20 @@ export function wrapToWidth(text: string, maxWidth: number): string[] {
 /** 当前终端可用列数（拿不到时回退到常见默认值） */
 export function terminalWidth(): number {
   return process.stdout.columns ?? DEFAULT_TERMINAL_WIDTH;
+}
+
+/**
+ * ANSI 转义序列（CSI / OSC / 单字符转义）。
+ *
+ * 外部进程的输出（bash stdout 尾行等）可能带颜色与进度控制序列：
+ * `displayWidth` 会把 ESC 算 1 列导致宽度失真，转义本身还会原样改写
+ * 终端状态（改色、移动光标）。任何**要测量宽度或原地覆写**的文本
+ * 必须先过这里。
+ */
+const ANSI_PATTERN =
+  /\x1b(?:\[[0-9;:?<=>]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+
+/** 剥掉 ANSI 转义序列，留下纯文本 */
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
 }

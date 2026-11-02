@@ -197,8 +197,7 @@ describe("renderToolCall", () => {
     assert.ok(lines.at(-1)?.includes("stderr"));
   });
 
-  it("有颜色时不再重复加 stderr 标记", () => {
-    const lines = renderToolCall(
+  it("有颜色时不再重复加 stderr 标记", () => {    const lines = renderToolCall(
       view({
         name: "bash",
         args: { command: "npm run build" },
@@ -213,6 +212,33 @@ describe("renderToolCall", () => {
 
     const stderrLine = lines.find((line) => line.includes("npm error")) ?? "";
     assert.ok(!stderrLine.includes(STDERR_MARK), "有色时靠颜色区分，不必再加标记");
+  });
+
+  it("无流信息的失败结果：NO_COLOR 下 error 正文也带文本标记", () => {
+    // isError 且没有 stdout/stderr 流：正文整段按 error kind 渲染
+    // （read_file 之类工具的失败路径），此前红色一关就与普通行无差别
+    const failed = view({
+      name: "read_file",
+      args: { path: "nope.ts" },
+      isError: true,
+      finishedAt: 300,
+      result: {
+        content: [{ type: "text", text: "ENOENT: no such file or directory" }],
+        details: {},
+      },
+    });
+
+    const plainLines = renderToolCall(failed, ctx);
+    assert.ok(
+      plainLines.some((line) => line.includes(`${STDERR_MARK}ENOENT`)),
+      `关色时 error 正文应有文本标记：\n${plainLines.join("\n")}`,
+    );
+
+    const coloredLines = renderToolCall(failed, { ...ctx, color: true });
+    assert.ok(
+      !coloredLines.some((line) => line.includes(STDERR_MARK)),
+      "有色时靠颜色区分，不加标记",
+    );
   });
 
   /**
@@ -774,7 +800,8 @@ describe("renderToolCall", () => {
     );
 
     assert.ok(lines[1].includes("❌"));
-    assert.strictEqual(lines[2], "│ ENOENT: no such file");
+    // 无色上下文下 error 正文带文本标记（与 stderr 的补救一致）
+    assert.strictEqual(lines[2], `│ ${STDERR_MARK}ENOENT: no such file`);
   });
 
   it("窄终端：状态另起一行而不是撑破宽度", () => {

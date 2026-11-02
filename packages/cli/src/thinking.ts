@@ -99,6 +99,8 @@ export function createThinkingPrinter(
   let open = false;
   /** 下一次写入是否落在新行的行首（决定要不要补 gutter） */
   let atLineStart = true;
+  /** 当前逻辑行已写入的显示列数（含 gutter）：正文按终端宽度截断用 */
+  let lineCols = 0;
   /** begin() 已调用、还没等到首个增量：spinner 占着行 */
   let waiting = false;
   let spinnerStartedAt = 0;
@@ -115,6 +117,10 @@ export function createThinkingPrinter(
   let retryNote: string | null = null;
 
   const paint = (text: string): string => context.style.dim(text);
+
+  /** 正文可用的列数：终端宽度减去 gutter 占用 */
+  const bodyColumns = (): number =>
+    Math.max(10, context.width - displayWidth(gutter));
 
   const drawSpinner = (): void => {
     const elapsed = Math.max(0, now() - spinnerStartedAt);
@@ -169,6 +175,7 @@ export function createThinkingPrinter(
         write(`${paint(header)}\n`);
         open = true;
         atLineStart = true;
+        lineCols = 0;
         lineCount = 0;
         truncated = false;
         omittedLines = 0;
@@ -191,6 +198,7 @@ export function createThinkingPrinter(
           }
           write("\n");
           atLineStart = true;
+          lineCols = 0;
         }
         const line = parts[index];
         if (truncated || !line) {
@@ -199,9 +207,22 @@ export function createThinkingPrinter(
         if (atLineStart) {
           write(paint(gutter));
           atLineStart = false;
+          lineCols = displayWidth(gutter);
           lineCount += 1;
         }
-        write(paint(line));
+        // 长推理行按终端宽度截断：不截的话终端自然折行会把 gutter 打断，
+        // 续行顶格（与卡片"先测量后着色、按宽度截断"的纪律一致）。
+        // 每行至多出现一个 …：截满后剩余列数为 0，同一行的后续增量直接丢弃。
+        const remaining = bodyColumns() - lineCols;
+        if (remaining <= 0) {
+          continue;
+        }
+        const clipped = truncateToWidth(line, remaining);
+        if (!clipped) {
+          continue;
+        }
+        write(paint(clipped));
+        lineCols += displayWidth(clipped);
       }
     },
 
@@ -223,6 +244,8 @@ export function createThinkingPrinter(
         write(`${paint(gutter)}… 已省略 ${omittedLines} 行（/thinking off 可关闭显示）\n`);
       }
       open = false;
+      atLineStart = true;
+      lineCols = 0;
       lineCount = 0;
       truncated = false;
       omittedLines = 0;

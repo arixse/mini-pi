@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   createAgentEventHandler,
+  lastLineOf,
   printLastToolOutput,
   printToolInfo,
   resetToolRenderState,
@@ -22,6 +23,25 @@ import { ToolResult } from "@minipi/core/shared/protocol";
 
 /** 固定宽度 + 纯文本样式：断言不依赖测试终端的实际列数与色彩能力 */
 const context = { ...PLAIN_CONTEXT, width: 100 } as RenderContext;
+
+describe("lastLineOf（状态行尾行）", () => {
+  it("取最后一个非空行，\\r 与 \\n 都算边界", () => {
+    assert.strictEqual(lastLineOf("a\r\nb\rc\nd"), "d");
+    assert.strictEqual(lastLineOf("only"), "only");
+    assert.strictEqual(lastLineOf(""), "");
+  });
+
+  it("剥掉 ANSI 转义：ESC 不能计入宽度，也不能原样改写终端状态", () => {
+    const raw = "\x1b[32mPASS\x1b[0m src/a.test.ts";
+    const line = lastLineOf(`${raw}\n`);
+    assert.strictEqual(line, "PASS src/a.test.ts");
+    assert.ok(!line.includes("\x1b"), `尾行不应有转义：${JSON.stringify(line)}`);
+
+    // 进度条式输出（\r 重绘 + 转义）同样干净（"50%" 前的空格是内容本身）
+    const progress = lastLineOf("\x1b[2K\r\x1b[1G\x1b[?25h 50%");
+    assert.strictEqual(progress, " 50%");
+  });
+});
 
 describe("printToolInfo", () => {
   it("start 事件只缓存，end 事件才输出卡片", () => {

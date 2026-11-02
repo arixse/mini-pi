@@ -20,6 +20,7 @@ import {
 } from "./render";
 import type { StatusController } from "./status";
 import type { ThinkingPrinter } from "./thinking";
+import { stripAnsi } from "./width";
 
 // 缓存 tool_execution_start 事件信息
 const toolStartCache = new Map<
@@ -46,7 +47,9 @@ const MAX_PROGRESS_BUFFER_CHARS = 8192;
 /** 取缓冲里的最后一个非空行（\r 与 \n 都算行边界：进度条只回 \r） */
 export function lastLineOf(buffer: string): string {
   const parts = buffer.split(/[\r\n]+/).filter(Boolean);
-  return parts.at(-1) ?? "";
+  // 外部命令的输出可能带颜色 / 进度控制序列：状态行要按显示宽度覆写，
+  // ESC 计入宽度会失真，转义原样写还会改写终端状态，进状态行前必须剥掉
+  return stripAnsi(parts.at(-1) ?? "");
 }
 
 /**

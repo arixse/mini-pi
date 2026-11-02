@@ -30,6 +30,7 @@ import { SkillLoader } from "@minipi/core/agent/skillLoader";
 import { printLogo, printResumedSession, printVersion, printWelcome } from "./ui";
 import { wantsVersion } from "./version";
 import { createUpdateChecker, printUpdateNotice } from "./updateCheck";
+import { terminalWidth, truncateToWidth } from "./width";
 import chalk from "chalk";
 
 /**
@@ -405,10 +406,14 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // 加载最近的 session 或创建新的
   const sessionStore = sessionManager.loadLatestSession();
 
-  // 加载 skill 元数据并生成摘要
+  // 加载 skill 元数据并生成摘要；**加载必须留在 buildPrompt 之前**（提示词
+  // 依赖它），但打印推迟到 logo 之后——启动画面第一行不该是 skills 列表
+  let skillsNotice: string | null = null;
   if (sessionManager.getSkillSummary()) {
     const skills = sessionManager.loadSkillMetadata()
-    console.log(chalk.dim(`[Skills]\n ${skills.length > 0 ? skills.map(skill => skill.name).join(',') : ''}`));
+    const names = skills.map(skill => skill.name).join(',')
+    // skill 多时名字列表可能超宽：按终端宽度截断，超出的用 … 收尾
+    skillsNotice = `[Skills] ${names ? truncateToWidth(names, Math.max(20, terminalWidth() - 10)) : ''}`;
   }
 
   // 已加载 skill 的名单：/load 原地追加，/reload 重组时同一引用可见
@@ -436,6 +441,9 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   // 显示 logo 和欢迎信息
   printLogo();
   printWelcome(providerName, modelName, { window: contextWindow, source: contextWindowSource });
+  if (skillsNotice) {
+    console.log(chalk.dim(skillsNotice));
+  }
   if (messages.length > 0) {
     // 只报条数时用户认不出这是哪次对话，多会话并行很容易在错误的上下文里继续
     printResumedSession(messages);
@@ -455,15 +463,15 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   }
 
   /**
-   * 版本更新检测：放在全部启动信息之后、REPL 之前。
-   *
-   * 代价上限是"每天一次、每次最多 5s 超时"（结果有 24h 缓存），
-   * 换来的是不会有人永远用着旧版本；非交互终端、环境变量
-   * `MINI_PI_SKIP_UPDATE_CHECK`、settings.json 的 `updateCheck: false`
-   * 都会跳过，检查失败保持安静——用户没问，就不解释网络状况。
+   * 版本更新检测：**不阻塞 REPL**。此前 await 在这里，网络慢时最坏
+   * 5s 超时才进得去提示符，为一条可有可无的升级提示扣住整个启动。
+   * 改成后台跑，结果出来后再补一行（checkOnStartup 自身吞错，
+   * 这里再兜一层避免未处理的 rejection）。
    */
-  const updateResult = await updateChecker.checkOnStartup();
-  printUpdateNotice(updateResult);
+  void updateChecker
+    .checkOnStartup()
+    .then((result) => printUpdateNotice(result))
+    .catch(() => {});
 
   // 创建新会话的回调函数：返回新的 store，由 REPL 切换并重建上下文
   const { onNewSession, onSwitchSession } = createSessionCallbacks(sessionManager);

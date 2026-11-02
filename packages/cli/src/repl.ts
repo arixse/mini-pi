@@ -129,10 +129,13 @@ export async function startRepl(
     prompt: chalk.cyan("> "),
   });
 
-  // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行
+  // 工作状态行：TTY 上原地刷新 spinner，非 TTY 只打印静态行。
+  // NO_COLOR 不在这里——它只是"不要颜色"，盲文 spinner 不是颜色；
+  // 关掉它 NO_COLOR 用户会退化成一行行静态刷屏。文案颜色由
+  // renderContext 的样式开关（同样认 NO_COLOR）负责退化。
   const status = createStatusLine({
     stream: env.stdout,
-    enabled: Boolean(env.stdout.isTTY) && !env.env.NO_COLOR,
+    enabled: Boolean(env.stdout.isTTY),
     ascii: Boolean(env.env.MINI_PI_ASCII),
   });
   const quiet = (...args: unknown[]): void => {
@@ -208,7 +211,8 @@ export async function startRepl(
   const thinking = createThinkingPrinter({
     write: (text) => env.stdout.write(text),
     context: renderContext,
-    spinner: Boolean(env.stdout.isTTY) && !env.env.NO_COLOR,
+    // 与状态行同一口径：spinner 跟 TTY 走，不跟 NO_COLOR 走
+    spinner: Boolean(env.stdout.isTTY),
     enabled: () => showThinking,
   });
   const onAgentEvent = createAgentEventHandler({

@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { createThinkingPrinter, NOOP_THINKING } from "./thinking";
 import { PLAIN_CONTEXT } from "./render";
 import type { RenderContext } from "./render";
+import { displayWidth } from "./width";
 
 /**
  * 推理内容（Thinking）块的渲染用例。
@@ -388,5 +389,56 @@ describe("ThinkingPrinter（/thinking 开关）", () => {
     assert.ok(!out.includes("关闭期间"));
     assert.ok(out.includes("💭 Thinking"));
     assert.ok(out.includes("重开后的增量"));
+  });
+});
+
+/**
+ * 长推理行按终端宽度截断：不截的话终端自然折行，续行顶格、
+ * gutter 断裂——与卡片"先测量后着色、按宽度截断"的纪律一致。
+ */
+describe("ThinkingPrinter（正文宽度截断）", () => {
+  const narrow: RenderContext = { ...PLAIN_CONTEXT, width: 20 };
+
+  it("超宽行截到终端宽度内，且同一逻辑行只留一个省略号", () => {
+    const { printer, chunks } = makePrinter(narrow);
+    printer.print("一".repeat(60)); // 120 列，远超 20 列终端
+
+    const out = chunks.join("");
+    for (const line of out.split("\n")) {
+      assert.ok(
+        displayWidth(line) <= 20,
+        `行宽 ${displayWidth(line)} 超出 20 列：${JSON.stringify(line)}`,
+      );
+    }
+    assert.ok(out.includes("…"), "截断处应有省略号");
+    assert.strictEqual(out.split("…").length - 1, 1, "同一逻辑行只留一个省略号");
+  });
+
+  it("同一行的后续增量在截满后丢弃，不折出第二行", () => {
+    const { printer, chunks } = makePrinter(narrow);
+    printer.print("一".repeat(20)); // 40 列，首轮就截满
+    printer.print("这段是截满后到达的增量");
+
+    const body = chunks.join("").split("\n").slice(1).join("\n");
+    assert.ok(!body.includes("\n"), "同一逻辑行不应折出第二行");
+    assert.ok(!body.includes("这段"), "截满后的增量不应再写");
+  });
+
+  it("换行后新行恢复完整宽度可用", () => {
+    const { printer, chunks } = makePrinter(narrow);
+    printer.print("一".repeat(30));
+    printer.print("\n短行");
+
+    const body = chunks.join("").split("\n");
+    assert.ok(body[1].includes("│ 一"));
+    assert.ok(body.at(-1)?.includes("│ 短行"), `新行应完整渲染：${JSON.stringify(body)}`);
+  });
+
+  it("宽度充裕时不截断、不出现省略号", () => {
+    const { printer, text } = makePrinter();
+    printer.print("正常的推理内容");
+
+    assert.ok(text().includes("正常的推理内容"));
+    assert.ok(!text().includes("…"));
   });
 });

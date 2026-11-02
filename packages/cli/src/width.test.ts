@@ -53,6 +53,24 @@ describe("width", () => {
       assert.strictEqual(isWide("a".codePointAt(0) ?? 0), false);
       assert.strictEqual(isZeroWidth("️".codePointAt(0) ?? 0), true);
     });
+
+    /**
+     * 这组期望值是**独立字面量**，不是从 `displayWidth` 推出来的：
+     * renderOverflow.test 的宽度不变量用的是同一个 `displayWidth`，
+     * 表错了那边恒绿，所以表本身必须在这里被钉住。
+     * 依据：CJK 终端（Windows Terminal / iTerm2 / VS Code）的实际渲染。
+     */
+    it("实际在用的符号按终端真实渲染钉住（字面量期望，不与表同源）", () => {
+      // 低估方向：此前不在表内、终端却渲染 2 列
+      assert.strictEqual(charDisplayWidth("⏳"), 2); // U+23F3 队列提示
+      assert.strictEqual(charDisplayWidth("⏹"), 2); // U+23F9 取消提示
+      assert.strictEqual(charDisplayWidth("⬆"), 2); // U+2B06 更新提示
+      assert.strictEqual(charDisplayWidth("ℹ"), 2); // U+2139 skill 提示
+      assert.strictEqual(charDisplayWidth("↑"), 2); // U+2191 选择列表 / 脚注
+      assert.strictEqual(charDisplayWidth("↓"), 2); // U+2193
+      // 高估方向：落在 2600-27bf 区间、实际按 text presentation 渲染 1 列
+      assert.strictEqual(charDisplayWidth("❯"), 1); // U+276F 选择光标
+    });
   });
 
   describe("truncateToWidth", () => {

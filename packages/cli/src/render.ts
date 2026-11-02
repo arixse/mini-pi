@@ -815,12 +815,14 @@ export const STDERR_MARK = "! ";
 function paintBodyLine(line: BodyLine, ctx: RenderContext): string {
   switch (line.kind) {
     case "stderr":
-      return ctx.style.yellow(ctx.color ? line.text : `${STDERR_MARK}${line.text}`);
+      return ctx.style.yellow(line.text);
     case "add":
       return ctx.style.green(line.text);
     case "remove":
       return ctx.style.red(line.text);
     case "error":
+      // 无色时 stderr / error 的 "! " 标记在正文装配处、**测量之前**拼进
+      // 文本（见 renderToolCall 的正文循环）——在这里补会把整行顶出终端
       return ctx.style.red(line.text);
     case "dim":
       return ctx.style.dim(line.text);
@@ -910,8 +912,15 @@ export function renderToolCall(view: ToolCallView, ctx: RenderContext): string[]
     lines.push(bodyLimitNote(`… 已省略前 ${window.headOmitted} 行`));
   }
   for (const line of window.lines) {
+    // 无色时 stderr / error 靠行首 `! ` 标记区分语义（颜色没了语义不能没）。
+    // 标记必须在**测量之前**拼进去：先截断再补标记会凭空多出 2 列，
+    // 30 列终端上正好溢出折行（renderOverflow 的宽度不变量抓过这一条）。
+    const mark =
+      !ctx.color && (line.kind === "stderr" || line.kind === "error")
+        ? STDERR_MARK
+        : "";
     const text = truncateToWidth(
-      line.text,
+      `${mark}${line.text}`,
       contentWidth(ctx, displayWidth(gutterPlain) + 1),
     );
     lines.push(`${gutterWithIndent} ${paintBodyLine({ ...line, text }, ctx)}`);
