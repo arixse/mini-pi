@@ -10,6 +10,35 @@
 import { ToolCallContent, ToolResultMessage } from "../shared/protocol";
 import { createTextContent } from "./message";
 import { ToolRegistry } from "./tools/registry";
+import type { ToolProgressReporter } from "./tools/types";
+
+/** 工具进度增量的最小发射间隔（毫秒）：避免大输出把事件流冲爆 */
+export const TOOL_PROGRESS_INTERVAL_MS = 500;
+
+/**
+ * 给进度回调加时间节流：间隔内的增量静默丢弃。
+ *
+ * CLI 只显示输出的最后一行，丢中间的没有损失；而一个跑几分钟的构建
+ * 可能吐几 MB 输出，逐块发事件会把事件流和客户端的 journal 缓冲冲爆。
+ * 时间基而不是定时器：不引入 timer 生命周期，测试可注入 now 精确驱动。
+ */
+export function createThrottledProgressSink(
+  onProgress: ToolProgressReporter,
+  intervalMs: number = TOOL_PROGRESS_INTERVAL_MS,
+  now: () => number = Date.now,
+): ToolProgressReporter {
+  let lastEmittedAt = -Infinity;
+  return (delta: string): void => {
+    if (!delta) {
+      return;
+    }
+    const at = now();
+    if (at - lastEmittedAt >= intervalMs) {
+      lastEmittedAt = at;
+      onProgress(delta);
+    }
+  };
+}
 
 /** 被审批拦下的工具调用：同样要有结果，否则 assistant 消息缺配对 */
 export function createBlockedToolResult(
@@ -73,12 +102,14 @@ export async function executeToolCall(
   toolCall: ToolCallContent,
   toolRegistry: ToolRegistry,
   signal?: AbortSignal,
+  onProgress?: ToolProgressReporter,
 ): Promise<ToolResultMessage> {
   try {
     const result = await toolRegistry.execute(
       toolCall.name,
       toolCall.arguments,
       signal,
+      onProgress,
     );
     return {
       role: "toolResult",

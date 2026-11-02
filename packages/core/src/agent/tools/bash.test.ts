@@ -298,3 +298,49 @@ describe("bash 工具（执行、输出上限、超时与终止）", () => {
     });
   });
 });
+
+describe("bash 流式输出（长命令实时可见）", () => {
+  beforeEach(() => workspace.reset());
+  afterEach(() => workspace.remove());
+
+  it("执行期间把 stdout 增量喂给 onProgress，最终结果不受影响", async () => {
+    const registry = createToolRegistry(testDir);
+    const deltas: string[] = [];
+    const result = await registry.execute(
+      "bash",
+      {
+        command: 'node -e "console.log(\'line-1\'); setTimeout(() => console.log(\'line-2\'), 200)"',
+      },
+      undefined,
+      (delta) => deltas.push(delta),
+    );
+
+    const streamed = deltas.join("");
+    assert.ok(streamed.includes("line-1"), `增量里要有第一行：${JSON.stringify(deltas)}`);
+    assert.ok(streamed.includes("line-2"), `增量里要有第二行：${JSON.stringify(deltas)}`);
+    // 最终结果与不传 onProgress 时一致
+    assert.ok(result.content[0].text.includes("line-1"));
+    assert.ok(result.content[0].text.includes("line-2"));
+    assert.notStrictEqual(result.isError, true);
+  });
+
+  it("stderr 的增量同样喂给 onProgress", async () => {
+    const registry = createToolRegistry(testDir);
+    const deltas: string[] = [];
+    await registry.execute(
+      "bash",
+      { command: 'node -e "console.error(\'err-progress\')"' },
+      undefined,
+      (delta) => deltas.push(delta),
+    );
+
+    assert.ok(deltas.join("").includes("err-progress"), JSON.stringify(deltas));
+  });
+
+  it("不传 onProgress 时照常工作（进度是可选能力）", async () => {
+    const registry = createToolRegistry(testDir);
+    const result = await registry.execute("bash", { command: "echo no-progress" });
+
+    assert.ok(result.content[0].text.includes("no-progress"));
+  });
+});

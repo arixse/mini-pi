@@ -13,7 +13,17 @@
 
 export type RunState =
   | { kind: "compacting"; startedAt: number }
-  | { kind: "tool"; toolName: string; detail: string; startedAt: number };
+  | {
+      kind: "tool";
+      toolName: string;
+      detail: string;
+      startedAt: number;
+      /**
+       * 长命令（bash）的最近一行输出：执行期间跟随 stdout 尾部刷新，
+       * 让跑几分钟的构建不再是黑盒。可变字段，由 `progress()` 原地更新。
+       */
+      tail?: string;
+    };
 
 const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ASCII_FRAMES = ["|", "/", "-", "\\"];
@@ -40,11 +50,12 @@ export function spinnerFrame(elapsedMs: number, ascii = false, intervalMs = 100)
   return frames[index];
 }
 
-/** 状态行的完整文本（带 spinner 与耗时） */
+/** 状态行的完整文本（带 spinner 与耗时；工具执行中附带输出尾行） */
 export function statusText(state: RunState, now: number, ascii = false): string {
   const elapsedMs = now - state.startedAt;
   const frame = spinnerFrame(elapsedMs, ascii);
-  return `${frame} ${stateLabel(state)} ${formatDuration(elapsedMs)}`;
+  const tail = state.kind === "tool" && state.tail ? ` · ${state.tail}` : "";
+  return `${frame} ${stateLabel(state)} ${formatDuration(elapsedMs)}${tail}`;
 }
 
 /** 非 TTY 下打印的静态文案（无动画、无耗时） */
@@ -95,6 +106,13 @@ export type StatusController = {
    * 全部结束才 {@link stop}。
    */
   end(id: string): void;
+  /**
+   * 更新一个执行中工具的输出尾行（`tool_progress`）。
+   *
+   * 只对当前显示的那个工具生效：并发时状态行只属于最早开始的那一个，
+   * 别的工具的进度混进来会互相踩。非 TTY 下是空操作（卡片会展示完整输出）。
+   */
+  progress(id: string, tail: string): void;
 };
 
 export type StatusOptions = {
@@ -221,6 +239,20 @@ export function createStatusLine(options: StatusOptions): StatusController {
       // 卡片打印完由 resume() 在新的空行上重新起 spinner。
       if (enabled) {
         state = pending.values().next().value as RunState;
+      }
+    },
+
+    progress(id: string, tail: string): void {
+      if (!enabled) {
+        return;
+      }
+      const entry = pending.get(id);
+      if (!entry || entry.kind !== "tool" || !tail) {
+        return;
+      }
+      entry.tail = tail;
+      if (state === entry) {
+        draw();
       }
     },
 

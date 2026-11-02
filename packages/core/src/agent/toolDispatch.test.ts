@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mapWithConcurrency } from "./toolDispatch";
+import { createThrottledProgressSink, mapWithConcurrency } from "./toolDispatch";
 
 /**
  * 并发批次的调度。
@@ -79,5 +79,40 @@ describe("mapWithConcurrency", () => {
         }),
       { message: "boom" },
     );
+  });
+});
+
+describe("createThrottledProgressSink（工具进度节流）", () => {
+  it("间隔内的增量静默丢弃，只放第一个", () => {
+    const seen: string[] = [];
+    let at = 0;
+    const sink = createThrottledProgressSink((delta) => seen.push(delta), 500, () => at);
+
+    sink("a");
+    at = 200;
+    sink("b");
+    at = 499;
+    sink("c");
+    at = 500;
+    sink("d");
+
+    assert.deepStrictEqual(seen, ["a", "d"], "500ms 内只发首条");
+  });
+
+  it("空增量与零间隔边界：interval 内不算到达", () => {
+    const seen: string[] = [];
+    let at = 1000;
+    const sink = createThrottledProgressSink((delta) => seen.push(delta), 500, () => at);
+
+    sink("");
+    assert.deepStrictEqual(seen, [], "空增量不触发");
+
+    sink("x"); // lastEmittedAt 从 -Infinity 起，首条必发
+    at = 1000;
+    sink("y"); // 与上一条同一时刻：不算超过间隔
+    at = 1500;
+    sink("z");
+
+    assert.deepStrictEqual(seen, ["x", "z"]);
   });
 });

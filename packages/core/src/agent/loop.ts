@@ -4,6 +4,7 @@ import { createTextContent, newMessageId } from "./message";
 import {
     MAX_CONCURRENT_TOOL_CALLS,
     createBlockedToolResult,
+    createThrottledProgressSink,
     executeToolCall,
     mapWithConcurrency,
 } from "./toolDispatch";
@@ -465,9 +466,20 @@ export async function runAgentLoop(options:RunAgentLoopOptions):Promise<{
                 [...executables.entries()],
                 MAX_CONCURRENT_TOOL_CALLS,
                 async ([index, executable]) => {
+                    // 长命令（bash）执行期间的流式输出：节流后转成 tool_progress 事件，
+                    // 终端状态行才能跟随 stdout 尾部，而不是盯着一行 spinner 干等
+                    const onProgress = createThrottledProgressSink((delta) => {
+                        emit({
+                            type:"tool_progress",
+                            toolCallId:executable.id,
+                            toolName:executable.name,
+                            delta,
+                            identity: options.identity,
+                        })
+                    })
                     executed.set(
                         index,
-                        await executeToolCall(executable, options.toolRegistry, signal),
+                        await executeToolCall(executable, options.toolRegistry, signal, onProgress),
                     )
                 },
             )

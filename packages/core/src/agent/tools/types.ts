@@ -1,8 +1,17 @@
 import { ToolDefinition, ToolResult } from "../../shared/protocol";
 
+/**
+ * 工具执行期间的流式输出增量（目前只有 bash 使用）。
+ *
+ * 调用方（loop 层）负责节流与事件化：工具只管"有新输出就喂"，
+ * 不该关心下游是终端 spinner 还是网页。
+ */
+export type ToolProgressReporter = (delta: string) => void;
+
 type ToolExecutor = (
   args: Record<string, unknown>,
   signal?: AbortSignal,
+  onProgress?: ToolProgressReporter,
 ) => Promise<ToolResult>;
 
 /**

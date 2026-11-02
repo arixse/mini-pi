@@ -1228,6 +1228,54 @@ describe("loop", () => {
       );
     });
 
+    it("工具报告进度时发出 tool_progress 事件（带调用 ID 与增量）", async () => {
+      const events: AgentEvent[] = [];
+      let calls = 0;
+      const registry = new ToolRegistry();
+      registry.register({
+        name: "progress_tool",
+        description: "test double",
+        parameters: { type: "object", properties: {} },
+        async execute(_args, _signal, onProgress) {
+          // 两条增量间隔远小于节流窗口：内核层只放行第一条
+          onProgress?.("alpha");
+          onProgress?.("beta");
+          return { content: [createTextContent("done")] };
+        },
+      });
+      const model: LlmModel = {
+        async complete() {
+          calls += 1;
+          if (calls === 1) {
+            return createAssistantMessage([
+              {
+                type: "toolCall",
+                id: "call-p1",
+                name: "progress_tool",
+                arguments: {},
+              },
+            ]);
+          }
+          return createAssistantMessage([createTextContent("final")]);
+        },
+      };
+
+      await runAgentLoop({
+        systemPrompt: "s",
+        messages: [{ role: "user", content: [createTextContent("hi")], timestamp: Date.now() }],
+        tools: [],
+        model,
+        toolRegistry: registry,
+        onEvent: (event) => events.push(event),
+      });
+
+      const progress = eventsOfType(events, "tool_progress");
+      assert.ok(progress.length >= 1, "至少发出一条进度事件");
+      assert.strictEqual(progress[0].toolCallId, "call-p1");
+      assert.strictEqual(progress[0].toolName, "progress_tool");
+      assert.ok(progress[0].delta.includes("alpha"));
+    });
+
     it("模型抛错时也要收好生命周期并产出一条错误消息", async () => {
       const events: AgentEvent[] = [];
       const model: LlmModel = {

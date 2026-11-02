@@ -215,6 +215,14 @@ export type AgentEvent =
      * 事件可能经 SSE 序列化，Error 对象过去就只剩 `{}`。
      */
     | {type:"model_retry";attempt:number;delayMs:number;error:string;identity?:AgentIdentity}
+    /**
+     * 工具执行的流式输出增量。
+     *
+     * 目前只有 bash 会发（长命令执行期间状态行跟随 stdout 尾部），
+     * 增量是原始 delta，消费方自己拼接。发出前在 loop 层做了节流
+     * （500ms 一批），避免大输出把事件流和客户端的 journal 缓冲冲爆。
+     */
+    | {type:"tool_progress";toolCallId:string;toolName:string;delta:string;identity?:AgentIdentity}
 
 export type SessionResponse = {
     sessionId:string

@@ -56,9 +56,12 @@ export function createFakeStatus(): {
   status: StatusController;
   states: RunState[];
   counters: { stopped: number };
+  /** progress(id, tail) 的调用记录（tool_progress 接线用） */
+  progressCalls: Array<{ id: string; tail: string }>;
 } {
   const states: RunState[] = [];
   const counters = { stopped: 0 };
+  const progressCalls: Array<{ id: string; tail: string }> = [];
   const status: StatusController = {
     set: (state) => {
       states.push(state);
@@ -72,10 +75,13 @@ export function createFakeStatus(): {
       states.push(state);
     },
     end: () => {},
+    progress: (id, tail) => {
+      progressCalls.push({ id, tail });
+    },
     suspend: () => {},
     resume: () => {},
   };
-  return { status, states, counters };
+  return { status, states, counters, progressCalls };
 }
 
 /** 抓下 `run` 期间写到 console.log 的全部内容 */

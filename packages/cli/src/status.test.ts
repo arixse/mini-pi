@@ -345,3 +345,67 @@ describe("status", () => {
     });
   });
 });
+
+describe("statusText（工具输出尾行）", () => {
+  it("progress 更新尾行并随下一帧画出", () => {
+    const fake = createFakeStream();
+    const status = createStatusLine({
+      stream: fake.stream,
+      enabled: true,
+      now: () => 1000,
+      intervalMs: 60_000,
+    });
+
+    status.begin("t1", { kind: "tool", toolName: "bash", detail: "npm test", startedAt: 0 });
+    status.progress("t1", "PASS src/a.test.ts");
+    const frame = fake.text().split("\r").at(-1) ?? "";
+
+    assert.ok(frame.includes("执行 npm test…"), `基础文案还在：${frame}`);
+    assert.ok(frame.includes("PASS src/a.test.ts"), `尾行要画进状态行：${frame}`);
+  });
+
+  it("并发时只有当前显示的那个工具接受进度", () => {
+    const fake = createFakeStream();
+    const status = createStatusLine({
+      stream: fake.stream,
+      enabled: true,
+      now: () => 1000,
+      intervalMs: 60_000,
+    });
+
+    status.begin("a", { kind: "tool", toolName: "bash", detail: "one", startedAt: 0 });
+    status.begin("b", { kind: "tool", toolName: "bash", detail: "two", startedAt: 0 });
+    status.progress("a", "来自 a 的尾行");
+    const frame = fake.text().split("\r").at(-1) ?? "";
+    assert.ok(!frame.includes("来自 a 的尾行"), "状态行显示的是 b，a 的进度不该混进来");
+    status.progress("b", "来自 b 的尾行");
+    assert.ok((fake.text().split("\r").at(-1) ?? "").includes("来自 b 的尾行"));
+  });
+
+  it("工具结束时缓冲清掉，尾行不残留到下一帧", () => {
+    const fake = createFakeStream();
+    const status = createStatusLine({
+      stream: fake.stream,
+      enabled: true,
+      now: () => 1000,
+      intervalMs: 60_000,
+    });
+
+    status.begin("t1", { kind: "tool", toolName: "bash", detail: "one", startedAt: 0 });
+    status.progress("t1", "some tail");
+    status.end("t1");
+    status.begin("t2", { kind: "tool", toolName: "bash", detail: "two", startedAt: 0 });
+    mockTimersTick(status);
+
+    assert.ok(
+      !(fake.text().split("\r").at(-1) ?? "").includes("some tail"),
+      "上一个工具的尾行不能残留",
+    );
+  });
+
+  /** 手动触发一次重绘：resume 会 apply 当前状态 */
+  function mockTimersTick(status: ReturnType<typeof createStatusLine>): void {
+    status.suspend();
+    status.resume();
+  }
+});

@@ -6,20 +6,20 @@
  * 改超时逻辑的人很容易漏掉"超时之后到底杀了谁"。
  */
 
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createTextContent } from "../message";
 import { numberArg, stringArg } from "./args";
 import { checkBashCommand } from "./workspace";
-import type { RegisteredTool } from "./types";
+import type { RegisteredTool, ToolProgressReporter } from "./types";
 
 /** 单次 bash 返回的最大行数 */
 export const MAX_BASH_OUTPUT_CHARS = 20_000;
 
 /**
  * exec 的缓冲区上限：比返回上限宽松得多。
- * 超过它 Node 会直接杀掉子进程并抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER，
- * 那时连有用输出都拿不到，所以留足余量。
+ * 超过它我们主动终止命令（与 exec 的 maxBuffer 行为对齐），
+ * 否则连有用输出都拿不到，所以留足余量。
  */
 const BASH_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
@@ -184,7 +184,7 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
       },
       required: ["command"],
     },
-    async execute(args, signal) {
+    async execute(args, signal, onProgress) {
       const command = stringArg(args.command, "");
       if (!command) {
         throw new Error("Command cannot be empty");
@@ -199,15 +199,26 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
       let timer: NodeJS.Timeout | null = null;
 
       /**
-       * 自己管超时（不用 exec 的 timeout）。
+       * 自己管超时（不用 SDK 式的 timeout 选项）。
        *
-       * exec 的 timeout 会先杀掉 shell，孙进程随即变成孤儿——既继续占资源，
-       * 又锁住自己作为 cwd 的目录。由我们先 taskkill /T 结束整棵树，才名副其实。
+       * 超时要先 taskkill /T 结束整棵树：只杀 shell 的话孙进程变成孤儿——
+       * 既继续占资源，又锁住自己作为 cwd 的目录。
+       *
+       * 用 spawn + 流式收集而不是一次性 exec：stdout 要喂给 onProgress
+       * （长命令执行期间状态行跟随输出尾部），等到 close 才拿到的缓冲
+       * 对"实时"毫无意义。
        */
-      const runCommand = (): Promise<{ stdout: string; stderr: string }> =>
+      const runCommand = (report: ToolProgressReporter | undefined): Promise<{ stdout: string; stderr: string }> =>
         new Promise((resolve, reject) => {
           let settled = false;
           let graceTimer: NodeJS.Timeout | null = null;
+          const stdoutChunks: Buffer[] = [];
+          const stderrChunks: Buffer[] = [];
+          let totalBytes = 0;
+          let overflowed = false;
+
+          const decode = (chunks: Buffer[]): string =>
+            Buffer.concat(chunks).toString("utf8");
 
           const settle = (action: () => void): void => {
             if (settled) {
@@ -229,11 +240,10 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
           /**
            * 结束整棵树之后再等一小会儿强制收尾。
            *
-           * `exec` 的回调只在子进程 `close` 时触发，而 close 要等所有继承了
-           * stdout/stderr 的进程都退出。POSIX 上 kill 只打 shell：孙进程
-           * （jest worker、`pnpm dev`、`tsc --watch`）继续占着管道，回调永远
-           * 不来，超时形同虚设，整个回合（连 Ctrl+C）都卡在这里。
-           * 到点就算 close 还没来也按超时/取消结算，绝不让循环无限等待。
+           * `close` 要等所有继承了 stdout/stderr 的进程都退出。POSIX 上 kill
+           * 只打 shell：孙进程（jest worker、`pnpm dev`、`tsc --watch`）继续
+           * 占着管道，close 永远不来，超时形同虚设，整个回合（连 Ctrl+C）
+           * 都卡在这里。到点就算 close 还没来也按超时/取消结算。
            */
           const forceSettle = (): void => {
             if (graceTimer !== null) {
@@ -256,25 +266,87 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
             forceSettle();
           };
 
-          const running = exec(
-            command,
-            {
-              cwd: workspaceRoot,
-              maxBuffer: BASH_MAX_BUFFER_BYTES,
-              signal,
-              windowsHide: true,
-            },
-            (error, stdout, stderr) => {
-              settle(() => {
-                if (error) {
-                  Object.assign(error, { stdout, stderr });
-                  reject(error);
-                  return;
+          const failOverflow = (): void => {
+            settle(() => {
+              // 与 exec 的 maxBuffer 行为对齐：终止命令并给出可操作的收窄建议。
+              // 说明必须追加进 stderr：classifyBashFailure 取 stderr || message
+              // 作文案，只写在 message 里会被非空 stderr 盖掉
+              const stderr = decode(stderrChunks);
+              const marker = "\n…[输出超过缓冲上限，已终止命令。请收窄输出（grep / head / 只取必要字段）]";
+              const error = Object.assign(
+                new Error(
+                  `输出超过缓冲上限（${BASH_MAX_BUFFER_BYTES} 字节）已终止命令。` +
+                    "请用更精确的命令收窄输出（如 grep / head / --quiet / 只取必要字段）",
+                ),
+                {
+                  code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+                  stdout: decode(stdoutChunks),
+                  stderr: stderr + marker,
+                },
+              );
+              reject(error);
+            });
+          };
+
+          const child = spawn(command, {
+            cwd: workspaceRoot,
+            shell: true,
+            windowsHide: true,
+            // stdin 直接接 /dev/null：等输入的命令立刻拿到 EOF，
+            // 不至于挂到超时
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          const running: ChildProcess = child;
+
+          const makeDataHandler =
+            (sink: Buffer[]): ((chunk: Buffer) => void) =>
+            (chunk: Buffer): void => {
+              totalBytes += chunk.length;
+              if (totalBytes > BASH_MAX_BUFFER_BYTES) {
+                if (!overflowed) {
+                  overflowed = true;
+                  void killProcessTree(running);
+                  failOverflow();
                 }
+                return;
+              }
+              sink.push(chunk);
+              // 增量喂给展示层；最终结果用 Buffer 拼接，不受分块截断多字节字符影响
+              report?.(chunk.toString("utf8"));
+            };
+
+          child.stdout?.on("data", makeDataHandler(stdoutChunks));
+          child.stderr?.on("data", makeDataHandler(stderrChunks));
+          child.on("error", (error) => {
+            settle(() => reject(error));
+          });
+
+          child.once("close", (code, signalName) => {
+            const stdout = decode(stdoutChunks);
+            const stderr = decode(stderrChunks);
+            settle(() => {
+              if (code === 0) {
                 resolve({ stdout, stderr });
-              });
-            },
-          );
+                return;
+              }
+              // 与 exec 的回调错误形态对齐：code 带退出码，signal 带终止信号
+              const error = Object.assign(
+                new Error(
+                  signalName
+                    ? `Command was killed with signal ${signalName}`
+                    : `Command failed with exit code ${code ?? 1}`,
+                ),
+                {
+                  code: signalName ? undefined : (code ?? 1),
+                  killed: Boolean(signalName),
+                  signal: signalName ?? undefined,
+                  stdout,
+                  stderr,
+                },
+              );
+              reject(error);
+            });
+          });
 
           timer = setTimeout(() => {
             forcedTimeout = true;
@@ -284,17 +356,10 @@ export function bashTool(workspaceRoot: string): RegisteredTool {
 
           // 用户取消时同样要连子进程一起结束，避免留下孤儿
           signal?.addEventListener("abort", onAbort, { once: true });
-
-          running.once("close", () => {
-            if (timer) {
-              clearTimeout(timer);
-              timer = null;
-            }
-          });
         });
 
       try {
-        const { stdout, stderr } = await runCommand();
+        const { stdout, stderr } = await runCommand(onProgress);
 
         const raw = [stdout, stderr].filter(Boolean).join("\n");
         return {

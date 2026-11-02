@@ -11,7 +11,7 @@ import { editFileTool, readFileTool, writeFileTool } from "./files";
 import { globTool, grepTool, listFilesTool } from "./search";
 import { emptySkillSource, loadSkillTool } from "./skill";
 import type { SkillContentSource } from "./skill";
-import type { ConcurrencyRule, RegisteredTool } from "./types";
+import type { ConcurrencyRule, RegisteredTool, ToolProgressReporter } from "./types";
 import { verifyCommandTool } from "./verify";
 
 export type { ConcurrencyRule, RegisteredTool };
@@ -122,12 +122,13 @@ export class ToolRegistry {
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    onProgress?: ToolProgressReporter,
   ): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Tool not found: ${name}`);
     }
-    return tool.execute(args, signal);
+    return tool.execute(args, signal, onProgress);
   }
 }
 

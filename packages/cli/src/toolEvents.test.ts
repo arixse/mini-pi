@@ -610,3 +610,62 @@ describe("/last 与工具渲染的会话级状态", () => {
     );
   });
 });
+
+describe("tool_progress（长命令实时输出）", () => {
+  it("增量拼接后取最后一行喂给状态行，end 时清缓冲", () => {
+    const { status, progressCalls } = createFakeStatus();
+    const handler = createAgentEventHandler({
+      status,
+      renderContext: context,
+      quiet: () => {},
+      write: () => {},
+    });
+
+    handler({
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "bash",
+      args: { command: "npm test" },
+    });
+    handler({ type: "tool_progress", toolCallId: "call-1", toolName: "bash", delta: "PASS a\n" });
+    handler({ type: "tool_progress", toolCallId: "call-1", toolName: "bash", delta: "PASS b" });
+    // 进度条只回 \r：同样算行边界
+    handler({ type: "tool_progress", toolCallId: "call-1", toolName: "bash", delta: "\r50%\r75%" });
+
+    const tails = progressCalls.map((call) => call.tail);
+    assert.strictEqual(tails[0], "PASS a");
+    assert.strictEqual(tails[1], "PASS b", "换行后取新的一行");
+    assert.strictEqual(tails.at(-1), "75%", "\\r 也算行边界");
+
+    handler({
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "bash",
+      result: { content: [createTextContent("done")] },
+      isError: false,
+    });
+    // end 之后的旧缓冲不得串到下一个调用
+    handler({
+      type: "tool_execution_start",
+      toolCallId: "call-2",
+      toolName: "bash",
+      args: { command: "other" },
+    });
+    handler({ type: "tool_progress", toolCallId: "call-2", toolName: "bash", delta: "fresh" });
+    assert.strictEqual(progressCalls.at(-1)?.tail, "fresh");
+    assert.strictEqual(progressCalls.at(-1)?.id, "call-2");
+  });
+
+  it("未知调用的进度直接透传（乱序容错，不抛错）", () => {
+    const { status, progressCalls } = createFakeStatus();
+    const handler = createAgentEventHandler({
+      status,
+      renderContext: context,
+      quiet: () => {},
+      write: () => {},
+    });
+
+    handler({ type: "tool_progress", toolCallId: "ghost", toolName: "bash", delta: "x" });
+    assert.deepStrictEqual(progressCalls, [{ id: "ghost", tail: "x" }]);
+  });
+});

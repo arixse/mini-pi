@@ -33,6 +33,23 @@ const toolStartCache = new Map<
 >();
 
 /**
+ * 每个执行中工具的输出缓冲（`tool_progress` 增量拼接）。
+ *
+ * 只用来取"最后一行"喂给状态行：内核层已按 500ms 节流，CLI 这边
+ * 再留一份尾巴缓冲即可。end 时清掉，避免跨调用串行。
+ */
+const toolProgressBuffers = new Map<string, string>();
+
+/** 输出缓冲的上限：只取尾巴，防止一条超长行把内存吃穿 */
+const MAX_PROGRESS_BUFFER_CHARS = 8192;
+
+/** 取缓冲里的最后一个非空行（\r 与 \n 都算行边界：进度条只回 \r） */
+export function lastLineOf(buffer: string): string {
+  const parts = buffer.split(/[\r\n]+/).filter(Boolean);
+  return parts.at(-1) ?? "";
+}
+
+/**
  * 取消 / 中断路径下 `tool_execution_end` 可能永远不来，
  * 缓存条目就会一直挂着；这里给个上限，超出按插入顺序丢弃最早的。
  */
@@ -55,6 +72,7 @@ export function getLastToolCall(): ToolCallView | null {
  */
 export function resetToolRenderState(): void {
   toolStartCache.clear();
+  toolProgressBuffers.clear();
   lastToolCall = null;
 }
 
@@ -188,6 +206,17 @@ export function createAgentEventHandler(
       deps.thinking?.end();
       write(event.delta);
     }
+    if (event.type === "tool_progress") {
+      // 长命令执行期间状态行跟随输出尾部：跑几分钟的构建不再是黑盒
+      const buffer = toolProgressBuffers.get(event.toolCallId) ?? "";
+      const next = `${buffer}${event.delta}`;
+      toolProgressBuffers.set(
+        event.toolCallId,
+        next.length > MAX_PROGRESS_BUFFER_CHARS ? next.slice(-MAX_PROGRESS_BUFFER_CHARS) : next,
+      );
+      deps.status.progress(event.toolCallId, lastLineOf(next));
+      return;
+    }
     if (event.type === "model_retry") {
       // 等待期的 spinner 文案换成"重试 N/M"：provider 的静默重试要显形，
       // 否则终端上一动不动，分不清"在重试"还是"卡死"
@@ -200,6 +229,7 @@ export function createAgentEventHandler(
     }
     if (event.type === "tool_execution_start") {
       deps.thinking?.end();
+      toolProgressBuffers.set(event.toolCallId, "");
       // 必须先喂卡片缓存，再更新状态行
       printToolInfo(event, deps.renderContext);
       /**
@@ -218,6 +248,7 @@ export function createAgentEventHandler(
       return;
     }
     if (event.type === "tool_execution_end") {
+      toolProgressBuffers.delete(event.toolCallId);
       // 记账先行：还有工具在跑时它会把状态切过去（不重绘），没有了才收尾
       deps.status.end(event.toolCallId);
       // 卡片是多行输出，打印前必须让出状态行，打印后再把未完成的进度接回来
