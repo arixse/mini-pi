@@ -55,6 +55,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     description: "开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘",
   },
   {
+    usage: "/thinking [on|off]",
+    description: "开关推理内容（Thinking 块）的显示（默认开启）",
+  },
+  {
     usage: "/update [on|off]",
     description: "检查是否有新版本（不带参数立即检查）；on/off 开关启动检测",
   },

@@ -238,6 +238,42 @@ describe("SettingsStore", () => {
     });
   });
 
+  describe("showThinking（推理内容显示）", () => {
+    it("缺省开启", async () => {
+      assert.strictEqual(await store.getShowThinking(), true);
+    });
+
+    it("关掉之后重新读出 false（重开终端仍然关着）", async () => {
+      await store.setShowThinking(false);
+      assert.strictEqual(await store.getShowThinking(), false);
+
+      const fresh = new SettingsStore(testFilePath);
+      assert.strictEqual(await fresh.getShowThinking(), false);
+    });
+
+    it("再开回 true", async () => {
+      await store.setShowThinking(false);
+      await store.setShowThinking(true);
+      assert.strictEqual(await store.getShowThinking(), true);
+    });
+
+    it("手改配置写成非布尔 false 的值时保持开启", async () => {
+      for (const value of ["false", 0, null, "no"]) {
+        writeFileSync(
+          testFilePath,
+          JSON.stringify({ showThinking: value }),
+          "utf-8",
+        );
+        const fresh = new SettingsStore(testFilePath);
+        assert.strictEqual(
+          await fresh.getShowThinking(),
+          true,
+          `showThinking=${JSON.stringify(value)} 不该关掉显示`,
+        );
+      }
+    });
+  });
+
   describe("getDefaultModel", () => {
     it("should return undefined when no default model is set", async () => {
       const defaultModel = await store.getDefaultModel();

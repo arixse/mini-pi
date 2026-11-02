@@ -37,6 +37,14 @@ type Settings = {
    * `MINI_PI_SKIP_UPDATE_CHECK` 也能关。
    */
   updateCheck?: boolean;
+  /**
+   * 是否在终端显示模型的推理内容（Thinking 块，`/thinking` 开关，缺省 true）。
+   *
+   * 与 updateCheck 同向默认开：推理块是"过程展示"，不写会话历史不烧成本，
+   * 关掉只损失可见性；而思维链动辄几百行，把回答刷出屏幕的伤害是实打实的。
+   * 显式写过 false 才关闭；块内正文超出上限时也会在省略提示里提到这个开关。
+   */
+  showThinking?: boolean;
 };
 
 export class SettingsStore {
@@ -278,6 +286,28 @@ export class SettingsStore {
   async setUpdateCheckEnabled(enabled: boolean): Promise<void> {
     await this.initialize();
     this.settings.updateCheck = enabled;
+    await this.persist();
+  }
+
+  /**
+   * 是否在终端显示模型的推理内容（`/thinking` 开关）。
+   *
+   * **默认开启**：推理块只是过程展示（不落盘、不进上下文、不烧 token），
+   * 默认开能让第一次见到思维链的用户理解"它在想"；嫌吵的人
+   * `/thinking off` 一次即可。
+   */
+  async getShowThinking(): Promise<boolean> {
+    await this.initialize();
+    return this.settings.showThinking !== false;
+  }
+
+  /**
+   * 开关推理内容的显示。
+   * @throws settings.json 处于损坏状态时拒绝写入
+   */
+  async setShowThinking(enabled: boolean): Promise<void> {
+    await this.initialize();
+    this.settings.showThinking = enabled;
     await this.persist();
   }
 

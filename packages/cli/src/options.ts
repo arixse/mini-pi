@@ -133,6 +133,13 @@ export type ReplOptions = {
    */
   subAgentTrace?: boolean;
   /**
+   * 会话初始的推理内容显示状态（`/thinking` 开关）；**缺省开启**。
+   *
+   * 推理块只是过程展示（不落盘不烧 token），默认开；
+   * 嫌思维链刷屏的人 `/thinking off` 一次即可。
+   */
+  showThinking?: boolean;
+  /**
    * 版本更新检测器：启动提示与 `/update` 共用同一份编排与缓存。
    *
    * 缺省时 `/update` 明确回复"未配置"而不是假装检查过——

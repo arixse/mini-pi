@@ -20,6 +20,7 @@
 | `/approval [mode]` | 查看或切换审批档位：`read-only`（写与执行一律拒绝）/ `workspace-write`（默认，逐次确认）/ `full-access`（全部放行）；不带参数只报告当前档位 |
 | `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on`/`trace off` 单独开关子 Agent trace 落盘（**默认关闭**）；两者状态都写入 settings.json |
 | `/update [on\|off]` | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（写入 settings.json，缺省开启） |
+| `/thinking [on\|off]` | 开关推理内容（Thinking 块）的显示：不带参数切换，`on`/`off` 显式设定（写入 settings.json，缺省开启）；关闭后等待期 spinner 一并静默 |
 | `/status` | 查看模型、会话文件、上下文窗口与用量、token 消耗、确认模式、子 Agent 开关与累计用量 |
 | `/sessions` | 列出**当前工作目录**的会话（标注当前会话与大小，标题下打印工作目录） |
 | `/switch <序号\|文件名>` | 切换到当前工作目录的指定会话并恢复其历史上下文 |

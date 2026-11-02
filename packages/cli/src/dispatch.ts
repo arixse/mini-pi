@@ -28,6 +28,7 @@ import {
   applyUpdateCommand,
   printUpdateOutcome,
 } from "./updateCheck";
+import { applyThinkingCommand, printThinkingCommandResult } from "./thinkingCommand";
 import { printLastToolOutput } from "./toolEvents";
 import type { ReplOptions } from "./options";
 import type { RenderContext } from "./render";
@@ -52,9 +53,12 @@ export type SlashCommandContext = {
   subAgent: { get(): boolean; set(value: boolean): void };
   /** 子 Agent trace 落盘开关（与委派开关互不影响） */
   subAgentTrace: { get(): boolean; set(value: boolean): void };
+  /** 推理内容（Thinking 块）显示开关 */
+  thinking: { get(): boolean; set(value: boolean): void };
   /** 开关落盘；缺省时只在本会话生效 */
   persistSubAgent?: (enabled: boolean) => Promise<void>;
   persistSubAgentTrace?: (enabled: boolean) => Promise<void>;
+  persistThinking?: (enabled: boolean) => Promise<void>;
 };
 
 export async function handleSlashCommand(
@@ -239,6 +243,21 @@ export async function handleSlashCommand(
     }
     if (outcome.traceEnabled !== undefined) {
       ctx.subAgentTrace.set(outcome.traceEnabled);
+    }
+    return true;
+  }
+
+  // 与 /subagent 同形：不带参数立即切换，on/off 只显式设定
+  if (input === "/thinking" || input.startsWith("/thinking ")) {
+    const previous = ctx.thinking.get();
+    const outcome = await applyThinkingCommand({
+      argument: input.slice("/thinking".length).trim(),
+      current: previous,
+      persist: ctx.persistThinking,
+    });
+    printThinkingCommandResult(outcome, previous);
+    if (outcome.error === undefined) {
+      ctx.thinking.set(outcome.enabled);
     }
     return true;
   }

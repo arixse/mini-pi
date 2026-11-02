@@ -34,7 +34,8 @@
   "maxTokens": 8192,
   "updateCheck": true,
   "subagentEnabled": false,
-  "subagentTrace": false
+  "subagentTrace": false,
+  "showThinking": true
 }
 ```
 
@@ -46,6 +47,7 @@
 | `updateCheck` | 启动时的版本更新检测；`/update off` 写入 `false` | 开启 |
 | `subagentEnabled` | 子 Agent 委派开关 | 关闭 |
 | `subagentTrace` | 子 Agent trace 落盘 | 关闭 |
+| `showThinking` | 推理内容（Thinking 块）显示开关；`/thinking off` 写入 `false` | 开启 |
 
 ### 凭据文件权限
 

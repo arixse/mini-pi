@@ -12,13 +12,20 @@
  * 让位给正文；模型不返回推理时（直接吐正文），spinner 行被整个收回，
  * 屏幕上不留痕迹。
  *
+ * 块内正文有行数上限：思维链动辄几百行（DeepSeek R1 一类），全量流式
+ * 会把回答整个刷出屏幕。超出后停止渲染，收尾时打一行"已省略 N 行"。
+ *
  * 只负责"怎么画"：何时开关由 `toolEvents.ts`（turn_start 开块，正文/工具
- * 一开始即收尾）与 `turn.ts`（回合结束兜底）决定。
+ * 一开始即收尾）与 `turn.ts`（回合结束兜底）决定；显不显示由
+ * `/thinking` 开关（`enabled`）决定。
  */
 
 import type { RenderContext } from "./render";
 import { formatDuration, spinnerFrame } from "./status";
 import { displayWidth, truncateToWidth } from "./width";
+
+/** 块内正文默认的最大行数；超出部分省略 */
+export const DEFAULT_THINKING_MAX_LINES = 100;
 
 export type ThinkingPrinter = {
   /**
@@ -54,6 +61,17 @@ export type ThinkingPrinterOptions = {
    * 不刷屏也不用光标控制，等待期什么都不显示。
    */
   spinner?: boolean;
+  /**
+   * 块内正文的最大行数，缺省 {@link DEFAULT_THINKING_MAX_LINES}。
+   * 超出后停止渲染，收尾时打一行省略提示。
+   */
+  maxLines?: number;
+  /**
+   * 是否渲染推理内容的实时开关（`/thinking`）。
+   * 缺省渲染。返回 false 时 begin/print 都不画；若开关时块已打开，
+   * 已画出的部分照常由 end() 收尾，不会留半截。
+   */
+  enabled?: () => boolean;
   /** 可注入时钟与间隔，便于单测 */
   now?: () => number;
   intervalMs?: number;
@@ -68,6 +86,8 @@ export function createThinkingPrinter(
   const spinnerEnabled = options.spinner ?? false;
   const now = options.now ?? Date.now;
   const intervalMs = options.intervalMs ?? 100;
+  const maxLines = Math.max(1, options.maxLines ?? DEFAULT_THINKING_MAX_LINES);
+  const isEnabled = options.enabled ?? ((): boolean => true);
 
   let open = false;
   /** 下一次写入是否落在新行的行首（决定要不要补 gutter） */
@@ -78,6 +98,12 @@ export function createThinkingPrinter(
   let timer: NodeJS.Timeout | null = null;
   /** spinner 当前占多少显示列（擦除用） */
   let spinnerWidth = 0;
+  /** 本次块内已渲染的行数（不含块头） */
+  let lineCount = 0;
+  /** 超出上限后置真：后续增量不再渲染，只数行数 */
+  let truncated = false;
+  /** 收尾时要报告的省略行数 */
+  let omittedLines = 0;
 
   const paint = (text: string): string => context.style.dim(text);
 
@@ -104,7 +130,7 @@ export function createThinkingPrinter(
 
   return {
     begin(): void {
-      if (open || waiting || !spinnerEnabled) {
+      if (open || waiting || !spinnerEnabled || !isEnabled()) {
         return;
       }
       waiting = true;
@@ -120,7 +146,7 @@ export function createThinkingPrinter(
     },
 
     print(delta: string): void {
-      if (!delta) {
+      if (!delta || !isEnabled()) {
         return;
       }
       if (waiting) {
@@ -131,6 +157,9 @@ export function createThinkingPrinter(
         write(`${paint(header)}\n`);
         open = true;
         atLineStart = true;
+        lineCount = 0;
+        truncated = false;
+        omittedLines = 0;
       }
 
       // 统一换行：某些网关会在思维链里回 `\r\n`，直接写 \r 会把光标拉回行首
@@ -138,18 +167,29 @@ export function createThinkingPrinter(
       const parts = normalized.split("\n");
       for (let index = 0; index < parts.length; index += 1) {
         if (index > 0) {
+          // 行边界：先判断这一行还能不能画
+          if (truncated) {
+            omittedLines += 1;
+            continue;
+          }
+          if (lineCount >= maxLines) {
+            truncated = true;
+            omittedLines += 1;
+            continue;
+          }
           write("\n");
           atLineStart = true;
         }
         const line = parts[index];
-        if (!line) {
+        if (truncated || !line) {
           continue;
         }
         if (atLineStart) {
           write(paint(gutter));
+          atLineStart = false;
+          lineCount += 1;
         }
         write(paint(line));
-        atLineStart = false;
       }
     },
 
@@ -164,9 +204,16 @@ export function createThinkingPrinter(
       }
       if (!atLineStart) {
         write("\n");
+        atLineStart = true;
+      }
+      if (truncated && omittedLines > 0) {
+        // 省略数在收尾时才确定，所以提示必须放在 end 而不是截断的那一刻
+        write(`${paint(gutter)}… 已省略 ${omittedLines} 行（/thinking off 可关闭显示）\n`);
       }
       open = false;
-      atLineStart = true;
+      lineCount = 0;
+      truncated = false;
+      omittedLines = 0;
     },
 
     isOpen(): boolean {

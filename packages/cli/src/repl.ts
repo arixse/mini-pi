@@ -198,10 +198,18 @@ export async function startRepl(
   // 等待模型输出期间块的位置显示 Thinking spinner（旧「思考中」状态行的替代）。
   // 开关时机在 `toolEvents.ts`（turn_start 开块，正文 / 工具 / 子 Agent 一开始
   // 就 end）与 `turn.ts`（回合结束兜底），这里只管"画"。
+  // 显不显示走 /thinking 开关：printer 每次画之前都问一遍，命令切换即时生效。
+  let showThinking = options.showThinking ?? true;
+  const persistShowThinking = options.settingsStore
+    ? async (enabled: boolean): Promise<void> => {
+        await options.settingsStore!.setShowThinking(enabled);
+      }
+    : undefined;
   const thinking = createThinkingPrinter({
     write: (text) => env.stdout.write(text),
     context: renderContext,
     spinner: Boolean(env.stdout.isTTY) && !env.env.NO_COLOR,
+    enabled: () => showThinking,
   });
   const onAgentEvent = createAgentEventHandler({
     status,
@@ -333,8 +341,15 @@ export async function startRepl(
         subAgentTrace = value;
       },
     },
+    thinking: {
+      get: () => showThinking,
+      set: (value) => {
+        showThinking = value;
+      },
+    },
     persistSubAgent: persistSubAgentEnabled,
     persistSubAgentTrace: persistSubAgentTrace,
+    persistThinking: persistShowThinking,
   };
 
   // 单条输入的处理逻辑；由下面的 line 回调串行调度

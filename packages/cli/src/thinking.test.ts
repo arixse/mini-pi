@@ -214,3 +214,131 @@ describe("ThinkingPrinter（等待期 spinner）", () => {
     assert.strictEqual(NOOP_THINKING.isOpen(), false);
   });
 });
+
+describe("ThinkingPrinter（行数上限）", () => {
+  function makeCappedPrinter(maxLines: number) {
+    const chunks: string[] = [];
+    const printer = createThinkingPrinter({
+      write: (text) => chunks.push(text),
+      context: PLAIN_CONTEXT,
+      maxLines,
+    });
+    return { printer, text: (): string => chunks.join("") };
+  }
+
+  it("未超上限时全量渲染，无省略提示", () => {
+    const { printer, text } = makeCappedPrinter(3);
+    printer.print("一\n二\n三");
+    printer.end();
+
+    const out = text();
+    assert.ok(out.includes("│ 三"), `三行都在：${JSON.stringify(out)}`);
+    assert.ok(!out.includes("已省略"));
+  });
+
+  it("超出上限后停止渲染，收尾时报告省略行数", () => {
+    const { printer, text } = makeCappedPrinter(2);
+    printer.print("一\n二\n三\n四\n五");
+    printer.end();
+
+    const out = text();
+    assert.ok(out.includes("│ 一"), "第一行在");
+    assert.ok(out.includes("│ 二"), "第二行在");
+    assert.ok(!out.includes("│ 三"), "第三行起不渲染");
+    assert.ok(!out.includes("四"));
+    // 收尾提示给出准确的省略行数（三、四、五 共 3 行）
+    assert.match(out, /已省略 3 行/);
+    assert.ok(out.includes("/thinking off"), "提示里要能找到开关");
+  });
+
+  it("省略数跨多次增量累计，收尾一次性报告", () => {
+    const { printer, text } = makeCappedPrinter(1);
+    printer.print("一");
+    printer.print("\n二");
+    printer.print("\n三");
+    printer.end();
+
+    assert.match(text(), /已省略 2 行/);
+  });
+
+  it("上限后同一行的续写同样不渲染", () => {
+    const { printer, text } = makeCappedPrinter(1);
+    printer.print("一\n二");
+    printer.print("还是二的续写");
+    printer.end();
+
+    const out = text();
+    assert.ok(!out.includes("续写"));
+    assert.match(out, /已省略 1 行/);
+  });
+
+  it("end 后重新开块：计数与截断状态复位", () => {
+    const { printer, text } = makeCappedPrinter(1);
+    printer.print("一\n二\n三");
+    printer.end();
+    printer.print("新块");
+    printer.end();
+
+    const out = text();
+    assert.ok(out.includes("│ 新块"), `新块要正常渲染：${JSON.stringify(out)}`);
+    // 新块没有省略；旧块的省略提示只出现一次
+    assert.strictEqual(out.split("已省略").length - 1, 1);
+  });
+});
+
+describe("ThinkingPrinter（/thinking 开关）", () => {
+  function makeSwitchable(initial: boolean) {
+    const chunks: string[] = [];
+    let enabled = initial;
+    const printer = createThinkingPrinter({
+      write: (text) => chunks.push(text),
+      context: PLAIN_CONTEXT,
+      spinner: true,
+      enabled: () => enabled,
+    });
+    return {
+      printer,
+      chunks,
+      text: (): string => chunks.join(""),
+      set(next: boolean): void {
+        enabled = next;
+      },
+    };
+  }
+
+  it("关闭时 begin 与 print 都不画", () => {
+    const { printer, chunks } = makeSwitchable(false);
+    printer.begin();
+    printer.print("推理");
+    printer.end();
+
+    assert.strictEqual(chunks.length, 0, `不应有任何输出：${JSON.stringify(chunks)}`);
+  });
+
+  it("中途关闭：已打开的块由 end 正常收尾，不再添新内容", () => {
+    const state = makeSwitchable(true);
+    state.printer.begin();
+    state.printer.print("前半段");
+    state.set(false);
+    state.printer.print("后半段");
+    state.printer.end();
+
+    const out = state.text();
+    assert.ok(out.includes("前半段"), "已画出的部分还在");
+    assert.ok(!out.includes("后半段"), "关闭后不再画");
+    assert.ok(!state.printer.isOpen(), "end 照常收尾");
+  });
+
+  it("中途重新打开：下一个增量重新开块", () => {
+    const state = makeSwitchable(true);
+    state.set(false);
+    state.printer.print("关闭期间的增量");
+    state.set(true);
+    state.printer.print("重开后的增量");
+
+    const out = state.text();
+    assert.ok(!out.includes("关闭期间"));
+    assert.ok(out.includes("💭 Thinking"));
+    assert.ok(out.includes("重开后的增量"));
+  });
+});

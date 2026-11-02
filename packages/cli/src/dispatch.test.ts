@@ -71,6 +71,7 @@ describe("/update 分派", () => {
       approvalMode: { get: () => "workspace-write" as ApprovalMode, set: () => {} },
       subAgent: { get: () => false, set: () => {} },
       subAgentTrace: { get: () => false, set: () => {} },
+      thinking: { get: () => true, set: () => {} },
     };
   }
 
@@ -216,6 +217,7 @@ describe("其余命令的分派接线", () => {
     quiet?: (...args: unknown[]) => void;
     persistSubAgent?: (enabled: boolean) => Promise<void>;
     persistSubAgentTrace?: (enabled: boolean) => Promise<void>;
+    persistThinking?: (enabled: boolean) => Promise<void>;
   } = {}): {
     ctx: SlashCommandContext;
     options: ReplOptions;
@@ -223,11 +225,13 @@ describe("其余命令的分派接线", () => {
     trusted: SwitchSpy<ApprovalMode>;
     subAgent: SwitchSpy<boolean>;
     subAgentTrace: SwitchSpy<boolean>;
+    thinking: SwitchSpy<boolean>;
   } {
     const quietLines: string[] = [];
     const trusted = switchSpy<ApprovalMode>("workspace-write");
     const subAgent = switchSpy(false);
     const subAgentTrace = switchSpy(false);
+    const thinking = switchSpy(true);
     const options = {
       prompt: "> ",
       systemPrompt: "BASE",
@@ -263,10 +267,12 @@ describe("其余命令的分派接线", () => {
       approvalMode: trusted.object,
       subAgent: subAgent.object,
       subAgentTrace: subAgentTrace.object,
+      thinking: thinking.object,
       persistSubAgent: overrides.persistSubAgent ?? (async () => {}),
       persistSubAgentTrace: overrides.persistSubAgentTrace ?? (async () => {}),
+      persistThinking: overrides.persistThinking,
     };
-    return { ctx, options, quietLines, trusted, subAgent, subAgentTrace };
+    return { ctx, options, quietLines, trusted, subAgent, subAgentTrace, thinking };
   }
 
   /** 只实现 syncContext 的假 store：切换/新建只需要它 */
@@ -394,6 +400,47 @@ describe("其余命令的分派接线", () => {
       captured.restore();
     }
     assert.deepStrictEqual(subAgent.calls, [false]);
+  });
+
+  it("/thinking off：关闭推理显示并落盘", async () => {
+    const persisted: boolean[] = [];
+    const { ctx, thinking } = makeCtx({
+      persistThinking: async (enabled: boolean) => {
+        persisted.push(enabled);
+      },
+    });
+    const captured = capture();
+    try {
+      await handleSlashCommand("/thinking off", ctx);
+    } finally {
+      captured.restore();
+    }
+    assert.deepStrictEqual(thinking.calls, [false]);
+    assert.deepStrictEqual(persisted, [false], "开关要写回 settings.json");
+    assert.match(captured.lines.join("\n"), /已关闭推理内容显示/);
+  });
+
+  it("/thinking：无参切换当前状态", async () => {
+    const { ctx, thinking } = makeCtx();
+    const captured = capture();
+    try {
+      await handleSlashCommand("/thinking", ctx);
+    } finally {
+      captured.restore();
+    }
+    assert.deepStrictEqual(thinking.calls, [false], "默认开，无参应切成关");
+  });
+
+  it("/thinking bad：报错且开关不动", async () => {
+    const { ctx, thinking } = makeCtx();
+    const captured = capture();
+    try {
+      await handleSlashCommand("/thinking bad", ctx);
+    } finally {
+      captured.restore();
+    }
+    assert.deepStrictEqual(thinking.calls, [], "认不出参数不该改开关");
+    assert.match(captured.lines.join("\n"), /无法识别/);
   });
 
   it("/subagent trace on：只动 trace 开关，不碰委派开关", async () => {

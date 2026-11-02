@@ -395,6 +395,8 @@ export async function main(argv: string[] = process.argv.slice(2)) {
   const subAgentEnabled = await settingsStore.getSubagentEnabled();
   // trace 落盘同样默认关闭：它是磁盘上额外的敏感数据副本
   const subAgentTrace = await settingsStore.getSubagentTrace();
+  // 推理内容显示：默认开启，/thinking off 写回 false
+  const showThinking = await settingsStore.getShowThinking();
 
   if(model) {
     sessionManager.setModel(model);
@@ -509,6 +511,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     toolRegistryFactory,
     subAgentEnabled,
     subAgentTrace,
+    showThinking,
     workspaceRoot,
     providerService,
     settingsStore,

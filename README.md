@@ -62,6 +62,7 @@ node bin/mini-pi.js              # 免安装试跑（免构建，用项目本地
 | `/approval [mode]`                          | 查看或切换审批档位（read-only / workspace-write / full-access） |
 | `/subagent [on\|off\|trace on\|trace off]`    | 子 Agent 委派及排障落盘（默认关闭）     |
 | `/update [on\|off]`                         | 立即检查新版本 / 开关启动检测           |
+| `/thinking [on\|off]`                       | 开关推理内容（Thinking 块）的显示       |
 | `/clear` · `/exit` · `/quit`         | 清空历史 / 退出                         |
 
 每条命令的交互细节与边界见 [cli-commands.md](docs/cli-commands.md)。
