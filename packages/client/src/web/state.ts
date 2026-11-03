@@ -256,6 +256,14 @@ export type ClientState = {
      * ref 记住已处理到哪个 nonce，不需要再回调清状态。
      */
     approvalJump: { runId: string; nonce: number } | null;
+    /**
+     * 待确认的档位切换（目前只有 `full-access` 会落到这里）。
+     *
+     * 非空表示警告弹窗开着，且**服务端一行都还没改**：确认之前档位仍是旧的。
+     * 先弹窗再请求，而不是先切换再提示——切错了没法撤销，回滚一个档位
+     * 比拦住一次点击难得多。
+     */
+    tierWarning: Tier | null;
   };
   /** 变更面板的数据（与 ui.diffRunId 同一条 Run） */
   diff: RunDiff | null;
@@ -364,6 +372,7 @@ export function initialState(): ClientState {
       diffRunId: null,
       file: null,
       approvalJump: null,
+      tierWarning: null,
     },
     diff: null,
     diffLoading: false,

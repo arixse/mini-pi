@@ -1215,6 +1215,9 @@ export class AppController {
    * 会换），但**不重建时间线**——正在看的会话不换、事件流不断。
    */
   private async focusWorkspace(root: string): Promise<void> {
+    // 档位是**每个工作区各一份**的：换了根，还开着的警告弹窗指的是上一
+    // 个根的授权，确认下去会作用到新根——先收掉，要切就在新根上重新发起
+    this.dismissTierWarning();
     try {
       await api.openWorkspace(root);
       await this.refreshState();
@@ -1230,6 +1233,7 @@ export class AppController {
    * 第一条消息去新的活动根。没在看就只刷状态，界面别的东西都不动。
    */
   private async closeWorkspace(root: string): Promise<void> {
+    this.dismissTierWarning();
     try {
       await api.closeWorkspace(root);
       this.banner("ok", "已关闭该工作区");
@@ -1481,8 +1485,42 @@ export class AppController {
     }, BANNER_TTL_MS);
   }
 
+  /**
+   * 收掉档位警告（不写任何东西）。
+   *
+   * 切工作区时也要调：弹窗里的"确认"只对**当前活动根**有意义，
+   * 换了根还留着它，点下去等于替新根做决定。
+   */
+  private dismissTierWarning(): void {
+    if (this.store.current.ui.tierWarning === null) {
+      return;
+    }
+    this.store.update((state) => {
+      state.ui.tierWarning = null;
+    });
+  }
+
   private fail(error: unknown): void {
     this.banner("error", describe(error, "操作失败"));
+  }
+
+  /**
+   * 真正把档位写到服务端。
+   *
+   * 单独一层是因为它有两个调用方：直接切档（只读 / 工作区写）与
+   * 警告弹窗确认后的完全访问。失败一律冒到提示条并 rethrow——
+   * 档位是安全边界，静默留在旧值上等于骗人。
+   */
+  private async applyTier(tier: Tier): Promise<void> {
+    try {
+      await api.setTier(tier);
+      this.store.update((state) => {
+        state.tier = tier;
+      });
+    } catch (error) {
+      this.fail(error);
+      throw error;
+    }
   }
 
   // ------------------------------------------------------------ 键盘
@@ -1496,6 +1534,11 @@ export class AppController {
    */
   handleEscape(): void {
     const state = this.store.current;
+    // 档位警告排在最前：它盖在设置面板之上，且是唯一会改变安全边界的弹窗
+    if (state.ui.tierWarning) {
+      this.actions.cancelTierWarning();
+      return;
+    }
     if (state.ui.settings) {
       this.actions.closeSettings();
       return;
@@ -1589,17 +1632,29 @@ export class AppController {
         this.store.update((state) => applySnapshot(state, snapshot));
       },
       setTier: async (tier: Tier) => {
-        try {
-          await api.setTier(tier);
+        // 切到完全访问是不可逆的便利性升级：先把后果摆出来，人点了"仍要切换"
+        // 才发请求。这里一个请求都不发——弹窗期间服务端仍按旧档位裁决，
+        // 于是"点了没确认"就等于什么都没发生。
+        if (tier === "full-access" && this.store.current.tier !== "full-access") {
           this.store.update((state) => {
-            state.tier = tier;
+            state.ui.tierWarning = tier;
           });
-        } catch (error) {
-          // 档位是安全边界：切换失败不能静默留在旧值上
-          this.fail(error);
-          throw error;
+          return;
         }
+        await this.applyTier(tier);
       },
+      confirmTierWarning: async () => {
+        const tier = this.store.current.ui.tierWarning;
+        this.store.update((state) => {
+          state.ui.tierWarning = null;
+        });
+        if (!tier) {
+          return;
+        }
+        // 失败要把弹窗关掉并冒到提示条：档位没变，界面不能停在"已切换"
+        await this.applyTier(tier);
+      },
+      cancelTierWarning: () => this.dismissTierWarning(),
       setSubAgent: async (enabled: boolean) => {
         const snapshot = await api.setSubAgent(enabled);
         this.store.update((state) => applySnapshot(state, snapshot));

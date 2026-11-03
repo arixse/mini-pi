@@ -49,6 +49,13 @@ export type SlashCommandContext = {
    * 里的 `a` 是同一个开关的三条入口，分派这里只能拿到当前的真实值。
    */
   approvalMode: { get(): ApprovalMode; set(value: ApprovalMode): void };
+  /**
+   * 本会话是否已按过 `a`（写与执行不再逐次确认，**高危仍逐条问**）。
+   *
+   * 与档位分开报：`a` 不改档位，只改"还问不问"。`/status` 若只说档位，
+   * 用户会看到"逐次确认"却再也没被问过——状态与实际不符比多问一次更危险。
+   */
+  sessionAllowed?: { get(): boolean };
   /** 子 Agent 委派开关 */
   subAgent: { get(): boolean; set(value: boolean): void };
   /** 子 Agent trace 落盘开关（与委派开关互不影响） */
@@ -126,7 +133,15 @@ export async function handleSlashCommand(
   }
 
   if (input === "/status") {
-    printStatus(options, ctx.approvalMode.get(), ctx.subAgent.get(), ctx.subAgentTrace.get(), undefined, ctx.renderContext.ascii);
+    printStatus(
+      options,
+      ctx.approvalMode.get(),
+      ctx.subAgent.get(),
+      ctx.subAgentTrace.get(),
+      undefined,
+      ctx.renderContext.ascii,
+      ctx.sessionAllowed?.get() === true,
+    );
     return true;
   }
 

@@ -58,6 +58,14 @@ describe("/status 的条目与排版", () => {
     assert.match(entries.get("工具确认") ?? "", /workspace-write：.*逐次确认/);
     assert.strictEqual(entries.get("工作目录"), testDir);
     assert.match(trustedEntries.get("工具确认") ?? "", /full-access：.*免确认/);
+
+    // 按过 a 之后档位没变，但已经不再逐次问了：状态必须说这个差别，
+    // 否则用户看到"逐次确认"却再也没被问过，会以为审批坏了
+    const sessionAllowed = new Map(
+      sessionStatusEntries(options, "workspace-write", false, false, false, true),
+    );
+    assert.match(sessionAllowed.get("工具确认") ?? "", /本会话写与执行已全部允许/);
+    assert.match(sessionAllowed.get("工具确认") ?? "", /高危命令仍逐条确认/);
   });
 
   it("sessionStatusEntries 无会话存储时给出占位", () => {

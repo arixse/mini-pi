@@ -114,7 +114,15 @@ export type Actions = {
   }) => Promise<ProviderView[]>;
   /** 删掉一个自定义供应商；默认模型指着它时服务端会一并清掉 */
   removeProvider: (name: string) => Promise<void>;
+  /**
+   * 切档。切到 `full-access` 时**不会立刻生效**：先开警告弹窗，
+   * 等 {@link confirmTierWarning} 才真的发请求（见 state.ui.tierWarning）。
+   */
   setTier: (tier: Tier) => Promise<void>;
+  /** 警告弹窗里点了"仍要切换"：这时才把档位写到服务端 */
+  confirmTierWarning: () => Promise<void>;
+  /** 关掉警告弹窗，档位保持原样 */
+  cancelTierWarning: () => void;
   setSubAgent: (enabled: boolean) => Promise<void>;
   /** 隔离开关：只影响之后新发的任务；环境不支持时服务端 409 */
   setIsolate: (enabled: boolean) => Promise<void>;

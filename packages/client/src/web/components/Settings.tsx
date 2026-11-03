@@ -522,7 +522,10 @@ function PermissionPage({ tier }: { tier: Tier }): React.ReactElement {
               if (item.tier === tierValue) {
                 return;
               }
-              setTierValue(item.tier);
+              setError("");
+              // 不在这里乐观选中：切到完全访问会先弹警告，用户可能取消。
+              // 选中的高亮由 `tier` prop 的 effect 跟随真实档位，painted 的
+              // 永远是服务端那一档，不画一个"看起来已切好"的假状态。
               void actions.setTier(item.tier).catch((caught: unknown) => {
                 setError(messageOf(caught));
               });

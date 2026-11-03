@@ -42,9 +42,10 @@ export const COMMANDS: readonly CommandSpec[] = [
   { usage: "/load <name>", description: "加载指定 skill 的完整内容" },
   {
     usage: "/trust",
-    description: "切换信任模式（跳过写文件/执行命令的确认）",
-    // 确认提示里就有这个选项，写在 /help 里才有机会被读到
-    note: "      y = 允许本次 / n = 拒绝 / a = 本会话全部允许",
+    description: "切换信任模式（全部工具免确认，含高危命令）",
+    // 确认提示里就有这些选项，写在 /help 里才有机会被读到；
+    // 高危命令没有 a 这一档，说清楚免得用户以为按 a 就一劳永逸
+    note: "      y = 允许本次 / n = 拒绝 / a = 本会话全部允许（高危命令只有 y/N）",
   },
   {
     usage: "/approval [mode]",

@@ -442,8 +442,15 @@ Node 由 `.nvmrc` 指定，CI 读同一份，避免出现"本地过了 CI 挂了
 | ---------------- | ------------------------------------------------ |
 | `read-only`      | 只读工具放行，写与执行一律拒绝（不弹提示）       |
 | `workspace-write`| 默认档：写与执行逐次问人                         |
-| `full-access`    | 一律放行（等价于 CLI 的 `/trust` 与 `a`）        |
+| `full-access`    | 一律放行——**包括高危命令**（CLI 的 `/trust` 切到这一档） |
 
+- **`a` 不再等于切档**：确认提示里的「本会话全部允许」只覆盖写与执行，
+  高危命令（`core/risk.ts` 判为 `high`）仍逐条确认；只有 `full-access`
+  才默认放行高危。两端一致：客户端的 `always` 也只记 session 白名单，
+  不把档位改成 `full-access`。
+- **`a` 的授权带代号**：`ApprovalPolicy.sessionEpoch` 一变（任何切档）旧授权
+  立即作废，切走再切回也不会复活——只比档位字符串的话，`/status` 会说
+  "逐次确认"而实际静默放行。
 - **两端同一裁决**：CLI 的 `createToolApproval` 与服务端的
   `approvalHook` 调的是同一个 `evaluateApprovalPolicy`；客户端的 `Tier`
   是 `ApprovalMode` 的**类型别名**（不是重写一份联合类型——"内核加第四档、
