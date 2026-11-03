@@ -405,7 +405,7 @@ describe("startRepl（主循环装配）", () => {
     assert.strictEqual(toolResult!.isError, true);
   });
 
-  it("审批按 a：信任状态回写，同回合后续调用不再询问", async () => {
+  it("审批按 a：写与执行不再询问，但回执不能说成「信任模式」", async () => {
     const model = scriptedModel([
       toolCallMessage("write_file", "t1"),
       toolCallMessage("write_file", "t2"),
@@ -423,7 +423,14 @@ describe("startRepl（主循环装配）", () => {
     await waitFor(() => model.calls === 3, "回合应跑完");
 
     assert.strictEqual(fakeRl.questions.length, 1, "按 a 之后不应再询问");
-    assert.match(logs.join("\n"), /信任模式/, "按 a 要有明确回执（与 /trust 同一开关）");
+    const output = logs.join("\n");
+    assert.match(output, /不再逐次确认/, "按 a 要有明确回执");
+    assert.match(output, /高危命令/, "回执必须点明高危仍逐条确认");
+    assert.doesNotMatch(
+      output,
+      /信任模式/,
+      "a 不切档位：说成信任模式会让用户以为连 rm -rf 也不再问了",
+    );
   });
 
   it("输入排队：上一轮未结束再来一条，提示已排队且两轮串行", async () => {
@@ -467,6 +474,11 @@ describe("startRepl（主循环装配）", () => {
 
     fakeRl.emit("line", "/trust");
     await waitFor(() => logs.some((line) => line.includes("已开启信任模式")), "/trust 应打印提示");
+    // 开启方向必须把"高危也不再问"写在同一条警示里：只说"信任模式"
+    // 会让用户以为还有一层网，而这一档恰恰把整张网收走了
+    const warning = logs.find((line) => line.includes("已开启信任模式")) ?? "";
+    assert.match(warning, /rm -rf/, `警示要点出具体高危操作：${warning}`);
+    assert.match(warning, /无法撤销/, `警示要说明后果：${warning}`);
     // 开关写回了主循环的状态：/status 看到的与 /trust 改的是同一份
     fakeRl.emit("line", "/status");
     await waitFor(

@@ -180,8 +180,33 @@ export type TierLabel = { tier: Tier; label: string; hint: string };
 export const TIER_LABELS: readonly TierLabel[] = [
   { tier: "read-only", label: "只读", hint: "只能读；写操作与命令一律拒绝执行" },
   { tier: "workspace-write", label: "工作区写", hint: "改工作区内的文件要问人，读操作直接放行" },
-  { tier: "full-access", label: "完全访问", hint: "不再询问，全部放行（慎用）" },
+  {
+    tier: "full-access",
+    label: "完全访问",
+    hint: "不再询问，全部放行——包括删库、强制推送这类高危命令",
+  },
 ];
+
+/**
+ * 切到「完全访问」前的警告文案。
+ *
+ * 收在这里而不是组件里，是因为它要被两处用到：弹窗渲染，以及"文案是否
+ * 说清了后果"的测试。档位本身是安全边界，这段话说得含糊就等于没警告。
+ *
+ * 三条各对应一类真实损失：① 数据没了；② 机器被改了；③ 连代手的子 Agent
+ * 一起放开。不写"请谨慎操作"这种没有信息量的话。
+ */
+export const FULL_ACCESS_WARNING = {
+  title: "完全访问会关掉审批这道防线",
+  lead: "之后这一整场会话里，模型可以直接改文件、执行任意命令，一次都不会再问你。",
+  items: [
+    "删文件、清空目录、git reset --hard 会直接执行，执行完无法撤销",
+    "命令以你的账号权限运行：sudo、格式化磁盘、改注册表都不例外",
+    "子 Agent 继承同样的权限，它发起的调用也不会再弹审批卡",
+  ],
+  stay: "保持工作区写",
+  confirm: "仍要切换到完全访问",
+} as const;
 
 export function tierLabel(tier: Tier): string {
   return TIER_LABELS.find((item) => item.tier === tier)?.label ?? tier;

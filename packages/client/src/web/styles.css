@@ -1472,6 +1472,19 @@ svg.ic {
   background: transparent;
 }
 
+/* 危险动作：填色而不是描边——它的可见度必须压过旁边的安全选项，
+   否则"仍要切换"看起来只是一行普通文字 */
+.btn-danger {
+  background: var(--Client-danger-solid);
+  color: var(--Client-text-inverse);
+  border-color: transparent;
+  font-weight: 500;
+}
+
+.btn-danger:hover {
+  filter: brightness(1.08);
+}
+
 /* ---------------- 提示条 ---------------- */
 
 .bar {
@@ -1861,6 +1874,54 @@ svg.ic {
 /* 设置面板：一行供应商 + 展开的凭据区，比默认的 560 宽一档 */
 .modal-settings {
   max-width: 680px;
+}
+
+/* ---------------- 档位警告（切到完全访问） ---------------- */
+
+/* 与普通弹窗一眼分开：红描边 + 红标题条。这不是"确认一下"，
+   而是"你正在拆掉审批防线"，视觉上不该和删会话长得一样。 */
+.modal-danger {
+  max-width: 520px;
+  border-color: var(--Client-danger-solid);
+}
+
+.modal-danger .danger-head {
+  color: var(--Client-danger-text);
+  background: var(--Client-danger-soft);
+  border-bottom-color: var(--Client-danger-solid);
+}
+
+.danger-lead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--Client-text-primary);
+}
+
+.danger-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--Client-text-secondary);
+}
+
+/* 圆点跟着一起红：列表是"会造成什么损失"，正文体例不该抢走危险色 */
+.danger-list li::marker {
+  color: var(--Client-danger-text);
+}
+
+.danger-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-input);
+  background: var(--Client-danger-soft);
+  color: var(--Client-danger-text);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* ---------------- 设置：一级分类 + 供应商行 ---------------- */

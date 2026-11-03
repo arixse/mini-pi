@@ -41,6 +41,8 @@ export function sessionStatusEntries(
   // 同上：trace 默认关（它是磁盘上额外的敏感数据副本）
   subAgentTrace = false,
   ascii = false,
+  // 本会话按过 `a`：写与执行不再问人，但高危仍逐条确认
+  sessionAllowed = false,
 ): Array<[string, string]> {
   const store = options.sessionStore;
   const { window, source } = contextWindowInfo(options);
@@ -66,10 +68,13 @@ export function sessionStatusEntries(
       : []),
     ...subAgentStatusRow(options, subAgentEnabled, subAgentTrace, ascii),
     // 档位名 + 一句话语义：只写"workspace-write"答不出"下一步会被怎么处理"，
-    // 而切到只读档的人恰恰需要这句话（写请求会被静默拒绝）
+    // 而切到只读档的人恰恰需要这句话（写请求会被静默拒绝）。
+    // 按过 `a` 之后要改口径：档位仍是 workspace-write，但已经不再逐次问了。
     [
       "工具确认",
-      `${approvalMode}：${describeApprovalMode(approvalMode)}（/approval 切换）`,
+      sessionAllowed && approvalMode !== "full-access"
+        ? `${approvalMode}：本会话写与执行已全部允许（高危命令仍逐条确认；/approval 切换）`
+        : `${approvalMode}：${describeApprovalMode(approvalMode)}（/approval 切换）`,
     ],
     ["工作目录", options.workspaceRoot],
   ];
@@ -153,11 +158,19 @@ export function printStatus(
   subAgentTrace = false,
   width: number = terminalWidth(),
   ascii = false,
+  sessionAllowed = false,
 ): void {
   const out: string[] = [""];
   out.push(chalk.cyan(ascii ? "会话状态" : "📊 会话状态"));
   for (const line of sessionStatusLines(
-    sessionStatusEntries(options, approvalMode, subAgentEnabled, subAgentTrace, ascii),
+    sessionStatusEntries(
+      options,
+      approvalMode,
+      subAgentEnabled,
+      subAgentTrace,
+      ascii,
+      sessionAllowed,
+    ),
     width,
   )) {
     out.push(chalk.dim(line));

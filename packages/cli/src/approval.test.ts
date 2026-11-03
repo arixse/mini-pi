@@ -383,6 +383,20 @@ describe("tool approval", () => {
     }
   });
 
+  it("allowAlways=false（高危）时 a 只算同意这一次", () => {
+    for (const input of ["a", "A", "always", "always  ", "总是", "全部"]) {
+      assert.strictEqual(
+        parseApprovalAnswer(input, { allowAlways: false }),
+        "yes",
+        `${input} 在高危提示下不能升级成整场授权，但意图是同意，应按"这一次"处理`,
+      );
+    }
+    assert.strictEqual(parseApprovalAnswer("y", { allowAlways: false }), "yes");
+    // 仍然 fail closed：空回车与胡写的都不算同意
+    assert.strictEqual(parseApprovalAnswer("", { allowAlways: false }), "no");
+    assert.strictEqual(parseApprovalAnswer("好呀", { allowAlways: false }), "no");
+  });
+
   it("describeToolCall 覆盖各工具的摘要形态", () => {
     assert.strictEqual(describeToolCall(call("edit_file", { path: "a.ts" })), "编辑 a.ts");
     // 参数缺失时给出空字符串而不是 `undefined`
@@ -795,5 +809,137 @@ describe("审批回执与提示的 ASCII 降级", () => {
     });
     assert.ok(question.includes("[!]"), `应有 [!] 状态位：${question}`);
     assert.ok(!/\p{Extended_Pictographic}/u.test(question), `不该出现 emoji：${question}`);
+  });
+});
+
+/**
+ * 高危命令单独一条线：默认不放行、不给整场授权，只有显式 `/trust`
+ * （= `full-access`）才默认放行。`a` 覆盖不到它——这是"只错一次就够"的那类操作。
+ */
+describe("高危命令的审批边界", () => {
+  const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, "");
+  const highRisk = (): ToolCallContent => call("bash", { command: "rm -rf build" });
+
+  it("提示语里没有 a，并写明每次单独确认", () => {
+    const question = strip(buildApprovalQuestion(highRisk()));
+    assert.ok(!question.includes("[y/N/a]"), `高危不该摆出 a 选项：${question}`);
+    assert.ok(question.includes("[y/N]"), `仍要能同意单次：${question}`);
+    assert.ok(question.includes("单独确认"), `要说清为什么没有 a：${question}`);
+  });
+
+  it("普通命令照旧提供整场放行", () => {
+    const question = strip(buildApprovalQuestion(call("bash", { command: "npm test" })));
+    assert.ok(question.includes("[y/N/a]"), question);
+  });
+
+  it("按过 a 之后，高危仍然逐条问", async () => {
+    const asked: string[] = [];
+    const approve = createToolApproval({
+      mode: () => "workspace-write",
+      confirm: async (text) => {
+        asked.push(text);
+        return "always";
+      },
+    });
+
+    // 普通命令：一次 a 兑现成整场
+    assert.strictEqual((await approve(call("bash", { command: "echo 1" }))).action, "allow");
+    assert.strictEqual((await approve(call("bash", { command: "echo 2" }))).action, "allow");
+    assert.strictEqual(asked.length, 1, "普通命令在 a 之后不该再问");
+
+    // 高危：整场授权对它无效
+    assert.strictEqual((await approve(highRisk())).action, "allow");
+    assert.strictEqual(asked.length, 2, "高危命令不能被整场授权覆盖");
+  });
+
+  it("高危时按 a 只放行这一次，且不波及普通命令", async () => {
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => "workspace-write",
+      // confirm 故意忽略 allowAlways 并直接回 always：钩子必须自己兜底降级
+      confirm: async () => {
+        asked += 1;
+        return "always";
+      },
+    });
+
+    assert.strictEqual((await approve(highRisk())).action, "allow");
+    assert.strictEqual((await approve(highRisk())).action, "allow");
+    assert.strictEqual(asked, 2, "第二次高危仍要单独确认");
+
+    // 那一次 always 没有被登记成整场授权：普通命令依然要问
+    assert.strictEqual((await approve(call("bash", { command: "echo 1" }))).action, "allow");
+    assert.strictEqual(asked, 3, "高危的 a 不能顺带放开普通命令");
+  });
+
+  it("confirm 收到 allowAlways：高危 false，普通 true", async () => {
+    const seen: Array<{ allowAlways: boolean } | undefined> = [];
+    const approve = createToolApproval({
+      mode: () => "workspace-write",
+      confirm: async (_text, options) => {
+        seen.push(options);
+        return "yes";
+      },
+    });
+
+    await approve(highRisk());
+    await approve(call("bash", { command: "echo 1" }));
+
+    assert.deepStrictEqual(seen, [{ allowAlways: false }, { allowAlways: true }]);
+  });
+
+  it("显式 full-access（/trust）才默认放行高危", async () => {
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => "full-access",
+      confirm: async () => {
+        asked += 1;
+        return "no";
+      },
+    });
+
+    const decision = await approve(highRisk());
+    assert.strictEqual(decision.action, "allow");
+    assert.strictEqual(asked, 0, "信任模式下高危不再询问");
+  });
+
+  it("read-only 档连高危都不问：直接拒绝，不给「问了就放行」的错觉", async () => {
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => "read-only",
+      confirm: async () => {
+        asked += 1;
+        return "yes";
+      },
+    });
+
+    assert.strictEqual((await approve(highRisk())).action, "block");
+    assert.strictEqual(asked, 0);
+  });
+
+  it("切档会让旧授权作废：切走再切回来也不复活", async () => {
+    let mode: ApprovalMode = "workspace-write";
+    let epoch = 0;
+    let asked = 0;
+    const approve = createToolApproval({
+      mode: () => mode,
+      sessionEpoch: () => epoch,
+      confirm: async () => {
+        asked += 1;
+        return "always";
+      },
+    });
+
+    assert.strictEqual((await approve(call("bash", { command: "echo 1" }))).action, "allow");
+    assert.strictEqual(asked, 1);
+
+    epoch += 1;
+    mode = "read-only";
+    assert.strictEqual((await approve(call("bash", { command: "echo 2" }))).action, "block");
+
+    epoch += 1;
+    mode = "workspace-write";
+    assert.strictEqual((await approve(call("bash", { command: "echo 3" }))).action, "allow");
+    assert.strictEqual(asked, 2, "档位字符串又相等了，但旧授权不能复活");
   });
 });

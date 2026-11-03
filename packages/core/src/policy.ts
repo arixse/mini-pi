@@ -94,7 +94,7 @@ export function describeApprovalMode(mode: ApprovalMode): string {
     case "workspace-write":
       return "工作区读写：写文件与执行命令逐次确认";
     case "full-access":
-      return "全权：全部工具免确认";
+      return "全权：全部工具免确认，包括 rm -rf 这类高危命令";
   }
 }
 

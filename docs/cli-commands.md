@@ -16,7 +16,7 @@
 | `/reload` | 重载配置文件（重新读取模型与 System Prompt） |
 | `/skills` | 列出所有可用的 Skills |
 | `/load <name>` | 加载指定 Skill 的完整内容并注入上下文 |
-| `/trust` | 切换信任模式（本会话内跳过工具调用确认）；等价于 `/approval full-access` 与 `/approval workspace-write` 之间的快切 |
+| `/trust` | 切换信任模式：开启后**连高危命令（`rm -rf` / `sudo` / 强制推送）一起放行**；等价于 `/approval full-access` 与 `/approval workspace-write` 之间的快切 |
 | `/approval [mode]` | 查看或切换审批档位：`read-only`（写与执行一律拒绝）/ `workspace-write`（默认，逐次确认）/ `full-access`（全部放行）；不带参数只报告当前档位 |
 | `/subagent [on\|off\|trace on\|trace off]` | 开关子 Agent 委派（`task` 工具），**默认关闭**，不带参数则切换；`trace on`/`trace off` 单独开关子 Agent trace 落盘（**默认关闭**）；两者状态都写入 settings.json |
 | `/update [on\|off]` | 检查是否有新版本：不带参数立即联网检查；`on`/`off` 开关**启动时**的自动检测（写入 settings.json，缺省开启） |
@@ -44,8 +44,8 @@
   /reload                                - 重载配置文件
   /skills                                - 列出所有可用的 skills
   /load <name>                           - 加载指定 skill 的完整内容
-  /trust                                 - 切换信任模式（跳过写文件/执行命令的确认）
-      y = 允许本次 / n = 拒绝 / a = 本会话全部允许
+  /trust                                 - 切换信任模式（全部工具免确认，含高危命令）
+      y = 允许本次 / n = 拒绝 / a = 本会话全部允许（高危命令没有 a）
   /approval [mode]                       - 查看或切换审批档位（read-only / workspace-write / full-access）
   /subagent [on|off|trace on|trace off]  - 开关子 Agent 委派（默认关闭）；trace 子项开关委派排障落盘
   /update [on|off]                       - 检查是否有新版本（不带参数立即检查）；on/off 开关启动检测
@@ -208,7 +208,10 @@
 | --- | --- | --- |
 | `read-only` | 免确认 | **一律拒绝**（不问，直接挡回去） |
 | `workspace-write`（默认） | 免确认 | 逐次确认 |
-| `full-access` | 免确认 | 免确认 |
+| `full-access` | 免确认 | 免确认（**高危也包括在内**） |
+
+高危命令（`rm -rf` / `sudo` / `git push --force` 等）默认不放行，且不给
+"本会话全部允许"；只有 `full-access` 才默认放行它们。
 
 ```
 > /approval
@@ -217,15 +220,18 @@
 > /approval read-only
 🔎 审批策略已切换为 read-only：只读：写文件与执行命令一律拒绝（/approval <mode> 可再切）
 > /trust
-🔓 已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）
+🔓 已开启信任模式（full-access）：全部工具免确认，包括 rm -rf / sudo / git push --force
+   ⚠ 这些操作一旦执行无法撤销，只有在你敢让这一整场会话随便动手时才开
+   （/trust 可关闭，/approval workspace-write 可逐条确认）
 ```
 
 - 档位是**会话级**的，重开终端回到默认档 `workspace-write`；
 - 认不出的档位**当场报错、不回落**：`/approval rw2` 若按默认档跑起来，
   用户以为自己在最宽松那一档，结果相反才最糟；
 - `/trust` 是 `/approval full-access` 与 `/approval workspace-write`
-  之间的快切，留着它是因为确认提示里的 `a` 用的就是这套说辞；
-- 确认提示里的 `a`（本会话内全部允许）语义上等价于 `/trust`；
+  之间的快切；**开启方向连高危命令一起放行**，所以给红字警示；
+- 确认提示里的 `a` **不等价于 `/trust`**：它只让写与执行不再逐次确认，
+  高危命令仍逐条问（`/trust` 才会连高危一起放行）；
 - `mini-pi exec` 另有 `--approval`：headless 里没有人能回答确认，
   因此只接受 `read-only`（默认）与 `full-access`，`workspace-write` 直接报错。
 

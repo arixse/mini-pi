@@ -335,8 +335,74 @@ describe("AppController", () => {
     );
     assert.match(controller.store.current.banner?.text ?? "", /模型名不能为空/);
 
-    await assert.rejects(controller.actions.setTier("full-access"), /无法识别的审批档位/);
+    await assert.rejects(controller.actions.setTier("read-only"), /无法识别的审批档位/);
     assert.match(controller.store.current.banner?.text ?? "", /无法识别的审批档位/);
+  });
+
+  it("切到完全访问先弹警告：确认之前服务端一行都不改", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/tier": { body: { tier: "full-access" } },
+    });
+    await controller.boot();
+    await settle();
+    requested.length = 0;
+
+    await controller.actions.setTier("full-access");
+    await settle();
+
+    assert.strictEqual(controller.store.current.ui.tierWarning, "full-access");
+    assert.strictEqual(
+      controller.store.current.tier,
+      "workspace-write",
+      "弹窗期间档位必须还是旧的：没有确认就没有变更",
+    );
+    assert.ok(
+      !requested.some((item) => item.url.includes("/api/tier")),
+      "没点确认不该发切换请求",
+    );
+
+    // 取消：什么都不发生，状态里也不留痕迹
+    controller.actions.cancelTierWarning();
+    await settle();
+    assert.strictEqual(controller.store.current.ui.tierWarning, null);
+    assert.strictEqual(controller.store.current.tier, "workspace-write");
+    assert.ok(!requested.some((item) => item.url.includes("/api/tier")));
+
+    // 再来一次，这次确认
+    await controller.actions.setTier("full-access");
+    await controller.actions.confirmTierWarning();
+    await settle();
+    assert.strictEqual(controller.store.current.ui.tierWarning, null);
+    assert.strictEqual(controller.store.current.tier, "full-access");
+  });
+
+  it("确认后服务端失败：档位不落到本地，错误冒到提示条", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/tier": { status: 500, body: { error: "写盘失败" } },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.setTier("full-access");
+    await assert.rejects(controller.actions.confirmTierWarning(), /写盘失败/);
+    assert.strictEqual(controller.store.current.ui.tierWarning, null, "弹窗要关掉，不能卡住");
+    assert.strictEqual(controller.store.current.tier, "workspace-write");
+    assert.match(controller.store.current.banner?.text ?? "", /写盘失败/);
+  });
+
+  it("其余档位切换不弹窗，直接生效", async () => {
+    installFetch({
+      "/api/state": { body: snapshot() },
+      "/api/tier": { body: { tier: "read-only" } },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.setTier("read-only");
+    assert.strictEqual(controller.store.current.tier, "read-only");
+    assert.strictEqual(controller.store.current.ui.tierWarning, null);
   });
 
   it("Esc 只收界面层：浮层 → 待删确认 → 抽屉，最后一层也不停任务", async () => {
@@ -383,6 +449,27 @@ describe("AppController", () => {
       !(controller.store.current.banner?.text ?? "").includes("已请求停止"),
       "Esc 不再停任务",
     );
+  });
+
+  it("Esc 先收档位警告：它盖在设置面板之上，且取消等于没发生过", async () => {
+    installFetch({ "/api/state": { body: snapshot() } });
+    await controller.boot();
+    await settle();
+
+    controller.store.update((state) => {
+      state.ui.settings = true;
+      state.ui.tierWarning = "full-access";
+    });
+
+    controller.handleEscape();
+    await settle();
+    assert.strictEqual(controller.store.current.ui.tierWarning, null);
+    assert.strictEqual(
+      controller.store.current.ui.settings,
+      true,
+      "一次 Esc 只收最上面那层",
+    );
+    assert.strictEqual(controller.store.current.tier, "workspace-write");
   });
 
   it("发送先乐观插入，失败时撤回（不留一条'发出去但其实没发'的话）", async () => {
@@ -623,6 +710,30 @@ describe("AppController", () => {
       requested.filter((item) => item.method === "POST").length,
       0,
       "已经是活动根就不必再请求一次",
+    );
+  });
+
+  it("切工作区会收掉档位警告：确认不能落到新根上", async () => {
+    let activeRoot = "D:/ws";
+    installFetch({
+      "/api/state": () => ({ body: snapshot({ activeRoot }) }),
+      "/api/workspace": () => {
+        activeRoot = "D:/other";
+        return { body: { root: "D:/other", name: "other" } };
+      },
+    });
+    await controller.boot();
+    await settle();
+
+    await controller.actions.setTier("full-access");
+    assert.strictEqual(controller.store.current.ui.tierWarning, "full-access");
+
+    await controller.actions.focusWorkspace("D:/other");
+    await settle();
+    assert.strictEqual(
+      controller.store.current.ui.tierWarning,
+      null,
+      "档位是每个根各一份的：换了根，弹窗里的确认就失去意义",
     );
   });
 

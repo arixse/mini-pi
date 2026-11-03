@@ -20,7 +20,7 @@ import type { ApprovalMode } from "@minipi/core/policy";
 import {
   createToolApproval,
   parseApprovalAnswer,
-  printTrustNotice,
+  printSessionAllowNotice,
   workspaceFileExists,
 } from "./approval";
 import { SlashCommandContext, handleSlashCommand } from "./dispatch";
@@ -146,14 +146,21 @@ export async function startRepl(
 
   // 工具审批：只读工具自动放行，写文件 / 执行命令按档位处理。
   // 非交互式终端（管道输入等）无法确认，按「拒绝」处理（fail closed）。
-  // 档位是会话级可变状态：/approval 与确认提示里的 a 都改它
+  // 档位是会话级可变状态：/approval、/trust 改它；`a` **不改它**（见下）。
   let approvalMode: ApprovalMode = DEFAULT_APPROVAL_MODE;
+  // 按过 `a` 之后的会话级授权。单独记一个布尔而不是把档位切到 full-access：
+  // `a` 的承诺只到"写与执行别再问"，高危命令仍要逐条确认；切档位会把
+  // 高危也一起放行，等于悄悄多给了一档权限。
+  let sessionAllowed = false;
+  // 授权代号：任何一次切档都 +1，旧的 `a` 授权随之作废（见 ApprovalPolicy.sessionEpoch）
+  let authEpoch = 0;
   let warnedNonInteractive = false;
   const canPrompt = Boolean(env.stdin.isTTY);
 
   const approval: BeforeToolCall = createToolApproval({
     mode: () => approvalMode,
-    confirm: async (promptText) => {
+    sessionEpoch: () => authEpoch,
+    confirm: async (promptText, confirmOptions) => {
       // 必须先让出状态行：spinner 每 100ms 用 `\r` + 空格覆写当前行，
       // 与确认提示抢的是同一行，不停掉的话提示会被反复擦掉。
       status.stop();
@@ -170,19 +177,24 @@ export async function startRepl(
         return "no";
       }
       const answer = await question(rl, chalk.yellow(promptText), paste.expand);
-      return parseApprovalAnswer(answer);
+      // 高危提示语里没有 a：解析时把 `a` 按"这一次"处理
+      return parseApprovalAnswer(answer, confirmOptions);
     },
     // 与状态行、卡片同一开关：降级时提示语也用 ASCII gutter
     ascii: asciiMode,
     /**
-     * 用户在确认时按了 `a`：语义等价于 `/trust`（全权），只是由真实上下文触发。
+     * 用户在确认时按了 `a`。
      *
-     * 必须回写 `approvalMode`，否则 `/status` 仍显示"逐次确认"，
-     * 而实际上已经不再问了——状态与实际不符比少一次确认更危险。
+     * 只记"本会话别再问"，**不切档位**：`a` 覆盖不到高危命令，而档位
+     * 一旦切到 full-access 就连 `rm -rf` 都不再问了——那是另一件事，
+     * 只能由 `/approval full-access`（带红字警告）显式选择。
+     *
+     * 回执必须说实话：`/status` 若仍显示"逐次确认"就与行为不符，
+     * 所以这里同时把 `sessionAllowed` 打开，状态行据此改口径。
      */
     onSessionAllow: () => {
-      approvalMode = "full-access";
-      printTrustNotice(true, asciiMode);
+      sessionAllowed = true;
+      printSessionAllowNotice(asciiMode);
     },
     // 只读工具集合由注册表提供，避免白名单在审批与并发两处各写一份
     autoApproved: new Set(options.toolRegistry.readOnlyToolNames()),
@@ -332,8 +344,14 @@ export async function startRepl(
       get: () => approvalMode,
       set: (value) => {
         approvalMode = value;
+        // 切档是比 `a` 更新的意图：旧授权作废，否则切走再切回来
+        // 会静默复活一整场的免确认，而 `/status` 正显示"逐次确认"
+        authEpoch += 1;
+        sessionAllowed = false;
       },
     },
+    // `/status` 要能说出"本会话已全部允许"——只报档位会与行为不符
+    sessionAllowed: { get: () => sessionAllowed },
     subAgent: {
       get: () => subAgentEnabled,
       set: (value) => {

@@ -19,6 +19,7 @@ import { Settings } from "./components/Settings";
 import { SideResizer } from "./components/SideResizer";
 import { Sidebar } from "./components/Sidebar";
 import { Statusbar } from "./components/Statusbar";
+import { TierWarning } from "./components/TierWarning";
 import { Timeline } from "./components/Timeline";
 import { Topbar } from "./components/Topbar";
 
@@ -145,6 +146,8 @@ function Shell({ controller }: { controller: AppController }): React.ReactElemen
       </div>
       <Settings />
       <Picker />
+      {/* 档位警告排在最后：它是模态的，必须盖在设置面板之上 */}
+      <TierWarning />
       <Boot />
     </div>
   );

@@ -28,6 +28,8 @@ import { Statusbar } from "./components/Statusbar";
 import { Timeline, visibleItems } from "./components/Timeline";
 import { InterfacePage } from "./components/Settings";
 import { ThinkingRow } from "./components/Thinking";
+import { TierWarning } from "./components/TierWarning";
+import { FULL_ACCESS_WARNING } from "./format";
 import type { UiPrefs } from "./prefs";
 import { pathScopeKey, pathScopeOf } from "./pathLinks";
 import type { ComposerHandle } from "./controller";
@@ -64,6 +66,8 @@ const fakeActions = {
   addCustomProvider: async () => [],
   removeProvider: async () => undefined,
   setTier: async () => undefined,
+  confirmTierWarning: async () => undefined,
+  cancelTierWarning: () => undefined,
   setSubAgent: async () => undefined,
   setIsolate: async () => undefined,
   toggleNotifications: async () => undefined,
@@ -1010,5 +1014,52 @@ describe("工具调用开关", () => {
 
     const on = renderInterface({ showToolCalls: true });
     assert.match(on, /checked/, "开着的时候必须勾上，否则开关在骗人");
+  });
+});
+
+/**
+ * 切到完全访问的警告弹窗。
+ *
+ * 这一条守的不是样式，而是"用户看见了什么"：标题说的是"关掉审批防线"
+ * 而不是"更宽松"，后果写到具体动作（删库 / 强推 / 子 Agent），
+ * 且安全选项排在危险按钮前面——手滑连点两下不该落到危险那一边。
+ */
+describe("档位警告弹窗", () => {
+  function renderWarning(tierWarning: "full-access" | null): string {
+    const store = new ClientStore();
+    store.update((state) => {
+      state.ui.tierWarning = tierWarning;
+    });
+    return renderToStaticMarkup(
+      createElement(
+        ClientProvider,
+        { value: { store, actions: fakeActions } },
+        createElement(TierWarning),
+      ),
+    );
+  }
+
+  it("没在待确认时不渲染任何东西", () => {
+    assert.strictEqual(renderWarning(null), "");
+  });
+
+  it("把后果说清楚，而不是只写「慎用」", () => {
+    const html = renderWarning("full-access");
+
+    assert.match(html, /role="alertdialog"/, "这是打断式确认，不是普通提示");
+    assert.match(html, /关掉审批/);
+    assert.match(html, /git reset --hard/, "要举出具体的高危动作");
+    assert.match(html, /无法撤销/);
+    assert.match(html, /子 Agent/, "委派出去的那一层也一起放开，必须说");
+  });
+
+  it("取消在前、确认在后，且危险按钮有独立样式", () => {
+    const html = renderWarning("full-access");
+    const stay = html.indexOf(FULL_ACCESS_WARNING.stay);
+    const confirm = html.indexOf(FULL_ACCESS_WARNING.confirm);
+
+    assert.ok(stay >= 0, "必须有取消项");
+    assert.ok(confirm > stay, "确认要排在取消之后：第一个可点的不该是危险动作");
+    assert.match(html, /class="btn btn-danger"/, "危险按钮不能和普通按钮长得一样");
   });
 });

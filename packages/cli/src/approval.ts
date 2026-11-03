@@ -4,6 +4,7 @@ import { ToolCallContent } from "@minipi/core/shared/protocol";
 import { READ_ONLY_TOOLS } from "@minipi/core/agent/tools/registry";
 // 风险等级与命中原因在内核里算：终端只是把同一份判断画出来
 import { assessToolRisk } from "@minipi/core/risk";
+import type { RiskAssessment } from "@minipi/core/risk";
 // 摘要文案同样在内核里：终端与客户端必须对同一次调用说同一句话
 import { describeToolCallLines } from "@minipi/core/toolSummary";
 // 三档裁决表：内核里唯一一份，终端与服务端调的是同一个函数（M4）
@@ -40,12 +41,21 @@ export function printTrustNotice(trusted: boolean, ascii = false): void {
   // ASCII 模式不带图标：🔓 这类符号在不支持 emoji 的终端上是乱码，
   // 语义已经由文案本身表达，图标只是装饰
   const icon = ascii ? "" : trusted ? "🔓 " : "🔒 ";
+  if (trusted) {
+    // 开启方向用红色整段警示：这一档会连高危命令一起放行，而且没有二次确认。
+    // 只在开启时吓人，关闭时给绿色——两种方向的情绪不该一样。
+    console.log(
+      chalk.red(
+        `\n${icon}已开启信任模式（full-access）：全部工具免确认，` +
+          `包括 rm -rf / sudo / git push --force\n` +
+          `   ${ascii ? "[!]" : "⚠"} 这些操作一旦执行无法撤销，只有在你敢让这一整场会话随便动手时才开\n` +
+          `   （/trust 可关闭，/approval workspace-write 可逐条确认）\n`,
+      ),
+    );
+    return;
+  }
   console.log(
-    trusted
-      ? chalk.yellow(
-          `\n${icon}已开启信任模式：本会话内写文件与执行命令不再逐次确认（/trust 可关闭）\n`,
-        )
-      : chalk.green(`\n${icon}已关闭信任模式：写文件与执行命令需逐次确认\n`),
+    chalk.green(`\n${icon}已关闭信任模式：写文件与执行命令需逐次确认（高危命令始终逐条确认）\n`),
   );
 }
 
@@ -53,7 +63,8 @@ export function printTrustNotice(trusted: boolean, ascii = false): void {
  * 审批档位变更回执（`/approval <mode>`）。
  *
  * 每一档都要说清"下一步会被怎么处理"，否则切到只读档的人会发现
- * 写文件的请求静默失败而不知道原因。
+ * 写文件的请求静默失败而不知道原因。切到全权档时额外红字点一句：
+ * 这一档连 `rm -rf` 都不再问，而它也是目前唯一能这么做的入口。
  */
 export function printApprovalNotice(mode: ApprovalMode, ascii = false): void {
   const icon = ascii
@@ -67,6 +78,31 @@ export function printApprovalNotice(mode: ApprovalMode, ascii = false): void {
     chalk.yellow(
       `\n${icon}审批策略已切换为 ${mode}：${describeApprovalMode(mode)}` +
         `（/approval <mode> 可再切）\n`,
+    ),
+  );
+  if (mode === "full-access") {
+    console.log(
+      chalk.red(
+        `${ascii ? "[!]" : "⚠️ "} 全权档连高危命令（rm -rf / sudo / git push --force）都不再询问，` +
+          `且拒绝不可撤销；需要逐条把关时用 /approval workspace-write\n`,
+      ),
+    );
+  }
+}
+
+/**
+ * 按 `a` 之后的回执。
+ *
+ * 这条回执**不能**说成"全权"：`a` 只覆盖写与执行，高危命令仍然逐条问
+ * （见 {@link createToolApproval}）。说成"全权"会让用户以为删库也不会再问，
+ * 于是在下一次高危提示出现时误以为是 bug 而随手回车。
+ */
+export function printSessionAllowNotice(ascii = false): void {
+  const icon = ascii ? "" : "🔓 ";
+  console.log(
+    chalk.yellow(
+      `\n${icon}本会话内写文件与执行命令不再逐次确认；` +
+        `高危命令（rm -rf / sudo / 强制推送等）仍需逐条确认\n`,
     ),
   );
 }
@@ -101,11 +137,20 @@ export type ApprovalReason =
  *
  * 只有明确表示同意的输入才算同意：空回车（多数终端的默认习惯）算拒绝，
  * 这与 `[y/N]` 里 `N` 大写的语义一致——审批必须以显式同意为准。
+ *
+ * @param options.allowAlways 这次调用能不能给"本会话全部允许"（默认能）。
+ *   高危调用传 `false`：它的提示语根本不提供 `a`，于是用户按下的 `a` 只是
+ *   **肌肉记忆**，意图明确是同意这一次——按"这一次"处理，而不是当作拒绝，
+ *   也不能悄悄升级成整场会话的授权。
  */
-export function parseApprovalAnswer(input: string): ApprovalAnswer {
+export function parseApprovalAnswer(
+  input: string,
+  options: { allowAlways?: boolean } = {},
+): ApprovalAnswer {
   const answer = input.trim().toLowerCase();
-  if (/^(a|always|总是|始终|全部|都是)$/.test(answer)) {
-    return "always";
+  const always = /^(a|always|总是|始终|全部|都是)$/.test(answer);
+  if (always) {
+    return options.allowAlways === false ? "yes" : "always";
   }
   if (/^(y|yes|是|允许|好)$/.test(answer)) {
     return "yes";
@@ -133,8 +178,23 @@ export type ApprovalPolicy = {
    * 返回值用 {@link ApprovalAnswer} 而不是 boolean：`a`（本会话全允许）
    * 无法用真假两态表达，而它恰好是最常用的那条路径——
    * 一次 `a` 能省掉后续十几次 Enter。
+   *
+   * `options.allowAlways` 一并传下去：高危调用不给整场授权，实现方据此
+   * 调整解析（见 {@link parseApprovalAnswer}）。忽略它的实现不会出安全问题——
+   * 钩子自己还会把高危的 `always` 降级成"这一次"。
    */
-  confirm: (question: string) => Promise<ApprovalAnswer>;
+  confirm: (
+    question: string,
+    options?: { allowAlways: boolean },
+  ) => Promise<ApprovalAnswer>;
+  /**
+   * 授权代号：变一次，之前按 `a` 攒下的「本会话全部允许」立刻作废。
+   *
+   * 光比档位不够——切走再切回来，档位字符串又相等了，旧授权会复活，
+   * 于是 `/status` 说"逐次确认"而实际静默放行。代号是单向的：只增不减，
+   * 任何一次切档/改授权意图都必须显式加一。
+   */
+  sessionEpoch?: () => number;
   /** 免确认工具集合，默认 {@link AUTO_APPROVED_TOOLS} */
   autoApproved?: ReadonlySet<string>;
   /**
@@ -151,8 +211,9 @@ export type ApprovalPolicy = {
   /**
    * 用户选择了"本会话全部允许"时的回调。
    *
-   * 语义上等价于 `/trust`，只是由真实上下文触发；调用方应据此打开信任模式，
-   * 否则用户按了 `a` 却在下一次调用又被问一遍。
+   * 调用方应据此更新状态展示（`/status`）、并给一次回执；**不要**把它
+   * 当成 `/trust` 去切档位：`a` 只覆盖写与执行，切到 `full-access`
+   * 会把高危命令也一起放行，等于替用户做了一个他没做的决定。
    */
   onSessionAllow?: () => void;
   /** 决策回调，便于日志与测试 */
@@ -185,18 +246,21 @@ export function buildApprovalQuestion(
   call: ToolCallContent,
   fileExists?: (relativePath: string) => boolean,
   context?: ToolCallContext,
-  options: { ascii?: boolean } = {},
+  options: { ascii?: boolean; risk?: RiskAssessment } = {},
 ): string {
   const ascii = options.ascii ?? false;
   // 与工具卡片同一套 gutter 语法：满屏信息里一眼认得出这是同一类东西
   const gutter = ascii ? "| " : "│ ";
   const closing = ascii ? "+ " : "└ ";
   const tag = agentTag(context);
-  const risk = assessToolRisk(call, fileExists);
+  const risk = options.risk ?? assessToolRisk(call, fileExists);
+  // 高危不给"整场放行"这个选项：它一旦被按错，后面所有同档调用都不再问，
+  // 而高危恰恰是"只错一次就够"的那一类。因此这里连 a 都不摆出来。
+  const highRisk = risk.level === "high";
 
   const warn = ascii ? "[!] " : "⚠️  ";
   const header =
-    risk.level === "high"
+    highRisk
       ? `${chalk.red(warn)}${chalk.red("高危操作待确认")}  ${chalk.red(call.name)}`
       : `${warn}需要确认  ${call.name}`;
 
@@ -213,9 +277,9 @@ export function buildApprovalQuestion(
   }
 
   for (const reason of risk.reasons) {
-    const mark = risk.level === "high" ? (ascii ? "[!] 高危" : "⚠ 高危") : "· 注意";
+    const mark = highRisk ? (ascii ? "[!] 高危" : "⚠ 高危") : "· 注意";
     const text = `${gutter}${mark}：${reason}`;
-    lines.push(risk.level === "high" ? chalk.red(text) : chalk.yellow(text));
+    lines.push(highRisk ? chalk.red(text) : chalk.yellow(text));
   }
 
   // 子 Agent 的调用用户没法预览上下文，必须能一眼拒绝整条委派链
@@ -225,7 +289,12 @@ export function buildApprovalQuestion(
     );
   }
 
-  lines.push(`${closing}允许执行? [y/N/a]   a = 本会话内全部允许 `);
+  // 收尾行只有 `└ ` 前缀不带颜色：测试与窄终端都按前缀识别卡片最后一行
+  lines.push(
+    highRisk
+      ? `${closing}${chalk.red("允许执行? [y/N]   高危命令不能整场放行，每次都要单独确认")}`
+      : `${closing}允许执行? [y/N/a]   a = 本会话内全部允许 `,
+  );
   return lines.join("\n");
 }
 
@@ -235,20 +304,27 @@ export function buildApprovalQuestion(
  *
  * 三档的裁决**不在这里**：`evaluateApprovalPolicy` 是内核里唯一的裁决表，
  * 终端与服务端调同一个函数——这是 M4「三档在两端给出同一裁决」的落地形式。
- * 这里只保留终端特有的两件事：把问题渲染成 `[y/N/a]`，以及 `a` 的会话级记忆。
+ * 这里只保留终端特有的三件事：把问题渲染成 `[y/N/a]`、`a` 的会话级记忆，
+ * 以及**高危命令不给整场授权**。
+ *
+ * 最后一条是有意加在钩子而不是裁决表里的：档位表回答的是"这一档要不要问"，
+ * 而"按一次 `a` 能替多少次确认签字"是交互约定。显式切到 `full-access`
+ * 仍然连 `rm -rf` 都放行——那是用户在读过警告之后另行做出的选择。
  */
 export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
   const autoApproved = policy.autoApproved ?? AUTO_APPROVED_TOOLS;
   // 用户选了 `a` 之后的会话级状态：即使调用方没接 onSessionAllow，
   // 也必须先兑现"本会话不再问"的承诺，否则下一次照问不误。
   //
-  // 但要记住**授权时的档位**：`a` 说的是"在这个档位下别再问"，不是
-  // "永久免检"。用户随后 `/trust` 切回 workspace-write，就是在明确要求
-  // 恢复逐次确认；只存一个布尔会让旧授权穿透新意图，界面提示与实际行为相反。
+  // 但要记住**授权时的档位与代号**：`a` 说的是"在这个档位下别再问"，不是
+  // "永久免检"。用户随后 `/approval read-only` 或 `/trust`，就是在明确要求
+  // 恢复逐次确认；只存一个布尔会让旧授权穿透新意图，`/status` 与实际行为相反。
   let sessionAllowed = false;
   let sessionAllowedMode: ApprovalMode | null = null;
+  let sessionAllowedEpoch = 0;
   const resolveMode = (): ApprovalMode =>
     policy.mode ? policy.mode() : approvalModeFromTrusted(policy.isTrusted?.() === true);
+  const resolveEpoch = (): number => policy.sessionEpoch?.() ?? 0;
 
   /**
    * 确认必须串行。
@@ -262,12 +338,15 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
    * 受影响的只是"问人"这一步。
    */
   let confirmQueue: Promise<unknown> = Promise.resolve();
-  const confirmSerially = (promptText: string): Promise<ApprovalAnswer> => {
+  const confirmSerially = (
+    promptText: string,
+    allowAlways: boolean,
+  ): Promise<ApprovalAnswer> => {
     const answer = confirmQueue.then(() => {
       if (policy.isCancelled?.()) {
         return "no" as ApprovalAnswer;
       }
-      return policy.confirm(promptText);
+      return policy.confirm(promptText, { allowAlways });
     });
     // 队列本身必须吞掉失败，否则一次抛错会让后续确认永远不再执行
     confirmQueue = answer.then(
@@ -297,7 +376,17 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
       return { action: "block", reason: verdict.reason };
     }
 
-    if (sessionAllowed && sessionAllowedMode === resolveMode()) {
+    // 风险只在这一处参与裁决：高危命令不走"本会话全部允许"这条捷径。
+    // 判完就不再重复算——提示语要用的也是这一份（同一个 fileExists 口径）。
+    const risk = assessToolRisk(call, policy.fileExists);
+    const highRisk = risk.level === "high";
+
+    if (
+      !highRisk &&
+      sessionAllowed &&
+      sessionAllowedMode === resolveMode() &&
+      sessionAllowedEpoch === resolveEpoch()
+    ) {
       policy.onDecision?.(call, true, "always");
       return { action: "allow", reason: "用户已选择本会话不再逐一确认" };
     }
@@ -307,11 +396,19 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
       answer = await confirmSerially(
         buildApprovalQuestion(call, policy.fileExists, context, {
           ascii: policy.ascii,
+          risk,
         }),
+        !highRisk,
       );
     } catch {
       // 确认过程本身出错（无 TTY、读输入失败）按拒绝处理
       answer = "no";
+    }
+
+    // 高危调用即便确认方忽略了 allowAlways 并回了 always，也只兑现这一次：
+    // 授权范围由钩子最终定夺，而不是由某个 confirm 实现的返回值定夺
+    if (answer === "always" && highRisk) {
+      answer = "yes";
     }
 
     if (answer === "yes") {
@@ -321,11 +418,12 @@ export function createToolApproval(policy: ApprovalPolicy): BeforeToolCall {
 
     if (answer === "always") {
       sessionAllowed = true;
-      // 通知调用方把 `/status` 里的信任状态同步过来，并给用户一次明确回执。
-      // 先回调再记档位：REPL 会把档位切到 full-access，记切换后的值，
-      // 否则下一次调用立刻因为"档位不匹配"又追问一遍。
+      // 通知调用方给一次明确回执（`/status` 也要跟着改口径）。
+      // 先回调再记档位/代号：回执里若改了档位或加了代号，
+      // 记的是改完之后的值，否则下一次调用立刻因为"不匹配"又追问一遍。
       policy.onSessionAllow?.();
       sessionAllowedMode = resolveMode();
+      sessionAllowedEpoch = resolveEpoch();
       policy.onDecision?.(call, true, "always");
       return { action: "allow", reason: "用户已选择本会话不再逐一确认" };
     }
