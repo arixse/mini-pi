@@ -1,0 +1,36 @@
+name: Ship
+
+# agent-autoloop 的交付流水线：合并进 main 后判断这次提交是否需要发布。
+# 与 publish.yml 不同——后者由 tag 触发、真正执行 npm publish；
+# 这里只在 main 的 push 上跑，用来界定「这次合并带来的代码变化」。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Action 要读完整历史来对比健康版本与目标提交，必须 fetch-depth: 0。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 固定到已发布 v1.7.1 的完整提交，不用分支名，避免上游改动悄悄改变行为。
+      - uses: KKKKhazix/agent-autoloop/plugins/delivery@24e21c6ba7c30808467ee93c99b3a1200ac9246e
+        id: scope
+
+      # TODO(发布占位)：换成项目已有的发布命令，例如 pnpm release，
+      # 或复用 publish.yml 里的发布步骤。当前 ops/delivery.json 未配置
+      # health，Action 会把每次 main push 都判为需要发布；这一步只写摘要，
+      # 不产生任何外部副作用，也不会真的发版。
+      - if: steps.scope.outputs.release == 'true' && steps.scope.outputs.superseded != 'true'
+        name: 发布（占位）
+        run: |
+          echo "待发布提交：${{ github.sha }}"
+          echo "release=${{ steps.scope.outputs.release }} superseded=${{ steps.scope.outputs.superseded }}"
+          echo "请在此替换为项目已有的发布命令"
