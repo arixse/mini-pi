@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main, master]
+  # 草稿转 ready 时要重新跑一次门禁：agent-autoloop 的交付流程只接受
+  # ready_for_review 之后新跑的那次 check（pull_request 默认不在转 ready 时触发）。
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # 同一个分支/PR 上的多次推送只保留最新一次：旧的那次跑完也没意义，还占并发

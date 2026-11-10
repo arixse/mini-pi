@@ -1,0 +1,12 @@
+{
+  "repo": "arixse/mini-pi",
+  "internal": ["docs/**/*.md", "README.md"],
+  "check": { "workflow": "ci.yml", "job": "check" },
+  "ship": { "workflow": "ship.yml" },
+  "review": {
+    "points": "AGENTS.md",
+    "status": "agent-review",
+    "xhigh": ["packages/cli/**", "scripts/release.ts", ".github/workflows/**"],
+    "command": ["D:/nvm/v24.22.2/node.exe", "C:/Users/fusheng/.agent-autoloop/delivery/dsh-review.cjs", "{input}"]
+  }
+}
