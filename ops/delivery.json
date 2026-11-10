@@ -7,6 +7,6 @@
     "points": "AGENTS.md",
     "status": "agent-review",
     "xhigh": ["packages/cli/**", "scripts/release.ts", ".github/workflows/**"],
-    "command": ["D:/nvm/v24.22.2/node.exe", "C:/Users/fusheng/.agent-autoloop/delivery/codex-review.cjs", "{input}"]
+    "command": ["D:/nvm/v24.22.2/node.exe", "C:/Users/fusheng/.agent-autoloop/delivery/dsh-review.cjs", "{input}"]
   }
 }
